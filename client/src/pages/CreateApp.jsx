@@ -1,105 +1,95 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import { CheckCircle, Circle, Loader, AlertCircle, Play } from 'lucide-react';
 import * as api from '../services/api';
+
+const DETECTION_STEPS = [
+  { id: 'validate', label: 'Validating path' },
+  { id: 'files', label: 'Scanning files' },
+  { id: 'package', label: 'Reading package.json' },
+  { id: 'config', label: 'Checking configs' },
+  { id: 'pm2', label: 'Checking PM2' },
+  { id: 'ai', label: 'AI analysis' }
+];
 
 export default function CreateApp() {
   const navigate = useNavigate();
+  const socketRef = useRef(null);
 
   // Path input
   const [repoPath, setRepoPath] = useState('');
-  const [pathValid, setPathValid] = useState(null);
 
   // Detection state
   const [detecting, setDetecting] = useState(false);
-  const [aiDetecting, setAiDetecting] = useState(false);
-  const [detected, setDetected] = useState(null);
-  const [hasAiProvider, setHasAiProvider] = useState(false);
+  const [steps, setSteps] = useState({});
+  const [detectionLog, setDetectionLog] = useState([]);
+  const [showLog, setShowLog] = useState(false);
 
-  // Form fields (populated by detection or manual entry)
+  // Form fields
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [uiPort, setUiPort] = useState('');
   const [apiPort, setApiPort] = useState('');
-  const [startCommands, setStartCommands] = useState('npm run dev');
+  const [startCommands, setStartCommands] = useState('');
   const [pm2Names, setPm2Names] = useState('');
+  const [pm2Status, setPm2Status] = useState(null);
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [detected, setDetected] = useState(false);
 
-  // Check if AI provider is available
+  // Initialize socket
   useEffect(() => {
-    api.getActiveProvider().then(p => setHasAiProvider(!!p)).catch(() => {});
+    socketRef.current = io({ path: '/socket.io' });
+
+    socketRef.current.on('detect:step', ({ step, status, data }) => {
+      setSteps(prev => ({ ...prev, [step]: { status, data } }));
+      setDetectionLog(prev => [...prev, { step, status, ...data }]);
+
+      // Update form fields as data comes in
+      if (data.name) setName(data.name);
+      if (data.description) setDescription(data.description);
+      if (data.uiPort) setUiPort(String(data.uiPort));
+      if (data.apiPort) setApiPort(String(data.apiPort));
+      if (data.startCommands?.length) setStartCommands(data.startCommands.join('\n'));
+      if (data.pm2ProcessNames?.length) setPm2Names(data.pm2ProcessNames.join(', '));
+      if (data.pm2Status) setPm2Status(data.pm2Status);
+    });
+
+    socketRef.current.on('detect:complete', ({ success, result, error: err }) => {
+      setDetecting(false);
+      if (success && result) {
+        setDetected(true);
+        if (result.name) setName(result.name);
+        if (result.description) setDescription(result.description);
+        if (result.uiPort) setUiPort(String(result.uiPort));
+        if (result.apiPort) setApiPort(String(result.apiPort));
+        if (result.startCommands?.length) setStartCommands(result.startCommands.join('\n'));
+        if (result.pm2ProcessNames?.length) setPm2Names(result.pm2ProcessNames.join(', '));
+      } else if (err) {
+        setError(err);
+      }
+    });
+
+    return () => {
+      socketRef.current?.disconnect();
+    };
   }, []);
 
-  // AI-powered detection
-  const handleAiDetect = async () => {
-    if (!repoPath) return;
+  // Start streaming detection
+  const handleImport = () => {
+    if (!repoPath || detecting) return;
 
     setError(null);
-    setAiDetecting(true);
+    setDetecting(true);
+    setSteps({});
+    setDetectionLog([]);
+    setDetected(false);
+    setPm2Status(null);
 
-    const result = await api.detectWithAi(repoPath).catch(err => ({
-      success: false,
-      error: err.message
-    }));
-
-    setAiDetecting(false);
-
-    if (!result.success) {
-      setError(result.error || 'AI detection failed');
-      return;
-    }
-
-    setDetected(result);
-
-    // Apply AI-detected values
-    const d = result.detected;
-    if (d.name) setName(d.name);
-    if (d.description) setDescription(d.description);
-    if (d.uiPort) setUiPort(String(d.uiPort));
-    if (d.apiPort) setApiPort(String(d.apiPort));
-    if (d.startCommands?.length > 0) setStartCommands(d.startCommands.join('\n'));
-    if (d.pm2ProcessNames?.length > 0) setPm2Names(d.pm2ProcessNames.join(', '));
-  };
-
-  // Import button handler - validates path, then runs AI detection if available
-  const handleImport = async () => {
-    if (!repoPath) return;
-
-    setError(null);
-
-    // First validate the path
-    if (pathValid === null) {
-      setDetecting(true);
-      const result = await api.detectRepo(repoPath).catch(() => ({ valid: false }));
-      setPathValid(result.valid);
-      setDetecting(false);
-
-      if (!result.valid) {
-        setError('Invalid directory path');
-        return;
-      }
-
-      // Apply basic detection
-      if (result.packageJson?.name && !name) {
-        setName(result.packageJson.name);
-      }
-      if (result.startCommands?.length > 0 && startCommands === 'npm run dev') {
-        setStartCommands(result.startCommands.join('\n'));
-      }
-      if (result.detectedPorts?.vite && !uiPort) {
-        setUiPort(String(result.detectedPorts.vite));
-      }
-      if (result.detectedPorts?.main && !apiPort) {
-        setApiPort(String(result.detectedPorts.main));
-      }
-    }
-
-    // Then run AI detection if provider is available
-    if (hasAiProvider) {
-      await handleAiDetect();
-    }
+    socketRef.current.emit('detect:start', { path: repoPath });
   };
 
   // Submit form
@@ -125,10 +115,31 @@ export default function CreateApp() {
     });
 
     setSubmitting(false);
+    if (result) navigate('/apps');
+  };
 
-    if (result) {
-      navigate('/apps');
-    }
+  const reset = () => {
+    setDetected(false);
+    setSteps({});
+    setDetectionLog([]);
+    setName('');
+    setDescription('');
+    setUiPort('');
+    setApiPort('');
+    setStartCommands('');
+    setPm2Names('');
+    setPm2Status(null);
+    setError(null);
+  };
+
+  const getStepIcon = (stepId) => {
+    const step = steps[stepId];
+    if (!step) return <Circle size={16} className="text-gray-600" />;
+    if (step.status === 'running') return <Loader size={16} className="text-port-accent animate-spin" />;
+    if (step.status === 'done') return <CheckCircle size={16} className="text-port-success" />;
+    if (step.status === 'error') return <AlertCircle size={16} className="text-port-error" />;
+    if (step.status === 'skipped') return <Circle size={16} className="text-gray-500" />;
+    return <Circle size={16} className="text-gray-600" />;
   };
 
   return (
@@ -145,7 +156,7 @@ export default function CreateApp() {
           <input
             type="text"
             value={repoPath}
-            onChange={(e) => { setRepoPath(e.target.value); setPathValid(null); setDetected(null); }}
+            onChange={(e) => { setRepoPath(e.target.value); reset(); }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
@@ -156,38 +167,63 @@ export default function CreateApp() {
             className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none font-mono"
           />
 
+          {/* Detection Progress */}
           {detecting && (
-            <p className="mt-2 text-sm text-gray-500">Validating path...</p>
+            <div className="mt-4 space-y-2">
+              {DETECTION_STEPS.map(({ id, label }) => (
+                <div key={id} className="flex items-center gap-2 text-sm">
+                  {getStepIcon(id)}
+                  <span className={steps[id]?.status === 'running' ? 'text-port-accent' :
+                    steps[id]?.status === 'done' ? 'text-white' : 'text-gray-500'}>
+                    {label}
+                  </span>
+                  {steps[id]?.data?.message && (
+                    <span className="text-gray-500 text-xs ml-2">
+                      {steps[id].data.message}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
 
-          {aiDetecting && (
-            <p className="mt-2 text-sm text-port-accent">Detecting project configuration with AI...</p>
-          )}
-
-          {pathValid === false && (
-            <p className="mt-2 text-sm text-port-error">Invalid directory path</p>
-          )}
-
-          {pathValid === true && !detected && !aiDetecting && (
-            <p className="mt-2 text-sm text-port-success">
-              Valid project directory
-            </p>
-          )}
-
-          {detected && (
-            <div className="mt-3 p-3 bg-port-success/10 border border-port-success/30 rounded-lg">
-              <p className="text-sm text-port-success font-medium">
-                AI Detection Complete ({detected.provider})
+          {/* PM2 Running Status */}
+          {pm2Status && pm2Status.length > 0 && (
+            <div className="mt-3 p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg">
+              <p className="text-sm text-port-warning font-medium flex items-center gap-2">
+                <Play size={14} /> Already running in PM2
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                {detected.context?.configFiles?.length > 0 && (
-                  <>Config files found: {detected.context.configFiles.join(', ')}</>
-                )}
+                {pm2Status.map(p => `${p.name} (${p.status})`).join(', ')}
               </p>
             </div>
           )}
 
-          {/* Action Buttons - Always visible */}
+          {/* Detection Log Toggle */}
+          {detectionLog.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowLog(!showLog)}
+              className="mt-3 text-xs text-gray-500 hover:text-gray-400"
+            >
+              {showLog ? 'Hide' : 'Show'} detection log ({detectionLog.length} entries)
+            </button>
+          )}
+
+          {showLog && (
+            <div className="mt-2 p-2 bg-port-bg rounded text-xs font-mono text-gray-400 max-h-40 overflow-auto">
+              {detectionLog.map((log, i) => (
+                <div key={i} className="py-0.5">
+                  <span className={log.status === 'done' ? 'text-port-success' :
+                    log.status === 'error' ? 'text-port-error' : 'text-gray-500'}>
+                    [{log.step}]
+                  </span> {log.message}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Action Buttons */}
           <div className="flex gap-3 mt-4">
             <button
               type="button"
@@ -199,17 +235,17 @@ export default function CreateApp() {
             <button
               type="button"
               onClick={handleImport}
-              disabled={!repoPath || detecting || aiDetecting}
+              disabled={!repoPath || detecting}
               className="flex-1 px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
-              {detecting ? 'Validating...' : aiDetecting ? 'Detecting...' : 'Import'}
+              {detecting ? 'Detecting...' : 'Import'}
             </button>
           </div>
         </div>
 
-        {/* App Details */}
-        {pathValid && (
-          <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+        {/* App Configuration - shown after detection */}
+        {detected && (
+          <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <h3 className="text-lg font-semibold text-white mb-4">App Configuration</h3>
 
             <div>
@@ -246,7 +282,6 @@ export default function CreateApp() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
                 />
               </div>
-
               <div>
                 <label className="block text-sm text-gray-400 mb-1">API/Backend Port</label>
                 <input
@@ -296,21 +331,12 @@ export default function CreateApp() {
           </div>
         )}
 
-        {/* Submit - only shown after detection */}
-        {pathValid && (
+        {/* Submit */}
+        {detected && (
           <div className="flex justify-between items-center">
             <button
               type="button"
-              onClick={() => {
-                setPathValid(null);
-                setDetected(null);
-                setName('');
-                setDescription('');
-                setUiPort('');
-                setApiPort('');
-                setStartCommands('npm run dev');
-                setPm2Names('');
-              }}
+              onClick={reset}
               className="px-4 py-2 text-gray-400 hover:text-white"
             >
               Reset
@@ -325,17 +351,6 @@ export default function CreateApp() {
           </div>
         )}
       </form>
-
-      {/* No AI Provider Notice */}
-      {pathValid && !hasAiProvider && (
-        <div className="mt-6 p-4 bg-port-border/50 rounded-lg">
-          <p className="text-sm text-gray-400">
-            <strong className="text-white">Tip:</strong> Configure an AI provider in{' '}
-            <a href="/ai" className="text-port-accent hover:underline">AI Providers</a>{' '}
-            to enable smart auto-detection of app configuration.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

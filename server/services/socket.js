@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { streamDetection } from './streamingDetect.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -6,6 +7,12 @@ const activeStreams = new Map();
 export function initSocket(io) {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
+
+    // Handle streaming app detection
+    socket.on('detect:start', async ({ path, providerId }) => {
+      console.log(`🔍 Starting detection: ${path}`);
+      await streamDetection(socket, path, providerId);
+    });
 
     // Handle log streaming requests
     socket.on('logs:subscribe', ({ processName, lines = 100 }) => {
