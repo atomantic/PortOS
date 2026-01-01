@@ -39,6 +39,16 @@ pm2 logs
 - Favor functional components and hooks over class components
 - Use Tailwind for all styling
 
+### Git Workflow
+- **`dev`** - Development branch, all features branch from here
+- **`main`** - Production branch, releases only
+- **Release Process**:
+  1. Work on `dev` branch (or feature branches merged to `dev`)
+  2. Create PR from `dev` to `main`
+  3. CI runs tests on PR
+  4. On merge, GitHub Action creates a release with version from `package.json`
+- Bump version in `package.json` before merging to `main`
+
 ---
 
 ## M4: App Wizard (Detailed)
