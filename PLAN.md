@@ -34,6 +34,11 @@ pm2 logs
 - [x] M5: AI providers + headless executor
 - [x] M6: Dev tools (history, command runner)
 
+### Code Guidelines
+- **No `window.alert` or `window.confirm`** - Use inline confirmation components or toast notifications for better UX
+- Favor functional components and hooks over class components
+- Use Tailwind for all styling
+
 ---
 
 ## M4: App Wizard (Detailed)

@@ -48,6 +48,7 @@ function HistoryTab() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ action: '', success: '' });
   const [actions, setActions] = useState([]);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -71,10 +72,9 @@ function HistoryTab() {
   };
 
   const handleClear = async () => {
-    if (confirm('Clear all history?')) {
-      await api.clearHistory();
-      loadData();
-    }
+    await api.clearHistory();
+    setConfirmingClear(false);
+    loadData();
   };
 
   const formatTime = (timestamp) => {
@@ -153,12 +153,30 @@ function HistoryTab() {
 
         <div className="flex-1" />
 
-        <button
-          onClick={handleClear}
-          className="px-4 py-2 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded-lg transition-colors"
-        >
-          Clear History
-        </button>
+        {confirmingClear ? (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-400">Clear all history?</span>
+            <button
+              onClick={handleClear}
+              className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded-lg transition-colors"
+            >
+              Yes
+            </button>
+            <button
+              onClick={() => setConfirmingClear(false)}
+              className="px-3 py-1.5 text-gray-400 hover:text-white"
+            >
+              No
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmingClear(true)}
+            className="px-4 py-2 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded-lg transition-colors"
+          >
+            Clear History
+          </button>
+        )}
       </div>
 
       {/* History List */}

@@ -7,6 +7,7 @@ export default function Apps() {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingApp, setEditingApp] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(null);
 
   const fetchApps = async () => {
     const data = await api.getApps().catch(() => []);
@@ -19,8 +20,8 @@ export default function Apps() {
   }, []);
 
   const handleDelete = async (app) => {
-    if (!confirm(`Delete "${app.name}"? This only removes it from PortOS, not the actual files.`)) return;
     await api.deleteApp(app.id);
+    setConfirmingDelete(null);
     fetchApps();
   };
 
@@ -97,18 +98,38 @@ export default function Apps() {
                       <StatusBadge status={app.overallStatus} size="sm" />
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => setEditingApp(app)}
-                        className="text-sm text-port-accent hover:text-port-accent/80 mr-3"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(app)}
-                        className="text-sm text-port-error hover:text-port-error/80"
-                      >
-                        Delete
-                      </button>
+                      {confirmingDelete === app.id ? (
+                        <div className="flex items-center justify-end gap-2">
+                          <span className="text-xs text-gray-400">Remove from PortOS?</span>
+                          <button
+                            onClick={() => handleDelete(app)}
+                            className="text-sm px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded"
+                          >
+                            Yes
+                          </button>
+                          <button
+                            onClick={() => setConfirmingDelete(null)}
+                            className="text-sm px-2 py-1 text-gray-400 hover:text-white"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => setEditingApp(app)}
+                            className="text-sm text-port-accent hover:text-port-accent/80 mr-3"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => setConfirmingDelete(app.id)}
+                            className="text-sm text-port-error hover:text-port-error/80"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
