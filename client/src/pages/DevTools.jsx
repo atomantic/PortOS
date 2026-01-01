@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -9,7 +10,15 @@ const TABS = [
 ];
 
 export default function DevTools() {
-  const [activeTab, setActiveTab] = useState('history');
+  const { tab = 'history' } = useParams();
+  const navigate = useNavigate();
+
+  // Redirect invalid tabs to history
+  useEffect(() => {
+    if (!TABS.find(t => t.id === tab)) {
+      navigate('/devtools/history', { replace: true });
+    }
+  }, [tab, navigate]);
 
   return (
     <div className="space-y-6">
@@ -19,25 +28,25 @@ export default function DevTools() {
 
       {/* Tabs */}
       <div className="flex gap-1 bg-port-card border border-port-border rounded-lg p-1">
-        {TABS.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              activeTab === tab.id
+        {TABS.map(t => (
+          <Link
+            key={t.id}
+            to={`/devtools/${t.id}`}
+            className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors text-center ${
+              tab === t.id
                 ? 'bg-port-accent text-white'
                 : 'text-gray-400 hover:text-white hover:bg-port-border/50'
             }`}
           >
-            {tab.label}
-          </button>
+            {t.label}
+          </Link>
         ))}
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'history' && <HistoryTab />}
-      {activeTab === 'runner' && <RunnerTab />}
-      {activeTab === 'processes' && <ProcessesTab />}
+      {tab === 'history' && <HistoryTab />}
+      {tab === 'runner' && <RunnerTab />}
+      {tab === 'processes' && <ProcessesTab />}
     </div>
   );
 }

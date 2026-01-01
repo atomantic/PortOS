@@ -14,7 +14,8 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="apps" element={<Apps />} />
         <Route path="logs" element={<Logs />} />
-        <Route path="devtools" element={<DevTools />} />
+        <Route path="devtools" element={<Navigate to="/devtools/history" replace />} />
+        <Route path="devtools/:tab" element={<DevTools />} />
         <Route path="ai" element={<AIProviders />} />
         <Route path="create" element={<CreateApp />} />
         <Route path="*" element={<Navigate to="/" replace />} />

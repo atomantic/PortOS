@@ -49,8 +49,14 @@ PortOS/
 ├── server/           # Express.js API (port 5554)
 ├── data/             # Runtime data (gitignored)
 ├── data.sample/      # Sample configurations
+├── docs/             # Documentation
 └── ecosystem.config.cjs  # PM2 configuration
 ```
+
+## Documentation
+
+- [Contributing Guide](./docs/CONTRIBUTING.md) - Development setup, code guidelines
+- [Versioning & Releases](./docs/VERSIONING.md) - Version format, release process
 
 ## PM2 Commands
 
