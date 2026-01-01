@@ -1,15 +1,18 @@
 # Port OS
 
-Local dev machine App OS portal for managing development web apps. Similar to Umbrel, but for active git repos and dev environments.
+A self-hosted App OS portal for your dev machine. Manage all your local development apps from a single dashboard — accessible from anywhere via [Tailscale](https://tailscale.com).
+
+Think Umbrel, but for your active git repos and dev environments. Access your dev apps from your phone, tablet, or any device on your Tailscale network.
 
 ## Features
 
-- **App Grid**: Dashboard with tiles showing status, ports, and quick actions
-- **App Management**: Register repos, configure ports, start/stop/restart via PM2
-- **Port Scanner**: Detect used ports and suggest available ranges
-- **Log Viewer**: Tail and stream logs from PM2 processes (coming soon)
-- **Dev Tools**: Process list, action history, command runner (coming soon)
-- **AI Providers**: Run Claude Code, Codex CLI, Gemini CLI, or local LLMs (coming soon)
+- **App Dashboard**: Grid of app tiles with status, ports, and quick actions (start/stop/restart)
+- **App Management**: Register existing projects or scaffold new ones from templates
+- **AI Auto-Detection**: Point to a directory and let AI analyze your project to configure it
+- **Log Viewer**: Real-time log streaming from PM2 processes via Socket.IO
+- **Dev Tools**: Process monitor, action history, and command runner
+- **AI Providers**: Run prompts via Claude Code CLI, Codex, Gemini CLI, LM Studio, or Ollama
+- **Mobile Ready**: Responsive design with collapsible sidebar for on-the-go access
 
 ## Quick Start
 
@@ -17,28 +20,26 @@ Local dev machine App OS portal for managing development web apps. Similar to Um
 # Install dependencies
 npm run install:all
 
-# Start development
+# Start with PM2 (recommended)
+pm2 start ecosystem.config.cjs
+
+# Or start in dev mode
 npm run dev
 ```
 
-- UI: http://localhost:5555
-- API: http://localhost:5554
+Access PortOS:
+- **Local**: http://localhost:5555
+- **Tailscale**: http://[your-tailscale-ip]:5555
 
-## Production with PM2
+## Network Access
 
-```bash
-# Start with PM2
-pm2 start ecosystem.config.cjs
+PortOS binds to `0.0.0.0` to allow access from your Tailscale network. This means you can:
 
-# View status
-pm2 status
+- Access your dev dashboard from your phone while on the go
+- Manage apps running on your home dev machine from anywhere
+- View logs and restart services remotely
 
-# View logs
-pm2 logs portos-server
-
-# Stop
-pm2 stop all
-```
+**Security Note**: PortOS is designed for private Tailscale networks. Do not expose ports 5554/5555 to the public internet.
 
 ## Project Structure
 
@@ -51,11 +52,34 @@ PortOS/
 └── ecosystem.config.cjs  # PM2 configuration
 ```
 
+## PM2 Commands
+
+```bash
+# Start PortOS
+pm2 start ecosystem.config.cjs
+
+# View status
+pm2 status
+
+# View logs
+pm2 logs portos-server
+pm2 logs portos-client
+
+# Restart
+pm2 restart portos-server portos-client
+
+# Stop
+pm2 stop portos-server portos-client
+
+# Save process list (survives reboot)
+pm2 save
+```
+
 ## API Endpoints
 
+### Apps
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | /api/health | Health check |
 | GET | /api/apps | List all registered apps |
 | POST | /api/apps | Register new app |
 | GET | /api/apps/:id | Get app details |
@@ -64,19 +88,44 @@ PortOS/
 | POST | /api/apps/:id/start | Start app via PM2 |
 | POST | /api/apps/:id/stop | Stop app |
 | POST | /api/apps/:id/restart | Restart app |
-| GET | /api/apps/:id/status | Get PM2 status |
-| GET | /api/apps/:id/logs | Get process logs |
-| GET | /api/ports/scan | Scan for used ports |
+
+### AI & Detection
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | /api/detect/repo | Validate path and detect project type |
+| POST | /api/detect/ai | AI-powered app configuration detection |
+| GET | /api/providers | List AI providers |
+| POST | /api/runs | Execute AI prompt |
+
+### Dev Tools
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | /api/logs/:process | Stream logs via SSE |
+| GET | /api/history | Action history |
+| POST | /api/commands/execute | Run shell command |
+| GET | /api/commands/processes | List PM2 processes |
 
 ## Configuration
 
-Apps are stored in `data/apps.json`. See `data.sample/` for example configurations.
+### Apps
+Apps are stored in `data/apps.json`. Each app entry includes:
+- `name`: Display name
+- `repoPath`: Path to project directory
+- `uiPort` / `apiPort`: Port numbers
+- `startCommands`: Commands to start the app
+- `pm2ProcessNames`: PM2 process identifiers
+
+### AI Providers
+Providers are stored in `data/providers.json`. Supported types:
+- **CLI**: Claude Code, Codex, Gemini CLI
+- **API**: LM Studio, Ollama (OpenAI-compatible endpoints)
 
 ## Security
 
-- Binds to 127.0.0.1 by default (local-only)
-- No external network access unless explicitly configured
-- Command execution uses spawn with arg arrays (no shell injection)
+- Binds to `0.0.0.0` for Tailscale network access
+- Command runner uses an allowlist (npm, git, pm2, etc.)
+- No shell interpolation — commands use spawn with arg arrays
+- Designed for private networks only
 
 ## License
 
