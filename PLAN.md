@@ -38,6 +38,7 @@ pm2 logs
 - **No `window.alert` or `window.confirm`** - Use inline confirmation components or toast notifications for better UX
 - Favor functional components and hooks over class components
 - Use Tailwind for all styling
+- **Linkable routes for all views** - Tabbed pages, sub-pages, edit/add forms should have distinct URL routes (e.g., `/devtools/history`, `/devtools/processes`) so users can bookmark and share links
 
 ### Git Workflow
 - **`dev`** - Development branch, all features branch from here
