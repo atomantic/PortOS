@@ -5,14 +5,14 @@ const activeStreams = new Map();
 
 export function initSocket(io) {
   io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+    console.log(`🔌 Client connected: ${socket.id}`);
 
     // Handle log streaming requests
     socket.on('logs:subscribe', ({ processName, lines = 100 }) => {
       // Clean up any existing stream for this socket
       cleanupStream(socket.id);
 
-      console.log(`Starting log stream for ${processName} (${lines} lines)`);
+      console.log(`📜 Log stream started: ${processName} (${lines} lines)`);
 
       // Spawn pm2 logs with --raw flag
       const logProcess = spawn('pm2', ['logs', processName, '--raw', '--lines', String(lines)], {
@@ -75,7 +75,7 @@ export function initSocket(io) {
 
     // Cleanup on disconnect
     socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
+      console.log(`🔌 Client disconnected: ${socket.id}`);
       cleanupStream(socket.id);
     });
   });

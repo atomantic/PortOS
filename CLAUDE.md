@@ -45,6 +45,12 @@ Client → HTTP/WebSocket → Routes (validate) → Services (logic) → JSON fi
 - **Functional programming** - no classes, use hooks in React
 - **Zod validation** - all route inputs validated via `lib/validation.js`
 - **Command allowlist** - shell execution restricted to approved commands only
+- **Single-line logging** - use emoji prefixes and string interpolation, never log full JSON blobs or arrays
+  ```js
+  console.log(`🚀 Server started on port ${PORT}`);
+  console.log(`📜 Processing ${items.length} items`);
+  console.error(`❌ Failed to connect: ${err.message}`);
+  ```
 
 ## Tailwind Design Tokens
 

@@ -62,7 +62,7 @@ app.use('/api/commands', commandsRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error('Server error:', err);
+  console.error(`❌ Server error: ${err.message}`);
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     code: err.code || 'INTERNAL_ERROR'
@@ -78,5 +78,5 @@ app.use((req, res) => {
 });
 
 httpServer.listen(PORT, HOST, () => {
-  console.log(`PortOS server running at http://${HOST}:${PORT}`);
+  console.log(`🚀 PortOS server running at http://${HOST}:${PORT}`);
 });
