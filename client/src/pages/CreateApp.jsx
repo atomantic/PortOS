@@ -10,7 +10,7 @@ const DETECTION_STEPS = [
   { id: 'package', label: 'Reading package.json' },
   { id: 'config', label: 'Checking configs' },
   { id: 'pm2', label: 'Checking PM2' },
-  { id: 'ai', label: 'AI analysis' }
+  { id: 'readme', label: 'Reading README' }
 ];
 
 export default function CreateApp() {
@@ -55,7 +55,13 @@ export default function CreateApp() {
       if (data.apiPort) setApiPort(String(data.apiPort));
       if (data.startCommands?.length) setStartCommands(data.startCommands.join('\n'));
       if (data.pm2ProcessNames?.length) setPm2Names(data.pm2ProcessNames.join(', '));
-      if (data.pm2Status) setPm2Status(data.pm2Status);
+      if (data.pm2Status) {
+        setPm2Status(data.pm2Status);
+        // Also set pm2Names from found processes if available
+        if (!data.pm2ProcessNames?.length && Array.isArray(data.pm2Status)) {
+          setPm2Names(data.pm2Status.map(p => p.name).join(', '));
+        }
+      }
     });
 
     socketRef.current.on('detect:complete', ({ success, result, error: err }) => {

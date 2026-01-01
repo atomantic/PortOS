@@ -95,62 +95,78 @@ export async function deleteApp(name) {
 }
 
 /**
- * Get status of a specific process
+ * Get status of a specific process using CLI (avoids connection deadlocks)
  * @param {string} name PM2 process name
  */
 export async function getAppStatus(name) {
-  return connectAndRun((pm2) => {
-    return new Promise((resolve, reject) => {
-      pm2.describe(name, (err, processDescription) => {
-        if (err) return reject(err);
+  return new Promise((resolve) => {
+    const child = spawn('pm2', ['jlist'], { shell: false });
+    let stdout = '';
 
-        if (!processDescription || processDescription.length === 0) {
-          return resolve({
-            name,
-            status: 'not_found',
-            pm2_env: null
-          });
-        }
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
 
-        const proc = processDescription[0];
-        resolve({
-          name: proc.name,
-          status: proc.pm2_env?.status || 'unknown',
-          pid: proc.pid,
-          pm_id: proc.pm_id,
-          cpu: proc.monit?.cpu || 0,
-          memory: proc.monit?.memory || 0,
-          uptime: proc.pm2_env?.pm_uptime || null,
-          restarts: proc.pm2_env?.restart_time || 0,
-          createdAt: proc.pm2_env?.created_at || null
+    child.on('close', () => {
+      const processes = JSON.parse(stdout || '[]');
+      const proc = processes.find(p => p.name === name);
+
+      if (!proc) {
+        return resolve({
+          name,
+          status: 'not_found',
+          pm2_env: null
         });
+      }
+
+      resolve({
+        name: proc.name,
+        status: proc.pm2_env?.status || 'unknown',
+        pid: proc.pid,
+        pm_id: proc.pm_id,
+        cpu: proc.monit?.cpu || 0,
+        memory: proc.monit?.memory || 0,
+        uptime: proc.pm2_env?.pm_uptime || null,
+        restarts: proc.pm2_env?.restart_time || 0,
+        createdAt: proc.pm2_env?.created_at || null
       });
+    });
+
+    child.on('error', () => {
+      resolve({ name, status: 'error', pm2_env: null });
     });
   });
 }
 
 /**
- * List all PM2 processes
+ * List all PM2 processes using CLI (avoids connection deadlocks)
  */
 export async function listProcesses() {
-  return connectAndRun((pm2) => {
-    return new Promise((resolve, reject) => {
-      pm2.list((err, list) => {
-        if (err) return reject(err);
+  return new Promise((resolve) => {
+    const child = spawn('pm2', ['jlist'], { shell: false });
+    let stdout = '';
 
-        const processes = list.map(proc => ({
-          name: proc.name,
-          status: proc.pm2_env?.status || 'unknown',
-          pid: proc.pid,
-          pm_id: proc.pm_id,
-          cpu: proc.monit?.cpu || 0,
-          memory: proc.monit?.memory || 0,
-          uptime: proc.pm2_env?.pm_uptime || null,
-          restarts: proc.pm2_env?.restart_time || 0
-        }));
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
 
-        resolve(processes);
-      });
+    child.on('close', () => {
+      const list = JSON.parse(stdout || '[]');
+      const processes = list.map(proc => ({
+        name: proc.name,
+        status: proc.pm2_env?.status || 'unknown',
+        pid: proc.pid,
+        pm_id: proc.pm_id,
+        cpu: proc.monit?.cpu || 0,
+        memory: proc.monit?.memory || 0,
+        uptime: proc.pm2_env?.pm_uptime || null,
+        restarts: proc.pm2_env?.restart_time || 0
+      }));
+      resolve(processes);
+    });
+
+    child.on('error', () => {
+      resolve([]);
     });
   });
 }

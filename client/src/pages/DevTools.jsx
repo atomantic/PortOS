@@ -1,63 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useState, useEffect, useRef, Fragment } from 'react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, BarChart3, Image, X, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
-const TABS = [
-  { id: 'history', label: 'History' },
-  { id: 'runner', label: 'Command Runner' },
-  { id: 'processes', label: 'Processes' }
-];
-
-export default function DevTools() {
-  const { tab = 'history' } = useParams();
-  const navigate = useNavigate();
-
-  // Redirect invalid tabs to history
-  useEffect(() => {
-    if (!TABS.find(t => t.id === tab)) {
-      navigate('/devtools/history', { replace: true });
-    }
-  }, [tab, navigate]);
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Dev Tools</h1>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 bg-port-card border border-port-border rounded-lg p-1">
-        {TABS.map(t => (
-          <Link
-            key={t.id}
-            to={`/devtools/${t.id}`}
-            className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors text-center ${
-              tab === t.id
-                ? 'bg-port-accent text-white'
-                : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-            }`}
-          >
-            {t.label}
-          </Link>
-        ))}
-      </div>
-
-      {/* Tab Content */}
-      {tab === 'history' && <HistoryTab />}
-      {tab === 'runner' && <RunnerTab />}
-      {tab === 'processes' && <ProcessesTab />}
-    </div>
-  );
-}
-
-function HistoryTab() {
+export function HistoryPage() {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ action: '', success: '' });
   const [actions, setActions] = useState([]);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -109,12 +62,25 @@ function HistoryTab() {
     return icons[action] || '📋';
   };
 
+  const formatRuntime = (ms) => {
+    if (!ms) return null;
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    return `${(ms / 60000).toFixed(1)}m`;
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedId(prev => prev === id ? null : id);
+  };
+
   if (loading) {
     return <div className="text-center py-8 text-gray-400">Loading history...</div>;
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold text-white">Action History</h1>
+
       {/* Stats */}
       {stats && (
         <div className="grid grid-cols-4 gap-4">
@@ -195,25 +161,122 @@ function HistoryTab() {
         ) : (
           <div className="divide-y divide-port-border">
             {history.map(entry => (
-              <div key={entry.id} className="p-4 hover:bg-port-border/20">
-                <div className="flex items-center gap-4">
-                  <span className="text-xl">{getActionIcon(entry.action)}</span>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-white">{entry.action}</span>
-                      {entry.targetName && (
-                        <span className="text-gray-400">→ {entry.targetName}</span>
+              <div key={entry.id}>
+                <div
+                  className="p-4 hover:bg-port-border/20 cursor-pointer"
+                  onClick={() => toggleExpand(entry.id)}
+                >
+                  <div className="flex items-center gap-4">
+                    <button className="text-gray-400 hover:text-white">
+                      <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                    <span className="text-xl">{getActionIcon(entry.action)}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white">{entry.action}</span>
+                        {entry.targetName && (
+                          <span className="text-gray-400">→ {entry.targetName}</span>
+                        )}
+                        {entry.details?.runtime && (
+                          <span className="text-xs text-cyan-400 font-mono">{formatRuntime(entry.details.runtime)}</span>
+                        )}
+                      </div>
+                      {entry.details?.command && (
+                        <code className="text-xs text-gray-500 font-mono truncate block">{entry.details.command}</code>
                       )}
                     </div>
-                    {entry.details?.command && (
-                      <code className="text-xs text-gray-500 font-mono">{entry.details.command}</code>
-                    )}
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
+                    <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(entry.timestamp)}</span>
                   </div>
-                  <span className={`w-2 h-2 rounded-full ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
-                  <span className="text-sm text-gray-500">{formatTime(entry.timestamp)}</span>
                 </div>
-                {entry.error && (
-                  <div className="mt-2 text-sm text-port-error ml-10">{entry.error}</div>
+
+                {/* Expanded Details */}
+                {expandedId === entry.id && (
+                  <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
+                    <div className="pt-4 space-y-4">
+                      {/* Metadata Grid */}
+                      <div className="grid grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Timestamp</div>
+                          <div className="text-gray-300">{new Date(entry.timestamp).toLocaleString()}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>
+                          <div className={entry.success ? 'text-port-success' : 'text-port-error'}>
+                            {entry.success ? 'Success' : 'Failed'}
+                          </div>
+                        </div>
+                        {entry.details?.runtime && (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime</div>
+                            <div className="text-cyan-400 font-mono">{formatRuntime(entry.details.runtime)}</div>
+                          </div>
+                        )}
+                        {entry.details?.exitCode !== undefined && (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Exit Code</div>
+                            <div className={`font-mono ${entry.details.exitCode === 0 ? 'text-port-success' : 'text-port-error'}`}>
+                              {entry.details.exitCode}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Command */}
+                      {entry.details?.command && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Command</div>
+                          <div className="bg-port-card border border-port-border rounded-lg p-3">
+                            <code className="text-sm text-cyan-300 font-mono whitespace-pre-wrap break-all">
+                              {entry.details.command}
+                            </code>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Output */}
+                      {entry.details?.output && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
+                          <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
+                            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
+                              {entry.details.output}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Error */}
+                      {entry.error && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Error</div>
+                          <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3">
+                            <pre className="text-sm text-port-error font-mono whitespace-pre-wrap">
+                              {entry.error}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Other Details */}
+                      {entry.details && Object.keys(entry.details).filter(k => !['command', 'output', 'runtime', 'exitCode'].includes(k)).length > 0 && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Additional Details</div>
+                          <div className="bg-port-card border border-port-border rounded-lg p-3">
+                            <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap">
+                              {JSON.stringify(
+                                Object.fromEntries(
+                                  Object.entries(entry.details).filter(([k]) => !['command', 'output', 'runtime', 'exitCode'].includes(k))
+                                ),
+                                null,
+                                2
+                              )}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             ))}
@@ -224,21 +287,72 @@ function HistoryTab() {
   );
 }
 
-function RunnerTab() {
+export function RunnerPage() {
+  const [mode, setMode] = useState('ai'); // 'ai' or 'command'
+  const [prompt, setPrompt] = useState('');
   const [command, setCommand] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
   const [output, setOutput] = useState('');
   const [running, setRunning] = useState(false);
+  const [runId, setRunId] = useState(null);
   const [commandId, setCommandId] = useState(null);
   const [apps, setApps] = useState([]);
+  const [providers, setProviders] = useState([]);
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [timeout, setTimeout] = useState(30);
   const [allowedCommands, setAllowedCommands] = useState([]);
+  const [screenshots, setScreenshots] = useState([]);
+  const fileInputRef = useRef(null);
   const outputRef = useRef(null);
 
   useEffect(() => {
-    api.getApps().then(setApps).catch(() => []);
-    api.getAllowedCommands().then(setAllowedCommands).catch(() => []);
+    Promise.all([
+      api.getApps().catch(() => []),
+      api.getProviders().catch(() => ({ providers: [] })),
+      api.getAllowedCommands().catch(() => [])
+    ]).then(([appsData, providersRes, cmds]) => {
+      setApps(appsData);
+      const allProviders = providersRes.providers || [];
+      const enabledProviders = allProviders.filter(p => p.enabled);
+      setProviders(enabledProviders);
+      if (enabledProviders.length > 0) {
+        const active = enabledProviders.find(p => p.id === providersRes.activeProvider) || enabledProviders[0];
+        setSelectedProvider(active.id);
+        setSelectedModel(active.defaultModel || '');
+      }
+      setAllowedCommands(cmds);
+    });
   }, []);
 
+  // Subscribe to run output
+  useEffect(() => {
+    if (!runId) return;
+
+    const handleData = (data) => {
+      setOutput(prev => prev + data);
+      if (outputRef.current) {
+        outputRef.current.scrollTop = outputRef.current.scrollHeight;
+      }
+    };
+
+    const handleComplete = (metadata) => {
+      setRunning(false);
+      setRunId(null);
+      const status = metadata.success ? '✓ Completed' : `✗ Failed (${metadata.error || 'unknown error'})`;
+      setOutput(prev => prev + `\n\n--- ${status} (${Math.round(metadata.duration / 1000)}s) ---\n`);
+    };
+
+    socket.on(`run:${runId}:data`, handleData);
+    socket.on(`run:${runId}:complete`, handleComplete);
+
+    return () => {
+      socket.off(`run:${runId}:data`, handleData);
+      socket.off(`run:${runId}:complete`, handleComplete);
+    };
+  }, [runId]);
+
+  // Subscribe to command output
   useEffect(() => {
     if (!commandId) return;
 
@@ -264,7 +378,30 @@ function RunnerTab() {
     };
   }, [commandId]);
 
-  const handleRun = async () => {
+  const handleRunAI = async () => {
+    if (!prompt.trim() || !selectedProvider) return;
+
+    setOutput('');
+    setRunning(true);
+
+    const result = await api.createRun({
+      providerId: selectedProvider,
+      model: selectedModel || undefined,
+      prompt: prompt.trim(),
+      workspacePath: workspacePath || undefined,
+      workspaceName: apps.find(a => a.repoPath === workspacePath)?.name
+    }).catch(err => ({ error: err.message }));
+
+    if (result.error) {
+      setOutput(`Error: ${result.error}`);
+      setRunning(false);
+      return;
+    }
+
+    setRunId(result.runId);
+  };
+
+  const handleRunCommand = async () => {
     if (!command.trim()) return;
 
     setOutput('');
@@ -283,6 +420,11 @@ function RunnerTab() {
   };
 
   const handleStop = async () => {
+    if (runId) {
+      await api.stopRun(runId);
+      setRunning(false);
+      setRunId(null);
+    }
     if (commandId) {
       await api.stopCommand(commandId);
       setRunning(false);
@@ -290,73 +432,247 @@ function RunnerTab() {
     }
   };
 
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files);
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const base64 = ev.target.result.split(',')[1];
+        const uploaded = await api.uploadScreenshot(base64, file.name, file.type).catch(() => null);
+        if (uploaded) {
+          setScreenshots(prev => [...prev, {
+            id: uploaded.id,
+            filename: uploaded.filename,
+            preview: ev.target.result,
+            path: uploaded.path
+          }]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  const removeScreenshot = (id) => {
+    setScreenshots(prev => prev.filter(s => s.id !== id));
+  };
+
+  const currentProvider = providers.find(p => p.id === selectedProvider);
+
   return (
-    <div className="space-y-4">
-      {/* Workspace Selector */}
-      <div className="flex gap-4">
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold text-white">AI Runner</h1>
+
+      {/* Mode Toggle */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setMode('ai')}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            mode === 'ai' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
+          }`}
+        >
+          AI Assistant
+        </button>
+        <button
+          onClick={() => setMode('command')}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            mode === 'command' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
+          }`}
+        >
+          Shell Command
+        </button>
+      </div>
+
+      {/* Configuration Row */}
+      <div className="flex flex-wrap gap-3">
+        {/* Workspace */}
         <select
           value={workspacePath}
           onChange={(e) => setWorkspacePath(e.target.value)}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
         >
           <option value="">Current directory</option>
           {apps.map(app => (
-            <option key={app.id} value={app.repoPath}>{app.name} ({app.repoPath})</option>
+            <option key={app.id} value={app.repoPath}>{app.name}</option>
           ))}
         </select>
-      </div>
 
-      {/* Command Input */}
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !running && handleRun()}
-          placeholder="Enter command (e.g., npm run build)"
-          className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono focus:border-port-accent focus:outline-none"
-        />
-        {running ? (
-          <button
-            onClick={handleStop}
-            className="px-6 py-3 bg-port-error hover:bg-port-error/80 text-white rounded-lg transition-colors"
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            onClick={handleRun}
-            disabled={!command.trim()}
-            className="px-6 py-3 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
-          >
-            Run
-          </button>
+        {mode === 'ai' && (
+          <>
+            {/* Provider */}
+            <select
+              value={selectedProvider}
+              onChange={(e) => {
+                setSelectedProvider(e.target.value);
+                const p = providers.find(p => p.id === e.target.value);
+                setSelectedModel(p?.defaultModel || '');
+              }}
+              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+            >
+              {providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+
+            {/* Model */}
+            {currentProvider?.models?.length > 0 && (
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              >
+                {currentProvider.models.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            )}
+
+            {/* Timeout */}
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-gray-400" />
+              <select
+                value={timeout}
+                onChange={(e) => setTimeout(Number(e.target.value))}
+                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              >
+                <option value={5}>5 min</option>
+                <option value={15}>15 min</option>
+                <option value={30}>30 min</option>
+                <option value={60}>60 min</option>
+              </select>
+            </div>
+
+            {/* Screenshot Upload */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm"
+            >
+              <Image size={16} />
+              Add Screenshot
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+          </>
         )}
       </div>
 
-      {/* Allowed Commands Info */}
-      <div className="text-xs text-gray-500">
-        Allowed: {allowedCommands.slice(0, 10).join(', ')}{allowedCommands.length > 10 ? `, +${allowedCommands.length - 10} more` : ''}
-      </div>
+      {/* Screenshot Previews */}
+      {mode === 'ai' && screenshots.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          {screenshots.map(s => (
+            <div key={s.id} className="relative group">
+              <img
+                src={s.preview}
+                alt={s.filename}
+                className="w-20 h-20 object-cover rounded-lg border border-port-border"
+              />
+              <button
+                onClick={() => removeScreenshot(s.id)}
+                className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Input Area */}
+      {mode === 'ai' ? (
+        <div className="flex gap-2">
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Describe what you want the AI to do..."
+            rows={3}
+            className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none resize-none"
+          />
+          {running ? (
+            <button
+              onClick={handleStop}
+              className="px-6 bg-port-error hover:bg-port-error/80 text-white rounded-lg transition-colors"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={handleRunAI}
+              disabled={!prompt.trim() || !selectedProvider}
+              className="px-6 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
+            >
+              Run
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !running && handleRunCommand()}
+              placeholder="Enter command (e.g., npm run build)"
+              className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono focus:border-port-accent focus:outline-none"
+            />
+            {running ? (
+              <button
+                onClick={handleStop}
+                className="px-6 py-3 bg-port-error hover:bg-port-error/80 text-white rounded-lg transition-colors"
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={handleRunCommand}
+                disabled={!command.trim()}
+                className="px-6 py-3 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
+              >
+                Run
+              </button>
+            )}
+          </div>
+          <div className="text-xs text-gray-500">
+            Allowed: {allowedCommands.slice(0, 10).join(', ')}{allowedCommands.length > 10 ? `, +${allowedCommands.length - 10} more` : ''}
+          </div>
+        </>
+      )}
 
       {/* Output */}
-      <div
-        ref={outputRef}
-        className="bg-port-bg border border-port-border rounded-lg p-4 h-96 overflow-auto font-mono text-sm"
-      >
-        {output ? (
-          <pre className="text-gray-300 whitespace-pre-wrap">{output}</pre>
-        ) : (
-          <div className="text-gray-500">Output will appear here...</div>
-        )}
+      <div className="space-y-1">
+        <div className="text-xs text-gray-500">Output:</div>
+        <div
+          ref={outputRef}
+          className="bg-port-bg border border-port-border rounded-lg p-4 h-80 overflow-auto font-mono text-sm"
+        >
+          {output ? (
+            <pre className="text-gray-300 whitespace-pre-wrap">{output}</pre>
+          ) : (
+            <div className="text-gray-500">Output will appear here...</div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function ProcessesTab() {
+export function ProcessesPage() {
   const [processes, setProcesses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [expandedProcess, setExpandedProcess] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [restarting, setRestarting] = useState({});
+  const [tailLines, setTailLines] = useState(500);
+  const [subscribed, setSubscribed] = useState(false);
+  const logsRef = useRef(null);
 
   useEffect(() => {
     loadProcesses();
@@ -364,10 +680,103 @@ function ProcessesTab() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (!expandedProcess) {
+      setLogs([]);
+      setSubscribed(false);
+      return;
+    }
+
+    // Subscribe to logs via socket
+    socket.emit('logs:subscribe', { processName: expandedProcess, lines: tailLines });
+
+    const handleLog = (data) => {
+      if (data.processName === expandedProcess) {
+        setLogs(prev => [...prev.slice(-1000), {
+          line: data.line,
+          type: data.type,
+          timestamp: data.timestamp
+        }]);
+        setTimeout(() => {
+          if (logsRef.current) {
+            logsRef.current.scrollTop = logsRef.current.scrollHeight;
+          }
+        }, 10);
+      }
+    };
+
+    const handleSubscribed = (data) => {
+      if (data.processName === expandedProcess) {
+        setSubscribed(true);
+      }
+    };
+
+    const handleError = (data) => {
+      if (data.processName === expandedProcess) {
+        setLogs(prev => [...prev, { line: `Error: ${data.error}`, type: 'stderr', timestamp: Date.now() }]);
+      }
+    };
+
+    socket.on('logs:line', handleLog);
+    socket.on('logs:subscribed', handleSubscribed);
+    socket.on('logs:error', handleError);
+
+    return () => {
+      socket.emit('logs:unsubscribe', { processName: expandedProcess });
+      socket.off('logs:line', handleLog);
+      socket.off('logs:subscribed', handleSubscribed);
+      socket.off('logs:error', handleError);
+    };
+  }, [expandedProcess, tailLines]);
+
   const loadProcesses = async () => {
     const data = await api.getProcessesList().catch(() => []);
     setProcesses(data);
     setLoading(false);
+  };
+
+  const handleRestart = async (name) => {
+    setRestarting(prev => ({ ...prev, [name]: true }));
+    await fetch('/api/commands/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: `pm2 restart ${name}` })
+    }).catch(() => null);
+    setTimeout(() => {
+      setRestarting(prev => ({ ...prev, [name]: false }));
+      loadProcesses();
+    }, 2000);
+  };
+
+  const handleStop = async (name) => {
+    setRestarting(prev => ({ ...prev, [name]: true }));
+    await fetch('/api/commands/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: `pm2 stop ${name}` })
+    }).catch(() => null);
+    setTimeout(() => {
+      setRestarting(prev => ({ ...prev, [name]: false }));
+      loadProcesses();
+    }, 2000);
+  };
+
+  const handleStart = async (name) => {
+    setRestarting(prev => ({ ...prev, [name]: true }));
+    await fetch('/api/commands/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: `pm2 start ${name}` })
+    }).catch(() => null);
+    setTimeout(() => {
+      setRestarting(prev => ({ ...prev, [name]: false }));
+      loadProcesses();
+    }, 2000);
+  };
+
+  const toggleExpand = (name) => {
+    setExpandedProcess(prev => prev === name ? null : name);
+    setLogs([]);
   };
 
   const formatMemory = (bytes) => {
@@ -399,9 +808,9 @@ function ProcessesTab() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <p className="text-gray-400">{processes.length} PM2 processes</p>
+        <h1 className="text-2xl font-bold text-white">PM2 Processes</h1>
         <button
           onClick={loadProcesses}
           className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
@@ -414,6 +823,7 @@ function ProcessesTab() {
         <table className="w-full">
           <thead className="bg-port-border/50">
             <tr>
+              <th className="px-4 py-3 text-left text-sm font-medium text-gray-400 w-8"></th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Name</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Status</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">PID</th>
@@ -421,31 +831,740 @@ function ProcessesTab() {
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Memory</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Uptime</th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Restarts</th>
+              <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-port-border">
             {processes.map(proc => (
-              <tr key={proc.pm_id} className="hover:bg-port-border/20">
-                <td className="px-4 py-3">
-                  <span className="font-medium text-white">{proc.name}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`inline-flex items-center gap-2 px-2 py-1 rounded text-xs ${getStatusColor(proc.status)} bg-opacity-20`}>
-                    <span className={`w-2 h-2 rounded-full ${getStatusColor(proc.status)}`} />
-                    {proc.status}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-gray-400 font-mono text-sm">{proc.pid || '-'}</td>
-                <td className="px-4 py-3 text-gray-400">{proc.cpu ? `${proc.cpu}%` : '-'}</td>
-                <td className="px-4 py-3 text-gray-400">{formatMemory(proc.memory)}</td>
-                <td className="px-4 py-3 text-gray-400">{formatUptime(proc.uptime)}</td>
-                <td className="px-4 py-3 text-gray-400">{proc.restarts}</td>
-              </tr>
+              <Fragment key={proc.pm_id}>
+                <tr className="hover:bg-port-border/20">
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => toggleExpand(proc.name)}
+                      className="text-gray-400 hover:text-white transition-transform"
+                    >
+                      <span className={`inline-block transition-transform ${expandedProcess === proc.name ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="font-medium text-white">{proc.name}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded text-xs ${getStatusColor(proc.status)} bg-opacity-20`}>
+                      <span className={`w-2 h-2 rounded-full ${getStatusColor(proc.status)}`} />
+                      {proc.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-400 font-mono text-sm">{proc.pid || '-'}</td>
+                  <td className="px-4 py-3 text-gray-400">{proc.cpu ? `${proc.cpu}%` : '-'}</td>
+                  <td className="px-4 py-3 text-gray-400">{formatMemory(proc.memory)}</td>
+                  <td className="px-4 py-3 text-gray-400">{formatUptime(proc.uptime)}</td>
+                  <td className="px-4 py-3 text-gray-400">{proc.restarts}</td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-1">
+                      {proc.status === 'online' ? (
+                        <>
+                          <button
+                            onClick={() => handleRestart(proc.name)}
+                            disabled={restarting[proc.name]}
+                            className="px-2 py-1 text-xs bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded disabled:opacity-50"
+                          >
+                            {restarting[proc.name] ? '...' : 'Restart'}
+                          </button>
+                          <button
+                            onClick={() => handleStop(proc.name)}
+                            disabled={restarting[proc.name]}
+                            className="px-2 py-1 text-xs bg-port-error/20 text-port-error hover:bg-port-error/30 rounded disabled:opacity-50"
+                          >
+                            Stop
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => handleStart(proc.name)}
+                          disabled={restarting[proc.name]}
+                          className="px-2 py-1 text-xs bg-port-success/20 text-port-success hover:bg-port-success/30 rounded disabled:opacity-50"
+                        >
+                          {restarting[proc.name] ? '...' : 'Start'}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+                {expandedProcess === proc.name && (
+                  <tr>
+                    <td colSpan={9} className="p-0">
+                      <div className="bg-port-bg border-t border-port-border">
+                        <div className="flex items-center justify-between px-4 py-2 border-b border-port-border">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs text-gray-400">Live logs for {proc.name}</span>
+                            {subscribed && (
+                              <span className="text-xs text-port-success">● streaming</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-gray-500">Tail lines:</label>
+                              <select
+                                value={tailLines}
+                                onChange={(e) => {
+                                  setTailLines(Number(e.target.value));
+                                  setLogs([]);
+                                }}
+                                className="px-2 py-1 text-xs bg-port-card border border-port-border rounded text-white"
+                              >
+                                <option value={100}>100</option>
+                                <option value={250}>250</option>
+                                <option value={500}>500</option>
+                                <option value={1000}>1000</option>
+                                <option value={2000}>2000</option>
+                              </select>
+                            </div>
+                            <span className="text-xs text-gray-600">{logs.length} lines</span>
+                            <button
+                              onClick={() => setLogs([])}
+                              className="text-xs text-gray-500 hover:text-white"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <div
+                          ref={logsRef}
+                          className="h-64 overflow-auto p-3 font-mono text-xs"
+                        >
+                          {logs.length === 0 ? (
+                            <div className="text-gray-500">
+                              {subscribed ? 'No logs yet...' : 'Connecting to log stream...'}
+                            </div>
+                          ) : (
+                            logs.map((log, i) => (
+                              <div
+                                key={i}
+                                className={`py-0.5 ${log.type === 'stderr' ? 'text-port-error' : 'text-gray-300'}`}
+                              >
+                                <span className="text-gray-600 mr-2">
+                                  {new Date(log.timestamp).toLocaleTimeString()}
+                                </span>
+                                {log.line}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
             {processes.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={9} className="px-4 py-12 text-center text-gray-500">
                   No PM2 processes running
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export function GitPage() {
+  const [apps, setApps] = useState([]);
+  const [selectedApp, setSelectedApp] = useState('');
+  const [gitInfo, setGitInfo] = useState(null);
+  const [diff, setDiff] = useState('');
+  const [showDiff, setShowDiff] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+  const [committing, setCommitting] = useState(false);
+
+  useEffect(() => {
+    api.getApps().then(apps => {
+      setApps(apps);
+      if (apps.length > 0) {
+        setSelectedApp(apps[0].repoPath);
+      }
+    }).catch(() => []);
+  }, []);
+
+  useEffect(() => {
+    if (selectedApp) loadGitInfo();
+  }, [selectedApp]);
+
+  const loadGitInfo = async () => {
+    if (!selectedApp) return;
+    setLoading(true);
+    const info = await api.getGitInfo(selectedApp).catch(() => null);
+    setGitInfo(info);
+    setLoading(false);
+  };
+
+  const loadDiff = async () => {
+    if (!selectedApp) return;
+    const result = await api.getGitDiff(selectedApp).catch(() => ({ diff: '' }));
+    setDiff(result.diff || '');
+    setShowDiff(true);
+  };
+
+  const handleStage = async (file) => {
+    await api.stageFiles(selectedApp, [file]);
+    await loadGitInfo();
+  };
+
+  const handleUnstage = async (file) => {
+    await api.unstageFiles(selectedApp, [file]);
+    await loadGitInfo();
+  };
+
+  const handleCommit = async () => {
+    if (!commitMessage.trim()) return;
+    setCommitting(true);
+    await api.createCommit(selectedApp, commitMessage).catch(() => null);
+    setCommitMessage('');
+    setCommitting(false);
+    await loadGitInfo();
+  };
+
+  const getStatusIcon = (file) => {
+    if (file.added) return <Plus size={14} className="text-port-success" />;
+    if (file.deleted) return <Minus size={14} className="text-port-error" />;
+    return <FileText size={14} className="text-port-warning" />;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Git Status</h1>
+        <div className="flex items-center gap-4">
+          <select
+            value={selectedApp}
+            onChange={(e) => setSelectedApp(e.target.value)}
+            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+          >
+            {apps.map(app => (
+              <option key={app.id} value={app.repoPath}>{app.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={loadGitInfo}
+            className="p-2 text-gray-400 hover:text-white"
+          >
+            <RefreshCw size={18} />
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-8 text-gray-400">Loading...</div>
+      ) : gitInfo && gitInfo.isRepo ? (
+        <div className="grid grid-cols-2 gap-6">
+          {/* Status Panel */}
+          <div className="space-y-4">
+            {/* Branch Info */}
+            <div className="bg-port-card border border-port-border rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <GitBranch size={18} className="text-port-accent" />
+                <span className="font-medium text-white">{gitInfo.branch}</span>
+                {gitInfo.status?.clean && (
+                  <span className="text-xs text-port-success px-2 py-0.5 bg-port-success/20 rounded">Clean</span>
+                )}
+              </div>
+              <div className="flex gap-4 text-sm">
+                <div className="text-gray-400">
+                  <span className="text-port-success">+{gitInfo.diffStats?.insertions || 0}</span>
+                  <span className="mx-1">/</span>
+                  <span className="text-port-error">-{gitInfo.diffStats?.deletions || 0}</span>
+                </div>
+                <div className="text-gray-500">
+                  {gitInfo.diffStats?.files || 0} files changed
+                </div>
+              </div>
+            </div>
+
+            {/* Changed Files */}
+            <div className="bg-port-card border border-port-border rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-gray-400">Changed Files</h3>
+                <button
+                  onClick={loadDiff}
+                  className="text-xs text-port-accent hover:underline"
+                >
+                  View Diff
+                </button>
+              </div>
+              <div className="space-y-1 max-h-64 overflow-auto">
+                {gitInfo.status?.files?.map((file, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm py-1 group">
+                    {getStatusIcon(file)}
+                    <span className={`flex-1 font-mono text-xs ${file.staged ? 'text-port-success' : 'text-gray-300'}`}>
+                      {file.path}
+                    </span>
+                    <span className="text-xs text-gray-500">{file.status}</span>
+                    {file.staged ? (
+                      <button
+                        onClick={() => handleUnstage(file.path)}
+                        className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-white"
+                      >
+                        Unstage
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleStage(file.path)}
+                        className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-white"
+                      >
+                        Stage
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {(!gitInfo.status?.files || gitInfo.status.files.length === 0) && (
+                  <div className="text-gray-500 text-sm">No changes</div>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Commit */}
+            {gitInfo.status?.staged > 0 && (
+              <div className="bg-port-card border border-port-border rounded-xl p-4">
+                <h3 className="text-sm font-medium text-gray-400 mb-2">Quick Commit</h3>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    placeholder="Commit message..."
+                    className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  />
+                  <button
+                    onClick={handleCommit}
+                    disabled={committing || !commitMessage.trim()}
+                    className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg text-sm disabled:opacity-50"
+                  >
+                    Commit
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Recent Commits */}
+          <div className="bg-port-card border border-port-border rounded-xl p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Commits</h3>
+            <div className="space-y-2">
+              {gitInfo.recentCommits?.map((commit, i) => (
+                <div key={i} className="py-2 border-b border-port-border last:border-0">
+                  <div className="flex items-center gap-2">
+                    <code className="text-xs text-port-accent">{commit.hash}</code>
+                    <span className="text-sm text-white truncate">{commit.message}</span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {commit.author} • {new Date(commit.date).toLocaleDateString()}
+                  </div>
+                </div>
+              ))}
+              {(!gitInfo.recentCommits || gitInfo.recentCommits.length === 0) && (
+                <div className="text-gray-500 text-sm">No commits</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500">
+          {gitInfo ? 'Not a git repository' : 'Select an app to view git status'}
+        </div>
+      )}
+
+      {/* Diff Modal */}
+      {showDiff && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowDiff(false)}>
+          <div className="bg-port-card border border-port-border rounded-xl w-3/4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-port-border">
+              <h3 className="font-medium text-white">Git Diff</h3>
+              <button onClick={() => setShowDiff(false)} className="text-gray-400 hover:text-white">×</button>
+            </div>
+            <pre className="p-4 overflow-auto max-h-[70vh] text-sm font-mono">
+              {diff.split('\n').map((line, i) => {
+                let color = 'text-gray-300';
+                if (line.startsWith('+') && !line.startsWith('+++')) color = 'text-port-success';
+                if (line.startsWith('-') && !line.startsWith('---')) color = 'text-port-error';
+                if (line.startsWith('@@')) color = 'text-port-accent';
+                return <div key={i} className={color}>{line}</div>;
+              })}
+              {!diff && <span className="text-gray-500">No changes to display</span>}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function UsagePage() {
+  const [usage, setUsage] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadUsage();
+  }, []);
+
+  const loadUsage = async () => {
+    setLoading(true);
+    const data = await api.getUsage().catch(() => null);
+    setUsage(data);
+    setLoading(false);
+  };
+
+  const formatNumber = (num) => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return String(num);
+  };
+
+  if (loading) {
+    return <div className="text-center py-8 text-gray-400">Loading usage data...</div>;
+  }
+
+  if (!usage) {
+    return <div className="text-center py-8 text-gray-500">No usage data available</div>;
+  }
+
+  const maxActivity = Math.max(...(usage.last7Days?.map(d => d.sessions) || [1]));
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold text-white">Usage Metrics</h1>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-5 gap-4">
+        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
+          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalSessions)}</div>
+          <div className="text-sm text-gray-400">Sessions</div>
+        </div>
+        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
+          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalMessages)}</div>
+          <div className="text-sm text-gray-400">Messages</div>
+        </div>
+        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
+          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalToolCalls)}</div>
+          <div className="text-sm text-gray-400">Tool Calls</div>
+        </div>
+        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
+          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalTokens?.input + usage.totalTokens?.output)}</div>
+          <div className="text-sm text-gray-400">Tokens</div>
+        </div>
+        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
+          <div className="text-2xl font-bold text-port-success">${usage.estimatedCost?.toFixed(2)}</div>
+          <div className="text-sm text-gray-400">Est. Cost</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-6">
+        {/* 7-Day Activity */}
+        <div className="bg-port-card border border-port-border rounded-xl p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-4">Last 7 Days</h3>
+          <div className="flex items-end gap-2 h-32">
+            {usage.last7Days?.map((day, i) => (
+              <div key={i} className="flex-1 flex flex-col items-center">
+                <div
+                  className="w-full bg-port-accent/60 rounded-t"
+                  style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
+                />
+                <div className="text-xs text-gray-500 mt-2">{day.label}</div>
+                <div className="text-xs text-gray-400">{day.sessions}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Hourly Distribution */}
+        <div className="bg-port-card border border-port-border rounded-xl p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-4">Hourly Distribution</h3>
+          <div className="flex items-end gap-0.5 h-32">
+            {usage.hourlyActivity?.map((count, hour) => {
+              const maxHour = Math.max(...usage.hourlyActivity);
+              return (
+                <div key={hour} className="flex-1 flex flex-col items-center">
+                  <div
+                    className="w-full bg-port-accent/40 rounded-t"
+                    style={{ height: `${(count / (maxHour || 1)) * 100}%`, minHeight: count > 0 ? 2 : 0 }}
+                    title={`${hour}:00 - ${count} sessions`}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex justify-between text-xs text-gray-500 mt-2">
+            <span>12am</span>
+            <span>6am</span>
+            <span>12pm</span>
+            <span>6pm</span>
+            <span>12am</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-6">
+        {/* Top Providers */}
+        <div className="bg-port-card border border-port-border rounded-xl p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Top Providers</h3>
+          <div className="space-y-2">
+            {usage.topProviders?.map((provider, i) => (
+              <div key={i} className="flex items-center justify-between py-2 border-b border-port-border last:border-0">
+                <span className="text-white">{provider.name}</span>
+                <div className="text-sm text-gray-400">
+                  <span>{provider.sessions} sessions</span>
+                  <span className="mx-2">•</span>
+                  <span>{formatNumber(provider.tokens)} tokens</span>
+                </div>
+              </div>
+            ))}
+            {(!usage.topProviders || usage.topProviders.length === 0) && (
+              <div className="text-gray-500 text-sm">No provider data</div>
+            )}
+          </div>
+        </div>
+
+        {/* Top Models */}
+        <div className="bg-port-card border border-port-border rounded-xl p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Top Models</h3>
+          <div className="space-y-2">
+            {usage.topModels?.map((model, i) => (
+              <div key={i} className="flex items-center justify-between py-2 border-b border-port-border last:border-0">
+                <span className="text-white font-mono text-sm">{model.model}</span>
+                <div className="text-sm text-gray-400">
+                  <span>{model.sessions} sessions</span>
+                  <span className="mx-2">•</span>
+                  <span>{formatNumber(model.tokens)} tokens</span>
+                </div>
+              </div>
+            ))}
+            {(!usage.topModels || usage.topModels.length === 0) && (
+              <div className="text-gray-500 text-sm">No model data</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Refresh button */}
+      <div className="flex justify-end">
+        <button
+          onClick={loadUsage}
+          className="flex items-center gap-2 px-4 py-2 text-gray-400 hover:text-white"
+        >
+          <RefreshCw size={16} /> Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function AgentsPage() {
+  const [agents, setAgents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [killing, setKilling] = useState({});
+  const [expandedPid, setExpandedPid] = useState(null);
+  const REFRESH_INTERVAL = 3;
+
+  useEffect(() => {
+    loadAgents();
+    const interval = setInterval(loadAgents, REFRESH_INTERVAL * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadAgents = async () => {
+    const data = await api.getAgents().catch(() => []);
+    setAgents(data);
+    setLoading(false);
+  };
+
+  const handleKill = async (pid) => {
+    setKilling(prev => ({ ...prev, [pid]: true }));
+    await api.killAgent(pid).catch(() => null);
+    setTimeout(() => {
+      setKilling(prev => ({ ...prev, [pid]: false }));
+      loadAgents();
+    }, 1000);
+  };
+
+  const toggleExpand = (pid) => {
+    setExpandedPid(prev => prev === pid ? null : pid);
+  };
+
+  const formatStartTime = (timestamp) => {
+    return new Date(timestamp).toLocaleString();
+  };
+
+  const totalCpu = agents.reduce((sum, a) => sum + (a.cpu || 0), 0);
+  const totalMemory = agents.reduce((sum, a) => sum + (a.memory || 0), 0);
+
+  if (loading) {
+    return <div className="text-center py-8 text-gray-400">Scanning for AI agents...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Activity size={28} className="text-purple-400" />
+          <h1 className="text-2xl font-bold text-white font-mono">AI Agent Processes</h1>
+          <span className="text-gray-500 text-sm">(auto-refresh: {REFRESH_INTERVAL}s)</span>
+        </div>
+        <button
+          onClick={loadAgents}
+          className="flex items-center gap-2 px-4 py-2 bg-port-card border border-port-border hover:border-gray-500 text-white rounded-lg transition-colors"
+        >
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-port-card border border-port-border rounded-xl p-5 flex items-center justify-between">
+          <div>
+            <div className="text-gray-400 text-sm mb-1">Total Processes</div>
+            <div className="text-3xl font-bold text-white font-mono">{agents.length}</div>
+          </div>
+          <Terminal size={32} className="text-purple-400" />
+        </div>
+        <div className="bg-port-card border border-port-border rounded-xl p-5 flex items-center justify-between">
+          <div>
+            <div className="text-gray-400 text-sm mb-1">Total CPU</div>
+            <div className="text-3xl font-bold text-white font-mono">{totalCpu.toFixed(1)}%</div>
+          </div>
+          <Cpu size={32} className="text-blue-400" />
+        </div>
+        <div className="bg-port-card border border-port-border rounded-xl p-5 flex items-center justify-between">
+          <div>
+            <div className="text-gray-400 text-sm mb-1">Total Memory</div>
+            <div className="text-3xl font-bold text-white font-mono">{totalMemory.toFixed(1)}%</div>
+          </div>
+          <MemoryStick size={32} className="text-green-400" />
+        </div>
+      </div>
+
+      {/* Running Processes Table */}
+      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-port-border">
+          <h2 className="text-lg font-semibold text-white">Running Processes</h2>
+        </div>
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-port-border">
+              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400 w-8"></th>
+              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">PID</th>
+              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Runtime</th>
+              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">CPU %</th>
+              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Memory %</th>
+              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Command</th>
+              <th className="px-4 py-4 text-center text-sm font-semibold text-gray-400">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {agents.map(agent => (
+              <Fragment key={agent.pid}>
+                <tr className="border-b border-port-border/50 hover:bg-port-border/20">
+                  <td className="px-4 py-4">
+                    <button
+                      onClick={() => toggleExpand(agent.pid)}
+                      className="text-gray-400 hover:text-white transition-transform"
+                    >
+                      <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                  </td>
+                  <td className="px-4 py-4 font-mono text-white">{agent.pid}</td>
+                  <td className="px-4 py-4 font-mono text-cyan-400">{agent.runtimeFormatted}</td>
+                  <td className="px-4 py-4 font-mono text-green-400">{agent.cpu?.toFixed(1)}%</td>
+                  <td className="px-4 py-4 font-mono text-blue-400">{agent.memory?.toFixed(1)}%</td>
+                  <td className="px-4 py-4 font-mono text-gray-300">{agent.agentName.toLowerCase()}</td>
+                  <td className="px-4 py-4 text-center">
+                    <button
+                      onClick={() => handleKill(agent.pid)}
+                      disabled={killing[agent.pid]}
+                      className="text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
+                      title="Kill process"
+                    >
+                      <XCircle size={22} className={killing[agent.pid] ? 'animate-pulse' : ''} />
+                    </button>
+                  </td>
+                </tr>
+                {expandedPid === agent.pid && (
+                  <tr>
+                    <td colSpan={7} className="p-0">
+                      <div className="bg-port-bg border-t border-port-border">
+                        <div className="px-6 py-4 space-y-4">
+                          {/* Process Details Grid */}
+                          <div className="grid grid-cols-4 gap-4">
+                            <div>
+                              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Agent Type</div>
+                              <div className="text-sm text-purple-400 font-medium">{agent.agentName}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Parent PID</div>
+                              <div className="text-sm text-gray-300 font-mono">{agent.ppid}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started At</div>
+                              <div className="text-sm text-gray-300">{formatStartTime(agent.startTime)}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime (ms)</div>
+                              <div className="text-sm text-gray-300 font-mono">{agent.runtime?.toLocaleString()}</div>
+                            </div>
+                          </div>
+
+                          {/* Full Command */}
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Full Command</div>
+                            <div className="bg-port-card border border-port-border rounded-lg p-3 overflow-x-auto">
+                              <code className="text-sm text-cyan-300 font-mono whitespace-pre-wrap break-all">
+                                {agent.command}
+                              </code>
+                            </div>
+                          </div>
+
+                          {/* Resource Usage Bar */}
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <div className="flex items-center justify-between text-xs mb-1">
+                                <span className="text-gray-500 uppercase tracking-wide">CPU Usage</span>
+                                <span className="text-green-400 font-mono">{agent.cpu?.toFixed(1)}%</span>
+                              </div>
+                              <div className="h-2 bg-port-border rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-green-500 rounded-full transition-all"
+                                  style={{ width: `${Math.min(agent.cpu || 0, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <div className="flex items-center justify-between text-xs mb-1">
+                                <span className="text-gray-500 uppercase tracking-wide">Memory Usage</span>
+                                <span className="text-blue-400 font-mono">{agent.memory?.toFixed(1)}%</span>
+                              </div>
+                              <div className="h-2 bg-port-border rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-500 rounded-full transition-all"
+                                  style={{ width: `${Math.min(agent.memory || 0, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+            {agents.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                  No AI agents currently running
                 </td>
               </tr>
             )}

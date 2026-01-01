@@ -16,6 +16,10 @@ import runsRoutes from './routes/runs.js';
 import historyRoutes from './routes/history.js';
 import commandsRoutes from './routes/commands.js';
 import promptsRoutes from './routes/prompts.js';
+import gitRoutes from './routes/git.js';
+import usageRoutes from './routes/usage.js';
+import screenshotsRoutes from './routes/screenshots.js';
+import agentsRoutes from './routes/agents.js';
 import { initSocket } from './services/socket.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -61,6 +65,10 @@ app.use('/api/runs', runsRoutes);
 app.use('/api/history', historyRoutes);
 app.use('/api/commands', commandsRoutes);
 app.use('/api/prompts', promptsRoutes);
+app.use('/api/git', gitRoutes);
+app.use('/api/usage', usageRoutes);
+app.use('/api/screenshots', screenshotsRoutes);
+app.use('/api/agents', agentsRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {

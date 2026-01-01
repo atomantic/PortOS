@@ -60,20 +60,21 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
 
   child.on('close', (code) => {
     activeCommands.delete(commandId);
-    const duration = Date.now() - startTime;
+    const runtime = Date.now() - startTime;
     const success = code === 0;
 
     logAction('command', null, command.substring(0, 50), {
       command,
       workspacePath,
       exitCode: code,
-      duration
+      runtime,
+      output: output.substring(0, 10000) // Truncate to prevent huge history
     }, success, success ? null : `Exit code ${code}`);
 
     onComplete?.({
       success,
       exitCode: code,
-      duration,
+      runtime,
       output
     });
   });

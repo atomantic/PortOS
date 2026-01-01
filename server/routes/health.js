@@ -3,6 +3,7 @@ import { Router } from 'express';
 const router = Router();
 
 router.get('/health', (req, res) => {
+  console.log('💓 GET /api/health');
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),

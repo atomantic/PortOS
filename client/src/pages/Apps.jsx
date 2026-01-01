@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import * as api from '../services/api';
 
@@ -9,6 +9,8 @@ export default function Apps() {
   const [loading, setLoading] = useState(true);
   const [editingApp, setEditingApp] = useState(null);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [actionLoading, setActionLoading] = useState({});
 
   const fetchApps = async () => {
     const data = await api.getApps().catch(() => []);
@@ -18,12 +20,45 @@ export default function Apps() {
 
   useEffect(() => {
     fetchApps();
+    const interval = setInterval(fetchApps, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleDelete = async (app) => {
     await api.deleteApp(app.id);
     setConfirmingDelete(null);
     fetchApps();
+  };
+
+  const handleStart = async (app) => {
+    setActionLoading(prev => ({ ...prev, [app.id]: 'start' }));
+    await api.startApp(app.id).catch(() => null);
+    setTimeout(() => {
+      setActionLoading(prev => ({ ...prev, [app.id]: null }));
+      fetchApps();
+    }, 1500);
+  };
+
+  const handleStop = async (app) => {
+    setActionLoading(prev => ({ ...prev, [app.id]: 'stop' }));
+    await api.stopApp(app.id).catch(() => null);
+    setTimeout(() => {
+      setActionLoading(prev => ({ ...prev, [app.id]: null }));
+      fetchApps();
+    }, 1500);
+  };
+
+  const handleRestart = async (app) => {
+    setActionLoading(prev => ({ ...prev, [app.id]: 'restart' }));
+    await api.restartApp(app.id).catch(() => null);
+    setTimeout(() => {
+      setActionLoading(prev => ({ ...prev, [app.id]: null }));
+      fetchApps();
+    }, 2000);
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedId(prev => prev === id ? null : id);
   };
 
   if (loading) {
@@ -69,79 +104,223 @@ export default function Apps() {
             <table className="w-full">
               <thead className="bg-port-border/50">
                 <tr>
+                  <th className="w-8 px-4 py-3"></th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Name</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Path</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Ports</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Status</th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-400">Controls</th>
                   <th className="text-right px-4 py-3 text-sm font-medium text-gray-400">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-port-border">
                 {apps.map(app => (
-                  <tr key={app.id} className="hover:bg-port-border/30">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-white">{app.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {(app.pm2ProcessNames || []).join(', ')}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-sm text-gray-400 truncate max-w-xs" title={app.repoPath}>
-                        {app.repoPath}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-400">
-                      {app.uiPort && <span className="mr-2">UI: {app.uiPort}</span>}
-                      {app.apiPort && <span>API: {app.apiPort}</span>}
-                      {!app.uiPort && !app.apiPort && '-'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={app.overallStatus} size="sm" />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {confirmingDelete === app.id ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <span className="text-xs text-gray-400">Remove from PortOS?</span>
-                          <button
-                            onClick={() => handleDelete(app)}
-                            className="text-sm px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded"
-                          >
-                            Yes
-                          </button>
-                          <button
-                            onClick={() => setConfirmingDelete(null)}
-                            className="text-sm px-2 py-1 text-gray-400 hover:text-white"
-                          >
-                            No
-                          </button>
+                  <Fragment key={app.id}>
+                    <tr className="hover:bg-port-border/30">
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => toggleExpand(app.id)}
+                          className="text-gray-400 hover:text-white transition-transform"
+                        >
+                          <span className={`inline-block transition-transform ${expandedId === app.id ? 'rotate-90' : ''}`}>▶</span>
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-white">{app.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {(app.pm2ProcessNames || []).join(', ')}
                         </div>
-                      ) : (
-                        <>
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        <div className="flex items-center gap-3">
                           {app.uiPort && (
                             <button
                               onClick={() => window.open(`http://localhost:${app.uiPort}`, '_blank')}
-                              className="text-sm text-green-400 hover:text-green-300 mr-3"
+                              className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1"
                               title={`Open UI at localhost:${app.uiPort}`}
                             >
-                              <ExternalLink size={16} className="inline" />
+                              :{app.uiPort} <ExternalLink size={12} />
                             </button>
                           )}
-                          <button
-                            onClick={() => setEditingApp(app)}
-                            className="text-sm text-port-accent hover:text-port-accent/80 mr-3"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => setConfirmingDelete(app.id)}
-                            className="text-sm text-port-error hover:text-port-error/80"
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
+                          {app.apiPort && (
+                            <span className="text-gray-400 font-mono">API:{app.apiPort}</span>
+                          )}
+                          {!app.uiPort && !app.apiPort && <span className="text-gray-500">-</span>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={app.overallStatus} size="sm" />
+                      </td>
+                      <td className="px-4 py-3">
+                        {/* Start/Stop/Restart Button Group */}
+                        <div className="flex justify-center">
+                          <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                            {app.overallStatus === 'online' ? (
+                              <>
+                                <button
+                                  onClick={() => handleStop(app)}
+                                  disabled={actionLoading[app.id]}
+                                  className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                                  title="Stop"
+                                >
+                                  <Square size={14} />
+                                  <span className="text-xs">Stop</span>
+                                </button>
+                                <button
+                                  onClick={() => handleRestart(app)}
+                                  disabled={actionLoading[app.id]}
+                                  className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
+                                  title="Restart"
+                                >
+                                  <RotateCcw size={14} className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
+                                  <span className="text-xs">Restart</span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => handleStart(app)}
+                                disabled={actionLoading[app.id]}
+                                className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                                title="Start"
+                              >
+                                <Play size={14} />
+                                <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {confirmingDelete === app.id ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <span className="text-xs text-gray-400">Remove?</span>
+                            <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                              <button
+                                onClick={() => handleDelete(app)}
+                                className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs"
+                              >
+                                Yes
+                              </button>
+                              <button
+                                onClick={() => setConfirmingDelete(null)}
+                                className="px-2 py-1 bg-port-border/50 text-gray-400 hover:text-white text-xs border-l border-port-border"
+                              >
+                                No
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                            <button
+                              onClick={() => setEditingApp(app)}
+                              className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => setConfirmingDelete(app.id)}
+                              className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+
+                    {/* Expanded Details Row */}
+                    {expandedId === app.id && (
+                      <tr>
+                        <td colSpan={6} className="p-0">
+                          <div className="bg-port-bg border-t border-port-border">
+                            <div className="px-6 py-4 space-y-4">
+                              {/* Details Grid */}
+                              <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Repository Path</div>
+                                  <div className="flex items-center gap-2">
+                                    <FolderOpen size={16} className="text-yellow-400" />
+                                    <code className="text-sm text-gray-300 font-mono">{app.repoPath}</code>
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Editor Command</div>
+                                  <div className="flex items-center gap-2">
+                                    <Code size={16} className="text-blue-400" />
+                                    <code className="text-sm text-gray-300 font-mono">{app.editorCommand || 'code .'}</code>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Start Commands */}
+                              {app.startCommands?.length > 0 && (
+                                <div>
+                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Start Commands</div>
+                                  <div className="bg-port-card border border-port-border rounded-lg p-3">
+                                    {app.startCommands.map((cmd, i) => (
+                                      <div key={i} className="flex items-center gap-2 py-1">
+                                        <Terminal size={14} className="text-green-400" />
+                                        <code className="text-sm text-cyan-300 font-mono">{cmd}</code>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* PM2 Processes Status */}
+                              {app.pm2Status && Object.keys(app.pm2Status).length > 0 && (
+                                <div>
+                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">PM2 Processes</div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {Object.values(app.pm2Status).map((proc, i) => (
+                                      <div
+                                        key={i}
+                                        className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border rounded-lg"
+                                      >
+                                        <span className={`w-2 h-2 rounded-full ${
+                                          proc.status === 'online' ? 'bg-port-success' :
+                                          proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
+                                        }`} />
+                                        <span className="text-sm text-white font-mono">{proc.name}</span>
+                                        <span className="text-xs text-gray-500">{proc.status}</span>
+                                        {proc.cpu !== undefined && (
+                                          <span className="text-xs text-green-400">{proc.cpu}%</span>
+                                        )}
+                                        {proc.memory !== undefined && (
+                                          <span className="text-xs text-blue-400">{(proc.memory / 1024 / 1024).toFixed(0)}MB</span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Quick Actions */}
+                              <div className="flex gap-2 pt-2">
+                                <button
+                                  onClick={() => {
+                                    const cmd = `cd "${app.repoPath}" && ${app.editorCommand || 'code .'}`;
+                                    api.executeCommand(cmd).catch(() => null);
+                                  }}
+                                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                                >
+                                  <Code size={14} /> Open in Editor
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const cmd = `open "${app.repoPath}"`;
+                                    api.executeCommand(cmd).catch(() => null);
+                                  }}
+                                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                                >
+                                  <FolderOpen size={14} /> Open Folder
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

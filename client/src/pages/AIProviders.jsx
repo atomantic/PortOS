@@ -248,6 +248,14 @@ export default function AIProviders() {
                   {provider.defaultModel && (
                     <p>Default: <code className="text-gray-300">{provider.defaultModel}</code></p>
                   )}
+                  {(provider.lightModel || provider.mediumModel || provider.heavyModel) && (
+                    <p className="text-xs">
+                      Tiers:
+                      {provider.lightModel && <span className="ml-1 text-green-400">{provider.lightModel}</span>}
+                      {provider.mediumModel && <span className="ml-1 text-yellow-400">{provider.mediumModel}</span>}
+                      {provider.heavyModel && <span className="ml-1 text-red-400">{provider.heavyModel}</span>}
+                    </p>
+                  )}
                 </div>
 
                 {testResults[provider.id] && !testResults[provider.id].testing && (
@@ -377,6 +385,9 @@ function ProviderForm({ provider, onClose, onSave }) {
     endpoint: provider?.endpoint || '',
     apiKey: provider?.apiKey || '',
     defaultModel: provider?.defaultModel || '',
+    lightModel: provider?.lightModel || '',
+    mediumModel: provider?.mediumModel || '',
+    heavyModel: provider?.heavyModel || '',
     timeout: provider?.timeout || 300000,
     enabled: provider?.enabled !== false
   });
@@ -493,6 +504,43 @@ function ProviderForm({ provider, onClose, onSave }) {
               placeholder="claude-sonnet-4-20250514"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
             />
+          </div>
+
+          {/* Model Tiers */}
+          <div className="border-t border-port-border pt-4 mt-4">
+            <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tiers</h4>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Light (fast)</label>
+                <input
+                  type="text"
+                  value={formData.lightModel}
+                  onChange={(e) => setFormData(prev => ({ ...prev, lightModel: e.target.value }))}
+                  placeholder="haiku"
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Medium (balanced)</label>
+                <input
+                  type="text"
+                  value={formData.mediumModel}
+                  onChange={(e) => setFormData(prev => ({ ...prev, mediumModel: e.target.value }))}
+                  placeholder="sonnet"
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Heavy (powerful)</label>
+                <input
+                  type="text"
+                  value={formData.heavyModel}
+                  onChange={(e) => setFormData(prev => ({ ...prev, heavyModel: e.target.value }))}
+                  placeholder="opus"
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-none"
+                />
+              </div>
+            </div>
           </div>
 
           <div>

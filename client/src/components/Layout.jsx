@@ -13,7 +13,10 @@ import {
   Menu,
   History,
   Play,
-  Activity
+  Activity,
+  GitBranch,
+  BarChart3,
+  Cpu
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -28,7 +31,10 @@ const navItems = [
     children: [
       { to: '/devtools/history', label: 'History', icon: History },
       { to: '/devtools/runner', label: 'Runner', icon: Play },
-      { to: '/devtools/processes', label: 'Processes', icon: Activity }
+      { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
+      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
+      { to: '/devtools/processes', label: 'Processes', icon: Activity },
+      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu }
     ]
   },
   {

@@ -8,14 +8,20 @@ const router = Router();
 
 // GET /api/apps - List all apps
 router.get('/', async (req, res, next) => {
+  console.log('📱 GET /api/apps - fetching apps list');
   const apps = await appsService.getAllApps();
+  console.log(`📱 GET /api/apps - found ${apps.length} apps`);
+
+  // Get all PM2 processes once
+  const allPm2 = await pm2Service.listProcesses().catch(() => []);
+  const pm2Map = new Map(allPm2.map(p => [p.name, p]));
 
   // Enrich with PM2 status
-  const enriched = await Promise.all(apps.map(async (app) => {
+  const enriched = apps.map((app) => {
     const statuses = {};
     for (const processName of app.pm2ProcessNames || []) {
-      const status = await pm2Service.getAppStatus(processName).catch(() => ({ status: 'unknown' }));
-      statuses[processName] = status;
+      const pm2Proc = pm2Map.get(processName);
+      statuses[processName] = pm2Proc || { name: processName, status: 'not_found', pm2_env: null };
     }
 
     // Compute overall status
@@ -34,8 +40,9 @@ router.get('/', async (req, res, next) => {
       pm2Status: statuses,
       overallStatus
     };
-  }));
+  });
 
+  console.log(`📱 GET /api/apps - responding with ${enriched.length} apps`);
   res.json(enriched);
 });
 

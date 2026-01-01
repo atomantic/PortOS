@@ -34,8 +34,11 @@ pm2 logs
 - [x] M5: AI providers + headless executor
 - [x] M6: Dev tools (history, command runner)
 - [ ] M7: App templates (create from templates, template management)
-- [ ] M8: Prompt manager (customizable AI prompts, variables, stages)
+- [x] M8: Prompt manager (customizable AI prompts, variables, stages)
 - [x] M9: Streaming import detection (websocket updates, progressive discovery)
+- [x] M10: Enhanced DevTools (provider/model selection, screenshot upload, git status, usage metrics)
+- [x] M11: AI Agents Page (process detection, kill ability, colorful UI, expandable details)
+- [x] M12: History Improvements (expandable entries, runtime/output capture, full command display)
 
 ### Documentation
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
@@ -143,6 +146,9 @@ Scaffold a new project from template:
 | POST /api/templates/create | Create app from template |
 | POST /api/templates | Add custom template |
 | DELETE /api/templates/:id | Delete custom template |
+| GET /api/agents | List running AI agent processes |
+| GET /api/agents/:pid | Get agent process details |
+| DELETE /api/agents/:pid | Kill agent process |
 
 ---
 

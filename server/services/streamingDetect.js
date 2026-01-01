@@ -3,15 +3,13 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getActiveProvider, getProviderById } from './providers.js';
-import { spawn } from 'child_process';
 
 const execAsync = promisify(exec);
 
 /**
  * Stream detection results to a socket as each step completes
  */
-export async function streamDetection(socket, dirPath, providerId = null) {
+export async function streamDetection(socket, dirPath) {
   const emit = (step, status, data = {}) => {
     socket.emit('detect:step', { step, status, data, timestamp: Date.now() });
   };
@@ -55,12 +53,11 @@ export async function streamDetection(socket, dirPath, providerId = null) {
   // Step 3: Read package.json
   emit('package', 'running', { message: 'Reading package.json...' });
   const pkgPath = join(dirPath, 'package.json');
-  let pkg = null;
 
   if (existsSync(pkgPath)) {
     const content = await readFile(pkgPath, 'utf-8').catch(() => null);
     if (content) {
-      pkg = JSON.parse(content);
+      const pkg = JSON.parse(content);
       result.name = pkg.name || result.name;
       result.description = pkg.description || '';
 
@@ -114,10 +111,41 @@ export async function streamDetection(socket, dirPath, providerId = null) {
     }
   }
 
+  // Check ecosystem.config.js/cjs for PM2 configuration
+  for (const ecosystemFile of ['ecosystem.config.js', 'ecosystem.config.cjs']) {
+    const ecosystemPath = join(dirPath, ecosystemFile);
+    if (existsSync(ecosystemPath)) {
+      const content = await readFile(ecosystemPath, 'utf-8').catch(() => '');
+      if (content) {
+        // Extract PORT from env_development or env_production
+        const portMatch = content.match(/PORT\s*:\s*(\d+)/);
+        if (portMatch && !result.apiPort) {
+          result.apiPort = parseInt(portMatch[1]);
+        }
+
+        // Extract UI port from CLIENT_URL
+        const clientUrlMatch = content.match(/CLIENT_URL\s*:\s*['"]https?:\/\/[^:]+:(\d+)/);
+        if (clientUrlMatch && !result.uiPort) {
+          result.uiPort = parseInt(clientUrlMatch[1]);
+        }
+
+        // Extract PM2 process names
+        const nameMatches = content.matchAll(/name\s*:\s*['"]([^'"]+)['"]/g);
+        const ecosystemNames = [...nameMatches].map(m => m[1]);
+        if (ecosystemNames.length > 0) {
+          result.pm2ProcessNames = ecosystemNames;
+        }
+
+        configFiles.push(ecosystemFile);
+      }
+    }
+  }
+
   emit('config', 'done', {
     message: configFiles.length ? `Found: ${configFiles.join(', ')}` : 'No config files found',
     uiPort: result.uiPort,
     apiPort: result.apiPort,
+    pm2ProcessNames: result.pm2ProcessNames.length > 0 ? result.pm2ProcessNames : undefined,
     configFiles
   });
 
@@ -145,135 +173,56 @@ export async function streamDetection(socket, dirPath, providerId = null) {
       status: p.pm2_env?.status,
       pid: p.pid
     }));
+    // Use actual found PM2 process names
+    result.pm2ProcessNames = matchingProcesses.map(p => p.name);
     emit('pm2', 'done', {
       message: `Found ${matchingProcesses.length} running process(es)`,
-      pm2Status: result.pm2Status
+      pm2Status: result.pm2Status,
+      pm2ProcessNames: result.pm2ProcessNames
     });
   } else {
     emit('pm2', 'done', { message: 'No matching PM2 processes found' });
+    // Generate PM2 process names only if none found from ecosystem.config
+    if (result.pm2ProcessNames.length === 0) {
+      const baseName = result.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+      if (result.type === 'vite+express') {
+        result.pm2ProcessNames = [`${baseName}-ui`, `${baseName}-api`];
+      } else {
+        result.pm2ProcessNames = [baseName];
+      }
+    }
   }
 
-  // Generate PM2 process names
-  const baseName = result.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-  if (result.type === 'vite+express') {
-    result.pm2ProcessNames = [`${baseName}-ui`, `${baseName}-api`];
-  } else {
-    result.pm2ProcessNames = [baseName];
-  }
-
-  // Step 6: AI-powered analysis (if provider available)
-  const provider = providerId
-    ? await getProviderById(providerId)
-    : await getActiveProvider();
-
-  if (provider?.enabled) {
-    emit('ai', 'running', { message: `Analyzing with ${provider.name}...` });
-
-    const aiResult = await runAiAnalysis(dirPath, provider, { pkg, files }).catch(err => {
-      console.log(`⚠️ AI analysis failed: ${err.message}`);
-      return null;
-    });
-
-    if (aiResult) {
-      // Merge AI results (AI takes precedence for name/description)
-      if (aiResult.name) result.name = aiResult.name;
-      if (aiResult.description) result.description = aiResult.description;
-      if (aiResult.uiPort && !result.uiPort) result.uiPort = aiResult.uiPort;
-      if (aiResult.apiPort && !result.apiPort) result.apiPort = aiResult.apiPort;
-      if (aiResult.startCommands?.length) result.startCommands = aiResult.startCommands;
-      if (aiResult.pm2ProcessNames?.length) result.pm2ProcessNames = aiResult.pm2ProcessNames;
-
-      emit('ai', 'done', {
-        message: 'AI analysis complete',
-        name: result.name,
-        description: result.description
-      });
-    } else {
-      emit('ai', 'skipped', { message: 'AI analysis unavailable' });
+  // Step 6: Read README.md for description (fast, no AI needed)
+  if (!result.description) {
+    emit('readme', 'running', { message: 'Reading README.md...' });
+    let foundReadme = false;
+    for (const readmeFile of ['README.md', 'readme.md', 'Readme.md']) {
+      const readmePath = join(dirPath, readmeFile);
+      if (existsSync(readmePath)) {
+        const content = await readFile(readmePath, 'utf-8').catch(() => '');
+        if (content) {
+          // Extract first paragraph or heading as description
+          const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('!'));
+          if (lines.length > 0) {
+            result.description = lines[0].trim().substring(0, 200);
+          }
+          emit('readme', 'done', { message: `Found: ${readmeFile}`, description: result.description });
+          foundReadme = true;
+          break;
+        }
+      }
+    }
+    if (!foundReadme) {
+      emit('readme', 'done', { message: 'No README found' });
     }
   } else {
-    emit('ai', 'skipped', { message: 'No AI provider configured' });
+    emit('readme', 'skipped', { message: 'Description already found in package.json' });
   }
 
   // Complete
   socket.emit('detect:complete', {
     success: true,
-    result,
-    provider: provider?.name || null
+    result
   });
-}
-
-/**
- * Run AI analysis on project
- */
-async function runAiAnalysis(dirPath, provider, context) {
-  const prompt = buildPrompt(dirPath, context);
-
-  let response;
-  if (provider.type === 'cli') {
-    response = await executeCliPrompt(provider, prompt, dirPath);
-  } else if (provider.type === 'api') {
-    response = await executeApiPrompt(provider, prompt);
-  } else {
-    throw new Error('Unknown provider type');
-  }
-
-  return parseResponse(response);
-}
-
-function buildPrompt(dirPath, { pkg, files }) {
-  return `Analyze this project and return JSON configuration.
-
-Directory: ${basename(dirPath)}
-Files: ${files.slice(0, 30).join(', ')}
-${pkg ? `package.json name: ${pkg.name}, scripts: ${Object.keys(pkg.scripts || {}).join(', ')}` : 'No package.json'}
-
-Return ONLY valid JSON:
-{
-  "name": "Human readable app name",
-  "description": "One sentence description",
-  "uiPort": null or number,
-  "apiPort": null or number,
-  "startCommands": ["npm run dev"],
-  "pm2ProcessNames": ["app-name"]
-}`;
-}
-
-async function executeCliPrompt(provider, prompt, cwd) {
-  return new Promise((resolve, reject) => {
-    const args = [...(provider.args || []), prompt];
-    let output = '';
-    const child = spawn(provider.command, args, { cwd, env: process.env, shell: false });
-    child.stdout.on('data', d => output += d.toString());
-    child.stderr.on('data', d => output += d.toString());
-    child.on('close', code => code === 0 ? resolve(output) : reject(new Error(`Exit ${code}`)));
-    child.on('error', reject);
-    setTimeout(() => { child.kill(); reject(new Error('Timeout')); }, provider.timeout || 60000);
-  });
-}
-
-async function executeApiPrompt(provider, prompt) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-  const res = await fetch(`${provider.endpoint}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: provider.defaultModel,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1
-    })
-  });
-
-  if (!res.ok) throw new Error(`API ${res.status}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
-}
-
-function parseResponse(response) {
-  let str = response.trim();
-  const match = str.match(/```(?:json)?\s*([\s\S]*?)```/) || str.match(/\{[\s\S]*\}/);
-  if (match) str = match[1] || match[0];
-  return JSON.parse(str);
 }

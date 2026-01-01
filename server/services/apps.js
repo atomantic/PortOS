@@ -41,19 +41,20 @@ async function saveApps(data) {
 }
 
 /**
- * Get all apps
+ * Get all apps (injects id from key)
  */
 export async function getAllApps() {
   const data = await loadApps();
-  return Object.values(data.apps);
+  return Object.entries(data.apps).map(([id, app]) => ({ id, ...app }));
 }
 
 /**
- * Get app by ID
+ * Get app by ID (injects id from key)
  */
 export async function getAppById(id) {
   const data = await loadApps();
-  return data.apps[id] || null;
+  const app = data.apps[id];
+  return app ? { id, ...app } : null;
 }
 
 /**
@@ -64,11 +65,14 @@ export async function createApp(appData) {
   const id = uuidv4();
   const now = new Date().toISOString();
 
+  // Store without id (key is id) and without uiUrl (derived from uiPort)
   const app = {
-    id,
-    ...appData,
-    // Don't hardcode host - client will construct URL from current hostname
-    uiUrl: appData.uiUrl || null,
+    name: appData.name,
+    description: appData.description || '',
+    repoPath: appData.repoPath,
+    type: appData.type || 'unknown',
+    uiPort: appData.uiPort || null,
+    apiPort: appData.apiPort || null,
     startCommands: appData.startCommands || ['npm run dev'],
     pm2ProcessNames: appData.pm2ProcessNames || [appData.name.toLowerCase().replace(/\s+/g, '-')],
     envFile: appData.envFile || '.env',
@@ -81,7 +85,8 @@ export async function createApp(appData) {
   data.apps[id] = app;
   await saveApps(data);
 
-  return app;
+  // Return with id injected
+  return { id, ...app };
 }
 
 /**
@@ -94,23 +99,21 @@ export async function updateApp(id, updates) {
     return null;
   }
 
+  // Remove id and uiUrl from updates if present (id is key, uiUrl is derived)
+  const { id: _id, uiUrl: _uiUrl, ...cleanUpdates } = updates;
+
   const app = {
     ...data.apps[id],
-    ...updates,
-    id, // Prevent ID override
+    ...cleanUpdates,
     createdAt: data.apps[id].createdAt, // Preserve creation date
     updatedAt: new Date().toISOString()
   };
 
-  // Clear uiUrl if uiPort changed - client will construct URL dynamically
-  if (updates.uiPort && !updates.uiUrl) {
-    app.uiUrl = null;
-  }
-
   data.apps[id] = app;
   await saveApps(data);
 
-  return app;
+  // Return with id injected
+  return { id, ...app };
 }
 
 /**
