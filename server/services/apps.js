@@ -67,7 +67,8 @@ export async function createApp(appData) {
   const app = {
     id,
     ...appData,
-    uiUrl: appData.uiUrl || (appData.uiPort ? `http://localhost:${appData.uiPort}` : null),
+    // Don't hardcode host - client will construct URL from current hostname
+    uiUrl: appData.uiUrl || null,
     startCommands: appData.startCommands || ['npm run dev'],
     pm2ProcessNames: appData.pm2ProcessNames || [appData.name.toLowerCase().replace(/\s+/g, '-')],
     envFile: appData.envFile || '.env',
@@ -101,9 +102,9 @@ export async function updateApp(id, updates) {
     updatedAt: new Date().toISOString()
   };
 
-  // Recompute uiUrl if uiPort changed
+  // Clear uiUrl if uiPort changed - client will construct URL dynamically
   if (updates.uiPort && !updates.uiUrl) {
-    app.uiUrl = `http://localhost:${updates.uiPort}`;
+    app.uiUrl = null;
   }
 
   data.apps[id] = app;

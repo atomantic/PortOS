@@ -4,15 +4,16 @@ import { z } from 'zod';
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),
-  type: z.enum(['vite+express', 'single-node-server', 'static']),
-  uiPort: z.number().int().min(1).max(65535).optional(),
-  apiPort: z.number().int().min(1).max(65535).optional(),
+  type: z.string().optional().default('express'),
+  uiPort: z.number().int().min(1).max(65535).nullable().optional(),
+  apiPort: z.number().int().min(1).max(65535).nullable().optional(),
   uiUrl: z.string().url().optional(),
   startCommands: z.array(z.string()).min(1).optional(),
   pm2ProcessNames: z.array(z.string()).optional(),
   envFile: z.string().optional(),
   icon: z.string().nullable().optional(),
-  editorCommand: z.string().optional()
+  editorCommand: z.string().optional(),
+  description: z.string().optional()
 });
 
 // Partial schema for updates

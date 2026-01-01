@@ -8,12 +8,12 @@ module.exports = {
       env: {
         NODE_ENV: 'development',
         PORT: 5554,
-        HOST: '127.0.0.1'
+        HOST: '0.0.0.0'
       },
       env_production: {
         NODE_ENV: 'production',
         PORT: 5554,
-        HOST: '127.0.0.1'
+        HOST: '0.0.0.0'
       },
       watch: false,
       max_memory_restart: '500M'
@@ -22,7 +22,7 @@ module.exports = {
       name: 'portos-client',
       script: 'node_modules/.bin/vite',
       cwd: `${__dirname}/client`,
-      args: '--host 127.0.0.1 --port 5555',
+      args: '--host 0.0.0.0 --port 5555',
       env: {
         NODE_ENV: 'development'
       },

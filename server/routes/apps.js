@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
+import { logAction } from '../services/history.js';
 import { validate, appSchema, appUpdateSchema } from '../lib/validation.js';
 
 const router = Router();
@@ -125,6 +126,9 @@ router.post('/:id/start', async (req, res, next) => {
     results[name] = result;
   }
 
+  const allSuccess = Object.values(results).every(r => r.success !== false);
+  await logAction('start', app.id, app.name, { processNames }, allSuccess);
+
   res.json({ success: true, results });
 });
 
@@ -144,6 +148,9 @@ router.post('/:id/stop', async (req, res, next) => {
     results[name] = result;
   }
 
+  const allSuccess = Object.values(results).every(r => r.success !== false);
+  await logAction('stop', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
+
   res.json({ success: true, results });
 });
 
@@ -162,6 +169,9 @@ router.post('/:id/restart', async (req, res, next) => {
       .catch(err => ({ success: false, error: err.message }));
     results[name] = result;
   }
+
+  const allSuccess = Object.values(results).every(r => r.success !== false);
+  await logAction('restart', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
 
   res.json({ success: true, results });
 });

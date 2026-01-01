@@ -2,8 +2,20 @@ import { useState } from 'react';
 import StatusBadge from './StatusBadge';
 import * as api from '../services/api';
 
+// Construct app URL using current hostname (works with Tailscale)
+function getAppUrl(app) {
+  if (app.uiUrl) return app.uiUrl;
+  if (app.uiPort) {
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    return `${protocol}//${hostname}:${app.uiPort}`;
+  }
+  return null;
+}
+
 export default function AppTile({ app, onUpdate }) {
   const [loading, setLoading] = useState(null);
+  const appUrl = getAppUrl(app);
 
   const handleAction = async (action) => {
     setLoading(action);
@@ -59,9 +71,9 @@ export default function AppTile({ app, onUpdate }) {
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
         {/* Open UI */}
-        {app.uiUrl && isOnline && (
+        {appUrl && isOnline && (
           <a
-            href={app.uiUrl}
+            href={appUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="px-3 py-1.5 text-sm rounded-lg bg-port-accent hover:bg-port-accent/80 text-white transition-colors"

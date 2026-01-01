@@ -67,10 +67,10 @@ export default function Dashboard() {
             Register your first app to get started
           </p>
           <Link
-            to="/apps"
+            to="/create"
             className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
           >
-            Register App
+            Add App
           </Link>
         </div>
       ) : (
