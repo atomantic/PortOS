@@ -18,6 +18,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "supertest": "^7.1.4",
     "vitest": "^2.1.8"
   }
 }
