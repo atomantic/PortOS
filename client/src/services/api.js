@@ -45,6 +45,8 @@ export const deleteApp = (id) => request(`/apps/${id}`, { method: 'DELETE' });
 export const startApp = (id) => request(`/apps/${id}/start`, { method: 'POST' });
 export const stopApp = (id) => request(`/apps/${id}/stop`, { method: 'POST' });
 export const restartApp = (id) => request(`/apps/${id}/restart`, { method: 'POST' });
+export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { method: 'POST' });
+export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppLogs = (id, lines = 100, processName) => {
   const params = new URLSearchParams({ lines: String(lines) });
@@ -135,6 +137,11 @@ export const scaffoldApp = (data) => request('/scaffold', {
   body: JSON.stringify(data)
 });
 
+export const createFromTemplate = (data) => request('/templates/create', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+
 // Providers
 export const getProviders = () => request('/providers');
 export const getActiveProvider = () => request('/providers/active');
@@ -191,3 +198,49 @@ export const executeCommand = (command, workspacePath) => request('/commands/exe
 export const stopCommand = (id) => request(`/commands/${id}/stop`, { method: 'POST' });
 export const getAllowedCommands = () => request('/commands/allowed');
 export const getProcessesList = () => request('/commands/processes');
+
+// Git
+export const getGitInfo = (path) => request('/git/info', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});
+export const getGitStatus = (path) => request('/git/status', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});
+export const getGitDiff = (path, staged = false) => request('/git/diff', {
+  method: 'POST',
+  body: JSON.stringify({ path, staged })
+});
+export const getGitCommits = (path, limit = 10) => request('/git/commits', {
+  method: 'POST',
+  body: JSON.stringify({ path, limit })
+});
+export const stageFiles = (path, files) => request('/git/stage', {
+  method: 'POST',
+  body: JSON.stringify({ path, files })
+});
+export const unstageFiles = (path, files) => request('/git/unstage', {
+  method: 'POST',
+  body: JSON.stringify({ path, files })
+});
+export const createCommit = (path, message) => request('/git/commit', {
+  method: 'POST',
+  body: JSON.stringify({ path, message })
+});
+
+// Usage
+export const getUsage = () => request('/usage');
+export const getUsageRaw = () => request('/usage/raw');
+export const resetUsage = () => request('/usage', { method: 'DELETE' });
+
+// Screenshots
+export const uploadScreenshot = (base64Data, filename, mimeType) => request('/screenshots', {
+  method: 'POST',
+  body: JSON.stringify({ data: base64Data, filename, mimeType })
+});
+
+// Agents
+export const getAgents = () => request('/agents');
+export const getAgentInfo = (pid) => request(`/agents/${pid}`);
+export const killAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });

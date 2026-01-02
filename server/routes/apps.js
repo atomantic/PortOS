@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { spawn } from 'child_process';
+import { existsSync } from 'fs';
 import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { logAction } from '../services/history.js';
@@ -8,14 +10,20 @@ const router = Router();
 
 // GET /api/apps - List all apps
 router.get('/', async (req, res, next) => {
+  console.log('📱 GET /api/apps - fetching apps list');
   const apps = await appsService.getAllApps();
+  console.log(`📱 GET /api/apps - found ${apps.length} apps`);
+
+  // Get all PM2 processes once
+  const allPm2 = await pm2Service.listProcesses().catch(() => []);
+  const pm2Map = new Map(allPm2.map(p => [p.name, p]));
 
   // Enrich with PM2 status
-  const enriched = await Promise.all(apps.map(async (app) => {
+  const enriched = apps.map((app) => {
     const statuses = {};
     for (const processName of app.pm2ProcessNames || []) {
-      const status = await pm2Service.getAppStatus(processName).catch(() => ({ status: 'unknown' }));
-      statuses[processName] = status;
+      const pm2Proc = pm2Map.get(processName);
+      statuses[processName] = pm2Proc || { name: processName, status: 'not_found', pm2_env: null };
     }
 
     // Compute overall status
@@ -34,8 +42,9 @@ router.get('/', async (req, res, next) => {
       pm2Status: statuses,
       overallStatus
     };
-  }));
+  });
 
+  console.log(`📱 GET /api/apps - responding with ${enriched.length} apps`);
   res.json(enriched);
 });
 
@@ -214,6 +223,68 @@ router.get('/:id/logs', async (req, res, next) => {
     .catch(err => `Error retrieving logs: ${err.message}`);
 
   res.json({ processName, lines, logs });
+});
+
+// POST /api/apps/:id/open-editor - Open app in editor
+router.post('/:id/open-editor', async (req, res, next) => {
+  const app = await appsService.getAppById(req.params.id);
+
+  if (!app) {
+    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+  }
+
+  if (!existsSync(app.repoPath)) {
+    return res.status(400).json({ error: 'App path does not exist', code: 'PATH_NOT_FOUND' });
+  }
+
+  const editorCommand = app.editorCommand || 'code .';
+  const [cmd, ...args] = editorCommand.split(/\s+/);
+
+  // Spawn the editor process detached so it doesn't block
+  const child = spawn(cmd, args, {
+    cwd: app.repoPath,
+    detached: true,
+    stdio: 'ignore'
+  });
+  child.unref();
+
+  res.json({ success: true, command: editorCommand, path: app.repoPath });
+});
+
+// POST /api/apps/:id/open-folder - Open app folder in file manager
+router.post('/:id/open-folder', async (req, res, next) => {
+  const app = await appsService.getAppById(req.params.id);
+
+  if (!app) {
+    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+  }
+
+  if (!existsSync(app.repoPath)) {
+    return res.status(400).json({ error: 'App path does not exist', code: 'PATH_NOT_FOUND' });
+  }
+
+  // Cross-platform folder open command
+  const platform = process.platform;
+  let cmd, args;
+
+  if (platform === 'darwin') {
+    cmd = 'open';
+    args = [app.repoPath];
+  } else if (platform === 'win32') {
+    cmd = 'explorer';
+    args = [app.repoPath];
+  } else {
+    cmd = 'xdg-open';
+    args = [app.repoPath];
+  }
+
+  const child = spawn(cmd, args, {
+    detached: true,
+    stdio: 'ignore'
+  });
+  child.unref();
+
+  res.json({ success: true, path: app.repoPath });
 });
 
 export default router;

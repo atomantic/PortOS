@@ -18,24 +18,40 @@ const router = Router();
 router.get('/templates', async (req, res) => {
   const templates = [
     {
-      id: 'vite-react',
-      name: 'Vite + React',
-      description: 'React app with Vite bundler',
-      type: 'vite',
-      ports: { ui: true, api: false }
+      id: 'portos-stack',
+      name: 'PortOS Stack',
+      description: 'Express + React + Vite with Tailwind, PM2, and GitHub Actions CI/CD',
+      type: 'portos-stack',
+      icon: 'layers',
+      builtIn: true,
+      features: ['Express.js API', 'React + Vite frontend', 'Tailwind CSS', 'PM2 ecosystem', 'GitHub Actions CI/CD', 'Collapsible nav layout'],
+      ports: { ui: true, api: true }
     },
     {
       id: 'vite-express',
       name: 'Vite + Express',
       description: 'Full-stack with React frontend and Express API',
       type: 'vite+express',
+      icon: 'code',
+      features: ['React + Vite', 'Express.js API', 'CORS configured'],
       ports: { ui: true, api: true }
+    },
+    {
+      id: 'vite-react',
+      name: 'Vite + React',
+      description: 'React app with Vite bundler',
+      type: 'vite',
+      icon: 'globe',
+      features: ['React 18', 'Vite bundler', 'Fast HMR'],
+      ports: { ui: true, api: false }
     },
     {
       id: 'express-api',
       name: 'Express API',
       description: 'Node.js Express API server',
       type: 'single-node-server',
+      icon: 'server',
+      features: ['Express.js', 'CORS', 'Health endpoint'],
       ports: { ui: false, api: true }
     }
   ];
@@ -43,8 +59,38 @@ router.get('/templates', async (req, res) => {
   res.json(templates);
 });
 
-// POST /api/scaffold - Create a new app from template
-router.post('/', async (req, res) => {
+// POST /api/templates/create - User-friendly template creation
+router.post('/templates/create', async (req, res) => {
+  const { templateId, name, targetPath } = req.body;
+
+  if (!templateId || !name || !targetPath) {
+    return res.status(400).json({
+      error: 'templateId, name, and targetPath are required'
+    });
+  }
+
+  // Map to scaffold endpoint format
+  const scaffoldData = {
+    name,
+    template: templateId,
+    parentDir: targetPath
+  };
+
+  // For portos-stack, we need to handle it specially (not implemented yet)
+  if (templateId === 'portos-stack') {
+    return res.status(501).json({
+      error: 'PortOS Stack template scaffolding is not yet implemented. Please use vite-express for a similar full-stack setup.'
+    });
+  }
+
+  // Reuse scaffold logic
+  req.body = scaffoldData;
+  // Forward to scaffold endpoint logic (call the same handler)
+  return scaffoldApp(req, res);
+});
+
+// Shared scaffold logic
+async function scaffoldApp(req, res) {
   const {
     name,
     template,
@@ -314,6 +360,9 @@ app.listen(PORT, '0.0.0.0', () => {
     repoPath,
     steps
   });
-});
+}
+
+// POST /api/scaffold - Create a new app from template
+router.post('/', scaffoldApp);
 
 export default router;

@@ -33,6 +33,12 @@ pm2 logs
 - [x] M4: App wizard (register existing + create new)
 - [x] M5: AI providers + headless executor
 - [x] M6: Dev tools (history, command runner)
+- [ ] M7: App templates (create from templates, template management)
+- [x] M8: Prompt manager (customizable AI prompts, variables, stages)
+- [x] M9: Streaming import detection (websocket updates, progressive discovery)
+- [x] M10: Enhanced DevTools (provider/model selection, screenshot upload, git status, usage metrics)
+- [x] M11: AI Agents Page (process detection, kill ability, colorful UI, expandable details)
+- [x] M12: History Improvements (expandable entries, runtime/output capture, full command display)
 
 ### Documentation
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
@@ -136,3 +142,131 @@ Scaffold a new project from template:
 | GET /api/commands/allowed | List allowed commands |
 | GET /api/commands/processes | List PM2 processes |
 | POST /api/detect/ai | AI-powered app detection |
+| GET /api/templates | List available templates |
+| POST /api/templates/create | Create app from template |
+| POST /api/templates | Add custom template |
+| DELETE /api/templates/:id | Delete custom template |
+| GET /api/agents | List running AI agent processes |
+| GET /api/agents/:pid | Get agent process details |
+| DELETE /api/agents/:pid | Kill agent process |
+
+---
+
+## M7: App Templates (Planned)
+
+Templates allow creating new apps from pre-configured project structures.
+
+### Built-in Template: PortOS Stack
+The default template mirrors this application's architecture:
+- Express.js API server
+- React + Vite frontend
+- Tailwind CSS styling
+- Collapsible navigation layout
+- PM2 ecosystem configuration
+- GitHub Actions CI/CD workflows
+- Auto-versioning system
+
+### Features
+1. **Template Selection**: Browse available templates with feature descriptions
+2. **App Creation**: Scaffold new project with chosen name and target directory
+3. **Custom Templates**: Register additional templates from local paths
+4. **Template Management**: View, edit, delete custom templates
+
+### Pages
+- `/templates` - Template browser and app creation
+- `/templates/new` - Register custom template
+
+### Template Structure
+Templates are stored in `./data/templates/` with:
+- `manifest.json` - Template metadata and feature list
+- Source files to copy when creating new app
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| GET /api/templates | List all templates |
+| POST /api/templates | Add custom template |
+| POST /api/templates/create | Create app from template |
+| DELETE /api/templates/:id | Remove custom template |
+
+---
+
+## M8: Prompt Manager (Planned)
+
+Customizable AI prompts for all backend AI operations. Inspired by void-private's prompt management architecture.
+
+### Architecture
+- **File-based prompts**: Prompts stored as `.md` files for easy editing and version control
+- **Variable system**: Reusable variables with metadata, categories, and usage tracking
+- **Stage configuration**: Each prompt stage defines provider, model type, and execution options
+- **Template rendering**: Mustache-like syntax with conditionals, arrays, and nested data
+
+### Directory Structure
+```
+./data/prompts/
+├── stages/              # Individual prompt templates (.md files)
+│   ├── app-detection.md
+│   ├── code-analysis.md
+│   └── ...
+├── variables.json       # Reusable prompt variables
+└── stage-config.json    # Stage metadata and provider config
+```
+
+### Features
+1. **Prompt Stages**: Define different prompts for different AI tasks (detection, analysis, etc.)
+2. **Variables**: Reusable content blocks (personas, formats, constraints)
+3. **Per-Stage Provider Config**: Each stage can use different AI providers/models
+4. **Web UI**: Edit prompts, variables, and preview rendered output
+5. **Template Syntax**: `{{variable}}`, `{{#condition}}...{{/condition}}`, arrays
+
+### UI Pages
+- `/prompts` - Prompt Manager with tabs for Stages, Variables, Elements
+- Live preview with test variables
+- Insert variable references
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| GET /api/prompts | List all prompt stages |
+| GET /api/prompts/:stage | Get stage template |
+| PUT /api/prompts/:stage | Update stage/template |
+| POST /api/prompts/:stage/preview | Preview compiled prompt |
+| GET /api/prompts/variables | List all variables |
+| PUT /api/prompts/variables/:key | Update variable |
+| POST /api/prompts/variables | Create variable |
+| DELETE /api/prompts/variables/:key | Delete variable |
+
+---
+
+## M9: Streaming Import Detection (Planned)
+
+Enhanced app import with real-time websocket updates as AI discovers project configuration.
+
+### Features
+1. **Progressive Discovery**: Form fields update in real-time as AI analyzes the project
+2. **Status Animations**: Visual indicators showing detection progress
+3. **PM2 Detection**: Check if app is already running in PM2
+4. **Websocket Updates**: Server streams discoveries to UI as they happen
+
+### Discovery Steps (streamed to UI)
+1. Validating directory path
+2. Reading package.json
+3. Detecting project type (React, Express, monorepo, etc.)
+4. Finding configuration files
+5. Extracting ports from configs
+6. Detecting start commands
+7. Checking PM2 process status
+8. AI-powered analysis for name, description
+9. Generating PM2 process names
+
+### UI/UX
+- Progress indicator with current step
+- Form fields animate in as values are discovered
+- Already-running indicator if detected in PM2
+- Expandable "Detection Log" showing raw discovery output
+
+### API
+| Route | Description |
+|-------|-------------|
+| WS /api/detect/stream | Websocket for streaming detection |
+| GET /api/detect/pm2-status | Check if app running in PM2 |

@@ -45,6 +45,12 @@ Client → HTTP/WebSocket → Routes (validate) → Services (logic) → JSON fi
 - **Functional programming** - no classes, use hooks in React
 - **Zod validation** - all route inputs validated via `lib/validation.js`
 - **Command allowlist** - shell execution restricted to approved commands only
+- **Single-line logging** - use emoji prefixes and string interpolation, never log full JSON blobs or arrays
+  ```js
+  console.log(`🚀 Server started on port ${PORT}`);
+  console.log(`📜 Processing ${items.length} items`);
+  console.error(`❌ Failed to connect: ${err.message}`);
+  ```
 
 ## Tailwind Design Tokens
 
@@ -60,5 +66,6 @@ port-error: #ef4444
 - **dev**: Active development (auto-bumps patch on CI pass)
 - **main**: Production releases only
 - PR `dev → main` creates tagged release and preps next version
+- **Use `/gitup` to push** - The dev branch receives auto version bump commits from CI. Always use `git pull --rebase --autostash && git push` (or `/gitup`) instead of plain `git push`.
 
 See `docs/VERSIONING.md` for details.

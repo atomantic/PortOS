@@ -10,11 +10,6 @@ module.exports = {
         PORT: 5554,
         HOST: '0.0.0.0'
       },
-      env_production: {
-        NODE_ENV: 'production',
-        PORT: 5554,
-        HOST: '0.0.0.0'
-      },
       watch: false,
       max_memory_restart: '500M'
     },

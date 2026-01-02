@@ -4,8 +4,10 @@ import Dashboard from './pages/Dashboard';
 import Apps from './pages/Apps';
 import Logs from './pages/Logs';
 import CreateApp from './pages/CreateApp';
+import Templates from './pages/Templates';
 import AIProviders from './pages/AIProviders';
-import DevTools from './pages/DevTools';
+import { HistoryPage, RunnerPage, GitPage, UsagePage, ProcessesPage, AgentsPage } from './pages/DevTools';
+import PromptManager from './pages/PromptManager';
 
 export default function App() {
   return (
@@ -15,9 +17,16 @@ export default function App() {
         <Route path="apps" element={<Apps />} />
         <Route path="logs" element={<Logs />} />
         <Route path="devtools" element={<Navigate to="/devtools/history" replace />} />
-        <Route path="devtools/:tab" element={<DevTools />} />
+        <Route path="devtools/history" element={<HistoryPage />} />
+        <Route path="devtools/runner" element={<RunnerPage />} />
+        <Route path="devtools/git" element={<GitPage />} />
+        <Route path="devtools/usage" element={<UsagePage />} />
+        <Route path="devtools/processes" element={<ProcessesPage />} />
+        <Route path="devtools/agents" element={<AgentsPage />} />
         <Route path="ai" element={<AIProviders />} />
+        <Route path="prompts" element={<PromptManager />} />
         <Route path="create" element={<CreateApp />} />
+        <Route path="templates" element={<Templates />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

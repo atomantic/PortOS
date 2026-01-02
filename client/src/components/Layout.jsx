@@ -1,32 +1,200 @@
 import { useState, useEffect } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import {
+  Home,
+  Package,
+  FileText,
+  Terminal,
+  Bot,
+  PlusCircle,
+  ChevronLeft,
+  ChevronDown,
+  ChevronRight,
+  Menu,
+  History,
+  Play,
+  Activity,
+  GitBranch,
+  BarChart3,
+  Cpu
+} from 'lucide-react';
+import packageJson from '../../package.json';
+import Logo from './Logo';
 
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: '🏠' },
-  { to: '/apps', label: 'Apps', icon: '📦' },
-  { to: '/logs', label: 'Logs', icon: '📋' },
-  { to: '/devtools', label: 'Dev Tools', icon: '🛠️' },
-  { to: '/ai', label: 'AI Providers', icon: '🤖' },
-  { to: '/create', label: 'Create App', icon: '➕' }
+  { to: '/', label: 'Dashboard', icon: Home, single: true },
+  { to: '/apps', label: 'Apps', icon: Package, single: true },
+  { to: '/logs', label: 'Logs', icon: FileText, single: true },
+  {
+    label: 'Dev Tools',
+    icon: Terminal,
+    children: [
+      { to: '/devtools/history', label: 'History', icon: History },
+      { to: '/devtools/runner', label: 'Runner', icon: Play },
+      { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
+      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
+      { to: '/devtools/processes', label: 'Processes', icon: Activity },
+      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu }
+    ]
+  },
+  {
+    label: 'AI Config',
+    icon: Bot,
+    children: [
+      { to: '/ai', label: 'Providers', icon: Bot },
+      { to: '/prompts', label: 'Prompts', icon: FileText }
+    ]
+  },
+  { to: '/create', label: 'Add App', icon: PlusCircle, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
 
 export default function Layout() {
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => {
     const saved = localStorage.getItem(SIDEBAR_KEY);
     return saved === 'true';
   });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [expandedSections, setExpandedSections] = useState({});
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));
   }, [collapsed]);
 
+  // Auto-expand sections when on a child page
+  useEffect(() => {
+    navItems.forEach(item => {
+      if (item.children) {
+        const isChildActive = item.children.some(child =>
+          location.pathname === child.to || location.pathname.startsWith(child.to + '/')
+        );
+        if (isChildActive) {
+          setExpandedSections(prev => ({ ...prev, [item.label]: true }));
+        }
+      }
+    });
+  }, [location.pathname]);
+
   // Close mobile menu on route change
   useEffect(() => {
     setMobileOpen(false);
-  }, []);
+  }, [location.pathname]);
+
+  const toggleSection = (label) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [label]: !prev[label]
+    }));
+  };
+
+  const isActive = (path) => {
+    if (path === '/') return location.pathname === '/';
+    return location.pathname === path || location.pathname.startsWith(path + '/');
+  };
+
+  const isSectionActive = (item) => {
+    if (item.single && item.to) {
+      return isActive(item.to);
+    }
+    if (item.children) {
+      return item.children.some(child => isActive(child.to));
+    }
+    return false;
+  };
+
+  const renderNavItem = (item) => {
+    const Icon = item.icon;
+
+    if (item.single) {
+      return (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.to === '/'}
+          onClick={() => setMobileOpen(false)}
+          className={`flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+          } ${
+            isActive(item.to)
+              ? 'bg-port-accent/10 text-port-accent'
+              : 'text-gray-400 hover:text-white hover:bg-port-border/50'
+          }`}
+          title={collapsed ? item.label : undefined}
+        >
+          <div className="flex items-center gap-3">
+            <Icon size={20} className="flex-shrink-0" />
+            <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
+              {item.label}
+            </span>
+          </div>
+        </NavLink>
+      );
+    }
+
+    // Collapsible section
+    return (
+      <div key={item.label} className="mx-2">
+        <button
+          onClick={() => {
+            if (collapsed) {
+              // When collapsed, navigate to first child
+              if (item.children && item.children.length > 0) {
+                window.location.href = item.children[0].to;
+              }
+            } else {
+              toggleSection(item.label);
+            }
+          }}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+          } ${
+            isSectionActive(item)
+              ? 'bg-port-accent/10 text-port-accent'
+              : 'text-gray-400 hover:text-white hover:bg-port-border/50'
+          }`}
+          title={collapsed ? item.label : undefined}
+        >
+          <div className="flex items-center gap-3">
+            <Icon size={20} className="flex-shrink-0" />
+            <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
+              {item.label}
+            </span>
+          </div>
+          {!collapsed && (
+            expandedSections[item.label]
+              ? <ChevronDown size={16} />
+              : <ChevronRight size={16} />
+          )}
+        </button>
+
+        {/* Children items */}
+        {expandedSections[item.label] && !collapsed && (
+          <div className="ml-4 mt-1">
+            {item.children.map((child) => {
+              const ChildIcon = child.icon;
+              return (
+                <NavLink
+                  key={child.to}
+                  to={child.to}
+                  onClick={() => setMobileOpen(false)}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                    isActive(child.to)
+                      ? 'bg-port-accent/10 text-port-accent'
+                      : 'text-gray-500 hover:text-white hover:bg-port-border/50'
+                  }`}
+                >
+                  <ChildIcon size={16} />
+                  <span>{child.label}</span>
+                </NavLink>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-port-bg flex">
@@ -49,55 +217,45 @@ export default function Layout() {
           w-56
         `}
       >
-        {/* Logo */}
-        <div className={`flex items-center gap-3 p-4 border-b border-port-border ${collapsed ? 'lg:justify-center' : ''}`}>
-          <span className="text-2xl flex-shrink-0">🚀</span>
-          <h1 className={`text-lg font-bold text-white whitespace-nowrap transition-opacity ${collapsed ? 'lg:hidden' : ''}`}>
-            Port OS
-          </h1>
+        {/* Header with logo and collapse toggle */}
+        <div className={`flex items-center justify-between p-4 border-b border-port-border`}>
+          <div className={`flex items-center gap-2 ${collapsed ? 'lg:hidden' : ''}`}>
+            <Logo size={24} className="text-port-accent" />
+            <span className="text-port-accent font-semibold whitespace-nowrap">PortOS</span>
+          </div>
+          {collapsed && (
+            <Logo size={24} className="hidden lg:block text-port-accent" />
+          )}
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <ChevronLeft size={20} className={`transition-transform ${collapsed ? 'rotate-180' : ''}`} />
+          </button>
+          {/* Mobile close button */}
+          <button
+            onClick={() => setMobileOpen(false)}
+            className="lg:hidden p-1 text-gray-500 hover:text-white"
+          >
+            ✕
+          </button>
         </div>
 
         {/* Nav items */}
         <nav className="flex-1 py-4 overflow-y-auto">
-          {navItems.map(({ to, label, icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              onClick={() => setMobileOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
-                ${collapsed ? 'lg:justify-center lg:px-2' : ''}
-                ${isActive
-                  ? 'bg-port-accent text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-port-border'
-                }`
-              }
-              title={collapsed ? label : undefined}
-            >
-              <span className="text-lg flex-shrink-0">{icon}</span>
-              <span className={`whitespace-nowrap transition-opacity ${collapsed ? 'lg:hidden' : ''}`}>
-                {label}
-              </span>
-            </NavLink>
-          ))}
+          {navItems.map(renderNavItem)}
         </nav>
 
-        {/* Collapse toggle - desktop only */}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="hidden lg:flex items-center justify-center p-4 border-t border-port-border text-gray-500 hover:text-white hover:bg-port-border transition-colors"
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          <svg
-            className={`w-5 h-5 transition-transform ${collapsed ? 'rotate-180' : ''}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-          </svg>
-        </button>
+        {/* Footer with version */}
+        <div className={`p-4 border-t border-port-border text-sm text-gray-500 ${collapsed ? 'lg:text-center' : ''}`}>
+          {collapsed ? (
+            <span className="hidden lg:block text-xs">v{packageJson.version.split('.')[0]}</span>
+          ) : (
+            <span>v{packageJson.version}</span>
+          )}
+          <span className={`lg:hidden`}>v{packageJson.version}</span>
+        </div>
       </aside>
 
       {/* Main area */}
@@ -108,13 +266,11 @@ export default function Layout() {
             onClick={() => setMobileOpen(true)}
             className="p-2 -ml-2 text-gray-400 hover:text-white"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+            <Menu size={24} />
           </button>
           <div className="flex items-center gap-2">
-            <span className="text-xl">🚀</span>
-            <span className="font-bold text-white">Port OS</span>
+            <Logo size={24} className="text-port-accent" />
+            <span className="font-bold text-port-accent">PortOS</span>
           </div>
           <div className="w-10" /> {/* Spacer for centering */}
         </header>
