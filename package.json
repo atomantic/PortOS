@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "Local dev machine App OS portal",
   "type": "module",
