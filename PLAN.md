@@ -39,6 +39,7 @@ pm2 logs
 - [x] M10: Enhanced DevTools (provider/model selection, screenshot upload, git status, usage metrics)
 - [x] M11: AI Agents Page (process detection, kill ability, colorful UI, expandable details)
 - [x] M12: History Improvements (expandable entries, runtime/output capture, full command display)
+- [x] M13: Autofixer Integration (PM2 crash detection, Claude CLI auto-fix, session history UI)
 
 ### Documentation
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
@@ -270,3 +271,47 @@ Enhanced app import with real-time websocket updates as AI discovers project con
 |-------|-------------|
 | WS /api/detect/stream | Websocket for streaming detection |
 | GET /api/detect/pm2-status | Check if app running in PM2 |
+
+---
+
+## M13: Autofixer Integration
+
+Autonomous crash detection and repair using Claude CLI.
+
+### Architecture
+- **Daemon Process** (`autofixer/server.js`): Monitors PM2 for crashed processes registered in PortOS
+- **UI Server** (`autofixer/ui.js`): Web interface for viewing logs and fix history on port 6000
+- **PM2 Integration**: Runs as `portos-autofixer` and `portos-autofixer-ui` processes
+
+### Features
+1. **Crash Detection**: Polls PM2 every 15 minutes for `errored` status on registered apps
+2. **Auto-Fix**: Invokes Claude CLI with crash context (error logs, app info) to diagnose and repair
+3. **Session History**: Stores fix attempts with prompts, outputs, and success/failure status
+4. **Cooldown**: 30-minute cooldown per process to prevent repeated fix loops
+5. **Log Streaming**: Real-time SSE log streaming from any PM2 process
+6. **Tailscale Compatible**: Dynamic hostname for remote access
+
+### Data Storage
+```
+./data/autofixer/
+├── index.json           # Fix session index
+└── sessions/
+    └── {sessionId}/
+        ├── prompt.txt    # Prompt sent to Claude
+        ├── output.txt    # Claude's response
+        └── metadata.json # Session details
+```
+
+### Autofixer UI (port 6000)
+- Process sidebar with live status indicators
+- SSE-powered log viewer with pause/clear controls
+- History tab showing fix attempts with success/failure status
+- Links back to PortOS Dashboard
+
+### Configuration
+| Setting | Value |
+|---------|-------|
+| UI Port | 6000 |
+| Check Interval | 15 minutes |
+| Fix Cooldown | 30 minutes |
+| Max History | 100 entries |

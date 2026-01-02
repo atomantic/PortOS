@@ -134,9 +134,9 @@ export default function Apps() {
                         <div className="flex items-center gap-3">
                           {app.uiPort && (
                             <button
-                              onClick={() => window.open(`http://localhost:${app.uiPort}`, '_blank')}
+                              onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
                               className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1"
-                              title={`Open UI at localhost:${app.uiPort}`}
+                              title={`Open UI at ${window.location.hostname}:${app.uiPort}`}
                             >
                               :{app.uiPort} <ExternalLink size={12} />
                             </button>

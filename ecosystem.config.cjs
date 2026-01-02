@@ -22,6 +22,35 @@ module.exports = {
         NODE_ENV: 'development'
       },
       watch: false
+    },
+    {
+      name: 'portos-autofixer',
+      script: 'autofixer/server.js',
+      cwd: __dirname,
+      interpreter: 'node',
+      env: {
+        NODE_ENV: 'development'
+      },
+      watch: false,
+      autorestart: true,
+      max_restarts: 10,
+      min_uptime: '10s',
+      restart_delay: 5000
+    },
+    {
+      name: 'portos-autofixer-ui',
+      script: 'autofixer/ui.js',
+      cwd: __dirname,
+      interpreter: 'node',
+      env: {
+        NODE_ENV: 'development',
+        PORT: 6000
+      },
+      watch: false,
+      autorestart: true,
+      max_restarts: 10,
+      min_uptime: '10s',
+      restart_delay: 5000
     }
   ]
 };

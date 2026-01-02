@@ -16,7 +16,9 @@ import {
   Activity,
   GitBranch,
   BarChart3,
-  Cpu
+  Cpu,
+  Wrench,
+  ExternalLink
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -45,7 +47,8 @@ const navItems = [
       { to: '/prompts', label: 'Prompts', icon: FileText }
     ]
   },
-  { to: '/create', label: 'Add App', icon: PlusCircle, single: true }
+  { to: '/create', label: 'Add App', icon: PlusCircle, single: true },
+  { href: '//:6000', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -106,6 +109,35 @@ export default function Layout() {
 
   const renderNavItem = (item) => {
     const Icon = item.icon;
+
+    // External link
+    if (item.external) {
+      // Build href - use current hostname for dynamic host links
+      const href = item.dynamicHost
+        ? `${window.location.protocol}//${window.location.hostname}${item.href.replace('//', '')}`
+        : item.href;
+
+      return (
+        <a
+          key={item.href}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+          } text-gray-400 hover:text-white hover:bg-port-border/50`}
+          title={collapsed ? item.label : undefined}
+        >
+          <div className="flex items-center gap-3">
+            <Icon size={20} className="flex-shrink-0" />
+            <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
+              {item.label}
+            </span>
+          </div>
+          {!collapsed && <ExternalLink size={14} className="text-gray-500" />}
+        </a>
+      );
+    }
 
     if (item.single) {
       return (
