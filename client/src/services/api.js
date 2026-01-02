@@ -189,6 +189,7 @@ export const clearHistory = (olderThanDays) => request(
   olderThanDays ? `/history?olderThanDays=${olderThanDays}` : '/history',
   { method: 'DELETE' }
 );
+export const deleteHistoryEntry = (id) => request(`/history/${id}`, { method: 'DELETE' });
 
 // Commands
 export const executeCommand = (command, workspacePath) => request('/commands/execute', {

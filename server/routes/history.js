@@ -29,6 +29,12 @@ router.get('/actions', async (req, res, next) => {
   if (actions) res.json(actions);
 });
 
+// DELETE /api/history/:id - Delete single entry
+router.delete('/:id', async (req, res, next) => {
+  const result = await history.deleteEntry(req.params.id).catch(next);
+  if (result) res.json(result);
+});
+
 // DELETE /api/history - Clear history
 router.delete('/', async (req, res, next) => {
   const olderThanDays = req.query.olderThanDays ? parseInt(req.query.olderThanDays) : null;

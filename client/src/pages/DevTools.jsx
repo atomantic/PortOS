@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2 } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -36,6 +36,12 @@ export function HistoryPage() {
   const handleClear = async () => {
     await api.clearHistory();
     setConfirmingClear(false);
+    loadData();
+  };
+
+  const handleDelete = async (id, e) => {
+    e.stopPropagation();
+    await api.deleteHistoryEntry(id);
     loadData();
   };
 
@@ -163,7 +169,7 @@ export function HistoryPage() {
             {history.map(entry => (
               <div key={entry.id}>
                 <div
-                  className="p-4 hover:bg-port-border/20 cursor-pointer"
+                  className="p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(entry.id)}
                 >
                   <div className="flex items-center gap-4">
@@ -187,6 +193,13 @@ export function HistoryPage() {
                     </div>
                     <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
                     <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(entry.timestamp)}</span>
+                    <button
+                      onClick={(e) => handleDelete(entry.id, e)}
+                      className="p-1 text-gray-500 hover:text-port-error transition-colors opacity-0 group-hover:opacity-100"
+                      title="Delete entry"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
 

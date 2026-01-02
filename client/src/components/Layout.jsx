@@ -25,30 +25,30 @@ import Logo from './Logo';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
-  { to: '/apps', label: 'Apps', icon: Package, single: true },
-  { to: '/logs', label: 'Logs', icon: FileText, single: true },
-  {
-    label: 'Dev Tools',
-    icon: Terminal,
-    children: [
-      { to: '/devtools/history', label: 'History', icon: History },
-      { to: '/devtools/runner', label: 'Code', icon: Code2 },
-      { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
-      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
-      { to: '/devtools/processes', label: 'Processes', icon: Activity },
-      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu }
-    ]
-  },
+  { to: '/create', label: 'Add App', icon: PlusCircle, single: true },
   {
     label: 'AI Config',
     icon: Bot,
     children: [
-      { to: '/ai', label: 'Providers', icon: Bot },
-      { to: '/prompts', label: 'Prompts', icon: FileText }
+      { to: '/prompts', label: 'Prompts', icon: FileText },
+      { to: '/ai', label: 'Providers', icon: Bot }
     ]
   },
-  { to: '/create', label: 'Add App', icon: PlusCircle, single: true },
-  { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true }
+  { to: '/apps', label: 'Apps', icon: Package, single: true },
+  { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
+  {
+    label: 'Dev Tools',
+    icon: Terminal,
+    children: [
+      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu },
+      { to: '/devtools/runner', label: 'Code', icon: Code2 },
+      { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
+      { to: '/devtools/history', label: 'History', icon: History },
+      { to: '/devtools/processes', label: 'Processes', icon: Activity },
+      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
+    ]
+  },
+  { to: '/logs', label: 'Logs', icon: FileText, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';

@@ -95,6 +95,22 @@ export async function getActionTypes() {
 }
 
 /**
+ * Delete a single history entry by ID
+ */
+export async function deleteEntry(id) {
+  const data = await loadHistory();
+  const index = data.entries.findIndex(e => e.id === id);
+
+  if (index === -1) {
+    return { deleted: false, error: 'Entry not found' };
+  }
+
+  data.entries.splice(index, 1);
+  await saveHistory(data);
+  return { deleted: true };
+}
+
+/**
  * Clear history (optionally older than days)
  */
 export async function clearHistory(olderThanDays = null) {
