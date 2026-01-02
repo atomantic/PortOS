@@ -78,9 +78,6 @@ app.get('/', async (req, res) => {
     }
   }
 
-  // Add autofixer itself
-  processes.unshift({ name: 'portos-autofixer', app: 'PortOS Autofixer' });
-
   const processOptions = processes
     .map(p => `<option value="${p.name}">${p.name} (${p.app})</option>`)
     .join('\n');
@@ -421,10 +418,7 @@ app.get('/', async (req, res) => {
       const res = await fetch('/api/apps');
       const apps = await res.json();
 
-      const processes = [
-        { name: 'portos-autofixer', app: 'PortOS Autofixer' }
-      ];
-
+      const processes = [];
       apps.forEach(app => {
         (app.pm2ProcessNames || []).forEach(proc => {
           processes.push({ name: proc, app: app.name });
