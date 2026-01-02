@@ -12,7 +12,7 @@ import {
   ChevronRight,
   Menu,
   History,
-  Play,
+  Code2,
   Activity,
   GitBranch,
   BarChart3,
@@ -32,7 +32,7 @@ const navItems = [
     icon: Terminal,
     children: [
       { to: '/devtools/history', label: 'History', icon: History },
-      { to: '/devtools/runner', label: 'Code', icon: Play },
+      { to: '/devtools/runner', label: 'Code', icon: Code2 },
       { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
