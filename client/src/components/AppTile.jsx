@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import StatusBadge from './StatusBadge';
+import AppIcon from './AppIcon';
 import * as api from '../services/api';
 
 // Construct app URL using current hostname (works with Tailscale)
@@ -38,8 +39,8 @@ export default function AppTile({ app, onUpdate }) {
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-lg bg-port-border flex items-center justify-center text-2xl">
-            {app.icon || '📦'}
+          <div className="w-12 h-12 rounded-lg bg-port-border flex items-center justify-center text-port-accent">
+            <AppIcon icon={app.icon || 'package'} size={28} />
           </div>
           <div>
             <h3 className="font-semibold text-white">{app.name}</h3>

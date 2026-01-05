@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { CheckCircle, Circle, Loader, AlertCircle, Play } from 'lucide-react';
+import { CheckCircle, Circle, Loader, AlertCircle, Play, Wrench } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as api from '../services/api';
+import IconPicker from '../components/IconPicker';
 
 const DETECTION_STEPS = [
   { id: 'validate', label: 'Validating path' },
@@ -10,7 +12,8 @@ const DETECTION_STEPS = [
   { id: 'package', label: 'Reading package.json' },
   { id: 'config', label: 'Checking configs' },
   { id: 'pm2', label: 'Checking PM2' },
-  { id: 'readme', label: 'Reading README' }
+  { id: 'readme', label: 'Reading README' },
+  { id: 'standardize', label: 'Standardizing PM2 config' }
 ];
 
 export default function CreateApp() {
@@ -34,11 +37,24 @@ export default function CreateApp() {
   const [startCommands, setStartCommands] = useState('');
   const [pm2Names, setPm2Names] = useState('');
   const [pm2Status, setPm2Status] = useState(null);
+  const [icon, setIcon] = useState('package');
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [detected, setDetected] = useState(false);
+
+  // Standardization state
+  const [standardizing, setStandardizing] = useState(false);
+  const [standardizeResult, setStandardizeResult] = useState(null);
+  const [activeProvider, setActiveProvider] = useState(null);
+
+  // Fetch active provider on mount
+  useEffect(() => {
+    api.getActiveProvider().then(provider => {
+      if (provider) setActiveProvider(provider);
+    }).catch(() => {});
+  }, []);
 
   // Initialize socket
   useEffect(() => {
@@ -79,10 +95,40 @@ export default function CreateApp() {
       }
     });
 
+    // Standardization socket events
+    socketRef.current.on('standardize:step', ({ step, status, data }) => {
+      // Map standardize steps to our step display
+      const stepMap = { analyze: 'standardize', backup: 'standardize', apply: 'standardize' };
+      const displayStep = stepMap[step] || 'standardize';
+      setSteps(prev => ({ ...prev, [displayStep]: { status: status === 'done' ? 'running' : status, data } }));
+      setDetectionLog(prev => [...prev, { step: `standardize:${step}`, status, ...data }]);
+    });
+
+    socketRef.current.on('standardize:complete', ({ success, result, error: err }) => {
+      setStandardizing(false);
+      if (success && result) {
+        setStandardizeResult(result);
+        setSteps(prev => ({ ...prev, standardize: { status: 'done', data: { message: 'PM2 config standardized' } } }));
+        toast.success(`PM2 config standardized${result.backupBranch ? ` (backup: ${result.backupBranch})` : ''}`);
+      } else {
+        setSteps(prev => ({ ...prev, standardize: { status: 'error', data: { message: err || 'Standardization failed' } } }));
+        if (err) toast.error(`Standardization failed: ${err}`);
+      }
+    });
+
     return () => {
       socketRef.current?.disconnect();
     };
   }, []);
+
+  // Auto-trigger standardization after detection completes
+  useEffect(() => {
+    if (detected && activeProvider && repoPath && !standardizing && !standardizeResult) {
+      setStandardizing(true);
+      setSteps(prev => ({ ...prev, standardize: { status: 'running', data: { message: 'Analyzing configuration...' } } }));
+      socketRef.current?.emit('standardize:start', { repoPath, providerId: activeProvider.id });
+    }
+  }, [detected, activeProvider, repoPath, standardizing, standardizeResult]);
 
   // Start streaming detection
   const handleImport = () => {
@@ -94,6 +140,8 @@ export default function CreateApp() {
     setDetectionLog([]);
     setDetected(false);
     setPm2Status(null);
+    setStandardizing(false);
+    setStandardizeResult(null);
 
     socketRef.current.emit('detect:start', { path: repoPath });
   };
@@ -107,6 +155,7 @@ export default function CreateApp() {
     const data = {
       name,
       repoPath,
+      icon,
       uiPort: uiPort ? parseInt(uiPort) : null,
       apiPort: apiPort ? parseInt(apiPort) : null,
       startCommands: startCommands.split('\n').filter(Boolean),
@@ -135,7 +184,10 @@ export default function CreateApp() {
     setStartCommands('');
     setPm2Names('');
     setPm2Status(null);
+    setIcon('package');
     setError(null);
+    setStandardizing(false);
+    setStandardizeResult(null);
   };
 
   const getStepIcon = (stepId) => {
@@ -205,6 +257,34 @@ export default function CreateApp() {
             </div>
           )}
 
+          {/* Standardization Result */}
+          {standardizeResult && (
+            <div className="mt-3 p-3 bg-port-success/10 border border-port-success/30 rounded-lg">
+              <p className="text-sm text-port-success font-medium flex items-center gap-2">
+                <Wrench size={14} /> PM2 Config Standardized
+              </p>
+              {standardizeResult.backupBranch && (
+                <p className="text-xs text-gray-400 mt-1">
+                  Backup branch: <code className="bg-port-bg px-1 rounded">{standardizeResult.backupBranch}</code>
+                </p>
+              )}
+              {standardizeResult.filesModified?.length > 0 && (
+                <p className="text-xs text-gray-400 mt-1">
+                  Modified: {standardizeResult.filesModified.join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* No Provider Warning */}
+          {detected && !activeProvider && !standardizing && !standardizeResult && (
+            <div className="mt-3 p-3 bg-port-border/50 border border-port-border rounded-lg">
+              <p className="text-xs text-gray-400">
+                <span className="text-port-warning">⚠</span> No LLM provider configured. PM2 standardization skipped.
+              </p>
+            </div>
+          )}
+
           {/* Detection Log Toggle */}
           {detectionLog.length > 0 && (
             <button
@@ -254,16 +334,21 @@ export default function CreateApp() {
           <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <h3 className="text-lg font-semibold text-white mb-4">App Configuration</h3>
 
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">App Name *</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="My Awesome App"
-                required
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
-              />
+            <div className="grid grid-cols-[1fr_auto] gap-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">App Name *</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="My Awesome App"
+                  required
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                />
+              </div>
+              <div className="w-32">
+                <IconPicker value={icon} onChange={setIcon} />
+              </div>
             </div>
 
             <div>

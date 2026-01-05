@@ -12,40 +12,48 @@ import {
   ChevronRight,
   Menu,
   History,
-  Play,
+  Code2,
   Activity,
   GitBranch,
   BarChart3,
-  Cpu
+  Cpu,
+  Wrench,
+  ExternalLink,
+  Crown,
+  Play
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
+import { useErrorNotifications } from '../hooks/useErrorNotifications';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
-  { to: '/apps', label: 'Apps', icon: Package, single: true },
-  { to: '/logs', label: 'Logs', icon: FileText, single: true },
-  {
-    label: 'Dev Tools',
-    icon: Terminal,
-    children: [
-      { to: '/devtools/history', label: 'History', icon: History },
-      { to: '/devtools/runner', label: 'Runner', icon: Play },
-      { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
-      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
-      { to: '/devtools/processes', label: 'Processes', icon: Activity },
-      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu }
-    ]
-  },
+  { to: '/create', label: 'Add App', icon: PlusCircle, single: true },
   {
     label: 'AI Config',
     icon: Bot,
     children: [
-      { to: '/ai', label: 'Providers', icon: Bot },
-      { to: '/prompts', label: 'Prompts', icon: FileText }
+      { to: '/prompts', label: 'Prompts', icon: FileText },
+      { to: '/ai', label: 'Providers', icon: Bot }
     ]
   },
-  { to: '/create', label: 'Add App', icon: PlusCircle, single: true }
+  { to: '/apps', label: 'Apps', icon: Package, single: true },
+  { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
+  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true },
+  {
+    label: 'Dev Tools',
+    icon: Terminal,
+    children: [
+      { to: '/devtools/agents', label: 'AI Agents', icon: Cpu },
+      { to: '/devtools/runs', label: 'AI Runs', icon: Play },
+      { to: '/devtools/runner', label: 'Code', icon: Code2 },
+      { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
+      { to: '/devtools/history', label: 'History', icon: History },
+      { to: '/devtools/processes', label: 'Processes', icon: Activity },
+      { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
+    ]
+  },
+  { to: '/logs', label: 'Logs', icon: FileText, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -58,6 +66,9 @@ export default function Layout() {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
+
+  // Subscribe to server error notifications
+  useErrorNotifications();
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));
@@ -106,6 +117,35 @@ export default function Layout() {
 
   const renderNavItem = (item) => {
     const Icon = item.icon;
+
+    // External link
+    if (item.external) {
+      // Build href - use current hostname for dynamic host links
+      const href = item.dynamicHost
+        ? `${window.location.protocol}//${window.location.hostname}${item.href.replace('//', '')}`
+        : item.href;
+
+      return (
+        <a
+          key={item.href}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+          } text-gray-400 hover:text-white hover:bg-port-border/50`}
+          title={collapsed ? item.label : undefined}
+        >
+          <div className="flex items-center gap-3">
+            <Icon size={20} className="flex-shrink-0" />
+            <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
+              {item.label}
+            </span>
+          </div>
+          {!collapsed && <ExternalLink size={14} className="text-gray-500" />}
+        </a>
+      );
+    }
 
     if (item.single) {
       return (
@@ -218,21 +258,32 @@ export default function Layout() {
         `}
       >
         {/* Header with logo and collapse toggle */}
-        <div className={`flex items-center justify-between p-4 border-b border-port-border`}>
+        <div className={`flex items-center p-4 border-b border-port-border ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
+          {/* Expanded: logo + text */}
           <div className={`flex items-center gap-2 ${collapsed ? 'lg:hidden' : ''}`}>
             <Logo size={24} className="text-port-accent" />
             <span className="text-port-accent font-semibold whitespace-nowrap">PortOS</span>
           </div>
+          {/* Collapsed: just logo, clickable to expand */}
           {collapsed && (
-            <Logo size={24} className="hidden lg:block text-port-accent" />
+            <button
+              onClick={() => setCollapsed(false)}
+              className="hidden lg:block text-port-accent hover:text-port-accent/80 transition-colors"
+              title="Expand sidebar"
+            >
+              <Logo size={24} />
+            </button>
           )}
-          <button
-            onClick={() => setCollapsed(!collapsed)}
-            className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            <ChevronLeft size={20} className={`transition-transform ${collapsed ? 'rotate-180' : ''}`} />
-          </button>
+          {/* Expanded: collapse button */}
+          {!collapsed && (
+            <button
+              onClick={() => setCollapsed(true)}
+              className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
+              title="Collapse sidebar"
+            >
+              <ChevronLeft size={20} />
+            </button>
+          )}
           {/* Mobile close button */}
           <button
             onClick={() => setMobileOpen(false)}
@@ -248,13 +299,8 @@ export default function Layout() {
         </nav>
 
         {/* Footer with version */}
-        <div className={`p-4 border-t border-port-border text-sm text-gray-500 ${collapsed ? 'lg:text-center' : ''}`}>
-          {collapsed ? (
-            <span className="hidden lg:block text-xs">v{packageJson.version.split('.')[0]}</span>
-          ) : (
-            <span>v{packageJson.version}</span>
-          )}
-          <span className={`lg:hidden`}>v{packageJson.version}</span>
+        <div className={`p-4 border-t border-port-border text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
+          <span>v{packageJson.version}</span>
         </div>
       </aside>
 

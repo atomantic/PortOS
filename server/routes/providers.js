@@ -1,116 +1,101 @@
 import { Router } from 'express';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import * as providers from '../services/providers.js';
 
 const router = Router();
 
 // GET /api/providers - List all providers
-router.get('/', async (req, res, next) => {
-  const data = await providers.getAllProviders().catch(next);
-  if (data) res.json(data);
-});
+router.get('/', asyncHandler(async (req, res) => {
+  const data = await providers.getAllProviders();
+  res.json(data);
+}));
 
 // GET /api/providers/active - Get active provider
-router.get('/active', async (req, res, next) => {
-  const provider = await providers.getActiveProvider().catch(next);
-  if (provider === undefined) return;
+router.get('/active', asyncHandler(async (req, res) => {
+  const provider = await providers.getActiveProvider();
   res.json(provider);
-});
+}));
 
 // PUT /api/providers/active - Set active provider
-router.put('/active', async (req, res, next) => {
+router.put('/active', asyncHandler(async (req, res) => {
   const { id } = req.body;
   if (!id) {
-    return res.status(400).json({ error: 'Provider ID required', code: 'MISSING_ID' });
+    throw new ServerError('Provider ID required', { status: 400, code: 'MISSING_ID' });
   }
 
-  const provider = await providers.setActiveProvider(id).catch(next);
-  if (provider === undefined) return;
+  const provider = await providers.setActiveProvider(id);
 
   if (!provider) {
-    return res.status(404).json({ error: 'Provider not found', code: 'NOT_FOUND' });
+    throw new ServerError('Provider not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.json(provider);
-});
+}));
 
 // GET /api/providers/:id - Get provider by ID
-router.get('/:id', async (req, res, next) => {
-  const provider = await providers.getProviderById(req.params.id).catch(next);
-  if (provider === undefined) return;
+router.get('/:id', asyncHandler(async (req, res) => {
+  const provider = await providers.getProviderById(req.params.id);
 
   if (!provider) {
-    return res.status(404).json({ error: 'Provider not found', code: 'NOT_FOUND' });
+    throw new ServerError('Provider not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.json(provider);
-});
+}));
 
 // POST /api/providers - Create new provider
-router.post('/', async (req, res, next) => {
+router.post('/', asyncHandler(async (req, res) => {
   const { name, type } = req.body;
 
   if (!name) {
-    return res.status(400).json({ error: 'Name is required', code: 'VALIDATION_ERROR' });
+    throw new ServerError('Name is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   if (!type || !['cli', 'api'].includes(type)) {
-    return res.status(400).json({ error: 'Type must be "cli" or "api"', code: 'VALIDATION_ERROR' });
+    throw new ServerError('Type must be "cli" or "api"', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const provider = await providers.createProvider(req.body).catch(err => {
-    if (err.message.includes('already exists')) {
-      res.status(409).json({ error: err.message, code: 'CONFLICT' });
-      return undefined;
-    }
-    next(err);
-    return undefined;
-  });
-
-  if (provider === undefined) return;
+  const provider = await providers.createProvider(req.body);
   res.status(201).json(provider);
-});
+}));
 
 // PUT /api/providers/:id - Update provider
-router.put('/:id', async (req, res, next) => {
-  const provider = await providers.updateProvider(req.params.id, req.body).catch(next);
-  if (provider === undefined) return;
+router.put('/:id', asyncHandler(async (req, res) => {
+  const provider = await providers.updateProvider(req.params.id, req.body);
 
   if (!provider) {
-    return res.status(404).json({ error: 'Provider not found', code: 'NOT_FOUND' });
+    throw new ServerError('Provider not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.json(provider);
-});
+}));
 
 // DELETE /api/providers/:id - Delete provider
-router.delete('/:id', async (req, res, next) => {
-  const deleted = await providers.deleteProvider(req.params.id).catch(next);
-  if (deleted === undefined) return;
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const deleted = await providers.deleteProvider(req.params.id);
 
   if (!deleted) {
-    return res.status(404).json({ error: 'Provider not found', code: 'NOT_FOUND' });
+    throw new ServerError('Provider not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.status(204).send();
-});
+}));
 
 // POST /api/providers/:id/test - Test provider connectivity
-router.post('/:id/test', async (req, res, next) => {
-  const result = await providers.testProvider(req.params.id).catch(next);
-  if (result === undefined) return;
+router.post('/:id/test', asyncHandler(async (req, res) => {
+  const result = await providers.testProvider(req.params.id);
   res.json(result);
-});
+}));
 
 // POST /api/providers/:id/refresh-models - Refresh models for API provider
-router.post('/:id/refresh-models', async (req, res, next) => {
-  const provider = await providers.refreshProviderModels(req.params.id).catch(next);
-  if (provider === undefined) return;
+router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
+  const provider = await providers.refreshProviderModels(req.params.id);
 
   if (!provider) {
-    return res.status(404).json({ error: 'Provider not found or not an API type', code: 'NOT_FOUND' });
+    throw new ServerError('Provider not found or not an API type', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.json(provider);
-});
+}));
 
 export default router;

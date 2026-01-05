@@ -1,7 +1,9 @@
 import { useState, useEffect, Fragment } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench } from 'lucide-react';
+import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
+import IconPicker from '../components/IconPicker';
 import * as api from '../services/api';
 
 export default function Apps() {
@@ -11,6 +13,8 @@ export default function Apps() {
   const [confirmingDelete, setConfirmingDelete] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [actionLoading, setActionLoading] = useState({});
+  const [refreshingConfig, setRefreshingConfig] = useState({});
+  const [standardizing, setStandardizing] = useState({});
 
   const fetchApps = async () => {
     const data = await api.getApps().catch(() => []);
@@ -55,6 +59,44 @@ export default function Apps() {
       setActionLoading(prev => ({ ...prev, [app.id]: null }));
       fetchApps();
     }, 2000);
+  };
+
+  const handleRefreshConfig = async (app) => {
+    setRefreshingConfig(prev => ({ ...prev, [app.id]: true }));
+    await api.refreshAppConfig(app.id).catch(() => null);
+    setRefreshingConfig(prev => ({ ...prev, [app.id]: false }));
+    fetchApps();
+  };
+
+  const handleStandardize = async (app) => {
+    setStandardizing(prev => ({ ...prev, [app.id]: true }));
+
+    // Step 1: Analyze
+    const analysis = await api.analyzeStandardizationByApp(app.id).catch(err => {
+      toast.error(`Analysis failed: ${err.message}`);
+      return null;
+    });
+
+    if (!analysis?.success) {
+      setStandardizing(prev => ({ ...prev, [app.id]: false }));
+      return;
+    }
+
+    // Step 2: Apply
+    const result = await api.applyStandardizationByApp(app.id, analysis).catch(err => {
+      toast.error(`Apply failed: ${err.message}`);
+      return null;
+    });
+
+    setStandardizing(prev => ({ ...prev, [app.id]: false }));
+
+    if (result?.success) {
+      const msg = result.backupBranch
+        ? `Standardized! Backup: ${result.backupBranch}`
+        : `Standardized ${result.filesModified?.length || 0} files`;
+      toast.success(msg);
+      fetchApps();
+    }
   };
 
   const toggleExpand = (id) => {
@@ -106,7 +148,6 @@ export default function Apps() {
                 <tr>
                   <th className="w-8 px-4 py-3"></th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Name</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Ports</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Status</th>
                   <th className="text-center px-4 py-3 text-sm font-medium text-gray-400">Controls</th>
                   <th className="text-right px-4 py-3 text-sm font-medium text-gray-400">Actions</th>
@@ -126,33 +167,26 @@ export default function Apps() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium text-white">{app.name}</div>
-                        <div className="text-xs text-gray-500">
-                          {(app.pm2ProcessNames || []).join(', ')}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm">
-                        <div className="flex items-center gap-3">
-                          {app.uiPort && (
-                            <button
-                              onClick={() => window.open(`http://localhost:${app.uiPort}`, '_blank')}
-                              className="text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1"
-                              title={`Open UI at localhost:${app.uiPort}`}
-                            >
-                              :{app.uiPort} <ExternalLink size={12} />
-                            </button>
-                          )}
-                          {app.apiPort && (
-                            <span className="text-gray-400 font-mono">API:{app.apiPort}</span>
-                          )}
-                          {!app.uiPort && !app.apiPort && <span className="text-gray-500">-</span>}
+                        <div className="text-xs text-gray-500 flex flex-wrap gap-x-2">
+                          {/* Show process names with ports - filter to only this app's processes */}
+                          {(app.pm2ProcessNames || []).map((procName, i) => {
+                            const procInfo = app.processes?.find(p => p.name === procName);
+                            const port = procInfo?.port;
+                            return (
+                              <span key={i}>
+                                {procName}{port ? <span className="text-cyan-500">:{port}</span> : ''}
+                                {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
+                              </span>
+                            );
+                          })}
                         </div>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={app.overallStatus} size="sm" />
                       </td>
                       <td className="px-4 py-3">
-                        {/* Start/Stop/Restart Button Group */}
-                        <div className="flex justify-center">
+                        {/* Start/Stop/Restart/Launch Button Group */}
+                        <div className="flex justify-center gap-2">
                           <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
                             {app.overallStatus === 'online' ? (
                               <>
@@ -187,6 +221,17 @@ export default function Apps() {
                               </button>
                             )}
                           </div>
+                          {/* Launch button - only show when online and has UI port */}
+                          {app.uiPort && app.overallStatus === 'online' && (
+                            <button
+                              onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
+                              className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                              title={`Open ${window.location.hostname}:${app.uiPort}`}
+                            >
+                              <ExternalLink size={14} />
+                              <span className="text-xs">Launch</span>
+                            </button>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right">
@@ -230,7 +275,7 @@ export default function Apps() {
                     {/* Expanded Details Row */}
                     {expandedId === app.id && (
                       <tr>
-                        <td colSpan={6} className="p-0">
+                        <td colSpan={5} className="p-0">
                           <div className="bg-port-bg border-t border-port-border">
                             <div className="px-6 py-4 space-y-4">
                               {/* Details Grid */}
@@ -271,25 +316,32 @@ export default function Apps() {
                                 <div>
                                   <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">PM2 Processes</div>
                                   <div className="flex flex-wrap gap-2">
-                                    {Object.values(app.pm2Status).map((proc, i) => (
-                                      <div
-                                        key={i}
-                                        className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border rounded-lg"
-                                      >
-                                        <span className={`w-2 h-2 rounded-full ${
-                                          proc.status === 'online' ? 'bg-port-success' :
-                                          proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
-                                        }`} />
-                                        <span className="text-sm text-white font-mono">{proc.name}</span>
-                                        <span className="text-xs text-gray-500">{proc.status}</span>
-                                        {proc.cpu !== undefined && (
-                                          <span className="text-xs text-green-400">{proc.cpu}%</span>
-                                        )}
-                                        {proc.memory !== undefined && (
-                                          <span className="text-xs text-blue-400">{(proc.memory / 1024 / 1024).toFixed(0)}MB</span>
-                                        )}
-                                      </div>
-                                    ))}
+                                    {Object.values(app.pm2Status).map((proc, i) => {
+                                      // Find port for this process from the processes array
+                                      const processConfig = app.processes?.find(p => p.name === proc.name);
+                                      return (
+                                        <div
+                                          key={i}
+                                          className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border rounded-lg"
+                                        >
+                                          <span className={`w-2 h-2 rounded-full ${
+                                            proc.status === 'online' ? 'bg-port-success' :
+                                            proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
+                                          }`} />
+                                          <span className="text-sm text-white font-mono">{proc.name}</span>
+                                          {processConfig?.port && (
+                                            <span className="text-xs text-cyan-400 font-mono">:{processConfig.port}</span>
+                                          )}
+                                          <span className="text-xs text-gray-500">{proc.status}</span>
+                                          {proc.cpu !== undefined && (
+                                            <span className="text-xs text-green-400">{proc.cpu}%</span>
+                                          )}
+                                          {proc.memory !== undefined && (
+                                            <span className="text-xs text-blue-400">{(proc.memory / 1024 / 1024).toFixed(0)}MB</span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </div>
                               )}
@@ -307,6 +359,24 @@ export default function Apps() {
                                   className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                                 >
                                   <FolderOpen size={14} /> Open Folder
+                                </button>
+                                <button
+                                  onClick={() => handleRefreshConfig(app)}
+                                  disabled={refreshingConfig[app.id]}
+                                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                                  title="Re-scan ecosystem config for PM2 processes and ports"
+                                >
+                                  <RefreshCw size={14} className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
+                                  Refresh Config
+                                </button>
+                                <button
+                                  onClick={() => handleStandardize(app)}
+                                  disabled={standardizing[app.id]}
+                                  className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                                  title="Standardize PM2 config: move all ports to ecosystem.config.cjs"
+                                >
+                                  <Wrench size={14} className={standardizing[app.id] ? 'animate-spin' : ''} />
+                                  {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
                                 </button>
                               </div>
                             </div>
@@ -337,6 +407,7 @@ export default function Apps() {
 function EditAppModal({ app, onClose, onSave }) {
   const [formData, setFormData] = useState({
     name: app.name,
+    icon: app.icon || 'package',
     repoPath: app.repoPath,
     uiPort: app.uiPort || '',
     apiPort: app.apiPort || '',
@@ -354,6 +425,7 @@ function EditAppModal({ app, onClose, onSave }) {
 
     const data = {
       name: formData.name,
+      icon: formData.icon,
       repoPath: formData.repoPath,
       uiPort: formData.uiPort ? parseInt(formData.uiPort) : null,
       apiPort: formData.apiPort ? parseInt(formData.apiPort) : null,
@@ -386,15 +458,20 @@ function EditAppModal({ app, onClose, onSave }) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Name</label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={e => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
-              required
-            />
+          <div className="grid grid-cols-[1fr_auto] gap-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Name</label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={e => setFormData({ ...formData, name: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                required
+              />
+            </div>
+            <div className="w-32">
+              <IconPicker value={formData.icon} onChange={icon => setFormData({ ...formData, icon })} />
+            </div>
           </div>
 
           <div>

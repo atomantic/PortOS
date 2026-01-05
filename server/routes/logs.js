@@ -2,17 +2,18 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
 // GET /api/logs/processes - List all PM2 processes for log selection
-router.get('/processes', async (req, res) => {
+router.get('/processes', asyncHandler(async (req, res) => {
   const processes = await pm2Service.listProcesses().catch(() => []);
   res.json(processes);
-});
+}));
 
 // GET /api/logs/:processName - Get logs for a process (static or streaming)
-router.get('/:processName', async (req, res) => {
+router.get('/:processName', asyncHandler(async (req, res) => {
   const { processName } = req.params;
   const lines = parseInt(req.query.lines) || 100;
   const follow = req.query.follow === 'true';
@@ -77,14 +78,14 @@ router.get('/:processName', async (req, res) => {
   req.on('close', () => {
     logProcess.kill('SIGTERM');
   });
-});
+}));
 
 // GET /api/logs/app/:appId - Get logs for all processes of an app
-router.get('/app/:appId', async (req, res) => {
+router.get('/app/:appId', asyncHandler(async (req, res) => {
   const app = await appsService.getAppById(req.params.appId);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const lines = parseInt(req.query.lines) || 100;
@@ -96,6 +97,6 @@ router.get('/app/:appId', async (req, res) => {
   }
 
   res.json({ app: app.name, processes: results });
-});
+}));
 
 export default router;

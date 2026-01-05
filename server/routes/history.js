@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import * as history from '../services/history.js';
 
 const router = Router();
@@ -27,6 +28,12 @@ router.get('/stats', async (req, res, next) => {
 router.get('/actions', async (req, res, next) => {
   const actions = await history.getActionTypes().catch(next);
   if (actions) res.json(actions);
+});
+
+// DELETE /api/history/:id - Delete single entry
+router.delete('/:id', async (req, res, next) => {
+  const result = await history.deleteEntry(req.params.id).catch(next);
+  if (result) res.json(result);
 });
 
 // DELETE /api/history - Clear history

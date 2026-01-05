@@ -1,3 +1,4 @@
+import './lib/logger.js'; // Add timestamps to all console output
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
@@ -20,7 +21,15 @@ import gitRoutes from './routes/git.js';
 import usageRoutes from './routes/usage.js';
 import screenshotsRoutes from './routes/screenshots.js';
 import agentsRoutes from './routes/agents.js';
+import cosRoutes from './routes/cos.js';
+import scriptsRoutes from './routes/scripts.js';
+import memoryRoutes from './routes/memory.js';
+import standardizeRoutes from './routes/standardize.js';
 import { initSocket } from './services/socket.js';
+import { initScriptRunner } from './services/scriptRunner.js';
+import { errorMiddleware, setupProcessErrorHandlers } from './lib/errorHandler.js';
+import { initAutoFixer } from './services/autoFixer.js';
+import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,12 +51,16 @@ const io = new Server(httpServer, {
 // Initialize socket handlers
 initSocket(io);
 
+// Initialize auto-fixer for error recovery
+initAutoFixer();
+
 // Middleware - allow any origin for Tailscale access
 app.use(cors({
   origin: true,
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Make io available to routes
 app.set('io', io);
@@ -69,15 +82,13 @@ app.use('/api/git', gitRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/agents', agentsRoutes);
+app.use('/api/cos/scripts', scriptsRoutes); // Mount before /api/cos to avoid route conflicts
+app.use('/api/cos', cosRoutes);
+app.use('/api/memory', memoryRoutes);
+app.use('/api/standardize', standardizeRoutes);
 
-// Error handler
-app.use((err, req, res, next) => {
-  console.error(`❌ Server error: ${err.message}`);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
-    code: err.code || 'INTERNAL_ERROR'
-  });
-});
+// Initialize script runner
+initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));
 
 // 404 handler
 app.use((req, res) => {
@@ -87,6 +98,13 @@ app.use((req, res) => {
   });
 });
 
+// Error middleware (must be last)
+app.use(errorMiddleware);
+
+// Start server
 httpServer.listen(PORT, HOST, () => {
   console.log(`🚀 PortOS server running at http://${HOST}:${PORT}`);
+
+  // Set up process error handlers with io instance
+  setupProcessErrorHandlers(io);
 });

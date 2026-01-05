@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -36,6 +37,12 @@ export function HistoryPage() {
   const handleClear = async () => {
     await api.clearHistory();
     setConfirmingClear(false);
+    loadData();
+  };
+
+  const handleDelete = async (id, e) => {
+    e.stopPropagation();
+    await api.deleteHistoryEntry(id);
     loadData();
   };
 
@@ -163,7 +170,7 @@ export function HistoryPage() {
             {history.map(entry => (
               <div key={entry.id}>
                 <div
-                  className="p-4 hover:bg-port-border/20 cursor-pointer"
+                  className="p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(entry.id)}
                 >
                   <div className="flex items-center gap-4">
@@ -187,6 +194,13 @@ export function HistoryPage() {
                     </div>
                     <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
                     <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(entry.timestamp)}</span>
+                    <button
+                      onClick={(e) => handleDelete(entry.id, e)}
+                      className="p-1 text-gray-500 hover:text-port-error transition-colors opacity-0 group-hover:opacity-100"
+                      title="Delete entry"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
 
@@ -287,11 +301,281 @@ export function HistoryPage() {
   );
 }
 
+export function RunsHistoryPage() {
+  const navigate = useNavigate();
+  const [runs, setRuns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState(null);
+  const [expandedDetails, setExpandedDetails] = useState({});
+  const [sourceFilter, setSourceFilter] = useState('all');
+
+  useEffect(() => {
+    loadRuns();
+  }, [sourceFilter]);
+
+  const loadRuns = async () => {
+    setLoading(true);
+    const data = await api.getRuns(100, 0, sourceFilter).catch(() => ({ runs: [] }));
+    setRuns(data.runs || []);
+    setLoading(false);
+  };
+
+  const handleDelete = async (id, e) => {
+    e.stopPropagation();
+    await api.deleteRun(id);
+    loadRuns();
+  };
+
+  const toggleExpand = async (id) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+
+    setExpandedId(id);
+
+    // Load full prompt and output if not already loaded
+    if (!expandedDetails[id]) {
+      const [prompt, output] = await Promise.all([
+        api.getRunPrompt(id).catch(() => ''),
+        api.getRunOutput(id).catch(() => '')
+      ]);
+      setExpandedDetails(prev => ({
+        ...prev,
+        [id]: { prompt, output }
+      }));
+    }
+  };
+
+  const handleContinue = (run) => {
+    const details = expandedDetails[run.id] || {};
+    navigate('/devtools/runner', {
+      state: {
+        continueFrom: {
+          prompt: details.prompt || run.prompt,
+          output: details.output || '',
+          runId: run.id,
+          providerId: run.providerId,
+          providerName: run.providerName,
+          model: run.model,
+          workspacePath: run.workspacePath,
+          workspaceName: run.workspaceName
+        }
+      }
+    });
+  };
+
+  const formatTime = (timestamp) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+
+    if (diff < 60000) return 'Just now';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return date.toLocaleDateString();
+  };
+
+  const formatRuntime = (ms) => {
+    if (!ms) return null;
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    return `${(ms / 60000).toFixed(1)}m`;
+  };
+
+  if (loading) {
+    return <div className="text-center py-8 text-gray-400">Loading runs history...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">AI Runs History</h1>
+        <button
+          onClick={loadRuns}
+          className="flex items-center gap-2 px-4 py-2 text-gray-400 hover:text-white"
+        >
+          <RefreshCw size={16} /> Refresh
+        </button>
+      </div>
+
+      {/* Source Filter */}
+      <div className="flex gap-2">
+        {[
+          { value: 'all', label: 'All Runs' },
+          { value: 'devtools', label: 'DevTools' },
+          { value: 'cos-agent', label: 'CoS Agents' }
+        ].map(filter => (
+          <button
+            key={filter.value}
+            onClick={() => setSourceFilter(filter.value)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              sourceFilter === filter.value
+                ? 'bg-port-accent text-white'
+                : 'bg-port-card text-gray-400 hover:text-white border border-port-border'
+            }`}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Runs List */}
+      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
+        {runs.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">No AI runs yet</div>
+        ) : (
+          <div className="divide-y divide-port-border">
+            {runs.map(run => (
+              <div key={run.id}>
+                <div
+                  className="p-4 hover:bg-port-border/20 cursor-pointer group"
+                  onClick={() => toggleExpand(run.id)}
+                  data-testid={`run-row-${run.id}`}
+                >
+                  <div className="flex items-center gap-4">
+                    <button className="text-gray-400 hover:text-white">
+                      <span className={`inline-block transition-transform ${expandedId === run.id ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                    <span className="text-xl">🤖</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white">{run.providerName}</span>
+                        <span className="text-gray-500 text-sm">{run.model}</span>
+                        {run.source === 'cos-agent' && (
+                          <span className="text-xs text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
+                            CoS
+                          </span>
+                        )}
+                        {run.workspaceName && (
+                          <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
+                            {run.workspaceName}
+                          </span>
+                        )}
+                        {run.duration && (
+                          <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 font-mono truncate mt-1">
+                        {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
+                      </div>
+                    </div>
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
+                    <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(run.startTime)}</span>
+                    <button
+                      onClick={(e) => handleDelete(run.id, e)}
+                      className="p-1 text-gray-500 hover:text-port-error transition-colors opacity-0 group-hover:opacity-100"
+                      title="Delete run"
+                      data-testid={`delete-run-${run.id}`}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Expanded Details */}
+                {expandedId === run.id && (
+                  <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
+                    <div className="pt-4 space-y-4">
+                      {/* Metadata Grid */}
+                      <div className="grid grid-cols-5 gap-4 text-sm">
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started</div>
+                          <div className="text-gray-300">{new Date(run.startTime).toLocaleString()}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>
+                          <div className={run.success ? 'text-port-success' : run.success === false ? 'text-port-error' : 'text-port-warning'}>
+                            {run.success ? 'Success' : run.success === false ? 'Failed' : 'Running'}
+                          </div>
+                        </div>
+                        {run.duration && (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Duration</div>
+                            <div className="text-cyan-400 font-mono">{formatRuntime(run.duration)}</div>
+                          </div>
+                        )}
+                        {run.exitCode !== undefined && run.exitCode !== null && (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Exit Code</div>
+                            <div className={`font-mono ${run.exitCode === 0 ? 'text-port-success' : 'text-port-error'}`}>
+                              {run.exitCode}
+                            </div>
+                          </div>
+                        )}
+                        {run.outputSize && (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Output Size</div>
+                            <div className="text-gray-300 font-mono">{(run.outputSize / 1024).toFixed(1)} KB</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Prompt */}
+                      <div>
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Prompt</div>
+                        <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-48 overflow-auto">
+                          <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
+                            {expandedDetails[run.id]?.prompt || run.prompt || 'Loading...'}
+                          </pre>
+                        </div>
+                      </div>
+
+                      {/* Output */}
+                      {expandedDetails[run.id]?.output && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
+                          <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
+                            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
+                              {expandedDetails[run.id].output}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Error */}
+                      {run.error && (
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Error</div>
+                          <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3">
+                            <pre className="text-sm text-port-error font-mono whitespace-pre-wrap">
+                              {run.error}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Continue Button */}
+                      {run.success && expandedDetails[run.id]?.output && (
+                        <div className="flex justify-end pt-2">
+                          <button
+                            onClick={() => handleContinue(run)}
+                            className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+                            data-testid="continue-conversation-btn"
+                          >
+                            <MessageSquarePlus size={16} />
+                            Continue Conversation
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function RunnerPage() {
+  const location = useLocation();
   const [mode, setMode] = useState('ai'); // 'ai' or 'command'
   const [prompt, setPrompt] = useState('');
   const [command, setCommand] = useState('');
-  const [workspacePath, setWorkspacePath] = useState('');
+  const [selectedAppId, setSelectedAppId] = useState('');
   const [output, setOutput] = useState('');
   const [running, setRunning] = useState(false);
   const [runId, setRunId] = useState(null);
@@ -303,8 +587,37 @@ export function RunnerPage() {
   const [timeout, setTimeout] = useState(30);
   const [allowedCommands, setAllowedCommands] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
+  const [continueContext, setContinueContext] = useState(null);
   const fileInputRef = useRef(null);
   const outputRef = useRef(null);
+
+  // Get the selected app's repoPath
+  const selectedApp = apps.find(a => a.id === selectedAppId);
+  const workspacePath = selectedApp?.repoPath || '';
+
+  // Handle continuation context from navigation
+  useEffect(() => {
+    const continueFrom = location.state?.continueFrom;
+    if (continueFrom) {
+      setContinueContext(continueFrom);
+      // Set provider and model from previous run if available
+      if (continueFrom.providerId) {
+        setSelectedProvider(continueFrom.providerId);
+      }
+      if (continueFrom.model) {
+        setSelectedModel(continueFrom.model);
+      }
+      // Set workspace from previous run if available
+      if (continueFrom.workspacePath) {
+        const app = apps.find(a => a.repoPath === continueFrom.workspacePath);
+        if (app) {
+          setSelectedAppId(app.id);
+        }
+      }
+      // Clear location state to prevent re-triggering on refresh
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, apps]);
 
   useEffect(() => {
     Promise.all([
@@ -312,7 +625,16 @@ export function RunnerPage() {
       api.getProviders().catch(() => ({ providers: [] })),
       api.getAllowedCommands().catch(() => [])
     ]).then(([appsData, providersRes, cmds]) => {
-      setApps(appsData);
+      // Filter out PortOS Autofixer (it's part of PortOS project)
+      const filteredApps = appsData.filter(a => a.id !== 'portos-autofixer');
+      setApps(filteredApps);
+      // Set PortOS as default workspace (exact name match)
+      const portosApp = filteredApps.find(a => a.name === 'PortOS');
+      if (portosApp) {
+        setSelectedAppId(portosApp.id);
+      } else if (filteredApps.length > 0) {
+        setSelectedAppId(filteredApps[0].id);
+      }
       const allProviders = providersRes.providers || [];
       const enabledProviders = allProviders.filter(p => p.enabled);
       setProviders(enabledProviders);
@@ -381,13 +703,28 @@ export function RunnerPage() {
   const handleRunAI = async () => {
     if (!prompt.trim() || !selectedProvider) return;
 
+    // Build final prompt, merging with continuation context if present
+    let finalPrompt = prompt.trim();
+    if (continueContext) {
+      finalPrompt = `CONTINUATION OF PREVIOUS CONVERSATION:
+
+--- PREVIOUS PROMPT ---
+${continueContext.prompt}
+
+--- PREVIOUS OUTPUT ---
+${continueContext.output}
+
+--- NEW INSTRUCTIONS ---
+${prompt.trim()}`;
+    }
+
     setOutput('');
     setRunning(true);
 
     const result = await api.createRun({
       providerId: selectedProvider,
       model: selectedModel || undefined,
-      prompt: prompt.trim(),
+      prompt: finalPrompt,
       workspacePath: workspacePath || undefined,
       workspaceName: apps.find(a => a.repoPath === workspacePath)?.name
     }).catch(err => ({ error: err.message }));
@@ -398,6 +735,8 @@ export function RunnerPage() {
       return;
     }
 
+    // Clear continuation context after running
+    setContinueContext(null);
     setRunId(result.runId);
   };
 
@@ -481,7 +820,48 @@ export function RunnerPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">AI Runner</h1>
+      <h1 className="text-2xl font-bold text-white">Code</h1>
+
+      {/* Continuation Context Banner */}
+      {continueContext && (
+        <div className="bg-port-success/10 border border-port-success/30 rounded-xl p-4" data-testid="continuation-banner">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Info size={18} className="text-port-success" />
+              <span className="font-medium text-port-success">Continuing Previous Conversation</span>
+              {continueContext.providerName && (
+                <span className="text-xs text-gray-400 bg-port-card px-2 py-0.5 rounded">
+                  {continueContext.providerName}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setContinueContext(null)}
+              className="p-1 text-gray-400 hover:text-white"
+              title="Dismiss context"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="space-y-2 text-sm">
+            <div>
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Previous Prompt</div>
+              <div className="text-gray-300 bg-port-card/50 rounded px-2 py-1 font-mono text-xs max-h-20 overflow-auto">
+                {continueContext.prompt?.substring(0, 500)}{continueContext.prompt?.length > 500 ? '...' : ''}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Previous Output</div>
+              <div className="text-gray-300 bg-port-card/50 rounded px-2 py-1 font-mono text-xs max-h-24 overflow-auto">
+                {continueContext.output?.substring(0, 800)}{continueContext.output?.length > 800 ? '...' : ''}
+              </div>
+            </div>
+          </div>
+          <div className="text-xs text-gray-500 mt-3 italic">
+            Enter your follow-up instructions below. The previous context will be included automatically.
+          </div>
+        </div>
+      )}
 
       {/* Mode Toggle */}
       <div className="flex gap-2">
@@ -507,13 +887,12 @@ export function RunnerPage() {
       <div className="flex flex-wrap gap-3">
         {/* Workspace */}
         <select
-          value={workspacePath}
-          onChange={(e) => setWorkspacePath(e.target.value)}
+          value={selectedAppId}
+          onChange={(e) => setSelectedAppId(e.target.value)}
           className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
         >
-          <option value="">Current directory</option>
           {apps.map(app => (
-            <option key={app.id} value={app.repoPath}>{app.name}</option>
+            <option key={app.id} value={app.id}>{app.name}</option>
           ))}
         </select>
 
@@ -1466,11 +1845,12 @@ export function AgentsPage() {
       </div>
 
       {/* Running Processes Table */}
-      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
+      <div className="bg-port-card border border-port-border rounded-xl">
         <div className="px-6 py-4 border-b border-port-border">
           <h2 className="text-lg font-semibold text-white">Running Processes</h2>
         </div>
-        <table className="w-full">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[600px]">
           <thead>
             <tr className="border-b border-port-border">
               <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400 w-8"></th>
@@ -1498,7 +1878,12 @@ export function AgentsPage() {
                   <td className="px-4 py-4 font-mono text-cyan-400">{agent.runtimeFormatted}</td>
                   <td className="px-4 py-4 font-mono text-green-400">{agent.cpu?.toFixed(1)}%</td>
                   <td className="px-4 py-4 font-mono text-blue-400">{agent.memory?.toFixed(1)}%</td>
-                  <td className="px-4 py-4 font-mono text-gray-300">{agent.agentName.toLowerCase()}</td>
+                  <td className="px-4 py-4 font-mono text-gray-300">
+                    {agent.agentName.toLowerCase()}
+                    {agent.source === 'cos' && (
+                      <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-400 rounded">CoS</span>
+                    )}
+                  </td>
                   <td className="px-4 py-4 text-center">
                     <button
                       onClick={() => handleKill(agent.pid)}
@@ -1514,12 +1899,15 @@ export function AgentsPage() {
                   <tr>
                     <td colSpan={7} className="p-0">
                       <div className="bg-port-bg border-t border-port-border">
-                        <div className="px-6 py-4 space-y-4">
+                        <div className="px-3 sm:px-6 py-4 space-y-4">
                           {/* Process Details Grid */}
-                          <div className="grid grid-cols-4 gap-4">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Agent Type</div>
-                              <div className="text-sm text-purple-400 font-medium">{agent.agentName}</div>
+                              <div className="text-sm text-purple-400 font-medium">
+                                {agent.agentName}
+                                {agent.source === 'cos' && <span className="ml-1 text-xs text-purple-300">(CoS)</span>}
+                              </div>
                             </div>
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Parent PID</div>
@@ -1533,6 +1921,32 @@ export function AgentsPage() {
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime (ms)</div>
                               <div className="text-sm text-gray-300 font-mono">{agent.runtime?.toLocaleString()}</div>
                             </div>
+                            {agent.model && (
+                              <div>
+                                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Model</div>
+                                <div className="text-sm text-yellow-400 font-mono">{agent.model}</div>
+                              </div>
+                            )}
+                            {agent.agentId && (
+                              <div>
+                                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Agent ID</div>
+                                <div className="text-sm text-gray-300 font-mono">{agent.agentId}</div>
+                              </div>
+                            )}
+                            {agent.taskId && (
+                              <div>
+                                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Task ID</div>
+                                <div className="text-sm text-gray-300 font-mono">{agent.taskId}</div>
+                              </div>
+                            )}
+                            {agent.workspacePath && (
+                              <div>
+                                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Workspace</div>
+                                <div className="text-sm text-gray-300 font-mono truncate" title={agent.workspacePath}>
+                                  {agent.workspacePath.split('/').pop()}
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {/* Full Command */}
@@ -1545,8 +1959,20 @@ export function AgentsPage() {
                             </div>
                           </div>
 
+                          {/* Task Prompt (for CoS agents) */}
+                          {agent.prompt && (
+                            <div>
+                              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Task Prompt</div>
+                              <div className="bg-port-card border border-port-border rounded-lg p-3 overflow-x-auto max-h-48 overflow-y-auto">
+                                <p className="text-sm text-gray-300 whitespace-pre-wrap">
+                                  {agent.prompt}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
                           {/* Resource Usage Bar */}
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                               <div className="flex items-center justify-between text-xs mb-1">
                                 <span className="text-gray-500 uppercase tracking-wide">CPU Usage</span>
@@ -1588,6 +2014,7 @@ export function AgentsPage() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

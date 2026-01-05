@@ -1,5 +1,26 @@
 {
   "apps": {
+    "portos-autofixer": {
+      "id": "portos-autofixer",
+      "name": "PortOS Autofixer",
+      "description": "Autonomous PM2 crash detection and repair using Claude CLI",
+      "repoPath": "/path/to/PortOS",
+      "type": "express",
+      "uiPort": 5560,
+      "apiPort": null,
+      "startCommands": [
+        "pm2 start ecosystem.config.cjs --only portos-autofixer,portos-autofixer-ui"
+      ],
+      "pm2ProcessNames": [
+        "portos-autofixer",
+        "portos-autofixer-ui"
+      ],
+      "envFile": null,
+      "icon": null,
+      "editorCommand": "code .",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    },
     "example-app-1": {
       "id": "example-app-1",
       "name": "My Web App",

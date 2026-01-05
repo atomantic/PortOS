@@ -39,10 +39,25 @@ pm2 logs
 - [x] M10: Enhanced DevTools (provider/model selection, screenshot upload, git status, usage metrics)
 - [x] M11: AI Agents Page (process detection, kill ability, colorful UI, expandable details)
 - [x] M12: History Improvements (expandable entries, runtime/output capture, full command display)
+- [x] M13: Autofixer Integration (PM2 crash detection, Claude CLI auto-fix, session history UI)
+- [x] M14: Chief of Staff (autonomous agent manager, TASKS.md, system health, self-improvement)
+- [x] M15: Graceful Error Handling (error normalization, auto-fix integration, Socket.IO events)
+- [~] M16: Memory System (semantic memory, LM Studio embeddings, auto-extraction, agent context injection)
+- [x] M17: PM2 Ecosystem Config Enhancement (per-process port detection, CDP_PORT support, refresh button)
+- [x] M18: PM2 Standardization (LLM-powered config refactoring, import integration, button trigger)
 
 ### Documentation
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
 - [Versioning & Releases](./docs/VERSIONING.md) - Version format, release process
+
+### Error Handling
+The server implements comprehensive error handling:
+- **asyncHandler**: All routes wrapped with error handler that catches uncaught errors
+- **ServerError**: Custom error class with status, code, severity, and context
+- **Socket.IO Events**: Errors broadcast to UI via `error:occurred` event
+- **Process Handlers**: Unhandled rejections and uncaught exceptions emit socket events
+- **Logging**: Errors logged with emoji prefixes, no server crashes
+- See `server/lib/errorHandler.js` and `server/services/socket.js`
 
 ---
 
@@ -270,3 +285,418 @@ Enhanced app import with real-time websocket updates as AI discovers project con
 |-------|-------------|
 | WS /api/detect/stream | Websocket for streaming detection |
 | GET /api/detect/pm2-status | Check if app running in PM2 |
+
+---
+
+## M13: Autofixer Integration
+
+Autonomous crash detection and repair using Claude CLI.
+
+### Architecture
+- **Daemon Process** (`autofixer/server.js`): Monitors PM2 for crashed processes registered in PortOS
+- **UI Server** (`autofixer/ui.js`): Web interface for viewing logs and fix history on port 5560
+- **PM2 Integration**: Runs as `portos-autofixer` and `portos-autofixer-ui` processes
+
+### Features
+1. **Crash Detection**: Polls PM2 every 15 minutes for `errored` status on registered apps
+2. **Auto-Fix**: Invokes Claude CLI with crash context (error logs, app info) to diagnose and repair
+3. **Session History**: Stores fix attempts with prompts, outputs, and success/failure status
+4. **Cooldown**: 30-minute cooldown per process to prevent repeated fix loops
+5. **Log Streaming**: Real-time SSE log streaming from any PM2 process
+6. **Tailscale Compatible**: Dynamic hostname for remote access
+
+### Data Storage
+```
+./data/autofixer/
+├── index.json           # Fix session index
+└── sessions/
+    └── {sessionId}/
+        ├── prompt.txt    # Prompt sent to Claude
+        ├── output.txt    # Claude's response
+        └── metadata.json # Session details
+```
+
+### Autofixer UI (port 6000)
+- Process sidebar with live status indicators
+- SSE-powered log viewer with pause/clear controls
+- History tab showing fix attempts with success/failure status
+- Links back to PortOS Dashboard
+
+### Configuration
+| Setting | Value |
+|---------|-------|
+| UI Port | 5560 |
+| Check Interval | 15 minutes |
+| Fix Cooldown | 30 minutes |
+| Max History | 100 entries |
+
+---
+
+## M14: Chief of Staff
+
+Autonomous agent manager that watches task files, spawns sub-agents, and maintains system health.
+
+### Architecture
+- **Task Parser** (`server/lib/taskParser.js`): Parses TASKS.md and COS-TASKS.md formats
+- **CoS Service** (`server/services/cos.js`): State management, health monitoring, task evaluation
+- **Task Watcher** (`server/services/taskWatcher.js`): File watching with chokidar
+- **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
+- **CoS Routes** (`server/routes/cos.js`): REST API endpoints
+- **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs
+
+### Features
+1. **Dual Task Lists**: User tasks (TASKS.md) and system tasks (COS-TASKS.md)
+2. **Autonomous Execution**: Auto-approved tasks run without user intervention
+3. **Approval Workflow**: Tasks marked APPROVAL require user confirmation
+4. **System Health Monitoring**: PM2 process checks, memory usage, error detection
+5. **Sub-Agent Spawning**: Claude CLI with --dangerously-skip-permissions and MCP servers
+6. **Self-Improvement**: Can analyze performance and suggest prompt/config improvements
+7. **Script Generation**: Creates automation scripts for repetitive tasks
+8. **Report Generation**: Daily summaries of completed work
+
+### Task File Format
+```markdown
+# Tasks
+## Pending
+- [ ] #task-001 | HIGH | Task description
+  - Context: Additional context
+  - App: app-name
+
+## In Progress
+- [~] #task-002 | MEDIUM | Another task
+  - Agent: agent-id
+  - Started: 2024-01-15T10:30:00Z
+
+## Completed
+- [x] #task-003 | LOW | Done task
+  - Completed: 2024-01-14T15:45:00Z
+```
+
+### System Task Format (with approval flags)
+```markdown
+- [ ] #sys-001 | HIGH | AUTO | Auto-approved task
+- [ ] #sys-002 | MEDIUM | APPROVAL | Needs user approval
+```
+
+### Data Storage
+```
+./data/cos/
+├── state.json           # Daemon state and config
+├── agents/{agentId}/    # Agent prompts and outputs
+├── reports/{date}.json  # Daily reports
+└── scripts/             # Generated automation scripts
+```
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| GET /api/cos | Get CoS status |
+| POST /api/cos/start | Start daemon |
+| POST /api/cos/stop | Stop daemon |
+| GET/PUT /api/cos/config | Configuration |
+| GET /api/cos/tasks | Get all tasks |
+| POST /api/cos/evaluate | Force evaluation |
+| GET /api/cos/health | Health status |
+| POST /api/cos/health/check | Run health check |
+| GET /api/cos/agents | List agents |
+| POST /api/cos/agents/:id/terminate | Terminate agent |
+| GET /api/cos/reports | List reports |
+
+### Prompt Templates
+| Template | Purpose |
+|----------|---------|
+| cos-agent-briefing | Brief sub-agent on task |
+| cos-evaluate | Evaluate tasks and decide actions |
+| cos-report-summary | Generate daily summary |
+| cos-self-improvement | Analyze and suggest improvements |
+
+### Configuration
+| Setting | Default | Description |
+|---------|---------|-------------|
+| evaluationIntervalMs | 60000 | Task evaluation interval |
+| healthCheckIntervalMs | 900000 | Health check interval |
+| maxConcurrentAgents | 3 | Max parallel agents |
+| maxProcessMemoryMb | 2048 | Memory alert threshold |
+| autoStart | false | Start on server boot |
+| selfImprovementEnabled | true | Allow self-analysis |
+
+---
+
+## M15: Graceful Error Handling
+
+Enhanced error handling system with automatic recovery and UI notifications.
+
+### Architecture
+- **Error Handler** (`server/lib/errorHandler.js`): Centralized error normalization and Socket.IO emission
+- **Auto-Fixer** (`server/services/autoFixer.js`): Automatic agent spawning for critical errors
+- **Socket.IO Integration**: Real-time error notifications to connected clients
+- **Route Protection**: All routes use asyncHandler wrapper for consistent error handling
+
+### Features
+1. **Graceful Error Handling**: Server never crashes, all errors caught and handled
+2. **Socket.IO Error Events**: Real-time error notifications to UI with severity and context
+3. **Auto-Fix Tasks**: Critical errors automatically create CoS tasks for agent resolution
+4. **Error Recovery UI**: Client can request manual error recovery via Socket.IO
+5. **Process Error Handlers**: Unhandled rejections and exceptions trigger auto-fix
+6. **Error Deduplication**: Prevents duplicate auto-fix tasks within 1-minute window
+
+### Error Severity Levels
+| Severity | Description | Auto-Fix |
+|----------|-------------|----------|
+| warning | Non-critical issues | No |
+| error | Server errors, failures | No |
+| critical | System-threatening errors | Yes |
+
+### Socket.IO Events
+| Event | Direction | Payload |
+|-------|-----------|---------|
+| error:occurred | Server → Client | Error details with severity, code, timestamp |
+| system:critical-error | Server → Client | Critical errors only |
+| error:notified | Server → Subscribers | Error notification to subscribed clients |
+| errors:subscribe | Client → Server | Subscribe to error events |
+| errors:unsubscribe | Client → Server | Unsubscribe from error events |
+| error:recover | Client → Server | Request manual error recovery |
+| error:recover:requested | Server → Client | Recovery task created confirmation |
+
+### Auto-Fix Flow
+1. Error occurs in route or service
+2. `asyncHandler` catches and normalizes error
+3. Error emitted to `errorEvents` EventEmitter
+4. `autoFixer` checks if error should trigger auto-fix
+5. If yes, creates CoS task with error context
+6. Socket.IO broadcasts error to all connected clients
+7. CoS evaluates and spawns agent to fix the error
+8. Agent analyzes, fixes, and reports back
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/lib/errorHandler.js` | Error classes, asyncHandler, middleware |
+| `server/services/autoFixer.js` | Auto-fix task creation and deduplication |
+| `server/services/socket.js` | Socket.IO error event forwarding |
+| `server/routes/*.js` | All routes use asyncHandler wrapper |
+| `client/src/hooks/useErrorNotifications.js` | Client-side error event handler with toast notifications |
+| `client/src/components/Layout.jsx` | Mounts error notification hook for app-wide coverage |
+
+### Error Context
+Errors include rich context for debugging:
+- Error code and message
+- HTTP status code
+- Timestamp
+- Stack trace (for 500+ errors)
+- Custom context object
+- Severity level
+- Auto-fix flag
+
+---
+
+## M16: Memory System
+
+Semantic memory system for the Chief of Staff that stores facts, learnings, observations, decisions, and user preferences with vector embeddings for intelligent retrieval.
+
+### Architecture
+- **Memory Service** (`server/services/memory.js`): Core CRUD, search, and lifecycle operations
+- **Embeddings Service** (`server/services/memoryEmbeddings.js`): LM Studio integration for vector generation
+- **Memory Extractor** (`server/services/memoryExtractor.js`): Extract memories from agent output
+- **Memory Retriever** (`server/services/memoryRetriever.js`): Context injection for agent prompts
+- **Memory Routes** (`server/routes/memory.js`): REST API endpoints
+- **Memory Tab** (`ChiefOfStaff.jsx`): UI with list, timeline, and graph views
+
+### Features
+1. **Six Memory Types**: fact, learning, observation, decision, preference, context
+2. **Semantic Search**: LM Studio embeddings for similarity-based retrieval
+3. **Auto-Extraction**: Memories extracted from successful agent task completions
+4. **Auto-Injection**: Relevant memories injected into agent prompts before execution
+5. **Importance Decay**: Time-based decay with access-based boosts
+6. **Memory Consolidation**: Merge similar memories automatically
+7. **Real-time Updates**: WebSocket events for memory changes
+8. **Graph Visualization**: D3.js relationship graph (planned)
+
+### Memory Schema
+```javascript
+{
+  id: string,              // UUID
+  type: 'fact' | 'learning' | 'observation' | 'decision' | 'preference' | 'context',
+  content: string,         // Full memory content
+  summary: string,         // Short summary
+  category: string,        // e.g., 'codebase', 'workflow', 'tools'
+  tags: string[],          // Auto-extracted and user-defined
+  relatedMemories: string[], // Linked memory IDs
+  sourceTaskId: string,    // Origin task
+  sourceAgentId: string,   // Origin agent
+  embedding: number[],     // Vector (768 dims for nomic-embed)
+  confidence: number,      // 0.0-1.0
+  importance: number,      // 0.0-1.0 (decays over time)
+  accessCount: number,
+  lastAccessed: string,
+  createdAt: string,
+  status: 'active' | 'archived' | 'expired'
+}
+```
+
+### Data Storage
+```
+./data/cos/memory/
+├── index.json         # Lightweight metadata for listing/filtering
+├── embeddings.json    # Vector storage for semantic search
+└── memories/          # Full memory content
+    └── {id}/
+        └── memory.json
+```
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| GET /api/memory | List memories with filters |
+| GET /api/memory/:id | Get single memory |
+| POST /api/memory | Create memory |
+| PUT /api/memory/:id | Update memory |
+| DELETE /api/memory/:id | Delete (soft) memory |
+| POST /api/memory/search | Semantic search |
+| GET /api/memory/categories | List categories |
+| GET /api/memory/tags | List tags |
+| GET /api/memory/timeline | Timeline view data |
+| GET /api/memory/graph | Graph visualization data |
+| GET /api/memory/stats | Memory statistics |
+| POST /api/memory/link | Link two memories |
+| POST /api/memory/consolidate | Merge similar memories |
+| POST /api/memory/decay | Apply importance decay |
+| DELETE /api/memory/expired | Clear expired memories |
+| GET /api/memory/embeddings/status | LM Studio connection status |
+
+### WebSocket Events
+| Event | Description |
+|-------|-------------|
+| cos:memory:created | New memory created |
+| cos:memory:updated | Memory updated |
+| cos:memory:deleted | Memory deleted |
+| cos:memory:extracted | Memories extracted from agent |
+| cos:memory:approval-needed | Medium-confidence memories pending approval |
+
+### LM Studio Configuration
+```javascript
+memory: {
+  enabled: true,
+  embeddingProvider: 'lmstudio',
+  embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
+  embeddingModel: 'nomic-embed-text-v1.5',
+  embeddingDimension: 768,
+  maxContextTokens: 2000,
+  minRelevanceThreshold: 0.7,
+  autoExtractEnabled: true
+}
+```
+
+### Memory Extraction
+Memories are extracted from agent output:
+1. **Structured Blocks**: `<MEMORY type="..." category="..." confidence="...">content</MEMORY>`
+2. **Pattern Matching**: "I learned that...", "User prefers...", "I decided to..."
+3. **High confidence (>0.8)**: Auto-saved
+4. **Medium confidence (0.5-0.8)**: Queued for user approval
+
+### Memory Injection
+Before agent task execution:
+1. Generate embedding for task description
+2. Find semantically similar memories (>0.7 relevance)
+3. Include high-importance user preferences
+4. Include relevant codebase facts
+5. Format as markdown section in agent prompt
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/lib/memoryValidation.js` | Zod schemas for memory operations |
+| `server/lib/vectorMath.js` | Cosine similarity, clustering helpers |
+| `server/services/memory.js` | Core CRUD, search, lifecycle |
+| `server/services/memoryEmbeddings.js` | LM Studio embedding generation |
+| `server/services/memoryExtractor.js` | Extract memories from agent output |
+| `server/services/memoryRetriever.js` | Retrieve and format for injection |
+| `server/routes/memory.js` | REST API endpoints |
+| `client/src/pages/ChiefOfStaff.jsx` | MemoryTab, MemoryTimeline, MemoryGraph |
+| `client/src/services/api.js` | Memory API client functions |
+
+---
+
+## M17: PM2 Ecosystem Config Enhancement
+
+Enhanced app management to detect and track all PM2 processes with their ports.
+
+### Features
+- **Per-process port detection**: Extracts ports for each PM2 process from ecosystem.config.js/cjs
+- **CDP_PORT support**: Detects Chrome DevTools Protocol ports for browser processes
+- **Constant resolution**: Handles variable references like `CDP_PORT: CDP_PORT` by parsing top-level constants
+- **Comment handling**: Properly skips `//` and `/* */` comments when parsing config files
+- **Refresh button**: UI button to re-scan ecosystem config and update app data
+
+### Schema Extension
+```javascript
+// Added to server/lib/validation.js
+export const processSchema = z.object({
+  name: z.string().min(1),
+  port: z.number().int().min(1).max(65535).nullable().optional(),
+  description: z.string().optional()
+});
+
+// Added to appSchema
+processes: z.array(processSchema).optional()
+```
+
+### API Endpoint
+```
+POST /api/apps/:id/refresh-config
+```
+Re-parses the app's ecosystem config and updates the app with new process/port data.
+
+### Implementation Files
+| File | Changes |
+|------|---------|
+| `server/lib/validation.js` | Added `processSchema` and `processes` field to `appSchema` |
+| `server/services/streamingDetect.js` | Added `parseEcosystemConfig()` with port/constant/comment parsing |
+| `server/routes/apps.js` | Added `POST /:id/refresh-config` endpoint |
+| `client/src/services/api.js` | Added `refreshAppConfig()` function |
+| `client/src/pages/Apps.jsx` | Added "Refresh Config" button with loading state |
+
+---
+
+## M18: PM2 Standardization
+
+LLM-powered refactoring to standardize app configurations to follow PM2 best practices.
+
+### Features
+1. **Standardize PM2 Button**: Available in each app's expanded details row
+2. **LLM Analysis**: Uses configured AI provider to analyze project structure
+3. **Auto-apply Changes**: Automatically modifies files with git backup
+4. **Git Backup**: Creates backup branch before any modifications
+5. **Port Consolidation**: Moves all ports to ecosystem.config.cjs env blocks
+6. **Stray Port Removal**: Removes PORT from .env files, comments out port in vite.config
+
+### PM2 Standard
+- All ports defined in `ecosystem.config.cjs` env blocks
+- PM2 configured with watch for live-reload on server processes
+- Vite processes use `npx vite --host --port XXXX` in args
+- No stray port references in .env or vite.config
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| POST /api/standardize/analyze | Analyze app and generate standardization plan |
+| POST /api/standardize/apply | Apply changes with git backup |
+| GET /api/standardize/template | Get standard PM2 template reference |
+| POST /api/standardize/backup | Create git backup only |
+
+### Socket Events (for streaming mode)
+| Event | Description |
+|-------|-------------|
+| standardize:start | Client requests standardization |
+| standardize:step | Progress update (analyze, backup, apply) |
+| standardize:analyzed | Analysis complete with plan |
+| standardize:complete | Standardization finished |
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/services/pm2Standardizer.js` | Core analysis and apply logic |
+| `server/routes/standardize.js` | API endpoints |
+| `server/services/socket.js` | Socket event handlers |
+| `client/src/pages/Apps.jsx` | Standardize PM2 button |
+| `client/src/services/api.js` | API functions |

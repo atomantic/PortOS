@@ -5,11 +5,13 @@ import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { logAction } from '../services/history.js';
 import { validate, appSchema, appUpdateSchema } from '../lib/validation.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
 const router = Router();
 
 // GET /api/apps - List all apps
-router.get('/', async (req, res, next) => {
+router.get('/', asyncHandler(async (req, res, next) => {
   console.log('📱 GET /api/apps - fetching apps list');
   const apps = await appsService.getAllApps();
   console.log(`📱 GET /api/apps - found ${apps.length} apps`);
@@ -18,8 +20,8 @@ router.get('/', async (req, res, next) => {
   const allPm2 = await pm2Service.listProcesses().catch(() => []);
   const pm2Map = new Map(allPm2.map(p => [p.name, p]));
 
-  // Enrich with PM2 status
-  const enriched = apps.map((app) => {
+  // Enrich with PM2 status and auto-populate processes if needed
+  const enriched = await Promise.all(apps.map(async (app) => {
     const statuses = {};
     for (const processName of app.pm2ProcessNames || []) {
       const pm2Proc = pm2Map.get(processName);
@@ -37,23 +39,30 @@ router.get('/', async (req, res, next) => {
       overallStatus = 'not_started';
     }
 
+    // Auto-populate processes from ecosystem config if not already set
+    let processes = app.processes;
+    if ((!processes || processes.length === 0) && existsSync(app.repoPath)) {
+      processes = await parseEcosystemFromPath(app.repoPath).catch(() => []);
+    }
+
     return {
       ...app,
+      processes,
       pm2Status: statuses,
       overallStatus
     };
-  });
+  }));
 
   console.log(`📱 GET /api/apps - responding with ${enriched.length} apps`);
   res.json(enriched);
-});
+}));
 
 // GET /api/apps/:id - Get single app
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   // Get PM2 status for each process
@@ -64,62 +73,62 @@ router.get('/:id', async (req, res, next) => {
   }
 
   res.json({ ...app, pm2Status: statuses });
-});
+}));
 
 // POST /api/apps - Create new app
-router.post('/', async (req, res, next) => {
+router.post('/', asyncHandler(async (req, res, next) => {
   const validation = validate(appSchema, req.body);
 
   if (!validation.success) {
-    return res.status(400).json({
-      error: 'Validation failed',
+    throw new ServerError('Validation failed', {
+      status: 400,
       code: 'VALIDATION_ERROR',
-      details: validation.errors
+      context: { details: validation.errors }
     });
   }
 
   const app = await appsService.createApp(validation.data);
   res.status(201).json(app);
-});
+}));
 
 // PUT /api/apps/:id - Update app
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', asyncHandler(async (req, res, next) => {
   const validation = validate(appUpdateSchema, req.body);
 
   if (!validation.success) {
-    return res.status(400).json({
-      error: 'Validation failed',
+    throw new ServerError('Validation failed', {
+      status: 400,
       code: 'VALIDATION_ERROR',
-      details: validation.errors
+      context: { details: validation.errors }
     });
   }
 
   const app = await appsService.updateApp(req.params.id, validation.data);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.json(app);
-});
+}));
 
 // DELETE /api/apps/:id - Delete app
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', asyncHandler(async (req, res, next) => {
   const deleted = await appsService.deleteApp(req.params.id);
 
   if (!deleted) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.status(204).send();
-});
+}));
 
 // POST /api/apps/:id/start - Start app via PM2
-router.post('/:id/start', async (req, res, next) => {
+router.post('/:id/start', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const results = {};
@@ -139,14 +148,14 @@ router.post('/:id/start', async (req, res, next) => {
   await logAction('start', app.id, app.name, { processNames }, allSuccess);
 
   res.json({ success: true, results });
-});
+}));
 
 // POST /api/apps/:id/stop - Stop app
-router.post('/:id/stop', async (req, res, next) => {
+router.post('/:id/stop', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const results = {};
@@ -161,14 +170,14 @@ router.post('/:id/stop', async (req, res, next) => {
   await logAction('stop', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
 
   res.json({ success: true, results });
-});
+}));
 
 // POST /api/apps/:id/restart - Restart app
-router.post('/:id/restart', async (req, res, next) => {
+router.post('/:id/restart', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const results = {};
@@ -183,14 +192,14 @@ router.post('/:id/restart', async (req, res, next) => {
   await logAction('restart', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
 
   res.json({ success: true, results });
-});
+}));
 
 // GET /api/apps/:id/status - Get PM2 status
-router.get('/:id/status', async (req, res, next) => {
+router.get('/:id/status', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const statuses = {};
@@ -202,39 +211,39 @@ router.get('/:id/status', async (req, res, next) => {
   }
 
   res.json(statuses);
-});
+}));
 
 // GET /api/apps/:id/logs - Get logs
-router.get('/:id/logs', async (req, res, next) => {
+router.get('/:id/logs', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const lines = parseInt(req.query.lines) || 100;
   const processName = req.query.process || app.pm2ProcessNames?.[0];
 
   if (!processName) {
-    return res.status(400).json({ error: 'No process name specified', code: 'MISSING_PROCESS' });
+    throw new ServerError('No process name specified', { status: 400, code: 'MISSING_PROCESS' });
   }
 
   const logs = await pm2Service.getLogs(processName, lines)
     .catch(err => `Error retrieving logs: ${err.message}`);
 
   res.json({ processName, lines, logs });
-});
+}));
 
 // POST /api/apps/:id/open-editor - Open app in editor
-router.post('/:id/open-editor', async (req, res, next) => {
+router.post('/:id/open-editor', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   if (!existsSync(app.repoPath)) {
-    return res.status(400).json({ error: 'App path does not exist', code: 'PATH_NOT_FOUND' });
+    throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
   }
 
   const editorCommand = app.editorCommand || 'code .';
@@ -249,18 +258,18 @@ router.post('/:id/open-editor', async (req, res, next) => {
   child.unref();
 
   res.json({ success: true, command: editorCommand, path: app.repoPath });
-});
+}));
 
 // POST /api/apps/:id/open-folder - Open app folder in file manager
-router.post('/:id/open-folder', async (req, res, next) => {
+router.post('/:id/open-folder', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found', code: 'NOT_FOUND' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   if (!existsSync(app.repoPath)) {
-    return res.status(400).json({ error: 'App path does not exist', code: 'PATH_NOT_FOUND' });
+    throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
   }
 
   // Cross-platform folder open command
@@ -285,6 +294,46 @@ router.post('/:id/open-folder', async (req, res, next) => {
   child.unref();
 
   res.json({ success: true, path: app.repoPath });
-});
+}));
+
+// POST /api/apps/:id/refresh-config - Re-parse ecosystem config for PM2 processes
+router.post('/:id/refresh-config', asyncHandler(async (req, res, next) => {
+  const app = await appsService.getAppById(req.params.id);
+
+  if (!app) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  if (!existsSync(app.repoPath)) {
+    throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+
+  // Parse ecosystem config from the app's repo path
+  const processes = await parseEcosystemFromPath(app.repoPath);
+
+  // Update app with new process data
+  const updates = {};
+
+  if (processes.length > 0) {
+    updates.processes = processes;
+    updates.pm2ProcessNames = processes.map(p => p.name);
+
+    // Update apiPort if we found one and it's different
+    const processWithPort = processes.find(p => p.port);
+    if (processWithPort && processWithPort.port !== app.apiPort) {
+      updates.apiPort = processWithPort.port;
+    }
+  }
+
+  // Only update if we have changes
+  if (Object.keys(updates).length > 0) {
+    const updatedApp = await appsService.updateApp(req.params.id, updates);
+    console.log(`🔄 Refreshed config for ${app.name}: ${processes.length} processes found`);
+    res.json({ success: true, updated: true, app: updatedApp, processes });
+  } else {
+    console.log(`🔄 No config changes for ${app.name}`);
+    res.json({ success: true, updated: false, app, processes: app.processes || [] });
+  }
+}));
 
 export default router;

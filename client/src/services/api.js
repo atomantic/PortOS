@@ -1,3 +1,5 @@
+import toast from 'react-hot-toast';
+
 const API_BASE = '/api';
 
 async function request(endpoint, options = {}) {
@@ -14,7 +16,9 @@ async function request(endpoint, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const errorMessage = error.error || `HTTP ${response.status}`;
+    toast.error(errorMessage);
+    throw new Error(errorMessage);
   }
 
   // Handle 204 No Content
@@ -47,6 +51,7 @@ export const stopApp = (id) => request(`/apps/${id}/stop`, { method: 'POST' });
 export const restartApp = (id) => request(`/apps/${id}/restart`, { method: 'POST' });
 export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { method: 'POST' });
 export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
+export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppLogs = (id, lines = 100, processName) => {
   const params = new URLSearchParams({ lines: String(lines) });
@@ -163,14 +168,15 @@ export const testProvider = (id) => request(`/providers/${id}/test`, { method: '
 export const refreshProviderModels = (id) => request(`/providers/${id}/refresh-models`, { method: 'POST' });
 
 // Runs
-export const getRuns = (limit = 50, offset = 0) =>
-  request(`/runs?limit=${limit}&offset=${offset}`);
+export const getRuns = (limit = 50, offset = 0, source = 'all') =>
+  request(`/runs?limit=${limit}&offset=${offset}&source=${source}`);
 export const createRun = (data) => request('/runs', {
   method: 'POST',
   body: JSON.stringify(data)
 });
 export const getRun = (id) => request(`/runs/${id}`);
 export const getRunOutput = (id) => request(`/runs/${id}/output`);
+export const getRunPrompt = (id) => request(`/runs/${id}/prompt`);
 export const stopRun = (id) => request(`/runs/${id}/stop`, { method: 'POST' });
 export const deleteRun = (id) => request(`/runs/${id}`, { method: 'DELETE' });
 
@@ -189,6 +195,7 @@ export const clearHistory = (olderThanDays) => request(
   olderThanDays ? `/history?olderThanDays=${olderThanDays}` : '/history',
   { method: 'DELETE' }
 );
+export const deleteHistoryEntry = (id) => request(`/history/${id}`, { method: 'DELETE' });
 
 // Commands
 export const executeCommand = (command, workspacePath) => request('/commands/execute', {
@@ -244,3 +251,128 @@ export const uploadScreenshot = (base64Data, filename, mimeType) => request('/sc
 export const getAgents = () => request('/agents');
 export const getAgentInfo = (pid) => request(`/agents/${pid}`);
 export const killAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
+
+// Chief of Staff
+export const getCosStatus = () => request('/cos');
+export const startCos = () => request('/cos/start', { method: 'POST' });
+export const stopCos = () => request('/cos/stop', { method: 'POST' });
+export const getCosConfig = () => request('/cos/config');
+export const updateCosConfig = (config) => request('/cos/config', {
+  method: 'PUT',
+  body: JSON.stringify(config)
+});
+export const getCosTasks = () => request('/cos/tasks');
+export const addCosTask = (task) => request('/cos/tasks', {
+  method: 'POST',
+  body: JSON.stringify(task)
+});
+export const updateCosTask = (id, updates) => request(`/cos/tasks/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(updates)
+});
+export const deleteCosTask = (id) => request(`/cos/tasks/${id}`, { method: 'DELETE' });
+export const reorderCosTasks = (taskIds) => request('/cos/tasks/reorder', {
+  method: 'POST',
+  body: JSON.stringify({ taskIds })
+});
+export const approveCosTask = (id) => request(`/cos/tasks/${id}/approve`, { method: 'POST' });
+export const forceCosEvaluate = () => request('/cos/evaluate', { method: 'POST' });
+export const getCosHealth = () => request('/cos/health');
+export const forceHealthCheck = () => request('/cos/health/check', { method: 'POST' });
+export const getCosAgents = () => request('/cos/agents');
+export const getCosAgent = (id) => request(`/cos/agents/${id}`);
+export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
+export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
+export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
+export const getCosReports = () => request('/cos/reports');
+export const getCosTodayReport = () => request('/cos/reports/today');
+export const getCosReport = (date) => request(`/cos/reports/${date}`);
+
+// CoS Scripts
+export const getCosScripts = () => request('/cos/scripts');
+export const getCosScript = (id) => request(`/cos/scripts/${id}`);
+export const createCosScript = (data) => request('/cos/scripts', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateCosScript = (id, data) => request(`/cos/scripts/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteCosScript = (id) => request(`/cos/scripts/${id}`, { method: 'DELETE' });
+export const runCosScript = (id) => request(`/cos/scripts/${id}/run`, { method: 'POST' });
+export const getCosScriptRuns = (id) => request(`/cos/scripts/${id}/runs`);
+export const getCosScriptPresets = () => request('/cos/scripts/presets');
+
+// Memory
+export const getMemories = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.types) params.set('types', options.types.join(','));
+  if (options.categories) params.set('categories', options.categories.join(','));
+  if (options.tags) params.set('tags', options.tags.join(','));
+  if (options.status) params.set('status', options.status);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  if (options.sortBy) params.set('sortBy', options.sortBy);
+  if (options.sortOrder) params.set('sortOrder', options.sortOrder);
+  return request(`/memory?${params}`);
+};
+export const getMemory = (id) => request(`/memory/${id}`);
+export const createMemory = (data) => request('/memory', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateMemory = (id, data) => request(`/memory/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteMemory = (id, hard = false) => request(`/memory/${id}?hard=${hard}`, { method: 'DELETE' });
+export const searchMemories = (query, options = {}) => request('/memory/search', {
+  method: 'POST',
+  body: JSON.stringify({ query, ...options })
+});
+export const getMemoryCategories = () => request('/memory/categories');
+export const getMemoryTags = () => request('/memory/tags');
+export const getMemoryTimeline = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.startDate) params.set('startDate', options.startDate);
+  if (options.endDate) params.set('endDate', options.endDate);
+  if (options.types) params.set('types', options.types.join(','));
+  if (options.limit) params.set('limit', options.limit);
+  return request(`/memory/timeline?${params}`);
+};
+export const getMemoryGraph = () => request('/memory/graph');
+export const getMemoryStats = () => request('/memory/stats');
+export const getRelatedMemories = (id, limit = 10) => request(`/memory/${id}/related?limit=${limit}`);
+export const linkMemories = (sourceId, targetId) => request('/memory/link', {
+  method: 'POST',
+  body: JSON.stringify({ sourceId, targetId })
+});
+export const consolidateMemories = (options = {}) => request('/memory/consolidate', {
+  method: 'POST',
+  body: JSON.stringify(options)
+});
+export const getEmbeddingStatus = () => request('/memory/embeddings/status');
+
+// PM2 Standardization
+export const analyzeStandardization = (repoPath, providerId) => request('/standardize/analyze', {
+  method: 'POST',
+  body: JSON.stringify({ repoPath, providerId })
+});
+export const analyzeStandardizationByApp = (appId, providerId) => request('/standardize/analyze', {
+  method: 'POST',
+  body: JSON.stringify({ appId, providerId })
+});
+export const applyStandardization = (repoPath, plan) => request('/standardize/apply', {
+  method: 'POST',
+  body: JSON.stringify({ repoPath, plan })
+});
+export const applyStandardizationByApp = (appId, plan) => request('/standardize/apply', {
+  method: 'POST',
+  body: JSON.stringify({ appId, plan })
+});
+export const getStandardizeTemplate = () => request('/standardize/template');
+export const createGitBackup = (repoPath) => request('/standardize/backup', {
+  method: 'POST',
+  body: JSON.stringify({ repoPath })
+});

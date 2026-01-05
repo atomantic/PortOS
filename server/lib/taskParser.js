@@ -1,0 +1,311 @@
+/**
+ * Task Parser for TASKS.md format
+ *
+ * Parses markdown task files with the following format:
+ *
+ * # Tasks
+ *
+ * ## Pending
+ * - [ ] #task-001 | HIGH | Task description
+ *   - Context: Additional context
+ *   - App: app-name
+ *
+ * ## In Progress
+ * - [~] #task-002 | MEDIUM | Another task
+ *   - Agent: agent-id
+ *   - Started: 2024-01-15T10:30:00Z
+ *
+ * ## Blocked
+ * - [!] #task-003 | HIGH | Blocked task
+ *   - Blocker: Waiting for API access
+ *
+ * ## Completed
+ * - [x] #task-004 | LOW | Done task
+ *   - Completed: 2024-01-14T15:45:00Z
+ *
+ * Internal CoS tasks can have approval flags:
+ * - [ ] #sys-001 | HIGH | AUTO | Auto-approved task
+ * - [ ] #sys-002 | MEDIUM | APPROVAL | Needs user approval
+ */
+
+const STATUS_MAP = {
+  '[ ]': 'pending',
+  '[~]': 'in_progress',
+  '[x]': 'completed',
+  '[!]': 'blocked'
+};
+
+const PRIORITY_VALUES = {
+  'CRITICAL': 4,
+  'HIGH': 3,
+  'MEDIUM': 2,
+  'LOW': 1
+};
+
+/**
+ * Parse a single task line
+ * Format: - [ ] #task-001 | HIGH | Description
+ * Or with approval flag: - [ ] #sys-001 | HIGH | AUTO | Description
+ */
+function parseTaskLine(line) {
+  // First try: - [status] #id | PRIORITY | APPROVAL_FLAG | description
+  let match = line.match(/^-\s*\[([ x~!])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i);
+
+  if (match) {
+    const [, statusChar, id, priority, approvalFlag, description] = match;
+    const statusKey = `[${statusChar}]`;
+
+    return {
+      id: id.startsWith('task-') || id.startsWith('sys-') ? id : `task-${id}`,
+      status: STATUS_MAP[statusKey] || 'pending',
+      priority: priority.toUpperCase(),
+      priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
+      approvalRequired: approvalFlag.toUpperCase() === 'APPROVAL',
+      autoApproved: approvalFlag.toUpperCase() === 'AUTO',
+      description: description.trim(),
+      metadata: {}
+    };
+  }
+
+  // Fallback: - [status] #id | PRIORITY | description (no approval flag)
+  match = line.match(/^-\s*\[([ x~!])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(.+)$/i);
+
+  if (!match) return null;
+
+  const [, statusChar, id, priority, description] = match;
+  const statusKey = `[${statusChar}]`;
+
+  return {
+    id: id.startsWith('task-') || id.startsWith('sys-') ? id : `task-${id}`,
+    status: STATUS_MAP[statusKey] || 'pending',
+    priority: priority.toUpperCase(),
+    priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
+    approvalRequired: false,
+    autoApproved: true,
+    description: description.trim(),
+    metadata: {}
+  };
+}
+
+/**
+ * Parse metadata line (indented under task)
+ * Format:   - Key: Value
+ */
+function parseMetadataLine(line) {
+  const match = line.match(/^\s+-\s*(\w+):\s*(.+)$/);
+  if (!match) return null;
+
+  return {
+    key: match[1].toLowerCase(),
+    value: match[2].trim()
+  };
+}
+
+/**
+ * Parse TASKS.md content into structured data
+ */
+export function parseTasksMarkdown(content) {
+  const lines = content.split('\n');
+  const tasks = [];
+  let currentTask = null;
+  let currentSection = null;
+
+  for (const line of lines) {
+    // Section headers
+    if (line.startsWith('## ')) {
+      currentSection = line.slice(3).trim().toLowerCase().replace(/\s+/g, '_');
+      continue;
+    }
+
+    // Skip main title and empty lines
+    if (line.startsWith('# ') || line.trim() === '') {
+      continue;
+    }
+
+    // Task line
+    if (line.startsWith('- [')) {
+      if (currentTask) {
+        tasks.push(currentTask);
+      }
+      currentTask = parseTaskLine(line);
+      if (currentTask) {
+        currentTask.section = currentSection;
+      }
+      continue;
+    }
+
+    // Metadata line (indented)
+    if (currentTask && line.match(/^\s+-\s*\w+:/)) {
+      const meta = parseMetadataLine(line);
+      if (meta) {
+        currentTask.metadata[meta.key] = meta.value;
+      }
+    }
+  }
+
+  // Don't forget last task
+  if (currentTask) {
+    tasks.push(currentTask);
+  }
+
+  return tasks;
+}
+
+/**
+ * Group tasks by status
+ */
+export function groupTasksByStatus(tasks) {
+  return {
+    pending: tasks.filter(t => t.status === 'pending'),
+    in_progress: tasks.filter(t => t.status === 'in_progress'),
+    blocked: tasks.filter(t => t.status === 'blocked'),
+    completed: tasks.filter(t => t.status === 'completed')
+  };
+}
+
+/**
+ * Sort tasks by priority (highest first)
+ */
+export function sortByPriority(tasks) {
+  return [...tasks].sort((a, b) => b.priorityValue - a.priorityValue);
+}
+
+/**
+ * Generate TASKS.md content from tasks array
+ * @param {boolean} includeApprovalFlags - Whether to include AUTO/APPROVAL flags (for internal CoS tasks)
+ */
+export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
+  const grouped = groupTasksByStatus(tasks);
+  const lines = ['# Tasks', ''];
+
+  const statusToCheckbox = {
+    'pending': '[ ]',
+    'in_progress': '[~]',
+    'blocked': '[!]',
+    'completed': '[x]'
+  };
+
+  const sections = [
+    { key: 'pending', title: 'Pending' },
+    { key: 'in_progress', title: 'In Progress' },
+    { key: 'blocked', title: 'Blocked' },
+    { key: 'completed', title: 'Completed' }
+  ];
+
+  for (const section of sections) {
+    const sectionTasks = grouped[section.key];
+    if (sectionTasks.length === 0) continue;
+
+    lines.push(`## ${section.title}`);
+
+    for (const task of sortByPriority(sectionTasks)) {
+      const checkbox = statusToCheckbox[task.status];
+      const approvalFlag = includeApprovalFlags && (task.approvalRequired || task.autoApproved !== undefined)
+        ? ` | ${task.approvalRequired ? 'APPROVAL' : 'AUTO'}`
+        : '';
+      lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${task.description}`);
+
+      // Add metadata
+      for (const [key, value] of Object.entries(task.metadata)) {
+        const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
+        lines.push(`  - ${capitalizedKey}: ${value}`);
+      }
+    }
+
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Filter tasks that can be auto-executed
+ */
+export function getAutoApprovedTasks(tasks) {
+  return tasks.filter(t => t.autoApproved && !t.approvalRequired && t.status === 'pending');
+}
+
+/**
+ * Filter tasks awaiting user approval
+ */
+export function getAwaitingApprovalTasks(tasks) {
+  return tasks.filter(t => t.approvalRequired && t.status === 'pending');
+}
+
+/**
+ * Update a task's status in the tasks array
+ */
+export function updateTaskStatus(tasks, taskId, newStatus, metadata = {}) {
+  return tasks.map(task => {
+    if (task.id === taskId) {
+      return {
+        ...task,
+        status: newStatus,
+        metadata: { ...task.metadata, ...metadata }
+      };
+    }
+    return task;
+  });
+}
+
+/**
+ * Add a new task
+ */
+export function addTask(tasks, { id, priority = 'MEDIUM', description, metadata = {} }) {
+  const newTask = {
+    id: id.startsWith('task-') ? id : `task-${id}`,
+    status: 'pending',
+    priority: priority.toUpperCase(),
+    priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
+    description,
+    metadata,
+    section: 'pending'
+  };
+
+  return [...tasks, newTask];
+}
+
+/**
+ * Remove a task by ID
+ */
+export function removeTask(tasks, taskId) {
+  return tasks.filter(t => t.id !== taskId);
+}
+
+/**
+ * Get next pending task (highest priority)
+ */
+export function getNextTask(tasks) {
+  const pending = tasks.filter(t => t.status === 'pending');
+  if (pending.length === 0) return null;
+
+  return sortByPriority(pending)[0];
+}
+
+/**
+ * Validate task format
+ */
+export function validateTask(task) {
+  const errors = [];
+
+  if (!task.id || typeof task.id !== 'string') {
+    errors.push('Task must have a valid id');
+  }
+
+  if (!task.description || typeof task.description !== 'string') {
+    errors.push('Task must have a description');
+  }
+
+  if (!['pending', 'in_progress', 'blocked', 'completed'].includes(task.status)) {
+    errors.push('Invalid task status');
+  }
+
+  if (!Object.keys(PRIORITY_VALUES).includes(task.priority)) {
+    errors.push('Invalid priority (must be CRITICAL, HIGH, MEDIUM, or LOW)');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}

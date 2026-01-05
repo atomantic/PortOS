@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "0.3.11",
+  "version": "0.4.9",
   "private": true,
   "description": "Local dev machine App OS portal",
   "type": "module",
@@ -15,5 +15,8 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
   }
 }

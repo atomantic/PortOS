@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+// Process definition schema (for PM2 processes with ports)
+export const processSchema = z.object({
+  name: z.string().min(1),
+  port: z.number().int().min(1).max(65535).nullable().optional(),
+  description: z.string().optional()
+});
+
 // App schema for registration/update
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
@@ -10,6 +17,7 @@ export const appSchema = z.object({
   uiUrl: z.string().url().optional(),
   startCommands: z.array(z.string()).min(1).optional(),
   pm2ProcessNames: z.array(z.string()).optional(),
+  processes: z.array(processSchema).optional(), // Per-process port configs from ecosystem.config
   envFile: z.string().optional(),
   icon: z.string().nullable().optional(),
   editorCommand: z.string().optional(),
