@@ -1,0 +1,14 @@
+{
+  "totalSessions": 0,
+  "totalMessages": 0,
+  "totalToolCalls": 0,
+  "totalTokens": {
+    "input": 0,
+    "output": 0
+  },
+  "byProvider": {},
+  "byModel": {},
+  "dailyActivity": {},
+  "hourlyActivity": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "lastUpdated": null
+}

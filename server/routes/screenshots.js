@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,11 +13,11 @@ const SCREENSHOTS_DIR = join(__dirname, '../../data/screenshots');
 const router = Router();
 
 // POST /api/screenshots - Upload a screenshot (base64)
-router.post('/', async (req, res) => {
+router.post('/', asyncHandler(async (req, res) => {
   const { data, filename, mimeType } = req.body;
 
   if (!data) {
-    return res.status(400).json({ error: 'data is required (base64)' });
+    throw new ServerError('data is required (base64)', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   // Ensure screenshots directory exists
@@ -41,21 +42,21 @@ router.post('/', async (req, res) => {
     path: filepath,
     size: buffer.length
   });
-});
+}));
 
 // GET /api/screenshots/:filename - Serve a screenshot
-router.get('/:filename', async (req, res) => {
+router.get('/:filename', asyncHandler(async (req, res) => {
   const { filename } = req.params;
   const filepath = join(SCREENSHOTS_DIR, filename);
 
   if (!existsSync(filepath)) {
-    return res.status(404).json({ error: 'Screenshot not found' });
+    throw new ServerError('Screenshot not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   const ext = filename.split('.').pop().toLowerCase();
   const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
 
   res.type(mimeType).sendFile(filepath);
-});
+}));
 
 export default router;

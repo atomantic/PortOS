@@ -5,16 +5,17 @@ import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { detectAppWithAi } from '../services/aiDetect.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const execAsync = promisify(exec);
 const router = Router();
 
 // POST /api/detect/repo - Validate repo path and detect project type
-router.post('/repo', async (req, res) => {
+router.post('/repo', asyncHandler(async (req, res) => {
   const { path } = req.body;
 
   if (!path) {
-    return res.status(400).json({ error: 'Path is required', code: 'MISSING_PATH' });
+    throw new ServerError('Path is required', { status: 400, code: 'MISSING_PATH' });
   }
 
   // Check if path exists
@@ -110,14 +111,14 @@ router.post('/repo', async (req, res) => {
   }
 
   res.json(result);
-});
+}));
 
 // POST /api/detect/port - Detect what process is running on a port
-router.post('/port', async (req, res) => {
+router.post('/port', asyncHandler(async (req, res) => {
   const { port } = req.body;
 
   if (!port || isNaN(port)) {
-    return res.status(400).json({ error: 'Valid port number is required', code: 'INVALID_PORT' });
+    throw new ServerError('Valid port number is required', { status: 400, code: 'INVALID_PORT' });
   }
 
   const result = {
@@ -150,14 +151,14 @@ router.post('/port', async (req, res) => {
   }
 
   res.json(result);
-});
+}));
 
 // POST /api/detect/pm2 - Check if a PM2 process exists with given name
-router.post('/pm2', async (req, res) => {
+router.post('/pm2', asyncHandler(async (req, res) => {
   const { name } = req.body;
 
   if (!name) {
-    return res.status(400).json({ error: 'Process name is required', code: 'MISSING_NAME' });
+    throw new ServerError('Process name is required', { status: 400, code: 'MISSING_NAME' });
   }
 
   const { stdout } = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
@@ -174,14 +175,14 @@ router.post('/pm2', async (req, res) => {
       pm_id: found.pm_id
     } : null
   });
-});
+}));
 
 // POST /api/detect/ai - AI-powered app detection
-router.post('/ai', async (req, res, next) => {
+router.post('/ai', asyncHandler(async (req, res) => {
   const { path, providerId } = req.body;
 
   if (!path) {
-    return res.status(400).json({ error: 'Path is required', code: 'MISSING_PATH' });
+    throw new ServerError('Path is required', { status: 400, code: 'MISSING_PATH' });
   }
 
   const result = await detectAppWithAi(path, providerId).catch(err => ({
@@ -190,6 +191,6 @@ router.post('/ai', async (req, res, next) => {
   }));
 
   res.json(result);
-});
+}));
 
 export default router;

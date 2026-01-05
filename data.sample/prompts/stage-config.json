@@ -1,0 +1,53 @@
+{
+  "stages": {
+    "app-detection": {
+      "name": "App Detection",
+      "description": "Analyze a project directory and detect its configuration",
+      "model": "default",
+      "returnsJson": true,
+      "variables": ["jsonOutputFormat", "appDetectionSchema", "portDetectionRules", "pm2NamingConvention"]
+    },
+    "code-analysis": {
+      "name": "Code Analysis",
+      "description": "Analyze code structure and suggest improvements",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "command-suggestion": {
+      "name": "Command Suggestion",
+      "description": "Suggest CLI commands based on context",
+      "model": "quick",
+      "returnsJson": false,
+      "variables": []
+    },
+    "cos-agent-briefing": {
+      "name": "CoS Agent Briefing",
+      "description": "Brief a sub-agent on their assigned task",
+      "model": "heavy",
+      "returnsJson": false,
+      "variables": []
+    },
+    "cos-evaluate": {
+      "name": "CoS Task Evaluation",
+      "description": "Evaluate pending tasks and decide what to work on",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "cos-report-summary": {
+      "name": "CoS Report Summary",
+      "description": "Generate daily work summary report",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "cos-self-improvement": {
+      "name": "CoS Self Improvement",
+      "description": "Analyze system performance and suggest improvements",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    }
+  }
+}

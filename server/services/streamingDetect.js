@@ -7,6 +7,193 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 /**
+ * Parse ecosystem.config.js/cjs to extract all processes with their ports
+ * Uses regex parsing since we can't safely execute arbitrary JS
+ */
+export function parseEcosystemConfig(content) {
+  const processes = [];
+
+  // Extract top-level port constants (e.g., const CDP_PORT = 5549)
+  const portConstants = {};
+  const constMatches = content.matchAll(/(?:const|let|var)\s+(\w*PORT\w*)\s*=\s*(\d+)/g);
+  for (const match of constMatches) {
+    portConstants[match[1]] = parseInt(match[2]);
+  }
+
+  // Match each app block: { name: '...', ... }
+  // This regex captures app objects including nested braces
+  const appBlockRegex = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
+  let match;
+  let lastIndex = 0;
+
+  while ((match = appBlockRegex.exec(content)) !== null) {
+    const processName = match[1];
+    const startPos = match.index;
+
+    // Find the end of this app block by counting braces
+    let braceCount = 0;
+    let endPos = startPos;
+    let inString = false;
+    let stringChar = null;
+    let inLineComment = false;
+    let inBlockComment = false;
+
+    for (let i = startPos; i < content.length; i++) {
+      const char = content[i];
+      const nextChar = i < content.length - 1 ? content[i + 1] : '';
+      const prevChar = i > 0 ? content[i - 1] : '';
+
+      // Handle line comments (// ...)
+      if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
+        inLineComment = true;
+        continue;
+      }
+      if (inLineComment && char === '\n') {
+        inLineComment = false;
+        continue;
+      }
+
+      // Handle block comments (/* ... */)
+      if (!inString && !inLineComment && char === '/' && nextChar === '*') {
+        inBlockComment = true;
+        continue;
+      }
+      if (inBlockComment && char === '*' && nextChar === '/') {
+        inBlockComment = false;
+        i++; // Skip the closing /
+        continue;
+      }
+
+      // Skip if in any comment
+      if (inLineComment || inBlockComment) continue;
+
+      // Track string boundaries
+      if ((char === '"' || char === "'") && prevChar !== '\\') {
+        if (!inString) {
+          inString = true;
+          stringChar = char;
+        } else if (char === stringChar) {
+          inString = false;
+          stringChar = null;
+        }
+      }
+
+      if (!inString) {
+        if (char === '{') braceCount++;
+        if (char === '}') {
+          braceCount--;
+          if (braceCount === 0) {
+            endPos = i;
+            break;
+          }
+        }
+      }
+    }
+
+    const appBlock = content.substring(startPos, endPos + 1);
+
+    // Extract port from env.PORT or env_development.PORT
+    let port = null;
+    const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*(\d+)/);
+    if (portMatch) {
+      port = parseInt(portMatch[1]);
+    }
+
+    // Check for CDP_PORT (Chrome DevTools Protocol port for browser processes)
+    if (!port) {
+      // First try numeric value
+      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*CDP_PORT\s*:\s*(\d+)/);
+      if (cdpPortMatch) {
+        port = parseInt(cdpPortMatch[1]);
+      } else {
+        // Check for variable reference (CDP_PORT: CDP_PORT)
+        const cdpVarMatch = appBlock.match(/CDP_PORT\s*:\s*(\w+)/);
+        if (cdpVarMatch && portConstants[cdpVarMatch[1]]) {
+          port = portConstants[cdpVarMatch[1]];
+        }
+      }
+    }
+
+    // Also check for --port in args
+    if (!port) {
+      const argsPortMatch = appBlock.match(/args\s*:\s*['"][^'"]*--port\s+(\d+)/);
+      if (argsPortMatch) {
+        port = parseInt(argsPortMatch[1]);
+      }
+    }
+
+    // Check for port: XXXX directly (some configs use this)
+    if (!port) {
+      const directPortMatch = appBlock.match(/\bport\s*:\s*(\d+)/);
+      if (directPortMatch) {
+        port = parseInt(directPortMatch[1]);
+      }
+    }
+
+    // Extract cwd for processes that might have external config files
+    let cwd = null;
+    const cwdMatch = appBlock.match(/cwd\s*:\s*['"]([^'"]+)['"]/);
+    if (cwdMatch) {
+      cwd = cwdMatch[1];
+    }
+
+    // Check if this process uses vite (need to check vite.config in cwd)
+    const usesVite = /\bvite\b/i.test(appBlock);
+
+    processes.push({ name: processName, port, cwd, usesVite });
+    lastIndex = endPos;
+  }
+
+  return processes;
+}
+
+/**
+ * Extract port from vite.config.js/ts content
+ */
+function extractVitePort(content) {
+  const portMatch = content.match(/port\s*:\s*(\d+)/);
+  return portMatch ? parseInt(portMatch[1]) : null;
+}
+
+/**
+ * Parse ecosystem config from a directory path (non-streaming, for refresh)
+ * Also checks vite.config files in subdirectories for processes that use Vite
+ */
+export async function parseEcosystemFromPath(dirPath) {
+  for (const ecosystemFile of ['ecosystem.config.js', 'ecosystem.config.cjs']) {
+    const ecosystemPath = join(dirPath, ecosystemFile);
+    if (existsSync(ecosystemPath)) {
+      const content = await readFile(ecosystemPath, 'utf-8');
+      const processes = parseEcosystemConfig(content);
+
+      // For processes that use vite and don't have a port, check their cwd for vite.config
+      for (const proc of processes) {
+        if (proc.usesVite && !proc.port && proc.cwd) {
+          const cwdPath = join(dirPath, proc.cwd);
+          for (const viteConfig of ['vite.config.ts', 'vite.config.js']) {
+            const viteConfigPath = join(cwdPath, viteConfig);
+            if (existsSync(viteConfigPath)) {
+              const viteContent = await readFile(viteConfigPath, 'utf-8').catch(() => '');
+              const port = extractVitePort(viteContent);
+              if (port) {
+                proc.port = port;
+                break;
+              }
+            }
+          }
+        }
+        // Clean up internal properties before returning
+        delete proc.cwd;
+        delete proc.usesVite;
+      }
+
+      return processes;
+    }
+  }
+  return [];
+}
+
+/**
  * Stream detection results to a socket as each step completes
  */
 export async function streamDetection(socket, dirPath) {
@@ -22,6 +209,7 @@ export async function streamDetection(socket, dirPath) {
     startCommands: [],
     pm2ProcessNames: [],
     pm2Status: null,
+    processes: [],
     type: 'unknown'
   };
 
@@ -117,23 +305,44 @@ export async function streamDetection(socket, dirPath) {
     if (existsSync(ecosystemPath)) {
       const content = await readFile(ecosystemPath, 'utf-8').catch(() => '');
       if (content) {
-        // Extract PORT from env_development or env_production
-        const portMatch = content.match(/PORT\s*:\s*(\d+)/);
-        if (portMatch && !result.apiPort) {
-          result.apiPort = parseInt(portMatch[1]);
+        // Parse all processes with their ports using the dedicated parser
+        const parsedProcesses = parseEcosystemConfig(content);
+        if (parsedProcesses.length > 0) {
+          // For processes that use vite and don't have a port, check their cwd for vite.config
+          for (const proc of parsedProcesses) {
+            if (proc.usesVite && !proc.port && proc.cwd) {
+              const cwdPath = join(dirPath, proc.cwd);
+              for (const viteConfig of ['vite.config.ts', 'vite.config.js']) {
+                const viteConfigPath = join(cwdPath, viteConfig);
+                if (existsSync(viteConfigPath)) {
+                  const viteContent = await readFile(viteConfigPath, 'utf-8').catch(() => '');
+                  const port = extractVitePort(viteContent);
+                  if (port) {
+                    proc.port = port;
+                    break;
+                  }
+                }
+              }
+            }
+            // Clean up internal properties
+            delete proc.cwd;
+            delete proc.usesVite;
+          }
+
+          result.processes = parsedProcesses;
+          result.pm2ProcessNames = parsedProcesses.map(p => p.name);
+
+          // Set apiPort from first process with a port (usually the main server)
+          const processWithPort = parsedProcesses.find(p => p.port);
+          if (processWithPort && !result.apiPort) {
+            result.apiPort = processWithPort.port;
+          }
         }
 
-        // Extract UI port from CLIENT_URL
+        // Extract UI port from CLIENT_URL (still needed as it's not in process configs)
         const clientUrlMatch = content.match(/CLIENT_URL\s*:\s*['"]https?:\/\/[^:]+:(\d+)/);
         if (clientUrlMatch && !result.uiPort) {
           result.uiPort = parseInt(clientUrlMatch[1]);
-        }
-
-        // Extract PM2 process names
-        const nameMatches = content.matchAll(/name\s*:\s*['"]([^'"]+)['"]/g);
-        const ecosystemNames = [...nameMatches].map(m => m[1]);
-        if (ecosystemNames.length > 0) {
-          result.pm2ProcessNames = ecosystemNames;
         }
 
         configFiles.push(ecosystemFile);
@@ -146,6 +355,7 @@ export async function streamDetection(socket, dirPath) {
     uiPort: result.uiPort,
     apiPort: result.apiPort,
     pm2ProcessNames: result.pm2ProcessNames.length > 0 ? result.pm2ProcessNames : undefined,
+    processes: result.processes.length > 0 ? result.processes : undefined,
     configFiles
   });
 

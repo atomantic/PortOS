@@ -18,10 +18,13 @@ import {
   BarChart3,
   Cpu,
   Wrench,
-  ExternalLink
+  ExternalLink,
+  Crown,
+  Play
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
+import { useErrorNotifications } from '../hooks/useErrorNotifications';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -36,11 +39,13 @@ const navItems = [
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
+  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true },
   {
     label: 'Dev Tools',
     icon: Terminal,
     children: [
       { to: '/devtools/agents', label: 'AI Agents', icon: Cpu },
+      { to: '/devtools/runs', label: 'AI Runs', icon: Play },
       { to: '/devtools/runner', label: 'Code', icon: Code2 },
       { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
       { to: '/devtools/history', label: 'History', icon: History },
@@ -61,6 +66,9 @@ export default function Layout() {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
+
+  // Subscribe to server error notifications
+  useErrorNotifications();
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));

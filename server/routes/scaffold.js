@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { createApp } from '../services/apps.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -15,7 +16,7 @@ const TEMPLATES_DIR = join(__dirname, '../../templates');
 const router = Router();
 
 // GET /api/templates - List available templates
-router.get('/templates', async (req, res) => {
+router.get('/templates', asyncHandler(async (req, res) => {
   const templates = [
     {
       id: 'portos-stack',
@@ -57,15 +58,16 @@ router.get('/templates', async (req, res) => {
   ];
 
   res.json(templates);
-});
+}));
 
 // POST /api/templates/create - User-friendly template creation
-router.post('/templates/create', async (req, res) => {
+router.post('/templates/create', asyncHandler(async (req, res) => {
   const { templateId, name, targetPath } = req.body;
 
   if (!templateId || !name || !targetPath) {
-    return res.status(400).json({
-      error: 'templateId, name, and targetPath are required'
+    throw new ServerError('templateId, name, and targetPath are required', {
+      status: 400,
+      code: 'VALIDATION_ERROR'
     });
   }
 
@@ -78,8 +80,9 @@ router.post('/templates/create', async (req, res) => {
 
   // For portos-stack, we need to handle it specially (not implemented yet)
   if (templateId === 'portos-stack') {
-    return res.status(501).json({
-      error: 'PortOS Stack template scaffolding is not yet implemented. Please use vite-express for a similar full-stack setup.'
+    throw new ServerError('PortOS Stack template scaffolding is not yet implemented. Please use vite-express for a similar full-stack setup.', {
+      status: 501,
+      code: 'NOT_IMPLEMENTED'
     });
   }
 
@@ -87,7 +90,7 @@ router.post('/templates/create', async (req, res) => {
   req.body = scaffoldData;
   // Forward to scaffold endpoint logic (call the same handler)
   return scaffoldApp(req, res);
-});
+}));
 
 // Shared scaffold logic
 async function scaffoldApp(req, res) {
@@ -103,8 +106,8 @@ async function scaffoldApp(req, res) {
 
   // Validation
   if (!name || !template || !parentDir) {
-    return res.status(400).json({
-      error: 'name, template, and parentDir are required',
+    throw new ServerError('name, template, and parentDir are required', {
+      status: 400,
       code: 'VALIDATION_ERROR'
     });
   }
@@ -115,16 +118,16 @@ async function scaffoldApp(req, res) {
 
   // Check parent exists
   if (!existsSync(parentDir)) {
-    return res.status(400).json({
-      error: 'Parent directory does not exist',
+    throw new ServerError('Parent directory does not exist', {
+      status: 400,
       code: 'INVALID_PARENT'
     });
   }
 
   // Check target doesn't exist
   if (existsSync(repoPath)) {
-    return res.status(400).json({
-      error: 'Directory already exists',
+    throw new ServerError('Directory already exists', {
+      status: 400,
       code: 'DIR_EXISTS'
     });
   }
@@ -363,6 +366,6 @@ app.listen(PORT, '0.0.0.0', () => {
 }
 
 // POST /api/scaffold - Create a new app from template
-router.post('/', scaffoldApp);
+router.post('/', asyncHandler(scaffoldApp));
 
 export default router;

@@ -13,6 +13,31 @@ const AGENT_PATTERNS = [
   { name: 'Copilot', pattern: 'copilot', command: 'copilot' }
 ];
 
+// Track spawned agents with their full commands (by PID)
+const spawnedAgentCommands = new Map();
+
+/**
+ * Register a spawned agent's full command (call when spawning)
+ */
+export function registerSpawnedAgent(pid, data) {
+  spawnedAgentCommands.set(pid, {
+    fullCommand: data.fullCommand,
+    agentId: data.agentId,
+    taskId: data.taskId,
+    model: data.model,
+    workspacePath: data.workspacePath,
+    prompt: data.prompt,
+    registeredAt: Date.now()
+  });
+}
+
+/**
+ * Unregister a spawned agent (call when process exits)
+ */
+export function unregisterSpawnedAgent(pid) {
+  spawnedAgentCommands.delete(pid);
+}
+
 /**
  * Get list of running agent processes
  */
@@ -22,10 +47,24 @@ export async function getRunningAgents() {
   for (const agent of AGENT_PATTERNS) {
     const procs = await findProcesses(agent.pattern);
     procs.forEach(proc => {
+      // Enrich with spawned command data if available
+      const spawnedData = spawnedAgentCommands.get(proc.pid);
+
       agents.push({
         ...proc,
         agentName: agent.name,
-        agentType: agent.command
+        agentType: agent.command,
+        // Override command with full command if we have it
+        command: spawnedData?.fullCommand || proc.command,
+        // Include additional metadata if available
+        ...(spawnedData && {
+          agentId: spawnedData.agentId,
+          taskId: spawnedData.taskId,
+          model: spawnedData.model,
+          workspacePath: spawnedData.workspacePath,
+          prompt: spawnedData.prompt,
+          source: 'cos'
+        })
       });
     });
   }
@@ -56,8 +95,8 @@ async function findProcesses(pattern) {
  */
 async function findUnixProcesses(pattern) {
   // ps command to get process info
-  // -e: all processes, -o: output format
-  const cmd = `ps -eo pid,ppid,%cpu,%mem,etime,command | grep -i "${pattern}" | grep -v grep`;
+  // -e: all processes, -o: output format, -ww: unlimited width (no truncation)
+  const cmd = `ps -ww -eo pid,ppid,%cpu,%mem,etime,command | grep -i "${pattern}" | grep -v grep`;
 
   const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }).catch(() => ({ stdout: '' }));
 
@@ -216,7 +255,7 @@ export async function getProcessInfo(pid) {
   const platform = process.platform;
 
   if (platform === 'darwin' || platform === 'linux') {
-    const cmd = `ps -p ${pid} -o pid,ppid,%cpu,%mem,etime,command`;
+    const cmd = `ps -ww -p ${pid} -o pid,ppid,%cpu,%mem,etime,command`;
     const result = await execAsync(cmd).catch(() => null);
     if (!result) return null;
 

@@ -1,0 +1,42 @@
+{
+  "running": false,
+  "config": {
+    "userTasksFile": "data/TASKS.md",
+    "cosTasksFile": "data/COS-TASKS.md",
+    "evaluationIntervalMs": 60000,
+    "healthCheckIntervalMs": 900000,
+    "maxConcurrentAgents": 3,
+    "maxProcessMemoryMb": 2048,
+    "maxTotalProcesses": 50,
+    "mcpServers": [
+      {
+        "name": "filesystem",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@anthropic/mcp-server-filesystem"
+        ]
+      },
+      {
+        "name": "puppeteer",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@anthropic/mcp-puppeteer",
+          "--isolated"
+        ]
+      }
+    ],
+    "autoStart": false,
+    "selfImprovementEnabled": true
+  },
+  "stats": {
+    "tasksCompleted": 0,
+    "totalRuntime": 0,
+    "agentsSpawned": 0,
+    "lastEvaluation": null,
+    "lastHealthCheck": null,
+    "healthIssues": []
+  },
+  "agents": {}
+}

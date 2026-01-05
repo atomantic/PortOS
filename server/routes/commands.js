@@ -1,15 +1,16 @@
 import { Router } from 'express';
 import * as commands from '../services/commands.js';
 import * as pm2Service from '../services/pm2.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
 // POST /api/commands/execute - Execute a command
-router.post('/execute', (req, res) => {
+router.post('/execute', asyncHandler(async (req, res) => {
   const { command, workspacePath } = req.body;
 
   if (!command) {
-    return res.status(400).json({ error: 'Command is required', code: 'MISSING_COMMAND' });
+    throw new ServerError('Command is required', { status: 400, code: 'MISSING_COMMAND' });
   }
 
   const io = req.app.get('io');
@@ -26,42 +27,41 @@ router.post('/execute', (req, res) => {
   );
 
   if (!commandId) {
-    return res.status(403).json({ error: 'Command not allowed', code: 'FORBIDDEN' });
+    throw new ServerError('Command not allowed', { status: 403, code: 'FORBIDDEN' });
   }
 
   res.status(202).json({ commandId, status: 'started' });
-});
+}));
 
 // POST /api/commands/:id/stop - Stop a running command
-router.post('/:id/stop', (req, res) => {
+router.post('/:id/stop', asyncHandler(async (req, res) => {
   const stopped = commands.stopCommand(req.params.id);
 
   if (!stopped) {
-    return res.status(404).json({ error: 'Command not found or not active', code: 'NOT_ACTIVE' });
+    throw new ServerError('Command not found or not active', { status: 404, code: 'NOT_ACTIVE' });
   }
 
   res.json({ stopped: true });
-});
+}));
 
 // GET /api/commands/allowed - Get allowed commands
-router.get('/allowed', (req, res) => {
+router.get('/allowed', asyncHandler(async (req, res) => {
   res.json(commands.getAllowedCommands());
-});
+}));
 
 // GET /api/commands/processes - Get PM2 process list with details
-router.get('/processes', async (req, res, next) => {
-  const processes = await pm2Service.listProcesses().catch(next);
-  if (processes) res.json(processes);
-});
+router.get('/processes', asyncHandler(async (req, res) => {
+  const processes = await pm2Service.listProcesses();
+  res.json(processes);
+}));
 
 // GET /api/commands/processes/:name/monit - Get PM2 monit data for a process
-router.get('/processes/:name/monit', async (req, res, next) => {
-  const processes = await pm2Service.listProcesses().catch(next);
-  if (!processes) return;
-
+router.get('/processes/:name/monit', asyncHandler(async (req, res) => {
+  const processes = await pm2Service.listProcesses();
   const process = processes.find(p => p.name === req.params.name);
+
   if (!process) {
-    return res.status(404).json({ error: 'Process not found', code: 'NOT_FOUND' });
+    throw new ServerError('Process not found', { status: 404, code: 'NOT_FOUND' });
   }
 
   res.json({
@@ -73,6 +73,6 @@ router.get('/processes/:name/monit', async (req, res, next) => {
     uptime: process.uptime,
     restarts: process.restarts
   });
-});
+}));
 
 export default router;

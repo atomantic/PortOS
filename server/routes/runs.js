@@ -1,27 +1,37 @@
 import { Router } from 'express';
 import * as runner from '../services/runner.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
 // GET /api/runs - List runs
-router.get('/', async (req, res, next) => {
+// Query params: limit, offset, source (all|devtools|cos-agent)
+router.get('/', asyncHandler(async (req, res, next) => {
   const limit = parseInt(req.query.limit) || 50;
   const offset = parseInt(req.query.offset) || 0;
+  const source = req.query.source || 'all'; // all, devtools, cos-agent
 
-  const result = await runner.listRuns(limit, offset).catch(next);
-  if (result) res.json(result);
-});
+  const result = await runner.listRuns(limit, offset, source);
+  res.json(result);
+}));
 
 // POST /api/runs - Create and execute a new run
-router.post('/', async (req, res, next) => {
+router.post('/', asyncHandler(async (req, res, next) => {
   const { providerId, model, prompt, workspacePath, workspaceName } = req.body;
+  console.log(`🚀 POST /api/runs - provider: ${providerId}, model: ${model}, workspace: ${workspaceName}`);
 
   if (!providerId) {
-    return res.status(400).json({ error: 'providerId is required', code: 'VALIDATION_ERROR' });
+    throw new ServerError('providerId is required', {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
   }
 
   if (!prompt) {
-    return res.status(400).json({ error: 'prompt is required', code: 'VALIDATION_ERROR' });
+    throw new ServerError('prompt is required', {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
   }
 
   const runData = await runner.createRun({
@@ -30,18 +40,15 @@ router.post('/', async (req, res, next) => {
     prompt,
     workspacePath,
     workspaceName
-  }).catch(err => {
-    res.status(400).json({ error: err.message, code: 'RUN_ERROR' });
-    return undefined;
   });
-
-  if (!runData) return;
 
   const { runId, provider, metadata } = runData;
   const io = req.app.get('io');
+  console.log(`🚀 Run created: ${runId}, provider type: ${provider.type}, command: ${provider.command}`);
 
   // Execute based on provider type
   if (provider.type === 'cli') {
+    console.log(`🚀 Executing CLI run: ${provider.command} with args: ${JSON.stringify(provider.args)}`);
     runner.executeCliRun(
       runId,
       provider,
@@ -49,9 +56,11 @@ router.post('/', async (req, res, next) => {
       workspacePath,
       (data) => {
         // Stream output via Socket.IO
+        console.log(`📤 Emitting run:${runId}:data (${data.length} chars)`);
         io?.emit(`run:${runId}:data`, data);
       },
       (finalMetadata) => {
+        console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
         io?.emit(`run:${runId}:complete`, finalMetadata);
       }
     );
@@ -77,74 +86,87 @@ router.post('/', async (req, res, next) => {
     status: 'started',
     metadata
   });
-});
+}));
 
 // GET /api/runs/:id - Get run metadata
-router.get('/:id', async (req, res, next) => {
-  const metadata = await runner.getRun(req.params.id).catch(next);
-  if (metadata === undefined) return;
+router.get('/:id', asyncHandler(async (req, res, next) => {
+  const metadata = await runner.getRun(req.params.id);
 
   if (!metadata) {
-    return res.status(404).json({ error: 'Run not found', code: 'NOT_FOUND' });
+    throw new ServerError('Run not found', {
+      status: 404,
+      code: 'NOT_FOUND'
+    });
   }
 
   res.json({
     ...metadata,
     isActive: runner.isRunActive(req.params.id)
   });
-});
+}));
 
 // GET /api/runs/:id/output - Get run output
-router.get('/:id/output', async (req, res, next) => {
-  const output = await runner.getRunOutput(req.params.id).catch(next);
-  if (output === undefined) return;
+router.get('/:id/output', asyncHandler(async (req, res, next) => {
+  const output = await runner.getRunOutput(req.params.id);
 
   if (output === null) {
-    return res.status(404).json({ error: 'Run not found', code: 'NOT_FOUND' });
+    throw new ServerError('Run not found', {
+      status: 404,
+      code: 'NOT_FOUND'
+    });
   }
 
   res.type('text/plain').send(output);
-});
+}));
 
 // GET /api/runs/:id/prompt - Get run prompt
-router.get('/:id/prompt', async (req, res, next) => {
-  const prompt = await runner.getRunPrompt(req.params.id).catch(next);
-  if (prompt === undefined) return;
+router.get('/:id/prompt', asyncHandler(async (req, res, next) => {
+  const prompt = await runner.getRunPrompt(req.params.id);
 
   if (prompt === null) {
-    return res.status(404).json({ error: 'Run not found', code: 'NOT_FOUND' });
+    throw new ServerError('Run not found', {
+      status: 404,
+      code: 'NOT_FOUND'
+    });
   }
 
   res.type('text/plain').send(prompt);
-});
+}));
 
 // POST /api/runs/:id/stop - Stop a running execution
-router.post('/:id/stop', async (req, res, next) => {
-  const stopped = await runner.stopRun(req.params.id).catch(next);
-  if (stopped === undefined) return;
+router.post('/:id/stop', asyncHandler(async (req, res, next) => {
+  const stopped = await runner.stopRun(req.params.id);
 
   if (!stopped) {
-    return res.status(404).json({ error: 'Run not found or not active', code: 'NOT_ACTIVE' });
+    throw new ServerError('Run not found or not active', {
+      status: 404,
+      code: 'NOT_ACTIVE'
+    });
   }
 
   res.json({ stopped: true });
-});
+}));
 
 // DELETE /api/runs/:id - Delete run and artifacts
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', asyncHandler(async (req, res, next) => {
   // Don't allow deleting active runs
   if (runner.isRunActive(req.params.id)) {
-    return res.status(409).json({ error: 'Cannot delete active run', code: 'RUN_ACTIVE' });
+    throw new ServerError('Cannot delete active run', {
+      status: 409,
+      code: 'RUN_ACTIVE'
+    });
   }
 
-  const deleted = await runner.deleteRun(req.params.id).catch(next);
-  if (deleted === undefined) return;
+  const deleted = await runner.deleteRun(req.params.id);
 
   if (!deleted) {
-    return res.status(404).json({ error: 'Run not found', code: 'NOT_FOUND' });
+    throw new ServerError('Run not found', {
+      status: 404,
+      code: 'NOT_FOUND'
+    });
   }
 
   res.status(204).send();
-});
+}));
 
 export default router;

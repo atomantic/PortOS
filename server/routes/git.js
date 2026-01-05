@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import * as git from '../services/git.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
 // GET /api/git/:appId - Get git info for an app
-router.get('/:appId', async (req, res, next) => {
+router.get('/:appId', asyncHandler(async (req, res) => {
   const { appId } = req.params;
 
   // Get app to find its path
@@ -12,127 +13,95 @@ router.get('/:appId', async (req, res, next) => {
   const app = apps?.find(a => a.id === appId);
 
   if (!app) {
-    return res.status(404).json({ error: 'App not found' });
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const info = await git.getGitInfo(app.repoPath).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (info) res.json(info);
-});
+  const info = await git.getGitInfo(app.repoPath);
+  res.json(info);
+}));
 
 // POST /api/git/status - Get status for a path
-router.post('/status', async (req, res, next) => {
+router.post('/status', asyncHandler(async (req, res) => {
   const { path } = req.body;
 
   if (!path) {
-    return res.status(400).json({ error: 'path is required' });
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const status = await git.getStatus(path).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (status) res.json(status);
-});
+  const status = await git.getStatus(path);
+  res.json(status);
+}));
 
 // POST /api/git/diff - Get diff for a path
-router.post('/diff', async (req, res, next) => {
+router.post('/diff', asyncHandler(async (req, res) => {
   const { path, staged } = req.body;
 
   if (!path) {
-    return res.status(400).json({ error: 'path is required' });
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const diff = await git.getDiff(path, staged).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (diff !== undefined) res.json({ diff });
-});
+  const diff = await git.getDiff(path, staged);
+  res.json({ diff });
+}));
 
 // POST /api/git/commits - Get recent commits
-router.post('/commits', async (req, res, next) => {
+router.post('/commits', asyncHandler(async (req, res) => {
   const { path, limit = 10 } = req.body;
 
   if (!path) {
-    return res.status(400).json({ error: 'path is required' });
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const commits = await git.getCommits(path, limit).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (commits) res.json({ commits });
-});
+  const commits = await git.getCommits(path, limit);
+  res.json({ commits });
+}));
 
 // POST /api/git/stage - Stage files
-router.post('/stage', async (req, res, next) => {
+router.post('/stage', asyncHandler(async (req, res) => {
   const { path, files } = req.body;
 
   if (!path || !files) {
-    return res.status(400).json({ error: 'path and files are required' });
+    throw new ServerError('path and files are required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await git.stageFiles(path, files).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (result) res.json({ success: true });
-});
+  await git.stageFiles(path, files);
+  res.json({ success: true });
+}));
 
 // POST /api/git/unstage - Unstage files
-router.post('/unstage', async (req, res, next) => {
+router.post('/unstage', asyncHandler(async (req, res) => {
   const { path, files } = req.body;
 
   if (!path || !files) {
-    return res.status(400).json({ error: 'path and files are required' });
+    throw new ServerError('path and files are required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await git.unstageFiles(path, files).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (result) res.json({ success: true });
-});
+  await git.unstageFiles(path, files);
+  res.json({ success: true });
+}));
 
 // POST /api/git/commit - Create a commit
-router.post('/commit', async (req, res, next) => {
+router.post('/commit', asyncHandler(async (req, res) => {
   const { path, message } = req.body;
 
   if (!path || !message) {
-    return res.status(400).json({ error: 'path and message are required' });
+    throw new ServerError('path and message are required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await git.commit(path, message).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (result) res.json(result);
-});
+  const result = await git.commit(path, message);
+  res.json(result);
+}));
 
 // POST /api/git/info - Get full git info for a path
-router.post('/info', async (req, res, next) => {
+router.post('/info', asyncHandler(async (req, res) => {
   const { path } = req.body;
 
   if (!path) {
-    return res.status(400).json({ error: 'path is required' });
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const info = await git.getGitInfo(path).catch(err => {
-    res.status(500).json({ error: err.message });
-    return undefined;
-  });
-
-  if (info) res.json(info);
-});
+  const info = await git.getGitInfo(path);
+  res.json(info);
+}));
 
 export default router;

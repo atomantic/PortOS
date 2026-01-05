@@ -33,6 +33,7 @@ PortOS is a monorepo with Express.js server (port 5554) and React/Vite client (p
 - **Pages**: Route-based components
 - **Components**: Reusable UI elements
 - **Services**: `api.js` (HTTP) and `socket.js` (WebSocket)
+- **Hooks**: `useErrorNotifications.js` subscribes to server errors, shows toast notifications
 
 ### Data Flow
 Client → HTTP/WebSocket → Routes (validate) → Services (logic) → JSON files/PM2

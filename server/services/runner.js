@@ -88,16 +88,20 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   const startTime = Date.now();
   let output = '';
 
+  console.log(`🔧 Spawning: ${provider.command} ${args.join(' ')} in ${workspacePath || process.cwd()}`);
+
   const child = spawn(provider.command, args, {
     cwd: workspacePath || process.cwd(),
     env: { ...process.env, ...provider.envVars },
-    shell: false
+    stdio: ['pipe', 'pipe', 'pipe']
   });
 
+  console.log(`🔧 Child process spawned, pid: ${child.pid}`);
   activeRuns.set(runId, child);
 
   const appendOutput = async (data) => {
     const text = data.toString();
+    console.log(`📥 Received ${text.length} chars from child process`);
     output += text;
     await writeFile(outputPath, output);
     onData?.(text);
@@ -105,6 +109,10 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   child.stdout.on('data', appendOutput);
   child.stderr.on('data', appendOutput);
+
+  child.on('spawn', () => {
+    console.log(`✓ Child process spawned successfully`);
+  });
 
   child.on('close', async (code) => {
     activeRuns.delete(runId);
@@ -286,7 +294,7 @@ export async function getRunPrompt(runId) {
   return readFile(join(runDir, 'prompt.txt'), 'utf-8');
 }
 
-export async function listRuns(limit = 50, offset = 0) {
+export async function listRuns(limit = 50, offset = 0, source = 'all') {
   await ensureRunsDir();
 
   const entries = await readdir(RUNS_DIR, { withFileTypes: true });
@@ -304,11 +312,20 @@ export async function listRuns(limit = 50, offset = 0) {
     }
   }
 
-  runs.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+  // Filter by source if specified
+  let filteredRuns = runs;
+  if (source !== 'all') {
+    filteredRuns = runs.filter(run => {
+      const runSource = run.source || 'devtools'; // Legacy runs without source are from devtools
+      return runSource === source;
+    });
+  }
+
+  filteredRuns.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
 
   return {
-    total: runs.length,
-    runs: runs.slice(offset, offset + limit)
+    total: filteredRuns.length,
+    runs: filteredRuns.slice(offset, offset + limit)
   };
 }
 

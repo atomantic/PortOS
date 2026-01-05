@@ -1,0 +1,24 @@
+{
+  "variables": {
+    "jsonOutputFormat": {
+      "name": "JSON Output Format",
+      "category": "response",
+      "content": "Return ONLY valid JSON (no markdown, no explanation, no code blocks)."
+    },
+    "appDetectionSchema": {
+      "name": "App Detection Schema",
+      "category": "schema",
+      "content": "{\n  \"name\": \"Human readable app name\",\n  \"description\": \"One sentence description\",\n  \"uiPort\": null or number,\n  \"apiPort\": null or number,\n  \"startCommands\": [\"array of npm scripts\"],\n  \"pm2ProcessNames\": [\"suggested PM2 process names\"]\n}"
+    },
+    "portDetectionRules": {
+      "name": "Port Detection Rules",
+      "category": "rules",
+      "content": "Look for ports in: vite.config (server.port), .env files (PORT, VITE_PORT), package.json scripts with --port flags."
+    },
+    "pm2NamingConvention": {
+      "name": "PM2 Naming Convention",
+      "category": "rules",
+      "content": "Use lowercase hyphenated names. For full-stack apps use suffixes: app-name-ui, app-name-api."
+    }
+  }
+}
