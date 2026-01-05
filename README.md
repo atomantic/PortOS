@@ -40,11 +40,8 @@ Auto-detect project configuration from your codebase — ports, start commands, 
 git clone https://github.com/atomantic/PortOS.git
 cd PortOS
 
-# Install dependencies
+# Install dependencies (also sets up data/ and .browser/ directories)
 npm run install:all
-
-# Copy sample data (first time only)
-cp -r data.sample data
 
 # Start with PM2 (recommended)
 pm2 start ecosystem.config.cjs
@@ -127,6 +124,7 @@ Configure AI providers for the runner:
 ## Documentation
 
 - [Contributing Guide](./docs/CONTRIBUTING.md) — Development setup and code guidelines
+- [Port Allocation](./docs/PORTS.md) — Port conventions and allocation guide
 - [Versioning & Releases](./docs/VERSIONING.md) — Version format and release process
 - [Implementation Plan](./PLAN.md) — Detailed feature roadmap and API reference
 

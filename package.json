@@ -10,7 +10,10 @@
     "dev:client": "cd client && npm run dev",
     "build": "cd client && npm run build",
     "start": "cd server && npm start",
-    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install && cd .. && npm run setup",
+    "setup": "node scripts/setup-data.js && node scripts/setup-browser.js",
+    "setup:data": "node scripts/setup-data.js",
+    "setup:browser": "node scripts/setup-browser.js",
     "test": "cd server && npm test"
   },
   "devDependencies": {
