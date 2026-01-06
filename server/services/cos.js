@@ -15,6 +15,9 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
+import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
+import { classifyTask, isIdleReviewTask } from './taskClassifier.js';
+import { getAllApps } from './apps.js';
 
 const execAsync = promisify(exec);
 
@@ -70,7 +73,7 @@ async function withStateLock(fn) {
 const DEFAULT_CONFIG = {
   userTasksFile: 'data/TASKS.md',          // User-defined tasks
   cosTasksFile: 'data/COS-TASKS.md',       // CoS internal/system tasks
-  evaluationIntervalMs: 60000,         // 1 minute
+  evaluationIntervalMs: 60000,         // 1 minute (also used for idle check frequency)
   healthCheckIntervalMs: 900000,       // 15 minutes
   maxConcurrentAgents: 3,
   maxProcessMemoryMb: 2048,            // Alert if any process exceeds this
@@ -79,8 +82,25 @@ const DEFAULT_CONFIG = {
     { name: 'filesystem', command: 'npx', args: ['-y', '@anthropic/mcp-server-filesystem'] },
     { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
   ],
-  autoStart: false,
-  selfImprovementEnabled: true         // Allow CoS to suggest improvements to its own prompts
+  autoStart: false,                    // Legacy: use alwaysOn instead
+  selfImprovementEnabled: true,        // Allow CoS to suggest improvements to its own prompts
+  avatarStyle: 'svg',                  // UI preference: 'svg' or 'ascii'
+  // Always-on mode settings
+  alwaysOn: true,                      // CoS starts automatically and stays active
+  appReviewCooldownMs: 3600000,        // 1 hour between working on same app
+  idleReviewEnabled: true,             // Review apps for improvements when no user tasks
+  idleReviewPriority: 'LOW',           // Priority for auto-generated review tasks
+  immediateExecution: true,            // Execute new tasks immediately, don't wait for interval
+  autoFixThresholds: {
+    maxLinesChanged: 50,               // Auto-approve if <= this many lines changed
+    allowedCategories: [               // Categories that can auto-execute
+      'formatting',
+      'dry-violations',
+      'dead-code',
+      'typo-fix',
+      'import-cleanup'
+    ]
+  }
 };
 
 /**
@@ -88,12 +108,16 @@ const DEFAULT_CONFIG = {
  */
 const DEFAULT_STATE = {
   running: false,
+  paused: false,                       // Pause state for always-on mode
+  pausedAt: null,                      // Timestamp when paused
+  pauseReason: null,                   // Optional reason for pause
   config: DEFAULT_CONFIG,
   stats: {
     tasksCompleted: 0,
     totalRuntime: 0,
     agentsSpawned: 0,
-    lastEvaluation: null
+    lastEvaluation: null,
+    lastIdleReview: null               // Track last idle review time
   },
   agents: {}
 };
@@ -152,6 +176,9 @@ export async function getStatus() {
 
   return {
     running: daemonRunning,
+    paused: state.paused || false,
+    pausedAt: state.pausedAt,
+    pauseReason: state.pauseReason,
     config: state.config,
     stats: state.stats,
     activeAgents,
@@ -256,6 +283,61 @@ export async function stop() {
 }
 
 /**
+ * Pause the CoS daemon (for always-on mode)
+ * Daemon stays running but skips evaluations
+ */
+export async function pause(reason = null) {
+  const state = await loadState();
+
+  if (state.paused) {
+    return { success: false, error: 'Already paused' };
+  }
+
+  state.paused = true;
+  state.pausedAt = new Date().toISOString();
+  state.pauseReason = reason;
+  await saveState(state);
+
+  emitLog('info', `CoS paused${reason ? `: ${reason}` : ''}`);
+  cosEvents.emit('status:paused', { paused: true, pausedAt: state.pausedAt, reason });
+  return { success: true, pausedAt: state.pausedAt };
+}
+
+/**
+ * Resume the CoS daemon from pause
+ */
+export async function resume() {
+  const state = await loadState();
+
+  if (!state.paused) {
+    return { success: false, error: 'Not paused' };
+  }
+
+  state.paused = false;
+  state.pausedAt = null;
+  state.pauseReason = null;
+  await saveState(state);
+
+  emitLog('info', 'CoS resumed');
+  cosEvents.emit('status:resumed', { paused: false });
+
+  // Trigger immediate evaluation on resume
+  if (daemonRunning) {
+    setTimeout(() => evaluateTasks(), 500);
+  }
+
+  return { success: true };
+}
+
+/**
+ * Check if CoS is paused
+ */
+export async function isPaused() {
+  const state = await loadState();
+  return state.paused || false;
+}
+
+/**
  * Get user tasks from TASKS.md
  */
 export async function getUserTasks(tasksFilePath = null) {
@@ -338,9 +420,21 @@ async function resetOrphanedTasks() {
 
 /**
  * Evaluate tasks and decide what to spawn
+ *
+ * Priority order:
+ * 1. User tasks (not on cooldown)
+ * 2. Auto-approved system tasks (not on cooldown)
+ * 3. Generate idle review task if no other work
  */
 export async function evaluateTasks() {
   if (!daemonRunning) return;
+
+  // Check if paused - skip evaluation if so
+  const paused = await isPaused();
+  if (paused) {
+    emitLog('debug', 'CoS is paused - skipping evaluation');
+    return;
+  }
 
   // Update evaluation timestamp with lock to prevent race conditions
   const state = await withStateLock(async () => {
@@ -353,17 +447,7 @@ export async function evaluateTasks() {
   // Get both user and CoS tasks
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
-  const pendingUserTasks = userTaskData.grouped?.pending?.length || 0;
-  const inProgressUserTasks = userTaskData.grouped?.in_progress?.length || 0;
-  const pendingCosTasks = cosTaskData.grouped?.pending?.length || 0;
-
-  emitLog('info', `Evaluating tasks: ${pendingUserTasks} pending, ${inProgressUserTasks} in_progress, ${pendingCosTasks} system`, {
-    pendingUser: pendingUserTasks,
-    inProgressUser: inProgressUserTasks,
-    pendingSystem: pendingCosTasks
-  });
-
-  // Count running agents
+  // Count running agents and available slots
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
   const availableSlots = state.config.maxConcurrentAgents - runningAgents;
 
@@ -373,40 +457,78 @@ export async function evaluateTasks() {
     return;
   }
 
-  // Priority 1: Check for auto-approved CoS tasks (system maintenance)
-  if (cosTaskData.exists && cosTaskData.autoApproved?.length > 0) {
-    const nextAutoTask = cosTaskData.autoApproved[0];
-    emitLog('info', `Found auto-approved system task: ${nextAutoTask.id}`, { taskId: nextAutoTask.id });
-    cosEvents.emit('evaluation', {
-      message: 'Found auto-approved system task',
-      task: nextAutoTask,
-      type: 'internal'
-    });
-    cosEvents.emit('task:ready', { ...nextAutoTask, taskType: 'internal' });
-    return;
+  const tasksToSpawn = [];
+
+  // Priority 1: User tasks (not on cooldown)
+  const pendingUserTasks = userTaskData.grouped?.pending || [];
+  for (const task of pendingUserTasks) {
+    if (tasksToSpawn.length >= availableSlots) break;
+
+    // Check if task's app is on cooldown
+    const appId = task.metadata?.app;
+    if (appId) {
+      const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
+      if (onCooldown) {
+        emitLog('debug', `Skipping task ${task.id} - app ${appId} on cooldown`);
+        continue;
+      }
+    }
+
+    tasksToSpawn.push({ ...task, taskType: 'user' });
   }
 
-  // Priority 2: Check for user tasks
-  if (userTaskData.exists) {
-    const nextUserTask = getNextTask(userTaskData.tasks);
-    if (nextUserTask) {
-      emitLog('success', `Found user task: ${nextUserTask.id} (${nextUserTask.priority})`, {
-        taskId: nextUserTask.id,
-        priority: nextUserTask.priority,
-        description: nextUserTask.description?.substring(0, 80)
-      });
-      cosEvents.emit('evaluation', {
-        message: 'Found user task to process',
-        task: nextUserTask,
-        pendingCount: userTaskData.grouped.pending.length,
-        type: 'user'
-      });
-      cosEvents.emit('task:ready', { ...nextUserTask, taskType: 'user' });
-      return;
+  // Priority 2: Auto-approved system tasks (if slots available)
+  if (tasksToSpawn.length < availableSlots && cosTaskData.exists) {
+    const autoApproved = cosTaskData.autoApproved || [];
+    for (const task of autoApproved) {
+      if (tasksToSpawn.length >= availableSlots) break;
+
+      // Check if task's app is on cooldown
+      const appId = task.metadata?.app;
+      if (appId) {
+        const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
+        if (onCooldown) {
+          emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
+          continue;
+        }
+      }
+
+      tasksToSpawn.push({ ...task, taskType: 'internal' });
     }
   }
 
-  // Emit tasks awaiting approval if any
+  // Priority 3: Generate idle review task if no other work and idle review enabled
+  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled) {
+    const idleTask = await generateIdleReviewTask(state);
+    if (idleTask) {
+      tasksToSpawn.push(idleTask);
+    }
+  }
+
+  // Emit evaluation status
+  const pendingUserCount = userTaskData.grouped?.pending?.length || 0;
+  const inProgressCount = userTaskData.grouped?.in_progress?.length || 0;
+  const pendingSystemCount = cosTaskData.grouped?.pending?.length || 0;
+
+  emitLog('info', `Evaluation: ${pendingUserCount} user pending, ${inProgressCount} in_progress, ${pendingSystemCount} system, spawning ${tasksToSpawn.length}`, {
+    pendingUser: pendingUserCount,
+    inProgress: inProgressCount,
+    pendingSystem: pendingSystemCount,
+    toSpawn: tasksToSpawn.length,
+    availableSlots
+  });
+
+  // Spawn all ready tasks (up to available slots)
+  for (const task of tasksToSpawn) {
+    emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
+      taskId: task.id,
+      taskType: task.taskType,
+      app: task.metadata?.app
+    });
+    cosEvents.emit('task:ready', task);
+  }
+
+  // Emit awaiting approval count if any
   if (cosTaskData.exists && cosTaskData.awaitingApproval?.length > 0) {
     emitLog('info', `${cosTaskData.awaitingApproval.length} tasks awaiting approval`);
     cosEvents.emit('evaluation', {
@@ -415,8 +537,67 @@ export async function evaluateTasks() {
     });
   }
 
-  emitLog('info', 'No pending tasks to process - idle');
-  cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
+  if (tasksToSpawn.length === 0) {
+    emitLog('info', 'No tasks to process - idle');
+    cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
+  }
+}
+
+/**
+ * Generate an idle review task when no user/system tasks are pending
+ *
+ * @param {Object} state - Current CoS state
+ * @returns {Object|null} Generated task or null if no apps eligible
+ */
+async function generateIdleReviewTask(state) {
+  // Get all managed apps
+  const apps = await getAllApps().catch(() => []);
+
+  if (apps.length === 0) {
+    emitLog('debug', 'No managed apps found for idle review');
+    return null;
+  }
+
+  // Find next app eligible for review (not on cooldown, oldest review first)
+  const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
+
+  if (!nextApp) {
+    emitLog('debug', 'All apps on cooldown - no idle review possible');
+    return null;
+  }
+
+  // Mark that we're starting an idle review
+  await markIdleReviewStarted();
+  await markAppReviewStarted(nextApp.id, `idle-review-${Date.now()}`);
+
+  // Update lastIdleReview timestamp
+  await withStateLock(async () => {
+    const s = await loadState();
+    s.stats.lastIdleReview = new Date().toISOString();
+    await saveState(s);
+  });
+
+  emitLog('info', `Generating idle review task for ${nextApp.name}`, { appId: nextApp.id });
+
+  // Create an idle review task
+  const reviewTask = {
+    id: `idle-review-${nextApp.id}-${Date.now().toString(36)}`,
+    status: 'pending',
+    priority: state.config.idleReviewPriority || 'LOW',
+    priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 1,
+    description: `[Idle Review] Review ${nextApp.name} codebase for improvements: formatting issues, dead code, DRY violations, typos, and other small fixes that can be auto-approved`,
+    metadata: {
+      app: nextApp.id,
+      appName: nextApp.name,
+      repoPath: nextApp.repoPath,
+      reviewType: 'idle',
+      autoGenerated: true
+    },
+    taskType: 'internal',
+    autoApproved: true // Idle reviews are auto-approved to start, but individual fixes need classification
+  };
+
+  return reviewTask;
 }
 
 /**
@@ -679,11 +860,28 @@ export async function getAgents() {
 }
 
 /**
- * Get agent by ID
+ * Get agent by ID with full output from file
  */
 export async function getAgent(agentId) {
   const state = await loadState();
-  return state.agents[agentId] || null;
+  const agent = state.agents[agentId];
+  if (!agent) return null;
+
+  // For completed agents, read full output from file
+  if (agent.status === 'completed') {
+    const outputFile = join(AGENTS_DIR, agentId, 'output.txt');
+    if (existsSync(outputFile)) {
+      const fullOutput = await readFile(outputFile, 'utf-8');
+      // Convert string to output array format
+      const lines = fullOutput.split('\n').filter(line => line.trim());
+      return {
+        ...agent,
+        output: lines.map(line => ({ line, timestamp: agent.completedAt }))
+      };
+    }
+  }
+
+  return agent;
 }
 
 /**
@@ -897,6 +1095,7 @@ export async function updateTask(taskId, updates, taskType = 'user') {
   if (updates.context !== undefined) updatedMetadata.context = updates.context || undefined;
   if (updates.model !== undefined) updatedMetadata.model = updates.model || undefined;
   if (updates.provider !== undefined) updatedMetadata.provider = updates.provider || undefined;
+  if (updates.app !== undefined) updatedMetadata.app = updates.app || undefined;
 
   // Clean undefined values from metadata
   Object.keys(updatedMetadata).forEach(key => {
@@ -1044,8 +1243,9 @@ async function init() {
 
   const state = await loadState();
 
-  // Auto-start if configured
-  if (state.config.autoStart) {
+  // Auto-start if alwaysOn mode is enabled (or legacy autoStart)
+  if (state.config.alwaysOn || state.config.autoStart) {
+    console.log('🚀 CoS auto-starting (alwaysOn mode)');
     await start();
   }
 }

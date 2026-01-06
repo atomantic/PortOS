@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
+import * as appActivity from '../services/appActivity.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -26,6 +27,19 @@ router.post('/start', asyncHandler(async (req, res) => {
 router.post('/stop', asyncHandler(async (req, res) => {
   const result = await cos.stop();
   await taskWatcher.stopWatching();
+  res.json(result);
+}));
+
+// POST /api/cos/pause - Pause CoS daemon (stays running but skips evaluations)
+router.post('/pause', asyncHandler(async (req, res) => {
+  const { reason } = req.body;
+  const result = await cos.pause(reason);
+  res.json(result);
+}));
+
+// POST /api/cos/resume - Resume CoS daemon from pause
+router.post('/resume', asyncHandler(async (req, res) => {
+  const result = await cos.resume();
   res.json(result);
 }));
 
@@ -79,13 +93,13 @@ router.post('/tasks/reorder', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, type = 'user', approvalRequired } = req.body;
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, approvalRequired };
+  const taskData = { description, priority, context, model, provider, app, approvalRequired };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));
@@ -93,7 +107,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
 // PUT /api/cos/tasks/:id - Update a task
 router.put('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { description, priority, status, context, model, provider, type = 'user' } = req.body;
+  const { description, priority, status, context, model, provider, app, type = 'user' } = req.body;
 
   const updates = {};
   if (description !== undefined) updates.description = description;
@@ -102,6 +116,7 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (context !== undefined) updates.context = context;
   if (model !== undefined) updates.model = model;
   if (provider !== undefined) updates.provider = provider;
+  if (app !== undefined) updates.app = app;
 
   const result = await cos.updateTask(id, updates, type);
   if (result?.error) {
@@ -234,5 +249,27 @@ router.get('/scripts/:name', asyncHandler(async (req, res) => {
 router.get('/watcher', (req, res) => {
   res.json(taskWatcher.getWatcherStatus());
 });
+
+// GET /api/cos/app-activity - Get per-app activity data
+router.get('/app-activity', asyncHandler(async (req, res) => {
+  const activity = await appActivity.loadAppActivity();
+  res.json(activity);
+}));
+
+// GET /api/cos/app-activity/:appId - Get activity for specific app
+router.get('/app-activity/:appId', asyncHandler(async (req, res) => {
+  const activity = await appActivity.getAppActivityById(req.params.appId);
+  if (!activity) {
+    res.json({ appId: req.params.appId, activity: null, message: 'No activity recorded for this app' });
+    return;
+  }
+  res.json({ appId: req.params.appId, activity });
+}));
+
+// POST /api/cos/app-activity/:appId/clear-cooldown - Clear cooldown for an app
+router.post('/app-activity/:appId/clear-cooldown', asyncHandler(async (req, res) => {
+  const result = await appActivity.clearAppCooldown(req.params.appId);
+  res.json({ success: true, appId: req.params.appId, activity: result });
+}));
 
 export default router;

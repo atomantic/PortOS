@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -1072,7 +1072,9 @@ export function ProcessesPage() {
   const [tailLines, setTailLines] = useState(500);
   const [subscribed, setSubscribed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const logsRef = useRef(null);
+  const fullscreenLogsRef = useRef(null);
 
   useEffect(() => {
     loadProcesses();
@@ -1115,6 +1117,9 @@ export function ProcessesPage() {
         setTimeout(() => {
           if (logsRef.current) {
             logsRef.current.scrollTop = logsRef.current.scrollHeight;
+          }
+          if (fullscreenLogsRef.current) {
+            fullscreenLogsRef.current.scrollTop = fullscreenLogsRef.current.scrollHeight;
           }
         }, 10);
       }
@@ -1373,11 +1378,19 @@ export function ProcessesPage() {
                             >
                               Clear
                             </button>
+                            <button
+                              onClick={() => setFullscreen(true)}
+                              className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                              title="Fullscreen"
+                            >
+                              <Maximize2 size={12} />
+                              Fullscreen
+                            </button>
                           </div>
                         </div>
                         <div
                           ref={logsRef}
-                          className="h-64 overflow-auto p-3 font-mono text-xs"
+                          className="h-[32rem] overflow-auto p-3 font-mono text-xs"
                         >
                           {logs.length === 0 ? (
                             <div className="text-gray-500">
@@ -1413,6 +1426,75 @@ export function ProcessesPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Fullscreen Log Modal */}
+      {fullscreen && expandedProcess && (
+        <div className="fixed inset-0 bg-port-bg z-50 flex flex-col">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-port-border bg-port-card">
+            <div className="flex items-center gap-4">
+              <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
+              {subscribed && (
+                <span className="text-sm text-port-success">● streaming</span>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-500">Tail lines:</label>
+                <select
+                  value={tailLines}
+                  onChange={(e) => {
+                    setTailLines(Number(e.target.value));
+                    setLogs([]);
+                  }}
+                  className="px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"
+                >
+                  <option value={100}>100</option>
+                  <option value={250}>250</option>
+                  <option value={500}>500</option>
+                  <option value={1000}>1000</option>
+                  <option value={2000}>2000</option>
+                </select>
+              </div>
+              <span className="text-sm text-gray-600">{logs.length} lines</span>
+              <button
+                onClick={() => setLogs([])}
+                className="text-sm text-gray-500 hover:text-white"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => setFullscreen(false)}
+                className="p-2 text-gray-400 hover:text-white"
+                title="Exit fullscreen"
+              >
+                <X size={20} />
+              </button>
+            </div>
+          </div>
+          <div
+            ref={fullscreenLogsRef}
+            className="flex-1 overflow-auto p-4 font-mono text-sm"
+          >
+            {logs.length === 0 ? (
+              <div className="text-gray-500">
+                {subscribed ? 'No logs yet...' : 'Connecting to log stream...'}
+              </div>
+            ) : (
+              logs.map((log, i) => (
+                <div
+                  key={i}
+                  className={`py-0.5 ${log.type === 'stderr' ? 'text-port-error' : 'text-gray-300'}`}
+                >
+                  <span className="text-gray-600 mr-3">
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
+                  {log.line}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

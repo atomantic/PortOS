@@ -50,8 +50,7 @@ const navItems = [
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
-  },
-  { to: '/logs', label: 'Logs', icon: FileText, single: true }
+  }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -320,10 +319,14 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main className="flex-1 p-4 md:p-6 overflow-auto">
-          <div className="max-w-7xl mx-auto">
+        <main className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') ? (
             <Outlet />
-          </div>
+          ) : (
+            <div className="max-w-7xl mx-auto">
+              <Outlet />
+            </div>
+          )}
         </main>
       </div>
     </div>

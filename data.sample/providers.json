@@ -22,8 +22,11 @@
       "type": "cli",
       "command": "codex",
       "args": [],
-      "models": ["codex"],
-      "defaultModel": "codex",
+      "models": ["gpt-5.1-codex-mini", "gpt-5.1-codex-max"],
+      "defaultModel": "gpt-5.1-codex-max",
+      "lightModel": "gpt-5.1-codex-mini",
+      "mediumModel": "gpt-5.1-codex-max",
+      "heavyModel": "gpt-5.1-codex-max",
       "timeout": 300000,
       "enabled": true,
       "envVars": {}
