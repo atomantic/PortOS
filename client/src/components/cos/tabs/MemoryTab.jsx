@@ -13,21 +13,18 @@ export default function MemoryTab() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState(null);
   const [view, setView] = useState('list'); // list, timeline, graph
-  const [filters, setFilters] = useState({ types: [], categories: [] });
-  const [categories, setCategories] = useState([]);
+  const [filters, setFilters] = useState({ types: [] });
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    const [memoriesRes, statsRes, catsRes, embRes] = await Promise.all([
+    const [memoriesRes, statsRes, embRes] = await Promise.all([
       api.getMemories({ limit: 100, ...filters }).catch(() => ({ memories: [] })),
       api.getMemoryStats().catch(() => null),
-      api.getMemoryCategories().catch(() => []),
       api.getEmbeddingStatus().catch(() => null)
     ]);
     setMemories(memoriesRes.memories || []);
     setStats(statsRes);
-    setCategories(catsRes);
     setEmbeddingStatus(embRes);
     setLoading(false);
   }, [filters]);

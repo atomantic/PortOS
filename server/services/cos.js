@@ -16,7 +16,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
-import { classifyTask, isIdleReviewTask } from './taskClassifier.js';
 import { getAllApps } from './apps.js';
 
 const execAsync = promisify(exec);
