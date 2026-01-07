@@ -3,17 +3,20 @@ import { createServer } from 'http';
 
 const CDP_PORT = parseInt(process.env.CDP_PORT || '5556', 10);
 const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);
+// Security: CDP binds to localhost only - remote access should go through
+// portos-server which can proxy connections with proper authentication
+const CDP_HOST = process.env.CDP_HOST || '127.0.0.1';
 
 let browser = null;
 
 async function launchBrowser() {
-  console.log(`🌐 Launching persistent Chromium browser with CDP on port ${CDP_PORT}`);
+  console.log(`🌐 Launching persistent Chromium browser with CDP on ${CDP_HOST}:${CDP_PORT}`);
 
   browser = await chromium.launch({
     headless: true,
     args: [
       `--remote-debugging-port=${CDP_PORT}`,
-      '--remote-debugging-address=0.0.0.0',
+      `--remote-debugging-address=${CDP_HOST}`,
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-networking',
@@ -30,7 +33,7 @@ async function launchBrowser() {
     setTimeout(launchBrowser, 1000);
   });
 
-  console.log(`✅ Browser launched, CDP available at ws://0.0.0.0:${CDP_PORT}`);
+  console.log(`✅ Browser launched, CDP available at ws://${CDP_HOST}:${CDP_PORT}`);
   return browser;
 }
 
@@ -42,17 +45,19 @@ const healthServer = createServer((req, res) => {
     res.end(JSON.stringify({
       status,
       cdpPort: CDP_PORT,
-      cdpEndpoint: `ws://0.0.0.0:${CDP_PORT}`
+      cdpHost: CDP_HOST,
+      cdpEndpoint: `ws://${CDP_HOST}:${CDP_PORT}`
     }));
   } else if (req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       service: 'portos-browser',
       cdpPort: CDP_PORT,
+      cdpHost: CDP_HOST,
       healthPort: HEALTH_PORT,
       endpoints: {
         health: '/health',
-        cdp: `ws://0.0.0.0:${CDP_PORT}`
+        cdp: `ws://${CDP_HOST}:${CDP_PORT}`
       }
     }));
   } else {
