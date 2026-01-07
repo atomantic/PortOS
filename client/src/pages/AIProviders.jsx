@@ -225,7 +225,7 @@ export default function AIProviders() {
                   </span>
                   {provider.id === activeProviderId && (
                     <span className="text-xs px-2 py-0.5 rounded bg-port-accent/20 text-port-accent">
-                      ACTIVE
+                      DEFAULT
                     </span>
                   )}
                   {!provider.enabled && (
@@ -303,7 +303,7 @@ export default function AIProviders() {
                     onClick={() => handleSetActive(provider.id)}
                     className="px-3 py-1 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors"
                   >
-                    Set Active
+                    Set Default
                   </button>
                 )}
 

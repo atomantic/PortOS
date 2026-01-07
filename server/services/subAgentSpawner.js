@@ -12,7 +12,8 @@ import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask } from './cos.js';
+import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask } from './cos.js';
+import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 
 /**
  * Emit a log event for UI display (mirrors cos.js helper)
@@ -155,6 +156,132 @@ async function completeAgentRun(runId, output, exitCode, duration, error = null)
 
 // Active agent processes
 const activeAgents = new Map();
+
+/**
+ * Error patterns that warrant investigation tasks
+ */
+const ERROR_PATTERNS = [
+  {
+    pattern: /API Error: 404.*model:\s*(\S+)/i,
+    category: 'model-not-found',
+    actionable: true,
+    extract: (match, output, task, model) => ({
+      message: `Model "${match[1]}" not found`,
+      suggestedFix: `Update model configuration - "${match[1]}" doesn't exist. Check provider settings or task metadata.`,
+      affectedModel: match[1],
+      configuredModel: model
+    })
+  },
+  {
+    pattern: /API Error: 401|authentication|unauthorized/i,
+    category: 'auth-error',
+    actionable: true,
+    extract: () => ({
+      message: 'Authentication failed',
+      suggestedFix: 'Check API keys and provider configuration'
+    })
+  },
+  {
+    pattern: /API Error: 429|rate.?limit|too many requests/i,
+    category: 'rate-limit',
+    actionable: false, // Transient, retry will handle
+    extract: () => ({
+      message: 'Rate limit exceeded',
+      suggestedFix: 'Wait and retry - temporary rate limiting'
+    })
+  },
+  {
+    pattern: /API Error: 5\d{2}|server error|internal error/i,
+    category: 'server-error',
+    actionable: false, // Transient
+    extract: () => ({
+      message: 'API server error',
+      suggestedFix: 'Retry later - temporary server issue'
+    })
+  },
+  {
+    pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
+    category: 'network-error',
+    actionable: false, // Transient
+    extract: () => ({
+      message: 'Network connection failed',
+      suggestedFix: 'Check network connectivity'
+    })
+  },
+  {
+    pattern: /not_found_error.*model/i,
+    category: 'model-not-found',
+    actionable: true,
+    extract: (match, output, task, model) => ({
+      message: `Model not found in API response`,
+      suggestedFix: `The model "${model}" specified for this task doesn't exist. Update provider or task configuration.`,
+      configuredModel: model
+    })
+  }
+];
+
+/**
+ * Analyze agent failure output and categorize the error
+ */
+function analyzeAgentFailure(output, task, model) {
+  for (const errorDef of ERROR_PATTERNS) {
+    const match = output.match(errorDef.pattern);
+    if (match) {
+      const extracted = errorDef.extract(match, output, task, model);
+      return {
+        category: errorDef.category,
+        actionable: errorDef.actionable,
+        ...extracted
+      };
+    }
+  }
+
+  // Generic failure - not actionable by default
+  return {
+    category: 'unknown',
+    actionable: false,
+    message: 'Agent failed with unknown error',
+    suggestedFix: 'Review agent output logs for details'
+  };
+}
+
+/**
+ * Create an investigation task in COS-TASKS.md for failed agent
+ */
+async function createInvestigationTask(agentId, originalTask, errorAnalysis) {
+  const description = `[Auto] Investigate agent failure: ${errorAnalysis.message}
+
+**Failed Agent**: ${agentId}
+**Original Task**: ${originalTask.id} - ${(originalTask.description || '').substring(0, 100)}
+**Error Category**: ${errorAnalysis.category}
+**Suggested Fix**: ${errorAnalysis.suggestedFix}
+${errorAnalysis.configuredModel ? `**Configured Model**: ${errorAnalysis.configuredModel}` : ''}
+${errorAnalysis.affectedModel ? `**Affected Model**: ${errorAnalysis.affectedModel}` : ''}
+
+Review the error, fix the configuration or code issue, and retry the original task.`;
+
+  const investigationTask = await addTask({
+    description,
+    priority: 'HIGH',
+    context: `Auto-generated from agent ${agentId} failure`,
+    approvalRequired: true // Require human approval before auto-fixing
+  }, 'internal');
+
+  emitLog('info', `Created investigation task ${investigationTask.id} for failed agent ${agentId}`, {
+    agentId,
+    taskId: investigationTask.id,
+    errorCategory: errorAnalysis.category
+  });
+
+  cosEvents.emit('investigation:created', {
+    investigationTaskId: investigationTask.id,
+    failedAgentId: agentId,
+    originalTaskId: originalTask.id,
+    errorAnalysis
+  });
+
+  return investigationTask;
+}
 
 /**
  * Initialize the spawner - listen for task:ready events
@@ -331,25 +458,57 @@ export async function spawnAgentForTask(task) {
     // Save final output
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
+    // Analyze failure and extract error details
+    const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, selectedModel);
+
     await completeAgent(agentId, {
       success,
       exitCode: code,
       duration,
-      outputLength: outputBuffer.length
+      outputLength: outputBuffer.length,
+      errorAnalysis
     });
 
     // Complete the run tracking
-    await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration);
+    await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis?.message);
 
     // Update task status based on result
     const newStatus = success ? 'completed' : 'pending'; // Reset to pending on failure for retry
     await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
+
+    // On failure, auto-queue an investigation task if error is actionable
+    if (!success && errorAnalysis?.actionable) {
+      await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
+        emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+      });
+    }
 
     // Extract and store memories from successful agent output
     if (success && outputBuffer.length > 100) {
       extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
         console.log(`⚠️ Memory extraction failed: ${err.message}`);
       });
+    }
+
+    // Start cooldown for the app if task had an associated app
+    const appId = task.metadata?.app;
+    if (appId) {
+      const config = await getConfig();
+      const cooldownMs = config.appReviewCooldownMs || 3600000; // 1 hour default
+
+      // Mark review completed with stats
+      const issuesFound = success ? 1 : 0; // TODO: Parse from output for accurate count
+      const issuesFixed = success ? 1 : 0;
+      await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
+        emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
+      });
+
+      // Start cooldown
+      await startAppCooldown(appId, cooldownMs).catch(err => {
+        emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
+      });
+
+      emitLog('info', `App ${appId} cooldown started (${Math.round(cooldownMs / 60000)} min)`, { appId, cooldownMs });
     }
 
     unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);

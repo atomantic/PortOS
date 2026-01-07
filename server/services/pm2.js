@@ -126,7 +126,7 @@ export async function getAppStatus(name) {
         pm_id: proc.pm_id,
         cpu: proc.monit?.cpu || 0,
         memory: proc.monit?.memory || 0,
-        uptime: proc.pm2_env?.pm_uptime || null,
+        uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
         restarts: proc.pm2_env?.restart_time || 0,
         createdAt: proc.pm2_env?.created_at || null
       });
@@ -159,7 +159,7 @@ export async function listProcesses() {
         pm_id: proc.pm_id,
         cpu: proc.monit?.cpu || 0,
         memory: proc.monit?.memory || 0,
-        uptime: proc.pm2_env?.pm_uptime || null,
+        uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
         restarts: proc.pm2_env?.restart_time || 0
       }));
       resolve(processes);

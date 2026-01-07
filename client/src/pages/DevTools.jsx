@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -1063,19 +1064,38 @@ ${prompt.trim()}`;
 
 export function ProcessesPage() {
   const [processes, setProcesses] = useState([]);
+  const [managedProcessNames, setManagedProcessNames] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [expandedProcess, setExpandedProcess] = useState(null);
   const [logs, setLogs] = useState([]);
   const [restarting, setRestarting] = useState({});
   const [tailLines, setTailLines] = useState(500);
   const [subscribed, setSubscribed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const logsRef = useRef(null);
+  const fullscreenLogsRef = useRef(null);
 
   useEffect(() => {
     loadProcesses();
+    loadManagedProcessNames();
     const interval = setInterval(loadProcesses, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const loadManagedProcessNames = async () => {
+    const apps = await api.getApps().catch(() => []);
+    const names = new Set();
+    apps.forEach(app => {
+      (app.pm2ProcessNames || []).forEach(name => names.add(name));
+    });
+    setManagedProcessNames(names);
+  };
+
+  const isPortOSManaged = (procName) => {
+    if (procName.startsWith('portos-')) return true;
+    return managedProcessNames.has(procName);
+  };
 
   useEffect(() => {
     if (!expandedProcess) {
@@ -1097,6 +1117,9 @@ export function ProcessesPage() {
         setTimeout(() => {
           if (logsRef.current) {
             logsRef.current.scrollTop = logsRef.current.scrollHeight;
+          }
+          if (fullscreenLogsRef.current) {
+            fullscreenLogsRef.current.scrollTop = fullscreenLogsRef.current.scrollHeight;
           }
         }, 10);
       }
@@ -1176,6 +1199,24 @@ export function ProcessesPage() {
     setLogs([]);
   };
 
+  const handlePm2Save = async () => {
+    setSaving(true);
+    const result = await fetch('/api/commands/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'pm2 save' })
+    }).then(r => r.json()).catch(() => ({ success: false }));
+    setSaving(false);
+    if (result.success) {
+      toast.success('PM2 process list saved to startup');
+    } else {
+      toast.error('Failed to save PM2 process list');
+    }
+  };
+
+  // Filter to only show PortOS-managed processes
+  const managedProcesses = processes.filter(proc => isPortOSManaged(proc.name));
+
   const formatMemory = (bytes) => {
     if (!bytes) return '0 MB';
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -1207,13 +1248,26 @@ export function ProcessesPage() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-white">PM2 Processes</h1>
-        <button
-          onClick={loadProcesses}
-          className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
-        >
-          Refresh
-        </button>
+        <div>
+          <h1 className="text-2xl font-bold text-white">PM2 Processes</h1>
+          <p className="text-gray-500">PortOS-managed processes ({managedProcesses.length} of {processes.length} total)</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handlePm2Save}
+            disabled={saving}
+            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+          >
+            <Save size={16} className={saving ? 'animate-pulse' : ''} />
+            {saving ? 'Saving...' : 'PM2 Save'}
+          </button>
+          <button
+            onClick={loadProcesses}
+            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
@@ -1232,7 +1286,7 @@ export function ProcessesPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-port-border">
-            {processes.map(proc => (
+            {managedProcesses.map(proc => (
               <Fragment key={proc.pm_id}>
                 <tr className="hover:bg-port-border/20">
                   <td className="px-4 py-3">
@@ -1324,11 +1378,19 @@ export function ProcessesPage() {
                             >
                               Clear
                             </button>
+                            <button
+                              onClick={() => setFullscreen(true)}
+                              className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                              title="Fullscreen"
+                            >
+                              <Maximize2 size={12} />
+                              Fullscreen
+                            </button>
                           </div>
                         </div>
                         <div
                           ref={logsRef}
-                          className="h-64 overflow-auto p-3 font-mono text-xs"
+                          className="h-[32rem] overflow-auto p-3 font-mono text-xs"
                         >
                           {logs.length === 0 ? (
                             <div className="text-gray-500">
@@ -1364,6 +1426,75 @@ export function ProcessesPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Fullscreen Log Modal */}
+      {fullscreen && expandedProcess && (
+        <div className="fixed inset-0 bg-port-bg z-50 flex flex-col">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-port-border bg-port-card">
+            <div className="flex items-center gap-4">
+              <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
+              {subscribed && (
+                <span className="text-sm text-port-success">● streaming</span>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-500">Tail lines:</label>
+                <select
+                  value={tailLines}
+                  onChange={(e) => {
+                    setTailLines(Number(e.target.value));
+                    setLogs([]);
+                  }}
+                  className="px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"
+                >
+                  <option value={100}>100</option>
+                  <option value={250}>250</option>
+                  <option value={500}>500</option>
+                  <option value={1000}>1000</option>
+                  <option value={2000}>2000</option>
+                </select>
+              </div>
+              <span className="text-sm text-gray-600">{logs.length} lines</span>
+              <button
+                onClick={() => setLogs([])}
+                className="text-sm text-gray-500 hover:text-white"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => setFullscreen(false)}
+                className="p-2 text-gray-400 hover:text-white"
+                title="Exit fullscreen"
+              >
+                <X size={20} />
+              </button>
+            </div>
+          </div>
+          <div
+            ref={fullscreenLogsRef}
+            className="flex-1 overflow-auto p-4 font-mono text-sm"
+          >
+            {logs.length === 0 ? (
+              <div className="text-gray-500">
+                {subscribed ? 'No logs yet...' : 'Connecting to log stream...'}
+              </div>
+            ) : (
+              logs.map((log, i) => (
+                <div
+                  key={i}
+                  className={`py-0.5 ${log.type === 'stderr' ? 'text-port-error' : 'text-gray-300'}`}
+                >
+                  <span className="text-gray-600 mr-3">
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
+                  {log.line}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

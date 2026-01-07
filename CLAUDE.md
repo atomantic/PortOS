@@ -24,6 +24,16 @@ pm2 logs
 
 PortOS is a monorepo with Express.js server (port 5554) and React/Vite client (port 5555). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.
 
+### Port Allocation
+
+PortOS uses ports 5554-5560. Define all ports in `ecosystem.config.cjs` using the `ports` object:
+
+```javascript
+ports: { api: 5554, health: 5555 }  // labeled ports for documentation
+```
+
+See `docs/PORTS.md` for the full port allocation guide.
+
 ### Server (`server/`)
 - **Routes**: HTTP handlers with Zod validation
 - **Services**: Business logic, PM2/file/Socket.IO operations
