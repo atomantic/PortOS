@@ -30,6 +30,7 @@ function emitLog(level, message, data = {}) {
   cosEvents.emit('log', logEntry);
 }
 import { getActiveProvider, getProviderById } from './providers.js';
+import { recordSession, recordMessages } from './usage.js';
 import { buildPrompt } from './promptService.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { getMemorySection } from './memoryRetriever.js';
@@ -135,6 +136,11 @@ async function createAgentRun(agentId, task, model, provider, workspacePath) {
   await writeFile(join(runDir, 'prompt.txt'), task.description || '');
   await writeFile(join(runDir, 'output.txt'), '');
 
+  // Record usage session for CoS agent
+  recordSession(provider.id, provider.name, model || provider.defaultModel).catch(err => {
+    console.error(`❌ Failed to record usage session: ${err.message}`);
+  });
+
   return { runId, runDir };
 }
 
@@ -167,6 +173,14 @@ async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis
 
   await writeFile(metaPath, JSON.stringify(metadata, null, 2));
   await writeFile(join(runDir, 'output.txt'), output || '');
+
+  // Record usage for successful CoS agent runs (estimate ~4 chars per token)
+  if (exitCode === 0 && metadata.providerId && metadata.model) {
+    const estimatedTokens = Math.ceil((output || '').length / 4);
+    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+      console.error(`❌ Failed to record usage: ${err.message}`);
+    });
+  }
 }
 
 /**

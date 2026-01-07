@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { getProviderById } from './providers.js';
 import { errorEvents } from '../lib/errorHandler.js';
+import { recordSession, recordMessages } from './usage.js';
 import {
   isRunnerAvailable,
   executeCliRunViaRunner,
@@ -63,6 +64,14 @@ function initRunnerEvents() {
       metadata.exitCode = exitCode;
       metadata.success = success;
       metadata.outputSize = Buffer.byteLength(output);
+
+      // Record usage for successful runs (estimate ~4 chars per token)
+      if (success && metadata.providerId && metadata.model) {
+        const estimatedTokens = Math.ceil(output.length / 4);
+        recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+          console.error(`❌ Failed to record usage: ${err.message}`);
+        });
+      }
 
       // Extract and store error details for failed runs
       if (!success) {
@@ -318,6 +327,11 @@ export async function createRun(options) {
   await writeFile(join(runDir, 'prompt.txt'), prompt);
   await writeFile(join(runDir, 'output.txt'), '');
 
+  // Record usage session
+  recordSession(providerId, provider.name, model || provider.defaultModel).catch(err => {
+    console.error(`❌ Failed to record usage session: ${err.message}`);
+  });
+
   return { runId, runDir, provider, metadata };
 }
 
@@ -484,6 +498,13 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
     metadata.success = true;
     metadata.outputSize = Buffer.byteLength(output);
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+
+    // Record usage for API run (estimate ~4 chars per token)
+    const estimatedTokens = Math.ceil(output.length / 4);
+    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+      console.error(`❌ Failed to record usage: ${err.message}`);
+    });
+
     onComplete?.(metadata);
   };
 

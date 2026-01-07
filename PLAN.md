@@ -47,6 +47,7 @@ pm2 logs
 - [x] M18: PM2 Standardization (LLM-powered config refactoring, import integration, button trigger)
 - [x] M19: CoS Agent Runner (isolated PM2 process for agent spawning, prevents orphaned processes)
 - [x] M20: AI Provider Error Handling (error extraction, categorization, CoS investigation tasks)
+- [x] M21: Usage Metrics Integration (usage tracking for all AI runs, mobile responsive design)
 
 ### Documentation
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
@@ -873,3 +874,55 @@ In the DevTools history, failed runs now show:
 - **Error Message**: Extracted error details
 - **Suggested Fix Panel**: Yellow-bordered box with actionable advice
 - **Additional Details**: Expandable section with raw error context
+
+---
+
+## M21: Usage Metrics Integration
+
+Enhanced usage tracking to capture all AI provider executions across CoS agents and DevTools runner.
+
+### Problem
+The Usage page existed but displayed zero data because the tracking functions were never called when runs executed.
+
+### Solution
+1. **Usage Service Integration**: Added `recordSession` and `recordMessages` calls to runner.js and subAgentSpawner.js
+2. **Mobile Responsive Design**: Redesigned usage page with responsive Tailwind breakpoints
+3. **Unified Tracking**: Both manual DevTools runs and CoS agent executions now record usage
+
+### Data Tracked
+| Metric | Source | Description |
+|--------|--------|-------------|
+| Sessions | createRun, createAgentRun | Incremented when any AI execution starts |
+| Messages | run completion | Recorded on successful run completion |
+| Tokens | Output-based estimate | ~4 characters per token estimation |
+| Provider Stats | Per provider | Sessions, messages, tokens by provider |
+| Model Stats | Per model | Sessions, messages, tokens by model |
+| Daily Activity | Per day | Sessions, messages, tokens by date |
+| Hourly Activity | 24-hour array | Session counts by hour of day |
+
+### Mobile Responsive Grid
+```css
+/* Summary stats */
+grid-cols-2 sm:grid-cols-3 lg:grid-cols-5
+
+/* Charts and tables */
+grid-cols-1 md:grid-cols-2
+```
+
+### Implementation Files
+| File | Changes |
+|------|---------|
+| `server/services/runner.js` | Import usage.js, call recordSession in createRun, recordMessages on completion |
+| `server/services/subAgentSpawner.js` | Import usage.js, call recordSession in createAgentRun, recordMessages in completeAgentRun |
+| `client/src/pages/DevTools.jsx` | Mobile-first responsive grid for UsagePage |
+
+### Data Flow
+```
+createRun() / createAgentRun()
+    └─► recordSession(providerId, providerName, model)
+            └─► updates byProvider, byModel, dailyActivity, hourlyActivity
+
+executeCliRun() / executeApiRun() / completeAgentRun()
+    └─► recordMessages(providerId, model, 1, estimatedTokens)
+            └─► updates totalMessages, byProvider, byModel tokens
+```

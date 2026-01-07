@@ -83,7 +83,7 @@ module.exports = {
     },
     {
       name: 'portos-browser',
-      script: '.browser/server.js',
+      script: 'browser/server.js',
       cwd: __dirname,
       interpreter: 'node',
       ports: { cdp: 5556, health: 5557 },

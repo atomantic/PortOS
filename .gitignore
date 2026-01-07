@@ -34,5 +34,5 @@ Thumbs.db
 # Playwright
 .playwright-mcp
 
-# Persistent browser for CoS/agents
-.browser/
+# Browser service node_modules (code is committed)
+browser/node_modules/

@@ -1848,51 +1848,51 @@ export function UsagePage() {
       <h1 className="text-2xl font-bold text-white">Usage Metrics</h1>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-5 gap-4">
-        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
-          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalSessions)}</div>
-          <div className="text-sm text-gray-400">Sessions</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalSessions)}</div>
+          <div className="text-xs sm:text-sm text-gray-400">Sessions</div>
         </div>
-        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
-          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalMessages)}</div>
-          <div className="text-sm text-gray-400">Messages</div>
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalMessages)}</div>
+          <div className="text-xs sm:text-sm text-gray-400">Messages</div>
         </div>
-        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
-          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalToolCalls)}</div>
-          <div className="text-sm text-gray-400">Tool Calls</div>
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalToolCalls)}</div>
+          <div className="text-xs sm:text-sm text-gray-400">Tool Calls</div>
         </div>
-        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
-          <div className="text-2xl font-bold text-white">{formatNumber(usage.totalTokens?.input + usage.totalTokens?.output)}</div>
-          <div className="text-sm text-gray-400">Tokens</div>
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalTokens?.input + usage.totalTokens?.output)}</div>
+          <div className="text-xs sm:text-sm text-gray-400">Tokens</div>
         </div>
-        <div className="bg-port-card border border-port-border rounded-xl p-4 text-center">
-          <div className="text-2xl font-bold text-port-success">${usage.estimatedCost?.toFixed(2)}</div>
-          <div className="text-sm text-gray-400">Est. Cost</div>
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center col-span-2 sm:col-span-1">
+          <div className="text-xl sm:text-2xl font-bold text-port-success">${usage.estimatedCost?.toFixed(2)}</div>
+          <div className="text-xs sm:text-sm text-gray-400">Est. Cost</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {/* 7-Day Activity */}
-        <div className="bg-port-card border border-port-border rounded-xl p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-4">Last 7 Days</h3>
-          <div className="flex items-end gap-2 h-32">
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Last 7 Days</h3>
+          <div className="flex items-end gap-1 sm:gap-2 h-24 sm:h-32">
             {usage.last7Days?.map((day, i) => (
               <div key={i} className="flex-1 flex flex-col items-center">
                 <div
                   className="w-full bg-port-accent/60 rounded-t"
                   style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
                 />
-                <div className="text-xs text-gray-500 mt-2">{day.label}</div>
-                <div className="text-xs text-gray-400">{day.sessions}</div>
+                <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>
+                <div className="text-[10px] sm:text-xs text-gray-400">{day.sessions}</div>
               </div>
             ))}
           </div>
         </div>
 
         {/* Hourly Distribution */}
-        <div className="bg-port-card border border-port-border rounded-xl p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-4">Hourly Distribution</h3>
-          <div className="flex items-end gap-0.5 h-32">
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Hourly Distribution</h3>
+          <div className="flex items-end gap-0.5 h-24 sm:h-32">
             {usage.hourlyActivity?.map((count, hour) => {
               const maxHour = Math.max(...usage.hourlyActivity);
               return (
@@ -1906,7 +1906,7 @@ export function UsagePage() {
               );
             })}
           </div>
-          <div className="flex justify-between text-xs text-gray-500 mt-2">
+          <div className="flex justify-between text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">
             <span>12am</span>
             <span>6am</span>
             <span>12pm</span>
@@ -1916,17 +1916,17 @@ export function UsagePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {/* Top Providers */}
-        <div className="bg-port-card border border-port-border rounded-xl p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Top Providers</h3>
-          <div className="space-y-2">
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-2 sm:mb-3">Top Providers</h3>
+          <div className="space-y-1 sm:space-y-2">
             {usage.topProviders?.map((provider, i) => (
-              <div key={i} className="flex items-center justify-between py-2 border-b border-port-border last:border-0">
-                <span className="text-white">{provider.name}</span>
-                <div className="text-sm text-gray-400">
+              <div key={i} className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2 border-b border-port-border last:border-0 gap-1 sm:gap-0">
+                <span className="text-white text-sm sm:text-base">{provider.name}</span>
+                <div className="text-xs sm:text-sm text-gray-400">
                   <span>{provider.sessions} sessions</span>
-                  <span className="mx-2">•</span>
+                  <span className="mx-1 sm:mx-2">•</span>
                   <span>{formatNumber(provider.tokens)} tokens</span>
                 </div>
               </div>
@@ -1938,15 +1938,15 @@ export function UsagePage() {
         </div>
 
         {/* Top Models */}
-        <div className="bg-port-card border border-port-border rounded-xl p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Top Models</h3>
-          <div className="space-y-2">
+        <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-2 sm:mb-3">Top Models</h3>
+          <div className="space-y-1 sm:space-y-2">
             {usage.topModels?.map((model, i) => (
-              <div key={i} className="flex items-center justify-between py-2 border-b border-port-border last:border-0">
-                <span className="text-white font-mono text-sm">{model.model}</span>
-                <div className="text-sm text-gray-400">
+              <div key={i} className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2 border-b border-port-border last:border-0 gap-1 sm:gap-0">
+                <span className="text-white font-mono text-xs sm:text-sm truncate max-w-[200px] sm:max-w-none">{model.model}</span>
+                <div className="text-xs sm:text-sm text-gray-400">
                   <span>{model.sessions} sessions</span>
-                  <span className="mx-2">•</span>
+                  <span className="mx-1 sm:mx-2">•</span>
                   <span>{formatNumber(model.tokens)} tokens</span>
                 </div>
               </div>
