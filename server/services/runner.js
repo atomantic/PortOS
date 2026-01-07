@@ -12,13 +12,25 @@ import {
   isRunActiveInRunner,
   stopRunViaRunner,
   initCosRunnerConnection,
-  onCosRunnerEvent
+  onCosRunnerEvent,
+  getActiveRunsFromRunner
 } from './cosRunnerClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '../../data');
 const RUNS_DIR = join(DATA_DIR, 'runs');
+
+/**
+ * Safe JSON parse with fallback to empty object
+ */
+function safeJsonParse(str, fallback = {}) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
 
 // Track active runs for cancellation (only used for API runs, CLI runs are in cos-runner)
 const activeRuns = new Map();
@@ -56,7 +68,7 @@ function initRunnerEvents() {
       const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
       const outputPath = join(RUNS_DIR, runId, 'output.txt');
 
-      const metadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+      const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
       const output = await readFile(outputPath, 'utf-8').catch(() => '');
 
       metadata.endTime = new Date().toISOString();
@@ -100,7 +112,7 @@ function initRunnerEvents() {
     const callbacks = pendingRunCallbacks.get(runId);
     if (callbacks) {
       const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
-      const metadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+      const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
 
       metadata.endTime = new Date().toISOString();
       metadata.success = false;
@@ -346,7 +358,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     // Fall back to error - cos-runner must be running
     console.error(`❌ CoS runner not available for run ${runId}`);
     const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
-    const metadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+    const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
     metadata.endTime = new Date().toISOString();
     metadata.success = false;
     metadata.error = 'CoS runner service not available';
@@ -380,7 +392,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     pendingRunCallbacks.delete(runId);
 
     const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
-    const metadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+    const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
     metadata.endTime = new Date().toISOString();
     metadata.success = false;
     metadata.error = err.message;
@@ -426,7 +438,7 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
 
   if (!response.ok) {
     activeRuns.delete(runId);
-    const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
+    const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
     metadata.endTime = new Date().toISOString();
     metadata.duration = Date.now() - startTime;
     metadata.success = false;
@@ -502,7 +514,7 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
     await writeFile(outputPath, output);
     activeRuns.delete(runId);
 
-    const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
+    const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
     metadata.endTime = new Date().toISOString();
     metadata.duration = Date.now() - startTime;
     metadata.exitCode = 0;
@@ -521,7 +533,7 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
 
   processStream().catch(async (err) => {
     activeRuns.delete(runId);
-    const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
+    const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
     metadata.endTime = new Date().toISOString();
     metadata.duration = Date.now() - startTime;
     metadata.success = false;
@@ -573,7 +585,7 @@ export async function getRun(runId) {
     return null;
   }
 
-  const metadata = JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf-8'));
+  const metadata = safeJsonParse(await readFile(join(runDir, 'metadata.json'), 'utf-8').catch(() => '{}'));
   return metadata;
 }
 
@@ -608,8 +620,8 @@ export async function listRuns(limit = 50, offset = 0, source = 'all') {
   for (const runId of runIds) {
     const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
     if (existsSync(metadataPath)) {
-      const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
-      runs.push(metadata);
+      const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+      if (metadata.id) runs.push(metadata);
     }
   }
 
@@ -650,7 +662,7 @@ export async function deleteFailedRuns() {
   for (const runId of runIds) {
     const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
     if (existsSync(metadataPath)) {
-      const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
+      const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
       if (metadata.success === false) {
         await rm(join(RUNS_DIR, runId), { recursive: true });
         deletedCount++;
@@ -700,7 +712,7 @@ async function syncActiveRuns() {
       const metadataPath = join(RUNS_DIR, runId, 'metadata.json');
 
       if (existsSync(outputPath) && existsSync(metadataPath)) {
-        const metadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
 
         // If endTime is set, the run completed - we missed the event
         if (metadata.endTime) {

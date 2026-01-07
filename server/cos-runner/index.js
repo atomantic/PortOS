@@ -24,7 +24,7 @@ const STATE_FILE = join(ROOT_DIR, 'data/cos/runner-state.json');
 const AGENTS_DIR = join(ROOT_DIR, 'data/cos/agents');
 
 const PORT = process.env.PORT || 5558;
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
 const RUNS_DIR = join(ROOT_DIR, 'data/runs');
 
 // Active agent processes (in memory)
