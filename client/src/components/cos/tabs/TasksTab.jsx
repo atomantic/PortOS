@@ -67,11 +67,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     }
   };
 
-  // Screenshot handling
+  // Screenshot handling - limit to 10MB per file
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files);
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue;
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`File "${file.name}" exceeds 10MB limit`);
+        continue;
+      }
 
       const reader = new FileReader();
       reader.onload = async (ev) => {

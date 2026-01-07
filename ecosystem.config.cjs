@@ -22,11 +22,12 @@ module.exports = {
       interpreter: 'node',
       // CoS Agent Runner - isolated process for spawning Claude CLI agents
       // Does NOT restart when portos-server restarts, preventing orphaned agents
+      // Security: Binds to localhost only - not exposed externally
       ports: { api: 5558 },
       env: {
         NODE_ENV: 'development',
         PORT: 5558,
-        HOST: '0.0.0.0'
+        HOST: '127.0.0.1'
       },
       watch: false,
       autorestart: true,

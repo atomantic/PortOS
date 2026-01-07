@@ -438,7 +438,12 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
       responseBody = await response.text().catch(() => null);
       if (responseBody) {
         // Try to parse as JSON for structured error
-        const parsed = JSON.parse(responseBody).catch?.(() => null);
+        let parsed = null;
+        try {
+          parsed = JSON.parse(responseBody);
+        } catch {
+          // Not valid JSON, ignore
+        }
         if (parsed?.error?.message) {
           errorDetails = `${response.status}: ${parsed.error.message}`;
         } else if (parsed?.message) {
@@ -479,7 +484,13 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
         const data = line.slice(6);
         if (data === '[DONE]') continue;
 
-        const parsed = JSON.parse(data).catch?.(() => null);
+        let parsed = null;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          // Not valid JSON, skip this chunk
+          continue;
+        }
         if (parsed?.choices?.[0]?.delta?.content) {
           const text = parsed.choices[0].delta.content;
           output += text;
@@ -703,7 +714,6 @@ async function syncActiveRuns() {
           // Run output exists but no endTime - run is likely stuck or orphaned
           // Mark it as failed
           console.log(`⚠️ Run ${runId} appears orphaned - marking as failed`);
-          const output = await readFile(outputPath, 'utf-8').catch(() => '');
           metadata.endTime = new Date().toISOString();
           metadata.success = false;
           metadata.error = 'Run was orphaned (process ended without proper completion)';

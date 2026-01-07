@@ -403,7 +403,10 @@ export async function initSpawner() {
     initCosRunnerConnection();
 
     // Sync any agents that were running before server restart
-    const synced = await syncRunnerAgents();
+    const synced = await syncRunnerAgents().catch(err => {
+      console.error(`❌ Failed to sync runner agents: ${err.message}`);
+      return 0;
+    });
     if (synced > 0) {
       console.log(`🔄 Recovered ${synced} agents from CoS Runner`);
     }
@@ -425,7 +428,7 @@ export async function initSpawner() {
     });
 
     onCosRunnerEvent('agent:completed', async (data) => {
-      const { agentId, taskId, exitCode, success, duration, outputLength } = data;
+      const { agentId, exitCode, success, duration } = data;
       const agent = runnerAgents.get(agentId);
       if (agent) {
         clearTimeout(agent.initializationTimeout);

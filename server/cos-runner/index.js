@@ -14,7 +14,6 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 
