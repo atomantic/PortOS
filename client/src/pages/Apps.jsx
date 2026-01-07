@@ -120,7 +120,7 @@ export default function Apps() {
           <p className="text-gray-500">Manage registered applications</p>
         </div>
         <Link
-          to="/create"
+          to="/apps/create"
           className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
         >
           + Add App
@@ -134,7 +134,7 @@ export default function Apps() {
           <h3 className="text-xl font-semibold text-white mb-2">No apps registered</h3>
           <p className="text-gray-500 mb-6">Add your first app to get started</p>
           <Link
-            to="/create"
+            to="/apps/create"
             className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
           >
             Add App
@@ -171,10 +171,16 @@ export default function Apps() {
                           {/* Show process names with ports - filter to only this app's processes */}
                           {(app.pm2ProcessNames || []).map((procName, i) => {
                             const procInfo = app.processes?.find(p => p.name === procName);
-                            const port = procInfo?.port;
+                            const ports = procInfo?.ports || {};
+                            const portEntries = Object.entries(ports);
+                            const portDisplay = portEntries.length > 1
+                              ? ` (${portEntries.map(([label, port]) => `${label}:${port}`).join(', ')})`
+                              : portEntries.length === 1
+                                ? `:${portEntries[0][1]}`
+                                : '';
                             return (
                               <span key={i}>
-                                {procName}{port ? <span className="text-cyan-500">:{port}</span> : ''}
+                                {procName}<span className="text-cyan-500">{portDisplay}</span>
                                 {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
                               </span>
                             );
@@ -329,8 +335,12 @@ export default function Apps() {
                                             proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
                                           }`} />
                                           <span className="text-sm text-white font-mono">{proc.name}</span>
-                                          {processConfig?.port && (
-                                            <span className="text-xs text-cyan-400 font-mono">:{processConfig.port}</span>
+                                          {processConfig?.ports && Object.keys(processConfig.ports).length > 0 && (
+                                            <span className="text-xs text-cyan-400 font-mono">
+                                              {Object.entries(processConfig.ports).length > 1
+                                                ? ` (${Object.entries(processConfig.ports).map(([label, port]) => `${label}:${port}`).join(', ')})`
+                                                : `:${Object.values(processConfig.ports)[0]}`}
+                                            </span>
                                           )}
                                           <span className="text-xs text-gray-500">{proc.status}</span>
                                           {proc.cpu !== undefined && (

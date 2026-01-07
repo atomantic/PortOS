@@ -70,49 +70,6 @@ export const allocatePorts = (count = 1) => request('/ports/allocate', {
   body: JSON.stringify({ count })
 });
 
-// Logs
-export const getProcesses = () => request('/logs/processes');
-export const getProcessLogs = (processName, lines = 100) =>
-  request(`/logs/${encodeURIComponent(processName)}?lines=${lines}`);
-
-/**
- * Create SSE connection for streaming logs
- * @param {string} processName - PM2 process name
- * @param {number} lines - Initial lines to fetch
- * @param {function} onMessage - Callback for each log line
- * @param {function} onError - Error callback
- * @returns {function} Cleanup function to close connection
- */
-export const streamLogs = (processName, lines, onMessage, onError) => {
-  const url = `/api/logs/${encodeURIComponent(processName)}?follow=true&lines=${lines}`;
-  const eventSource = new EventSource(url);
-
-  eventSource.addEventListener('stdout', (e) => {
-    const data = JSON.parse(e.data);
-    onMessage({ ...data, type: 'stdout' });
-  });
-
-  eventSource.addEventListener('stderr', (e) => {
-    const data = JSON.parse(e.data);
-    onMessage({ ...data, type: 'stderr' });
-  });
-
-  eventSource.addEventListener('connected', (e) => {
-    const data = JSON.parse(e.data);
-    onMessage({ type: 'connected', ...data });
-  });
-
-  eventSource.addEventListener('error', (e) => {
-    onError?.(e);
-  });
-
-  eventSource.addEventListener('close', () => {
-    eventSource.close();
-  });
-
-  return () => eventSource.close();
-};
-
 // Detect
 export const detectRepo = (path) => request('/detect/repo', {
   method: 'POST',
@@ -256,6 +213,11 @@ export const killAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' }
 export const getCosStatus = () => request('/cos');
 export const startCos = () => request('/cos/start', { method: 'POST' });
 export const stopCos = () => request('/cos/stop', { method: 'POST' });
+export const pauseCos = (reason) => request('/cos/pause', {
+  method: 'POST',
+  body: JSON.stringify({ reason })
+});
+export const resumeCos = () => request('/cos/resume', { method: 'POST' });
 export const getCosConfig = () => request('/cos/config');
 export const updateCosConfig = (config) => request('/cos/config', {
   method: 'PUT',

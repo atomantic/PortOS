@@ -6,7 +6,6 @@ import {
   FileText,
   Terminal,
   Bot,
-  PlusCircle,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
@@ -28,7 +27,6 @@ import { useErrorNotifications } from '../hooks/useErrorNotifications';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
-  { to: '/create', label: 'Add App', icon: PlusCircle, single: true },
   {
     label: 'AI Config',
     icon: Bot,
@@ -52,8 +50,7 @@ const navItems = [
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
-  },
-  { to: '/logs', label: 'Logs', icon: FileText, single: true }
+  }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -249,7 +246,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed lg:static inset-y-0 left-0 z-50
+          fixed inset-y-0 left-0 z-50 h-screen
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
@@ -305,7 +302,7 @@ export default function Layout() {
       </aside>
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
         <header className="lg:hidden flex items-center justify-between p-4 border-b border-port-border bg-port-card">
           <button
@@ -322,10 +319,14 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main className="flex-1 p-4 md:p-6 overflow-auto">
-          <div className="max-w-7xl mx-auto">
+        <main className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') ? (
             <Outlet />
-          </div>
+          ) : (
+            <div className="max-w-7xl mx-auto">
+              <Outlet />
+            </div>
+          )}
         </main>
       </div>
     </div>

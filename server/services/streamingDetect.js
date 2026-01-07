@@ -92,43 +92,59 @@ export function parseEcosystemConfig(content) {
 
     const appBlock = content.substring(startPos, endPos + 1);
 
-    // Extract port from env.PORT or env_development.PORT
-    let port = null;
-    const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*(\d+)/);
-    if (portMatch) {
-      port = parseInt(portMatch[1]);
+    // Extract ports - first try the PortOS standard 'ports' object
+    let ports = {};
+
+    // Look for ports: { label: port, ... } object (PortOS standard)
+    const portsObjMatch = appBlock.match(/\bports\s*:\s*\{([^}]+)\}/);
+    if (portsObjMatch) {
+      const portsContent = portsObjMatch[1];
+      const portEntries = portsContent.matchAll(/(\w+)\s*:\s*(\d+)/g);
+      for (const entry of portEntries) {
+        ports[entry[1]] = parseInt(entry[2]);
+      }
     }
 
-    // Check for CDP_PORT (Chrome DevTools Protocol port for browser processes)
-    if (!port) {
-      // First try numeric value
+    // Fall back to legacy parsing if no ports object found
+    if (Object.keys(ports).length === 0) {
+      // Extract PORT from env
+      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*(\d+)/);
+      if (portMatch) {
+        ports.api = parseInt(portMatch[1]);
+      }
+
+      // Extract CDP_PORT (Chrome DevTools Protocol port for browser processes)
       const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*CDP_PORT\s*:\s*(\d+)/);
       if (cdpPortMatch) {
-        port = parseInt(cdpPortMatch[1]);
+        ports.cdp = parseInt(cdpPortMatch[1]);
       } else {
         // Check for variable reference (CDP_PORT: CDP_PORT)
         const cdpVarMatch = appBlock.match(/CDP_PORT\s*:\s*(\w+)/);
         if (cdpVarMatch && portConstants[cdpVarMatch[1]]) {
-          port = portConstants[cdpVarMatch[1]];
+          ports.cdp = portConstants[cdpVarMatch[1]];
+        }
+      }
+
+      // Also check for --port in args
+      if (Object.keys(ports).length === 0) {
+        const argsPortMatch = appBlock.match(/args\s*:\s*['"][^'"]*--port\s+(\d+)/);
+        if (argsPortMatch) {
+          ports.ui = parseInt(argsPortMatch[1]);
+        }
+      }
+
+      // Check for port: XXXX directly (some configs use this)
+      if (Object.keys(ports).length === 0) {
+        const directPortMatch = appBlock.match(/\bport\s*:\s*(\d+)/);
+        if (directPortMatch) {
+          ports.api = parseInt(directPortMatch[1]);
         }
       }
     }
 
-    // Also check for --port in args
-    if (!port) {
-      const argsPortMatch = appBlock.match(/args\s*:\s*['"][^'"]*--port\s+(\d+)/);
-      if (argsPortMatch) {
-        port = parseInt(argsPortMatch[1]);
-      }
-    }
-
-    // Check for port: XXXX directly (some configs use this)
-    if (!port) {
-      const directPortMatch = appBlock.match(/\bport\s*:\s*(\d+)/);
-      if (directPortMatch) {
-        port = parseInt(directPortMatch[1]);
-      }
-    }
+    // Primary port is the first one found (for backwards compatibility)
+    const portValues = Object.values(ports);
+    const port = portValues.length > 0 ? portValues[0] : null;
 
     // Extract cwd for processes that might have external config files
     let cwd = null;
@@ -140,7 +156,7 @@ export function parseEcosystemConfig(content) {
     // Check if this process uses vite (need to check vite.config in cwd)
     const usesVite = /\bvite\b/i.test(appBlock);
 
-    processes.push({ name: processName, port, cwd, usesVite });
+    processes.push({ name: processName, port, ports, cwd, usesVite });
     lastIndex = endPos;
   }
 
