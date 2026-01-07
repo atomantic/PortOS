@@ -45,6 +45,9 @@ pm2 logs
 - [~] M16: Memory System (semantic memory, LM Studio embeddings, auto-extraction, agent context injection)
 - [x] M17: PM2 Ecosystem Config Enhancement (per-process port detection, CDP_PORT support, refresh button)
 - [x] M18: PM2 Standardization (LLM-powered config refactoring, import integration, button trigger)
+- [x] M19: CoS Agent Runner (isolated PM2 process for agent spawning, prevents orphaned processes)
+- [x] M20: AI Provider Error Handling (error extraction, categorization, CoS investigation tasks)
+- [x] M21: Usage Metrics Integration (usage tracking for all AI runs, mobile responsive design)
 
 ### Documentation
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
@@ -420,6 +423,17 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 | autoStart | false | Start on server boot |
 | selfImprovementEnabled | true | Allow self-analysis |
 
+### Model Selection Rules
+The `selectModelForTask` function in `subAgentSpawner.js` routes tasks to appropriate model tiers:
+
+| Tier | Trigger | Example Tasks |
+|------|---------|---------------|
+| **heavy** | Critical priority, visual analysis, complex reasoning | Architect, refactor, security audit, long context |
+| **medium** | Standard development tasks, default | Most coding tasks, bug fixes, feature implementation |
+| **light** | Documentation-only tasks | Update README, write docs, format text |
+
+**Important**: Light model (haiku) is NEVER used for coding tasks. Tasks containing keywords like `fix`, `bug`, `implement`, `test`, `feature`, `api`, `component`, etc. are automatically routed to medium tier or higher.
+
 ---
 
 ## M15: Graceful Error Handling
@@ -700,3 +714,215 @@ LLM-powered refactoring to standardize app configurations to follow PM2 best pra
 | `server/services/socket.js` | Socket event handlers |
 | `client/src/pages/Apps.jsx` | Standardize PM2 button |
 | `client/src/services/api.js` | API functions |
+
+---
+
+## M19: CoS Agent Runner
+
+Isolated PM2 process for spawning Claude CLI agents, preventing orphaned processes when portos-server restarts.
+
+### Problem
+When multiple CoS agents are running and the main portos-server restarts (due to code changes, crashes, or manual restart), child processes spawned via `child_process.spawn()` become orphaned. The parent loses track of them because the `activeAgents` Map is in memory.
+
+### Solution
+A separate `portos-cos` PM2 process that:
+1. Runs independently from `portos-server`
+2. Manages agent spawning via HTTP/Socket.IO bridge
+3. Doesn't restart when `portos-server` restarts
+4. Maintains its own state file for PID tracking
+
+### Architecture
+```
+┌─────────────────┐     HTTP/Socket.IO    ┌─────────────────┐
+│  portos-server  │ ──────────────────►   │   portos-cos    │
+│    (5554)       │     spawn/terminate   │     (5558)      │
+│                 │ ◄──────────────────   │                 │
+│  subAgentSpawner│     events/output     │  cos-runner     │
+└─────────────────┘                       └────────┬────────┘
+                                                   │
+                                                   │ spawn
+                                                   ▼
+                                          ┌───────────────┐
+                                          │  Claude CLI   │
+                                          │   Processes   │
+                                          └───────────────┘
+```
+
+### Features
+1. **Isolated Process**: portos-cos runs as separate PM2 app, unaffected by portos-server restarts
+2. **Fallback Mode**: If portos-cos is unavailable, falls back to direct spawning
+3. **Event Bridge**: Socket.IO connection forwards agent output/completion events
+4. **PID Tracking**: Runner maintains state file with active PIDs for orphan cleanup
+5. **Graceful Shutdown**: 30-second kill timeout to allow agents to complete
+
+### Configuration
+| Setting | Value | Description |
+|---------|-------|-------------|
+| Port | 5558 | HTTP/Socket.IO API port |
+| kill_timeout | 30s | Grace period for agent shutdown |
+| max_restarts | 5 | Limit restarts to prevent loops |
+| min_uptime | 30s | Minimum runtime before healthy |
+
+### API Endpoints (portos-cos)
+| Route | Description |
+|-------|-------------|
+| GET /health | Health check with active agent count |
+| GET /agents | List active agents |
+| POST /spawn | Spawn a new agent |
+| POST /terminate/:agentId | Terminate specific agent |
+| POST /terminate-all | Terminate all agents |
+| GET /agents/:agentId/output | Get agent output buffer |
+
+### Socket.IO Events
+| Event | Direction | Payload |
+|-------|-----------|---------|
+| agent:output | Runner → Server | agentId, text |
+| agent:completed | Runner → Server | agentId, taskId, exitCode, success, duration |
+| agent:error | Runner → Server | agentId, error |
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/cos-runner/index.js` | Standalone Express server for agent management |
+| `server/services/cosRunnerClient.js` | Client library for portos-server to communicate with runner |
+| `server/services/subAgentSpawner.js` | Updated to use runner when available |
+| `ecosystem.config.cjs` | Added portos-cos PM2 configuration |
+
+### Data Storage
+```
+./data/cos/
+├── runner-state.json    # Active agent PIDs and stats
+└── agents/{agentId}/    # Agent prompts and outputs (shared)
+```
+
+---
+
+## M20: AI Provider Error Handling
+
+Enhanced error extraction and display for AI provider execution failures, with automatic CoS investigation task creation.
+
+### Problem
+When AI provider executions fail (e.g., invalid model, API errors), the devtools/runner UI only showed exit codes without meaningful error information, making debugging difficult.
+
+### Solution
+1. **Error Extraction**: Extract meaningful error details from CLI output
+2. **Error Categorization**: Classify errors by type (model_not_found, auth_error, rate_limit, etc.)
+3. **Suggested Fixes**: Provide actionable suggestions for each error category
+4. **CoS Integration**: Create investigation tasks for actionable failures
+5. **UI Enhancement**: Display error details, category, and suggestions in history list
+
+### Error Categories
+| Category | Description | Actionable |
+|----------|-------------|------------|
+| model_not_found | Model doesn't exist in provider | Yes |
+| auth_error | API key invalid or unauthorized | Yes |
+| api_error | Generic API request failure | Yes |
+| rate_limit | Rate limiting triggered | No (transient) |
+| quota_exceeded | Billing/quota issue | Yes |
+| network_error | Connection refused/timeout | No (transient) |
+| timeout | Process timeout (SIGTERM) | No |
+| command_not_found | CLI tool not installed | Yes |
+| permission_denied | File/directory access denied | Yes |
+| unknown | Unrecognized error pattern | No |
+
+### Error Data Flow
+1. **Extraction** (`runner.js::extractErrorDetails`): Parse CLI output for error messages
+2. **Categorization** (`runner.js::categorizeError`): Match against known patterns
+3. **Emission** (`runner.js::emitProviderError`): Emit to errorEvents EventEmitter
+4. **Auto-fix** (`autoFixer.js::handleAIProviderError`): Create CoS investigation task
+5. **Display** (`DevTools.jsx`): Show in history with error details, category, and fix suggestion
+
+### Metadata Schema Enhancement
+Failed runs now include additional fields:
+```javascript
+{
+  // Existing fields
+  exitCode: number,
+  success: boolean,
+  error: string,         // Primary error message
+
+  // New fields
+  errorDetails: string,  // Additional error context
+  errorCategory: string, // e.g., 'model_not_found'
+  suggestedFix: string   // Actionable suggestion
+}
+```
+
+### CoS Investigation Tasks
+When actionable errors occur, a CoS task is created:
+```markdown
+## Pending
+- [ ] #task-XXX | HIGH | APPROVAL | [Auto] Investigate agent failure: Model not found
+  - Context: # AI Provider Execution Failure
+    - Provider: Claude Code CLI
+    - Model: codex
+    - Error: model: codex
+    - Suggested Fix: Update model configuration
+```
+
+### Implementation Files
+| File | Changes |
+|------|---------|
+| `server/services/runner.js` | Added `extractErrorDetails`, `categorizeError`, `emitProviderError` |
+| `server/services/autoFixer.js` | Added `handleAIProviderError`, `buildAIProviderErrorContext` |
+| `server/services/subAgentSpawner.js` | Added `analyzeAgentFailure`, `createInvestigationTask` |
+| `client/src/pages/DevTools.jsx` | Display `errorCategory`, `errorDetails`, `suggestedFix` |
+
+### UI Display
+In the DevTools history, failed runs now show:
+- **Error Category Badge**: Colored tag showing the error type
+- **Error Message**: Extracted error details
+- **Suggested Fix Panel**: Yellow-bordered box with actionable advice
+- **Additional Details**: Expandable section with raw error context
+
+---
+
+## M21: Usage Metrics Integration
+
+Enhanced usage tracking to capture all AI provider executions across CoS agents and DevTools runner.
+
+### Problem
+The Usage page existed but displayed zero data because the tracking functions were never called when runs executed.
+
+### Solution
+1. **Usage Service Integration**: Added `recordSession` and `recordMessages` calls to runner.js and subAgentSpawner.js
+2. **Mobile Responsive Design**: Redesigned usage page with responsive Tailwind breakpoints
+3. **Unified Tracking**: Both manual DevTools runs and CoS agent executions now record usage
+
+### Data Tracked
+| Metric | Source | Description |
+|--------|--------|-------------|
+| Sessions | createRun, createAgentRun | Incremented when any AI execution starts |
+| Messages | run completion | Recorded on successful run completion |
+| Tokens | Output-based estimate | ~4 characters per token estimation |
+| Provider Stats | Per provider | Sessions, messages, tokens by provider |
+| Model Stats | Per model | Sessions, messages, tokens by model |
+| Daily Activity | Per day | Sessions, messages, tokens by date |
+| Hourly Activity | 24-hour array | Session counts by hour of day |
+
+### Mobile Responsive Grid
+```css
+/* Summary stats */
+grid-cols-2 sm:grid-cols-3 lg:grid-cols-5
+
+/* Charts and tables */
+grid-cols-1 md:grid-cols-2
+```
+
+### Implementation Files
+| File | Changes |
+|------|---------|
+| `server/services/runner.js` | Import usage.js, call recordSession in createRun, recordMessages on completion |
+| `server/services/subAgentSpawner.js` | Import usage.js, call recordSession in createAgentRun, recordMessages in completeAgentRun |
+| `client/src/pages/DevTools.jsx` | Mobile-first responsive grid for UsagePage |
+
+### Data Flow
+```
+createRun() / createAgentRun()
+    └─► recordSession(providerId, providerName, model)
+            └─► updates byProvider, byModel, dailyActivity, hourlyActivity
+
+executeCliRun() / executeApiRun() / completeAgentRun()
+    └─► recordMessages(providerId, model, 1, estimatedTokens)
+            └─► updates totalMessages, byProvider, byModel tokens
+```

@@ -14,6 +14,12 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
     onRefresh();
   };
 
+  const handleKill = async (agentId) => {
+    await api.killCosAgent(agentId).catch(err => toast.error(err.message));
+    toast.success('Agent force killed');
+    onRefresh();
+  };
+
   const handleDelete = async (agentId) => {
     await api.deleteCosAgent(agentId).catch(err => toast.error(err.message));
     toast.success('Agent removed');
@@ -75,6 +81,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
                 key={agent.id}
                 agent={agent}
                 onTerminate={handleTerminate}
+                onKill={handleKill}
                 liveOutput={liveOutputs[agent.id]}
               />
             ))}

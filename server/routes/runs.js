@@ -99,9 +99,10 @@ router.get('/:id', asyncHandler(async (req, res, next) => {
     });
   }
 
+  const isActive = await runner.isRunActive(req.params.id);
   res.json({
     ...metadata,
-    isActive: runner.isRunActive(req.params.id)
+    isActive
   });
 }));
 
@@ -150,7 +151,8 @@ router.post('/:id/stop', asyncHandler(async (req, res, next) => {
 // DELETE /api/runs/:id - Delete run and artifacts
 router.delete('/:id', asyncHandler(async (req, res, next) => {
   // Don't allow deleting active runs
-  if (runner.isRunActive(req.params.id)) {
+  const isActive = await runner.isRunActive(req.params.id);
+  if (isActive) {
     throw new ServerError('Cannot delete active run', {
       status: 409,
       code: 'RUN_ACTIVE'
@@ -167,6 +169,19 @@ router.delete('/:id', asyncHandler(async (req, res, next) => {
   }
 
   res.status(204).send();
+}));
+
+// DELETE /api/runs - Delete all failed runs
+// Requires ?confirm=true query parameter to prevent accidental deletion
+router.delete('/', asyncHandler(async (req, res, next) => {
+  if (req.query.confirm !== 'true') {
+    throw new ServerError('Destructive operation requires ?confirm=true', {
+      status: 400,
+      code: 'CONFIRMATION_REQUIRED'
+    });
+  }
+  const deletedCount = await runner.deleteFailedRuns();
+  res.json({ deleted: deletedCount });
 }));
 
 export default router;

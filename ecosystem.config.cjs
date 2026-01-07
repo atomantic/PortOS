@@ -16,6 +16,30 @@ module.exports = {
       max_memory_restart: '500M'
     },
     {
+      name: 'portos-cos',
+      script: 'server/cos-runner/index.js',
+      cwd: __dirname,
+      interpreter: 'node',
+      // CoS Agent Runner - isolated process for spawning Claude CLI agents
+      // Does NOT restart when portos-server restarts, preventing orphaned agents
+      // Security: Binds to localhost only - not exposed externally
+      ports: { api: 5558 },
+      env: {
+        NODE_ENV: 'development',
+        PORT: 5558,
+        HOST: '127.0.0.1'
+      },
+      watch: false,
+      autorestart: true,
+      max_restarts: 5,
+      min_uptime: '30s',
+      restart_delay: 10000,
+      max_memory_restart: '1G',
+      // Important: This process manages long-running agent processes
+      // Keep kill_timeout high to allow graceful shutdown of agents
+      kill_timeout: 30000
+    },
+    {
       name: 'portos-client',
       script: 'node_modules/.bin/vite',
       cwd: `${__dirname}/client`,
@@ -60,13 +84,16 @@ module.exports = {
     },
     {
       name: 'portos-browser',
-      script: '.browser/server.js',
+      script: 'browser/server.js',
       cwd: __dirname,
       interpreter: 'node',
+      // Security: CDP binds to 127.0.0.1 by default (set CDP_HOST=0.0.0.0 to expose)
+      // Remote access should go through portos-server proxy with authentication
       ports: { cdp: 5556, health: 5557 },
       env: {
         NODE_ENV: 'development',
         CDP_PORT: 5556,
+        CDP_HOST: '127.0.0.1',
         PORT: 5557
       },
       watch: false,

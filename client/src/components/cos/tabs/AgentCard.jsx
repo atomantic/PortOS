@@ -6,15 +6,19 @@ import {
   CheckCircle,
   AlertCircle,
   RotateCcw,
-  Loader2
+  Loader2,
+  Skull,
+  Activity
 } from 'lucide-react';
 import * as api from '../../../services/api';
 
-export default function AgentCard({ agent, onTerminate, onDelete, onResume, completed, liveOutput }) {
+export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResume, completed, liveOutput }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
+  const [processStats, setProcessStats] = useState(null);
+  const [killing, setKilling] = useState(false);
 
   // Determine if this is a system agent (health check, etc.)
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
@@ -25,6 +29,27 @@ export default function AgentCard({ agent, onTerminate, onDelete, onResume, comp
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [completed]);
+
+  // Fetch process stats for running agents
+  useEffect(() => {
+    if (completed) return;
+
+    const fetchStats = async () => {
+      const stats = await api.getCosAgentStats(agent.id).catch(() => null);
+      setProcessStats(stats);
+    };
+
+    fetchStats();
+    const interval = setInterval(fetchStats, 5000); // Update every 5 seconds
+    return () => clearInterval(interval);
+  }, [completed, agent.id]);
+
+  const handleKill = async () => {
+    if (!onKill) return;
+    setKilling(true);
+    await onKill(agent.id);
+    setKilling(false);
+  };
 
   // Fetch full output when expanded for completed agents
   useEffect(() => {
@@ -85,12 +110,25 @@ export default function AgentCard({ agent, onTerminate, onDelete, onResume, comp
             {!completed && (
               <span className={`px-2 py-0.5 text-xs rounded animate-pulse ${
                 agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400' :
-                agent.metadata?.phase === 'working' ? 'bg-port-accent/20 text-port-accent' :
                 'bg-port-accent/20 text-port-accent'
               }`}>
-                {agent.metadata?.phase === 'initializing' ? 'Initializing' :
-                 agent.metadata?.phase === 'working' ? 'Working' :
-                 'Running'}
+                {agent.metadata?.phase === 'initializing' ? 'Initializing' : 'Working'}
+              </span>
+            )}
+            {/* Process stats for running agents */}
+            {!completed && processStats?.active && (
+              <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-port-success/20 text-port-success"
+                    title={`PID: ${processStats.pid} | State: ${processStats.state}`}>
+                <Activity size={10} />
+                PID {processStats.pid} | {processStats.cpu?.toFixed(1)}% | {processStats.memoryMb}MB
+              </span>
+            )}
+            {/* Show zombie warning if PID exists but process is dead */}
+            {!completed && agent.pid && processStats && !processStats.active && (
+              <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-port-error/20 text-port-error"
+                    title="Process is not running - zombie agent">
+                <Skull size={10} />
+                PID {agent.pid} ZOMBIE
               </span>
             )}
           </div>
@@ -104,13 +142,25 @@ export default function AgentCard({ agent, onTerminate, onDelete, onResume, comp
                 {expanded ? 'Hide' : 'Show'} Output
               </button>
             )}
+            {/* Terminate button (graceful) */}
             {!completed && onTerminate && (
               <button
                 onClick={() => onTerminate(agent.id)}
-                className="text-gray-500 hover:text-port-error transition-colors"
-                title="Terminate"
+                className="text-gray-500 hover:text-port-warning transition-colors"
+                title="Terminate (graceful SIGTERM)"
               >
                 <Square size={14} />
+              </button>
+            )}
+            {/* Kill button (force SIGKILL) */}
+            {!completed && onKill && (
+              <button
+                onClick={handleKill}
+                disabled={killing}
+                className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
+                title="Force Kill (SIGKILL)"
+              >
+                {killing ? <Loader2 size={14} className="animate-spin" /> : <Skull size={14} />}
               </button>
             )}
             {completed && !isSystemAgent && onResume && (

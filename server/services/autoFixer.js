@@ -12,17 +12,112 @@ import { errorEvents } from '../lib/errorHandler.js';
 const recentErrors = new Map();
 const ERROR_DEDUPE_WINDOW = 60000; // 1 minute
 
+// Store pending tasks when CoS is not running (for later pickup)
+const pendingAutoFixTasks = [];
+
+/**
+ * Check if an error is a duplicate within the dedupe window
+ * Also cleans up expired entries
+ * @returns {boolean} true if this is a duplicate error
+ */
+function isDuplicateError(errorKey) {
+  const now = Date.now();
+  const lastSeen = recentErrors.get(errorKey);
+
+  // Clean up expired entries
+  for (const [key, timestamp] of recentErrors.entries()) {
+    if (now - timestamp > ERROR_DEDUPE_WINDOW) {
+      recentErrors.delete(key);
+    }
+  }
+
+  if (lastSeen && (now - lastSeen) < ERROR_DEDUPE_WINDOW) {
+    return true;
+  }
+
+  recentErrors.set(errorKey, now);
+  return false;
+}
+
 /**
  * Initialize auto-fixer event listeners
  */
 export function initAutoFixer() {
   errorEvents.on('error', async (error) => {
+    // Always handle AI provider errors (even if CoS not running)
+    if (error.code === 'AI_PROVIDER_EXECUTION_FAILED') {
+      await handleAIProviderError(error);
+      return;
+    }
+
     if (shouldAutoFix(error)) {
       await createAutoFixTask(error);
     }
   });
 
   console.log('🔧 Auto-fixer initialized');
+}
+
+/**
+ * Get pending autofix tasks (for CoS to pick up when it starts)
+ */
+export function getPendingAutoFixTasks() {
+  return [...pendingAutoFixTasks];
+}
+
+/**
+ * Clear pending autofix tasks after they've been processed
+ */
+export function clearPendingAutoFixTasks() {
+  pendingAutoFixTasks.length = 0;
+}
+
+/**
+ * Handle AI provider execution failures specifically
+ * These are always tracked and can create tasks even if CoS is not running
+ */
+async function handleAIProviderError(error) {
+  const ctx = error.context || {};
+  const errorKey = `${error.code}-${ctx.runId}`;
+
+  if (isDuplicateError(errorKey)) {
+    console.log(`⏭️ Skipping duplicate AI provider error: ${ctx.runId}`);
+    return;
+  }
+
+  console.log(`🤖 AI provider error detected: ${ctx.provider} - run ${ctx.runId}`);
+
+  // Build specialized context for AI provider errors
+  const context = buildAIProviderErrorContext(error);
+
+  const taskData = {
+    description: `Investigate AI provider failure: ${ctx.provider} (${ctx.model})`,
+    priority: 'MEDIUM',
+    context,
+    app: 'portos', // Associate with PortOS app
+    approvalRequired: true // Require user approval before investigating
+  };
+
+  // If CoS is running, create the task immediately
+  if (isRunning()) {
+    const task = await addTask(taskData, 'internal');
+    console.log(`✅ AI provider investigation task created: ${task.id}`);
+    return task;
+  }
+
+  // Otherwise, store for later pickup
+  console.log(`📋 CoS not running - queuing AI provider investigation task`);
+  pendingAutoFixTasks.push({
+    ...taskData,
+    createdAt: Date.now(),
+    error: {
+      code: error.code,
+      message: error.message,
+      context: ctx
+    }
+  });
+
+  return null;
 }
 
 /**
@@ -39,26 +134,82 @@ function shouldAutoFix(error) {
     return false;
   }
 
-  // Check for duplicate errors within dedupe window
   const errorKey = `${error.code}-${error.message}`;
-  const lastSeen = recentErrors.get(errorKey);
-  const now = Date.now();
 
-  if (lastSeen && (now - lastSeen) < ERROR_DEDUPE_WINDOW) {
+  if (isDuplicateError(errorKey)) {
     console.log(`⏭️ Skipping duplicate error: ${error.code}`);
     return false;
   }
 
-  recentErrors.set(errorKey, now);
+  return true;
+}
 
-  // Clean up old entries
-  for (const [key, timestamp] of recentErrors.entries()) {
-    if (now - timestamp > ERROR_DEDUPE_WINDOW) {
-      recentErrors.delete(key);
+/**
+ * Build detailed context for AI provider execution errors
+ */
+function buildAIProviderErrorContext(error) {
+  const ctx = error.context || {};
+  const lines = [
+    '# AI Provider Execution Failure',
+    '',
+    '## Run Details',
+    `- **Run ID:** ${ctx.runId || 'N/A'}`,
+    `- **Provider:** ${ctx.provider || 'Unknown'}`,
+    `- **Provider ID:** ${ctx.providerId || 'N/A'}`,
+    `- **Model:** ${ctx.model || 'N/A'}`,
+    `- **Exit Code:** ${ctx.exitCode ?? 'N/A'}`,
+    `- **Duration:** ${ctx.duration ? `${(ctx.duration / 1000).toFixed(1)}s` : 'N/A'}`,
+    `- **Workspace:** ${ctx.workspaceName || ctx.workspacePath || 'N/A'}`,
+    ''
+  ];
+
+  // Add error category if available
+  if (ctx.errorCategory) {
+    lines.push(`## Error Category: ${ctx.errorCategory}`);
+    if (ctx.suggestedFix) {
+      lines.push(`**Suggested Fix:** ${ctx.suggestedFix}`);
     }
+    lines.push('');
   }
 
-  return true;
+  // Add error details
+  lines.push('## Error Details');
+  if (ctx.errorDetails) {
+    lines.push('```');
+    lines.push(ctx.errorDetails);
+    lines.push('```');
+  } else {
+    lines.push(error.message || 'No error details available');
+  }
+  lines.push('');
+
+  // Add prompt preview if available
+  if (ctx.promptPreview) {
+    lines.push('## Prompt Preview');
+    lines.push('```');
+    lines.push(ctx.promptPreview);
+    lines.push('```');
+    lines.push('');
+  }
+
+  // Add output tail if available (last part of output for debugging)
+  if (ctx.outputTail) {
+    lines.push('## Output Tail (last 2KB)');
+    lines.push('```');
+    lines.push(ctx.outputTail);
+    lines.push('```');
+    lines.push('');
+  }
+
+  lines.push('## Investigation Steps');
+  lines.push('1. Check if the AI provider is configured correctly in /devtools/providers');
+  lines.push('2. Verify API keys and endpoints are valid');
+  lines.push('3. Check server logs for additional context (pm2 logs portos-server)');
+  lines.push('4. If this is a CLI provider, verify the command is installed and accessible');
+  lines.push('5. Check for rate limiting or quota issues with the provider');
+  lines.push('6. Review the output tail for specific error messages');
+
+  return lines.join('\n');
 }
 
 /**

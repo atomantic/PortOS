@@ -144,6 +144,13 @@ export default function ChiefOfStaff() {
       fetchData();
     });
 
+    socket.on('cos:agent:updated', (updatedAgent) => {
+      // Update the specific agent in the agents list without fetching all data
+      setAgents(prev => prev.map(agent =>
+        agent.id === updatedAgent.id ? updatedAgent : agent
+      ));
+    });
+
     socket.on('cos:agent:output', (data) => {
       if (data?.agentId && data?.line) {
         setLiveOutputs(prev => ({
@@ -273,7 +280,7 @@ export default function ChiefOfStaff() {
   const hasIssues = (health?.issues?.length || 0) > 0;
 
   return (
-    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-screen">
+    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-screen overflow-hidden">
       {/* Agent Panel */}
       {avatarStyle === 'ascii' ? (
         <TerminalCoSPanel
@@ -288,7 +295,7 @@ export default function ChiefOfStaff() {
           evalCountdown={evalCountdown}
         />
       ) : (
-        <div className="relative flex flex-col items-center p-6 lg:p-8 border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 h-full overflow-y-auto scrollbar-hide">
+        <div className="relative flex border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Background Effects */}
           <div
             className="absolute inset-0 pointer-events-none"
@@ -300,12 +307,13 @@ export default function ChiefOfStaff() {
             }}
           />
 
-          <div className="relative z-10 flex flex-col items-center">
-            <div className="text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
+          {/* Avatar Column - half width on mobile, full on desktop */}
+          <div className="flex-1 lg:flex-none flex flex-col items-center p-4 lg:p-8 relative z-10">
+            <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
               Digital Assistant
             </div>
             <h1
-              className="text-2xl lg:text-3xl font-bold mb-4 lg:mb-8"
+              className="text-lg sm:text-xl lg:text-3xl font-bold mb-2 lg:mb-8"
               style={{
                 background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
                 WebkitBackgroundClip: 'text',
@@ -318,59 +326,96 @@ export default function ChiefOfStaff() {
 
             <CoSCharacter state={agentState} speaking={speaking} />
             <StateLabel state={agentState} />
-            <StatusBubble message={statusMessage} countdown={evalCountdown} />
-            {status?.running && <EventLog logs={eventLogs} />}
+            <div className="hidden sm:block">
+              <StatusBubble message={statusMessage} countdown={evalCountdown} />
+            </div>
+            <div className="hidden lg:block">
+              {status?.running && <EventLog logs={eventLogs} />}
+            </div>
 
             {/* Control Buttons */}
-            <div className="flex items-center gap-3 mt-6">
+            <div className="flex items-center gap-2 sm:gap-3 mt-3 lg:mt-6">
               {status?.running ? (
                 <button
                   onClick={handleStop}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
                 >
-                  <Square size={16} />
+                  <Square size={14} className="sm:w-4 sm:h-4" />
                   Stop
                 </button>
               ) : (
                 <button
                   onClick={handleStart}
-                  className="flex items-center gap-2 px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors"
+                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors"
                 >
-                  <Play size={16} />
+                  <Play size={14} className="sm:w-4 sm:h-4" />
                   Start
                 </button>
               )}
               <StatusIndicator running={status?.running} />
             </div>
           </div>
+
+          {/* Mobile Stats Column - only visible on mobile */}
+          <div className="flex-1 flex flex-col justify-center gap-2 p-3 lg:hidden relative z-10">
+            <StatCard
+              label="Active"
+              value={activeAgentCount}
+              icon={<Cpu className="w-4 h-4 text-port-accent" />}
+              active={activeAgentCount > 0}
+              compact
+            />
+            <StatCard
+              label="Pending"
+              value={(tasks.user?.grouped?.pending?.length || 0) + (tasks.cos?.grouped?.pending?.length || 0)}
+              icon={<Clock className="w-4 h-4 text-yellow-500" />}
+              compact
+            />
+            <StatCard
+              label="Done"
+              value={status?.stats?.tasksCompleted || 0}
+              icon={<CheckCircle className="w-4 h-4 text-port-success" />}
+              compact
+            />
+            <StatCard
+              label="Issues"
+              value={health?.issues?.length || 0}
+              icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
+              compact
+            />
+          </div>
         </div>
       )}
 
       {/* Content Panel */}
-      <div className="flex-1 p-3 lg:p-4 overflow-y-auto">
-        {/* Stats Bar */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="overflow-y-auto p-3 lg:p-4">
+        {/* Stats Bar - hidden on mobile for SVG mode (shown in avatar panel instead) */}
+        <div className={`grid grid-cols-4 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden lg:grid' : ''}`}>
           <StatCard
-            label="Active Agents"
+            label="Active"
             value={activeAgentCount}
-            icon={<Cpu className="w-5 h-5 text-port-accent" />}
+            icon={<Cpu className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 text-port-accent" />}
             active={activeAgentCount > 0}
-            activeLabel={activeAgentCount > 0 ? agents.find(a => a.status === 'running')?.taskId : null}
+            mini
           />
           <StatCard
-            label="Pending Tasks"
+            label="Pending"
             value={(tasks.user?.grouped?.pending?.length || 0) + (tasks.cos?.grouped?.pending?.length || 0)}
-            icon={<Clock className="w-5 h-5 text-yellow-500" />}
+            icon={<Clock className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 text-yellow-500" />}
+            mini
           />
           <StatCard
-            label="Completed"
+            label="Done"
             value={status?.stats?.tasksCompleted || 0}
-            icon={<CheckCircle className="w-5 h-5 text-port-success" />}
+            icon={<CheckCircle className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 text-port-success" />}
+            mini
           />
           <StatCard
-            label="Health Issues"
+            label="Issues"
             value={health?.issues?.length || 0}
-            icon={<AlertCircle className={`w-5 h-5 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
+            icon={<AlertCircle className={`w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
+            mini
           />
         </div>
 
@@ -382,14 +427,14 @@ export default function ChiefOfStaff() {
               <button
                 key={tabItem.id}
                 onClick={() => navigate(`/cos/${tabItem.id}`)}
-                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+                className={`flex items-center gap-2 px-3 sm:px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
                   activeTab === tabItem.id
                     ? 'text-port-accent border-port-accent'
                     : 'text-gray-500 border-transparent hover:text-white'
                 }`}
               >
                 <Icon size={16} />
-                {tabItem.label}
+                <span className="hidden sm:inline">{tabItem.label}</span>
               </button>
             );
           })}
@@ -414,6 +459,7 @@ export default function ChiefOfStaff() {
         {activeTab === 'config' && (
           <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={avatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
         )}
+        </div>
       </div>
     </div>
   );

@@ -1,28 +1,22 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, cpSync } from 'fs';
+import { existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
-const browserDir = join(rootDir, '.browser');
-const templateDir = join(rootDir, '.browser.template');
+const browserDir = join(__dirname, '..', 'browser');
 
-console.log('🌐 Setting up .browser directory...');
+console.log('🌐 Setting up browser directory...');
 
-if (!existsSync(browserDir)) {
-  console.log('📁 Creating .browser directory from template...');
-  mkdirSync(browserDir, { recursive: true });
-  cpSync(templateDir, browserDir, { recursive: true });
-
+if (!existsSync(join(browserDir, 'node_modules'))) {
   console.log('📦 Installing browser dependencies...');
   execSync('npm install', { cwd: browserDir, stdio: 'inherit' });
 
   console.log('🎭 Installing Playwright browsers...');
   execSync('npx playwright install chromium', { cwd: browserDir, stdio: 'inherit' });
 
-  console.log('✅ .browser directory setup complete');
+  console.log('✅ Browser setup complete');
 } else {
-  console.log('✅ .browser directory already exists, skipping setup');
+  console.log('✅ Browser dependencies already installed, skipping setup');
 }
