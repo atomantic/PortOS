@@ -136,6 +136,7 @@ export const getRunOutput = (id) => request(`/runs/${id}/output`);
 export const getRunPrompt = (id) => request(`/runs/${id}/prompt`);
 export const stopRun = (id) => request(`/runs/${id}/stop`, { method: 'POST' });
 export const deleteRun = (id) => request(`/runs/${id}`, { method: 'DELETE' });
+export const deleteFailedRuns = () => request('/runs', { method: 'DELETE' });
 
 // History
 export const getHistory = (options = {}) => {
@@ -244,6 +245,8 @@ export const forceHealthCheck = () => request('/cos/health/check', { method: 'PO
 export const getCosAgents = () => request('/cos/agents');
 export const getCosAgent = (id) => request(`/cos/agents/${id}`);
 export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
+export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 'POST' });
+export const getCosAgentStats = (id) => request(`/cos/agents/${id}/stats`);
 export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
 export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
 export const getCosReports = () => request('/cos/reports');

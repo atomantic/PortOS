@@ -771,7 +771,16 @@ export async function updateAgent(agentId, updates) {
       return null;
     }
 
-    state.agents[agentId] = { ...state.agents[agentId], ...updates };
+    // Merge metadata if present in updates
+    if (updates.metadata) {
+      state.agents[agentId] = {
+        ...state.agents[agentId],
+        ...updates,
+        metadata: { ...state.agents[agentId].metadata, ...updates.metadata }
+      };
+    } else {
+      state.agents[agentId] = { ...state.agents[agentId], ...updates };
+    }
     await saveState(state);
 
     cosEvents.emit('agent:updated', state.agents[agentId]);
@@ -803,6 +812,7 @@ export async function completeAgent(agentId, result = {}) {
 
     await saveState(state);
     cosEvents.emit('agent:completed', state.agents[agentId]);
+    cosEvents.emit('agent:updated', state.agents[agentId]);
 
     // Save agent data to file for history
     const agentDir = join(AGENTS_DIR, agentId);
@@ -887,8 +897,90 @@ export async function getAgent(agentId) {
  * Terminate an agent (will be handled by spawner)
  */
 export async function terminateAgent(agentId) {
+  // Emit event to kill the process FIRST
   cosEvents.emit('agent:terminate', agentId);
+  // The spawner will handle marking the agent as completed after termination
   return { success: true, agentId };
+}
+
+/**
+ * Force kill an agent with SIGKILL (immediate, no graceful shutdown)
+ */
+export async function killAgent(agentId) {
+  const { killAgent: killAgentFromSpawner } = await import('./subAgentSpawner.js');
+  return killAgentFromSpawner(agentId);
+}
+
+/**
+ * Get process stats for an agent (CPU, memory)
+ */
+export async function getAgentProcessStats(agentId) {
+  const { getAgentProcessStats: getStatsFromSpawner } = await import('./subAgentSpawner.js');
+  return getStatsFromSpawner(agentId);
+}
+
+/**
+ * Check if a PID is still running
+ */
+async function isPidAlive(pid) {
+  if (!pid) return false;
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+  const result = await execAsync(`ps -p ${pid} -o pid= 2>/dev/null`).catch(() => ({ stdout: '' }));
+  return result.stdout.trim() !== '';
+}
+
+/**
+ * Cleanup zombie agents - agents marked as running but whose process is dead
+ */
+export async function cleanupZombieAgents() {
+  // Also check against activeAgents map from spawner
+  const { getActiveAgentIds } = await import('./subAgentSpawner.js');
+  const activeIds = getActiveAgentIds();
+
+  return withStateLock(async () => {
+    const state = await loadState();
+    const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
+    const cleaned = [];
+
+    for (const agent of runningAgents) {
+      let isZombie = false;
+
+      // If agent has a PID, check if it's still alive
+      if (agent.pid) {
+        const alive = await isPidAlive(agent.pid);
+        if (!alive) {
+          isZombie = true;
+        }
+      } else {
+        // No PID stored - check if it's in activeAgents map
+        // If not in map, it's a zombie from before PID tracking
+        if (!activeIds.includes(agent.id)) {
+          isZombie = true;
+        }
+      }
+
+      if (isZombie) {
+        console.log(`🧟 Zombie agent detected: ${agent.id} (PID ${agent.pid || 'unknown'} is dead)`);
+        state.agents[agent.id] = {
+          ...agent,
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          result: { success: false, error: 'Agent process was orphaned (server restart)' }
+        };
+        cleaned.push(agent.id);
+      }
+    }
+
+    if (cleaned.length > 0) {
+      await saveState(state);
+      console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);
+      cosEvents.emit('agents:changed', { action: 'zombie-cleanup', cleaned });
+    }
+
+    return { cleaned, count: cleaned.length };
+  });
 }
 
 /**
@@ -1036,6 +1128,7 @@ export async function addTask(taskData, taskType = 'user') {
   if (taskData.model) metadata.model = taskData.model;
   if (taskData.provider) metadata.provider = taskData.provider;
   if (taskData.app) metadata.app = taskData.app;
+  if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
 
   // Create the new task
   const newTask = {

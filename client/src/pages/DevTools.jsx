@@ -91,7 +91,7 @@ export function HistoryPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="bg-port-card border border-port-border rounded-lg p-4 text-center">
             <div className="text-2xl font-bold text-white">{stats.total}</div>
             <div className="text-sm text-gray-400">Total Actions</div>
@@ -112,33 +112,35 @@ export function HistoryPage() {
       )}
 
       {/* Filters */}
-      <div className="flex gap-4 items-center">
-        <select
-          value={filter.action}
-          onChange={(e) => setFilter(prev => ({ ...prev, action: e.target.value }))}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
-        >
-          <option value="">All Actions</option>
-          {actions.map(action => (
-            <option key={action} value={action}>{action}</option>
-          ))}
-        </select>
+      <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 sm:items-center">
+        <div className="flex flex-wrap gap-2 sm:gap-4">
+          <select
+            value={filter.action}
+            onChange={(e) => setFilter(prev => ({ ...prev, action: e.target.value }))}
+            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+          >
+            <option value="">All Actions</option>
+            {actions.map(action => (
+              <option key={action} value={action}>{action}</option>
+            ))}
+          </select>
 
-        <select
-          value={filter.success}
-          onChange={(e) => setFilter(prev => ({ ...prev, success: e.target.value }))}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
-        >
-          <option value="">All Results</option>
-          <option value="true">Success</option>
-          <option value="false">Failed</option>
-        </select>
+          <select
+            value={filter.success}
+            onChange={(e) => setFilter(prev => ({ ...prev, success: e.target.value }))}
+            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+          >
+            <option value="">All Results</option>
+            <option value="true">Success</option>
+            <option value="false">Failed</option>
+          </select>
+        </div>
 
         <div className="flex-1" />
 
         {confirmingClear ? (
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-400">Clear all history?</span>
+            <span className="text-sm text-gray-400">Clear all?</span>
             <button
               onClick={handleClear}
               className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded-lg transition-colors"
@@ -171,37 +173,41 @@ export function HistoryPage() {
             {history.map(entry => (
               <div key={entry.id}>
                 <div
-                  className="p-4 hover:bg-port-border/20 cursor-pointer group"
+                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(entry.id)}
                 >
-                  <div className="flex items-center gap-4">
-                    <button className="text-gray-400 hover:text-white">
-                      <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`}>▶</span>
-                    </button>
-                    <span className="text-xl">{getActionIcon(entry.action)}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-white">{entry.action}</span>
-                        {entry.targetName && (
-                          <span className="text-gray-400">→ {entry.targetName}</span>
-                        )}
-                        {entry.details?.runtime && (
-                          <span className="text-xs text-cyan-400 font-mono">{formatRuntime(entry.details.runtime)}</span>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <button className="text-gray-400 hover:text-white flex-shrink-0">
+                        <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`}>▶</span>
+                      </button>
+                      <span className="text-xl flex-shrink-0">{getActionIcon(entry.action)}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-medium text-white">{entry.action}</span>
+                          {entry.targetName && (
+                            <span className="text-gray-400 text-sm sm:text-base">→ {entry.targetName}</span>
+                          )}
+                          {entry.details?.runtime && (
+                            <span className="text-xs text-cyan-400 font-mono">{formatRuntime(entry.details.runtime)}</span>
+                          )}
+                        </div>
+                        {entry.details?.command && (
+                          <code className="text-xs text-gray-500 font-mono truncate block mt-1">{entry.details.command}</code>
                         )}
                       </div>
-                      {entry.details?.command && (
-                        <code className="text-xs text-gray-500 font-mono truncate block">{entry.details.command}</code>
-                      )}
                     </div>
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
-                    <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(entry.timestamp)}</span>
-                    <button
-                      onClick={(e) => handleDelete(entry.id, e)}
-                      className="p-1 text-gray-500 hover:text-port-error transition-colors opacity-0 group-hover:opacity-100"
-                      title="Delete entry"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-3 pl-8 sm:pl-0">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
+                      <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(entry.timestamp)}</span>
+                      <button
+                        onClick={(e) => handleDelete(entry.id, e)}
+                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Delete entry"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -210,7 +216,7 @@ export function HistoryPage() {
                   <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
                     <div className="pt-4 space-y-4">
                       {/* Metadata Grid */}
-                      <div className="grid grid-cols-4 gap-4 text-sm">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Timestamp</div>
                           <div className="text-gray-300">{new Date(entry.timestamp).toLocaleString()}</div>
@@ -384,33 +390,59 @@ export function RunsHistoryPage() {
     return `${(ms / 60000).toFixed(1)}m`;
   };
 
+  const getExitCodeInfo = (exitCode) => {
+    const codeInfo = {
+      1: { label: 'Error', description: 'Generic error - check the output for details' },
+      2: { label: 'Misuse', description: 'Incorrect command usage or invalid arguments' },
+      126: { label: 'Not Executable', description: 'Command found but not executable' },
+      127: { label: 'Not Found', description: 'Command not found - check if CLI is installed' },
+      128: { label: 'Invalid Exit', description: 'Invalid exit argument' },
+      130: { label: 'Interrupted', description: 'Process interrupted (Ctrl+C / SIGINT)' },
+      137: { label: 'Killed', description: 'Process killed (SIGKILL) - likely out of memory' },
+      143: { label: 'Terminated', description: 'Process terminated (SIGTERM) - likely hit timeout' }
+    };
+    return codeInfo[exitCode] || { label: 'Unknown', description: `Exit code ${exitCode}` };
+  };
+
   if (loading) {
     return <div className="text-center py-8 text-gray-400">Loading runs history...</div>;
   }
 
+  const failedCount = runs.filter(r => r.success === false).length;
+
+  const handleClearFailed = async () => {
+    const result = await api.deleteFailedRuns().catch(() => null);
+    if (result) {
+      loadRuns();
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">AI Runs History</h1>
-        <button
-          onClick={loadRuns}
-          className="flex items-center gap-2 px-4 py-2 text-gray-400 hover:text-white"
-        >
-          <RefreshCw size={16} /> Refresh
-        </button>
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-lg sm:text-2xl font-bold text-white">AI Runs History</h1>
+        {failedCount > 0 && (
+          <button
+            onClick={handleClearFailed}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg transition-colors self-end sm:self-auto"
+          >
+            <Trash2 size={14} />
+            Clear Failed ({failedCount})
+          </button>
+        )}
       </div>
 
       {/* Source Filter */}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-1.5 sm:gap-2">
         {[
-          { value: 'all', label: 'All Runs' },
+          { value: 'all', label: 'All' },
           { value: 'devtools', label: 'DevTools' },
-          { value: 'cos-agent', label: 'CoS Agents' }
+          { value: 'cos-agent', label: 'CoS' }
         ].map(filter => (
           <button
             key={filter.value}
             onClick={() => setSourceFilter(filter.value)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
               sourceFilter === filter.value
                 ? 'bg-port-accent text-white'
                 : 'bg-port-card text-gray-400 hover:text-white border border-port-border'
@@ -422,7 +454,7 @@ export function RunsHistoryPage() {
       </div>
 
       {/* Runs List */}
-      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
+      <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl overflow-hidden">
         {runs.length === 0 ? (
           <div className="text-center py-12 text-gray-500">No AI runs yet</div>
         ) : (
@@ -430,47 +462,61 @@ export function RunsHistoryPage() {
             {runs.map(run => (
               <div key={run.id}>
                 <div
-                  className="p-4 hover:bg-port-border/20 cursor-pointer group"
+                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(run.id)}
                   data-testid={`run-row-${run.id}`}
                 >
-                  <div className="flex items-center gap-4">
-                    <button className="text-gray-400 hover:text-white">
-                      <span className={`inline-block transition-transform ${expandedId === run.id ? 'rotate-90' : ''}`}>▶</span>
-                    </button>
-                    <span className="text-xl">🤖</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-white">{run.providerName}</span>
-                        <span className="text-gray-500 text-sm">{run.model}</span>
-                        {run.source === 'cos-agent' && (
-                          <span className="text-xs text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
-                            CoS
-                          </span>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <button className="text-gray-400 hover:text-white flex-shrink-0">
+                        <span className={`inline-block transition-transform ${expandedId === run.id ? 'rotate-90' : ''}`}>▶</span>
+                      </button>
+                      <span className="text-xl flex-shrink-0">🤖</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-medium text-white">{run.providerName}</span>
+                          <span className="text-gray-500 text-sm">{run.model}</span>
+                          {run.source === 'cos-agent' && (
+                            <span className="text-xs text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
+                              CoS
+                            </span>
+                          )}
+                          {run.workspaceName && (
+                            <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
+                              {run.workspaceName}
+                            </span>
+                          )}
+                          {run.duration && (
+                            <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500 font-mono truncate mt-1">
+                          {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
+                        </div>
+                        {/* Show error preview for failed runs in collapsed view */}
+                        {run.success === false && expandedId !== run.id && (
+                          <div className="text-xs text-port-error/80 font-mono truncate mt-1">
+                            ⚠ {run.error
+                              ? `${run.error.split('\n')[0]?.substring(0, 80)}${run.error.length > 80 ? '...' : ''}`
+                              : run.errorCategory && run.errorCategory !== 'unknown'
+                                ? `${run.errorCategory}: ${run.suggestedFix || 'See details'}`
+                                : `${getExitCodeInfo(run.exitCode).label}: ${getExitCodeInfo(run.exitCode).description}`}
+                          </div>
                         )}
-                        {run.workspaceName && (
-                          <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
-                            {run.workspaceName}
-                          </span>
-                        )}
-                        {run.duration && (
-                          <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500 font-mono truncate mt-1">
-                        {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
                       </div>
                     </div>
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
-                    <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(run.startTime)}</span>
-                    <button
-                      onClick={(e) => handleDelete(run.id, e)}
-                      className="p-1 text-gray-500 hover:text-port-error transition-colors opacity-0 group-hover:opacity-100"
-                      title="Delete run"
-                      data-testid={`delete-run-${run.id}`}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-3 pl-8 sm:pl-0">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
+                      <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(run.startTime)}</span>
+                      <button
+                        onClick={(e) => handleDelete(run.id, e)}
+                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Delete run"
+                        data-testid={`delete-run-${run.id}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -479,7 +525,7 @@ export function RunsHistoryPage() {
                   <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
                     <div className="pt-4 space-y-4">
                       {/* Metadata Grid */}
-                      <div className="grid grid-cols-5 gap-4 text-sm">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-sm">
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started</div>
                           <div className="text-gray-300">{new Date(run.startTime).toLocaleString()}</div>
@@ -522,29 +568,64 @@ export function RunsHistoryPage() {
                         </div>
                       </div>
 
-                      {/* Output */}
-                      {expandedDetails[run.id]?.output && (
+                      {/* Output - show for successful runs with output OR for failed runs */}
+                      {(expandedDetails[run.id]?.output || run.success === false) && (
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
                           <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
                             <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
-                              {expandedDetails[run.id].output}
+                              {expandedDetails[run.id]?.output || (run.success === false ? 'Loading output...' : '')}
                             </pre>
                           </div>
                         </div>
                       )}
 
-                      {/* Error */}
-                      {run.error && (
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Error</div>
-                          <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3">
-                            <pre className="text-sm text-port-error font-mono whitespace-pre-wrap">
-                              {run.error}
-                            </pre>
+                      {/* Error - show for failed runs with error message OR exit code */}
+                      {(run.error || (run.success === false && run.exitCode !== 0)) && (() => {
+                        const exitInfo = getExitCodeInfo(run.exitCode);
+                        return (
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+                              Error
+                              {run.exitCode !== undefined && run.exitCode !== null && run.exitCode !== 0 && (
+                                <span className="text-port-error/70">(exit code: {run.exitCode})</span>
+                              )}
+                              {run.errorCategory && run.errorCategory !== 'unknown' ? (
+                                <span className="px-1.5 py-0.5 bg-port-error/20 text-port-error/80 rounded text-xs">
+                                  {run.errorCategory}
+                                </span>
+                              ) : run.exitCode !== 0 && exitInfo.label !== 'Unknown' && (
+                                <span className="px-1.5 py-0.5 bg-port-error/20 text-port-error/80 rounded text-xs">
+                                  {exitInfo.label}
+                                </span>
+                              )}
+                            </div>
+                            <div className="bg-port-error/10 border border-port-error/30 rounded-lg p-3">
+                              <pre className="text-sm text-port-error font-mono whitespace-pre-wrap break-all">
+                                {run.error || exitInfo.description}
+                              </pre>
+                            </div>
+                            {/* Show additional error details if available and different from error */}
+                            {run.errorDetails && run.errorDetails !== run.error && (
+                              <div className="mt-2 bg-port-error/5 border border-port-error/20 rounded-lg p-3">
+                                <div className="text-xs text-gray-500 mb-1">Additional Details</div>
+                                <pre className="text-xs text-port-error/80 font-mono whitespace-pre-wrap break-all">
+                                  {run.errorDetails}
+                                </pre>
+                              </div>
+                            )}
+                            {/* Show suggested fix if available, or fallback to exit code info */}
+                            {(run.suggestedFix || (!run.error && exitInfo.description)) && (
+                              <div className="mt-2 bg-port-warning/10 border border-port-warning/30 rounded-lg p-3">
+                                <div className="text-xs text-port-warning mb-1 font-medium">Suggested Fix</div>
+                                <div className="text-sm text-gray-300">
+                                  {run.suggestedFix || 'Check the output above for specific error details. If the output is empty, the process may have been terminated before producing output.'}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )}
+                        );
+                      })()}
 
                       {/* Continue Button */}
                       {run.success && expandedDetails[run.id]?.output && (
@@ -985,18 +1066,18 @@ ${prompt.trim()}`;
 
       {/* Input Area */}
       {mode === 'ai' ? (
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Describe what you want the AI to do..."
             rows={3}
-            className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none resize-none"
+            className="flex-1 px-3 sm:px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none resize-none text-sm sm:text-base"
           />
           {running ? (
             <button
               onClick={handleStop}
-              className="px-6 bg-port-error hover:bg-port-error/80 text-white rounded-lg transition-colors"
+              className="px-6 py-3 bg-port-error hover:bg-port-error/80 text-white rounded-lg transition-colors"
             >
               Stop
             </button>
@@ -1004,7 +1085,7 @@ ${prompt.trim()}`;
             <button
               onClick={handleRunAI}
               disabled={!prompt.trim() || !selectedProvider}
-              className="px-6 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
+              className="px-6 py-3 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               Run
             </button>
@@ -1012,14 +1093,14 @@ ${prompt.trim()}`;
         </div>
       ) : (
         <>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <input
               type="text"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !running && handleRunCommand()}
               placeholder="Enter command (e.g., npm run build)"
-              className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono focus:border-port-accent focus:outline-none"
+              className="flex-1 px-3 sm:px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono focus:border-port-accent focus:outline-none text-sm sm:text-base"
             />
             {running ? (
               <button
@@ -1038,7 +1119,7 @@ ${prompt.trim()}`;
               </button>
             )}
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-gray-500 break-words">
             Allowed: {allowedCommands.slice(0, 10).join(', ')}{allowedCommands.length > 10 ? `, +${allowedCommands.length - 10} more` : ''}
           </div>
         </>
@@ -1049,7 +1130,7 @@ ${prompt.trim()}`;
         <div className="text-xs text-gray-500">Output:</div>
         <div
           ref={outputRef}
-          className="bg-port-bg border border-port-border rounded-lg p-4 h-80 overflow-auto font-mono text-sm"
+          className="bg-port-bg border border-port-border rounded-lg p-3 sm:p-4 h-64 sm:h-80 overflow-auto font-mono text-xs sm:text-sm"
         >
           {output ? (
             <pre className="text-gray-300 whitespace-pre-wrap">{output}</pre>
@@ -1247,31 +1328,32 @@ export function ProcessesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white">PM2 Processes</h1>
-          <p className="text-gray-500">PortOS-managed processes ({managedProcesses.length} of {processes.length} total)</p>
+          <p className="text-gray-500 text-sm sm:text-base">PortOS-managed processes ({managedProcesses.length} of {processes.length} total)</p>
         </div>
         <div className="flex gap-2">
           <button
             onClick={handlePm2Save}
             disabled={saving}
-            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+            className="px-3 sm:px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 text-sm sm:text-base"
           >
             <Save size={16} className={saving ? 'animate-pulse' : ''} />
-            {saving ? 'Saving...' : 'PM2 Save'}
+            <span className="hidden sm:inline">{saving ? 'Saving...' : 'PM2 Save'}</span>
+            <span className="sm:hidden">{saving ? '...' : 'Save'}</span>
           </button>
           <button
             onClick={loadProcesses}
-            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
+            className="px-3 sm:px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
           >
             Refresh
           </button>
         </div>
       </div>
 
-      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
-        <table className="w-full">
+      <div className="bg-port-card border border-port-border rounded-xl overflow-hidden overflow-x-auto">
+        <table className="w-full min-w-[700px]">
           <thead className="bg-port-border/50">
             <tr>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-400 w-8"></th>
@@ -1588,7 +1670,7 @@ export function GitPage() {
       {loading ? (
         <div className="text-center py-8 text-gray-400">Loading...</div>
       ) : gitInfo && gitInfo.isRepo ? (
-        <div className="grid grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Status Panel */}
           <div className="space-y-4">
             {/* Branch Info */}
@@ -1933,54 +2015,143 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 lg:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Activity size={28} className="text-purple-400" />
-          <h1 className="text-2xl font-bold text-white font-mono">AI Agent Processes</h1>
-          <span className="text-gray-500 text-sm">(auto-refresh: {REFRESH_INTERVAL}s)</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <Activity size={24} className="sm:w-7 sm:h-7 text-purple-400" />
+          <h1 className="text-lg sm:text-2xl font-bold text-white font-mono">AI Agent Processes</h1>
+          <span className="hidden sm:inline text-gray-500 text-sm">({REFRESH_INTERVAL}s)</span>
         </div>
         <button
           onClick={loadAgents}
-          className="flex items-center gap-2 px-4 py-2 bg-port-card border border-port-border hover:border-gray-500 text-white rounded-lg transition-colors"
+          className="flex items-center justify-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 bg-port-card border border-port-border hover:border-gray-500 text-white text-sm rounded-lg transition-colors"
         >
-          <RefreshCw size={16} />
-          Refresh
+          <RefreshCw size={14} className="sm:w-4 sm:h-4" />
+          <span className="sm:inline">Refresh</span>
         </button>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-port-card border border-port-border rounded-xl p-5 flex items-center justify-between">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
+        <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
-            <div className="text-gray-400 text-sm mb-1">Total Processes</div>
-            <div className="text-3xl font-bold text-white font-mono">{agents.length}</div>
+            <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">Processes</div>
+            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{agents.length}</div>
           </div>
-          <Terminal size={32} className="text-purple-400" />
+          <Terminal size={20} className="sm:w-8 sm:h-8 text-purple-400" />
         </div>
-        <div className="bg-port-card border border-port-border rounded-xl p-5 flex items-center justify-between">
+        <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
-            <div className="text-gray-400 text-sm mb-1">Total CPU</div>
-            <div className="text-3xl font-bold text-white font-mono">{totalCpu.toFixed(1)}%</div>
+            <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">CPU</div>
+            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{totalCpu.toFixed(1)}%</div>
           </div>
-          <Cpu size={32} className="text-blue-400" />
+          <Cpu size={20} className="sm:w-8 sm:h-8 text-blue-400" />
         </div>
-        <div className="bg-port-card border border-port-border rounded-xl p-5 flex items-center justify-between">
+        <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
-            <div className="text-gray-400 text-sm mb-1">Total Memory</div>
-            <div className="text-3xl font-bold text-white font-mono">{totalMemory.toFixed(1)}%</div>
+            <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">Memory</div>
+            <div className="text-lg sm:text-3xl font-bold text-white font-mono">{totalMemory.toFixed(1)}%</div>
           </div>
-          <MemoryStick size={32} className="text-green-400" />
+          <MemoryStick size={20} className="sm:w-8 sm:h-8 text-green-400" />
         </div>
       </div>
 
-      {/* Running Processes Table */}
-      <div className="bg-port-card border border-port-border rounded-xl">
-        <div className="px-6 py-4 border-b border-port-border">
-          <h2 className="text-lg font-semibold text-white">Running Processes</h2>
+      {/* Running Processes */}
+      <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl">
+        <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-port-border">
+          <h2 className="text-base sm:text-lg font-semibold text-white">Running Processes</h2>
         </div>
-        <div className="overflow-x-auto">
+
+        {/* Mobile Card View */}
+        <div className="sm:hidden divide-y divide-port-border">
+          {agents.map(agent => (
+            <div key={agent.pid} className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-white text-sm">{agent.agentName.toLowerCase()}</span>
+                  {agent.source === 'cos' && (
+                    <span className="px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-400 rounded">CoS</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleKill(agent.pid)}
+                  disabled={killing[agent.pid]}
+                  className="text-red-400 hover:text-red-300 disabled:opacity-50 p-1"
+                >
+                  <XCircle size={18} className={killing[agent.pid] ? 'animate-pulse' : ''} />
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-2 text-xs">
+                <div>
+                  <div className="text-gray-500">PID</div>
+                  <div className="font-mono text-white">{agent.pid}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Time</div>
+                  <div className="font-mono text-cyan-400">{agent.runtimeFormatted}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">CPU</div>
+                  <div className="font-mono text-green-400">{agent.cpu?.toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Mem</div>
+                  <div className="font-mono text-blue-400">{agent.memory?.toFixed(1)}%</div>
+                </div>
+              </div>
+              <button
+                onClick={() => toggleExpand(agent.pid)}
+                className="mt-2 text-xs text-gray-500 hover:text-white flex items-center gap-1"
+              >
+                <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>
+                {expandedPid === agent.pid ? 'Hide details' : 'Show details'}
+              </button>
+              {expandedPid === agent.pid && (
+                <div className="mt-3 pt-3 border-t border-port-border space-y-3">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <div className="text-gray-500 uppercase tracking-wide mb-0.5">Agent Type</div>
+                      <div className="text-purple-400">{agent.agentName}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500 uppercase tracking-wide mb-0.5">Parent PID</div>
+                      <div className="text-gray-300 font-mono">{agent.ppid}</div>
+                    </div>
+                    {agent.model && (
+                      <div>
+                        <div className="text-gray-500 uppercase tracking-wide mb-0.5">Model</div>
+                        <div className="text-yellow-400 font-mono">{agent.model}</div>
+                      </div>
+                    )}
+                    {agent.taskId && (
+                      <div>
+                        <div className="text-gray-500 uppercase tracking-wide mb-0.5">Task ID</div>
+                        <div className="text-gray-300 font-mono truncate">{agent.taskId}</div>
+                      </div>
+                    )}
+                  </div>
+                  {agent.prompt && (
+                    <div>
+                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Task</div>
+                      <div className="bg-port-bg border border-port-border rounded p-2 text-xs text-gray-300 line-clamp-3">
+                        {agent.prompt}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+          {agents.length === 0 && (
+            <div className="px-3 py-8 text-center text-gray-500 text-sm">
+              No AI agents currently running
+            </div>
+          )}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden sm:block overflow-x-auto">
         <table className="w-full min-w-[600px]">
           <thead>
             <tr className="border-b border-port-border">

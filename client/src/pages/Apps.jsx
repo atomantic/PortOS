@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -114,20 +114,20 @@ export default function Apps() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h2 className="text-2xl font-bold text-white">Apps</h2>
-          <p className="text-gray-500">Manage registered applications</p>
+          <p className="text-gray-500 text-sm sm:text-base">Manage registered applications</p>
         </div>
         <Link
           to="/apps/create"
-          className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+          className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-center"
         >
           + Add App
         </Link>
       </div>
 
-      {/* Table */}
+      {/* App List */}
       {apps.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-12 text-center">
           <div className="text-4xl mb-4">📦</div>
@@ -141,264 +141,251 @@ export default function Apps() {
           </Link>
         </div>
       ) : (
-        <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-port-border/50">
-                <tr>
-                  <th className="w-8 px-4 py-3"></th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Name</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-400">Status</th>
-                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-400">Controls</th>
-                  <th className="text-right px-4 py-3 text-sm font-medium text-gray-400">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-port-border">
-                {apps.map(app => (
-                  <Fragment key={app.id}>
-                    <tr className="hover:bg-port-border/30">
-                      <td className="px-4 py-3">
+        <div className="space-y-4">
+          {apps.map(app => (
+            <div
+              key={app.id}
+              className="bg-port-card border border-port-border rounded-xl overflow-hidden"
+            >
+              {/* Main App Row */}
+              <div className="p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                  {/* Expand + Name + Status */}
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <button
+                      onClick={() => toggleExpand(app.id)}
+                      className="text-gray-400 hover:text-white transition-transform flex-shrink-0"
+                    >
+                      <span className={`inline-block transition-transform ${expandedId === app.id ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-white">{app.name}</span>
+                        <StatusBadge status={app.overallStatus} size="sm" />
+                      </div>
+                      <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
+                        {(app.pm2ProcessNames || []).map((procName, i) => {
+                          const procInfo = app.processes?.find(p => p.name === procName);
+                          const ports = procInfo?.ports || {};
+                          const portEntries = Object.entries(ports);
+                          const portDisplay = portEntries.length > 1
+                            ? ` (${portEntries.map(([label, port]) => `${label}:${port}`).join(', ')})`
+                            : portEntries.length === 1
+                              ? `:${portEntries[0][1]}`
+                              : '';
+                          return (
+                            <span key={i}>
+                              {procName}<span className="text-cyan-500">{portDisplay}</span>
+                              {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Controls */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Start/Stop/Restart Button Group */}
+                    <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                      {app.overallStatus === 'online' ? (
+                        <>
+                          <button
+                            onClick={() => handleStop(app)}
+                            disabled={actionLoading[app.id]}
+                            className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                            title="Stop"
+                          >
+                            <Square size={14} />
+                            <span className="text-xs">Stop</span>
+                          </button>
+                          <button
+                            onClick={() => handleRestart(app)}
+                            disabled={actionLoading[app.id]}
+                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
+                            title="Restart"
+                          >
+                            <RotateCcw size={14} className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
+                            <span className="text-xs">Restart</span>
+                          </button>
+                        </>
+                      ) : (
                         <button
-                          onClick={() => toggleExpand(app.id)}
-                          className="text-gray-400 hover:text-white transition-transform"
+                          onClick={() => handleStart(app)}
+                          disabled={actionLoading[app.id]}
+                          className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                          title="Start"
                         >
-                          <span className={`inline-block transition-transform ${expandedId === app.id ? 'rotate-90' : ''}`}>▶</span>
+                          <Play size={14} />
+                          <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
                         </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-white">{app.name}</div>
-                        <div className="text-xs text-gray-500 flex flex-wrap gap-x-2">
-                          {/* Show process names with ports - filter to only this app's processes */}
-                          {(app.pm2ProcessNames || []).map((procName, i) => {
-                            const procInfo = app.processes?.find(p => p.name === procName);
-                            const ports = procInfo?.ports || {};
-                            const portEntries = Object.entries(ports);
-                            const portDisplay = portEntries.length > 1
-                              ? ` (${portEntries.map(([label, port]) => `${label}:${port}`).join(', ')})`
-                              : portEntries.length === 1
-                                ? `:${portEntries[0][1]}`
-                                : '';
+                      )}
+                    </div>
+
+                    {/* Launch button */}
+                    {app.uiPort && app.overallStatus === 'online' && (
+                      <button
+                        onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
+                        className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                        title={`Open ${window.location.hostname}:${app.uiPort}`}
+                      >
+                        <ExternalLink size={14} />
+                        <span className="text-xs">Launch</span>
+                      </button>
+                    )}
+
+                    {/* Edit/Delete Actions */}
+                    {confirmingDelete === app.id ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400">Remove?</span>
+                        <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                          <button
+                            onClick={() => handleDelete(app)}
+                            className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs"
+                          >
+                            Yes
+                          </button>
+                          <button
+                            onClick={() => setConfirmingDelete(null)}
+                            className="px-2 py-1 bg-port-border/50 text-gray-400 hover:text-white text-xs border-l border-port-border"
+                          >
+                            No
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                        <button
+                          onClick={() => setEditingApp(app)}
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => setConfirmingDelete(app.id)}
+                          className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Expanded Details */}
+              {expandedId === app.id && (
+                <div className="bg-port-bg border-t border-port-border">
+                  <div className="p-4 sm:px-6 sm:py-4 space-y-4">
+                    {/* Details Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                      <div>
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Repository Path</div>
+                        <div className="flex items-start gap-2">
+                          <FolderOpen size={16} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                          <code className="text-sm text-gray-300 font-mono break-all">{app.repoPath}</code>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Editor Command</div>
+                        <div className="flex items-center gap-2">
+                          <Code size={16} className="text-blue-400 flex-shrink-0" />
+                          <code className="text-sm text-gray-300 font-mono">{app.editorCommand || 'code .'}</code>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Start Commands */}
+                    {app.startCommands?.length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Start Commands</div>
+                        <div className="bg-port-card border border-port-border rounded-lg p-3">
+                          {app.startCommands.map((cmd, i) => (
+                            <div key={i} className="flex items-start gap-2 py-1">
+                              <Terminal size={14} className="text-green-400 flex-shrink-0 mt-0.5" />
+                              <code className="text-sm text-cyan-300 font-mono break-all">{cmd}</code>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* PM2 Processes Status */}
+                    {app.pm2Status && Object.keys(app.pm2Status).length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">PM2 Processes</div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.values(app.pm2Status).map((proc, i) => {
+                            const processConfig = app.processes?.find(p => p.name === proc.name);
                             return (
-                              <span key={i}>
-                                {procName}<span className="text-cyan-500">{portDisplay}</span>
-                                {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
-                              </span>
+                              <div
+                                key={i}
+                                className="flex flex-wrap items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border rounded-lg"
+                              >
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  proc.status === 'online' ? 'bg-port-success' :
+                                  proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
+                                }`} />
+                                <span className="text-sm text-white font-mono">{proc.name}</span>
+                                {processConfig?.ports && Object.keys(processConfig.ports).length > 0 && (
+                                  <span className="text-xs text-cyan-400 font-mono">
+                                    {Object.entries(processConfig.ports).length > 1
+                                      ? ` (${Object.entries(processConfig.ports).map(([label, port]) => `${label}:${port}`).join(', ')})`
+                                      : `:${Object.values(processConfig.ports)[0]}`}
+                                  </span>
+                                )}
+                                <span className="text-xs text-gray-500">{proc.status}</span>
+                                {proc.cpu !== undefined && (
+                                  <span className="text-xs text-green-400">{proc.cpu}%</span>
+                                )}
+                                {proc.memory !== undefined && (
+                                  <span className="text-xs text-blue-400">{(proc.memory / 1024 / 1024).toFixed(0)}MB</span>
+                                )}
+                              </div>
                             );
                           })}
                         </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={app.overallStatus} size="sm" />
-                      </td>
-                      <td className="px-4 py-3">
-                        {/* Start/Stop/Restart/Launch Button Group */}
-                        <div className="flex justify-center gap-2">
-                          <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-                            {app.overallStatus === 'online' ? (
-                              <>
-                                <button
-                                  onClick={() => handleStop(app)}
-                                  disabled={actionLoading[app.id]}
-                                  className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
-                                  title="Stop"
-                                >
-                                  <Square size={14} />
-                                  <span className="text-xs">Stop</span>
-                                </button>
-                                <button
-                                  onClick={() => handleRestart(app)}
-                                  disabled={actionLoading[app.id]}
-                                  className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
-                                  title="Restart"
-                                >
-                                  <RotateCcw size={14} className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
-                                  <span className="text-xs">Restart</span>
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() => handleStart(app)}
-                                disabled={actionLoading[app.id]}
-                                className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
-                                title="Start"
-                              >
-                                <Play size={14} />
-                                <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
-                              </button>
-                            )}
-                          </div>
-                          {/* Launch button - only show when online and has UI port */}
-                          {app.uiPort && app.overallStatus === 'online' && (
-                            <button
-                              onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
-                              className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-                              title={`Open ${window.location.hostname}:${app.uiPort}`}
-                            >
-                              <ExternalLink size={14} />
-                              <span className="text-xs">Launch</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {confirmingDelete === app.id ? (
-                          <div className="flex items-center justify-end gap-2">
-                            <span className="text-xs text-gray-400">Remove?</span>
-                            <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-                              <button
-                                onClick={() => handleDelete(app)}
-                                className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs"
-                              >
-                                Yes
-                              </button>
-                              <button
-                                onClick={() => setConfirmingDelete(null)}
-                                className="px-2 py-1 bg-port-border/50 text-gray-400 hover:text-white text-xs border-l border-port-border"
-                              >
-                                No
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-                            <button
-                              onClick={() => setEditingApp(app)}
-                              className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => setConfirmingDelete(app.id)}
-                              className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-
-                    {/* Expanded Details Row */}
-                    {expandedId === app.id && (
-                      <tr>
-                        <td colSpan={5} className="p-0">
-                          <div className="bg-port-bg border-t border-port-border">
-                            <div className="px-6 py-4 space-y-4">
-                              {/* Details Grid */}
-                              <div className="grid grid-cols-2 gap-6">
-                                <div>
-                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Repository Path</div>
-                                  <div className="flex items-center gap-2">
-                                    <FolderOpen size={16} className="text-yellow-400" />
-                                    <code className="text-sm text-gray-300 font-mono">{app.repoPath}</code>
-                                  </div>
-                                </div>
-                                <div>
-                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Editor Command</div>
-                                  <div className="flex items-center gap-2">
-                                    <Code size={16} className="text-blue-400" />
-                                    <code className="text-sm text-gray-300 font-mono">{app.editorCommand || 'code .'}</code>
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Start Commands */}
-                              {app.startCommands?.length > 0 && (
-                                <div>
-                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Start Commands</div>
-                                  <div className="bg-port-card border border-port-border rounded-lg p-3">
-                                    {app.startCommands.map((cmd, i) => (
-                                      <div key={i} className="flex items-center gap-2 py-1">
-                                        <Terminal size={14} className="text-green-400" />
-                                        <code className="text-sm text-cyan-300 font-mono">{cmd}</code>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* PM2 Processes Status */}
-                              {app.pm2Status && Object.keys(app.pm2Status).length > 0 && (
-                                <div>
-                                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">PM2 Processes</div>
-                                  <div className="flex flex-wrap gap-2">
-                                    {Object.values(app.pm2Status).map((proc, i) => {
-                                      // Find port for this process from the processes array
-                                      const processConfig = app.processes?.find(p => p.name === proc.name);
-                                      return (
-                                        <div
-                                          key={i}
-                                          className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border rounded-lg"
-                                        >
-                                          <span className={`w-2 h-2 rounded-full ${
-                                            proc.status === 'online' ? 'bg-port-success' :
-                                            proc.status === 'stopped' ? 'bg-gray-500' : 'bg-port-error'
-                                          }`} />
-                                          <span className="text-sm text-white font-mono">{proc.name}</span>
-                                          {processConfig?.ports && Object.keys(processConfig.ports).length > 0 && (
-                                            <span className="text-xs text-cyan-400 font-mono">
-                                              {Object.entries(processConfig.ports).length > 1
-                                                ? ` (${Object.entries(processConfig.ports).map(([label, port]) => `${label}:${port}`).join(', ')})`
-                                                : `:${Object.values(processConfig.ports)[0]}`}
-                                            </span>
-                                          )}
-                                          <span className="text-xs text-gray-500">{proc.status}</span>
-                                          {proc.cpu !== undefined && (
-                                            <span className="text-xs text-green-400">{proc.cpu}%</span>
-                                          )}
-                                          {proc.memory !== undefined && (
-                                            <span className="text-xs text-blue-400">{(proc.memory / 1024 / 1024).toFixed(0)}MB</span>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Quick Actions */}
-                              <div className="flex gap-2 pt-2">
-                                <button
-                                  onClick={() => api.openAppInEditor(app.id).catch(() => null)}
-                                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
-                                >
-                                  <Code size={14} /> Open in Editor
-                                </button>
-                                <button
-                                  onClick={() => api.openAppFolder(app.id).catch(() => null)}
-                                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
-                                >
-                                  <FolderOpen size={14} /> Open Folder
-                                </button>
-                                <button
-                                  onClick={() => handleRefreshConfig(app)}
-                                  disabled={refreshingConfig[app.id]}
-                                  className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                                  title="Re-scan ecosystem config for PM2 processes and ports"
-                                >
-                                  <RefreshCw size={14} className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
-                                  Refresh Config
-                                </button>
-                                <button
-                                  onClick={() => handleStandardize(app)}
-                                  disabled={standardizing[app.id]}
-                                  className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                                  title="Standardize PM2 config: move all ports to ecosystem.config.cjs"
-                                >
-                                  <Wrench size={14} className={standardizing[app.id] ? 'animate-spin' : ''} />
-                                  {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
+                      </div>
                     )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
+
+                    {/* Quick Actions */}
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <button
+                        onClick={() => api.openAppInEditor(app.id).catch(() => null)}
+                        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                      >
+                        <Code size={14} /> Open in Editor
+                      </button>
+                      <button
+                        onClick={() => api.openAppFolder(app.id).catch(() => null)}
+                        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                      >
+                        <FolderOpen size={14} /> Open Folder
+                      </button>
+                      <button
+                        onClick={() => handleRefreshConfig(app)}
+                        disabled={refreshingConfig[app.id]}
+                        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                        title="Re-scan ecosystem config for PM2 processes and ports"
+                      >
+                        <RefreshCw size={14} className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
+                        Refresh Config
+                      </button>
+                      <button
+                        onClick={() => handleStandardize(app)}
+                        disabled={standardizing[app.id]}
+                        className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                        title="Standardize PM2 config: move all ports to ecosystem.config.cjs"
+                      >
+                        <Wrench size={14} className={standardizing[app.id] ? 'animate-spin' : ''} />
+                        {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -457,8 +444,8 @@ function EditAppModal({ app, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-port-card border border-port-border rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-auto">
         <h2 className="text-xl font-bold text-white mb-4">Edit App</h2>
 
         {error && (
@@ -468,7 +455,7 @@ function EditAppModal({ app, onClose, onSave }) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-[1fr_auto] gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4">
             <div>
               <label className="block text-sm text-gray-400 mb-1">Name</label>
               <input
@@ -479,7 +466,7 @@ function EditAppModal({ app, onClose, onSave }) {
                 required
               />
             </div>
-            <div className="w-32">
+            <div className="w-full sm:w-32">
               <IconPicker value={formData.icon} onChange={icon => setFormData({ ...formData, icon })} />
             </div>
           </div>
@@ -495,7 +482,7 @@ function EditAppModal({ app, onClose, onSave }) {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm text-gray-400 mb-1">UI Port</label>
               <input

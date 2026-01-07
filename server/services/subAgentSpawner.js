@@ -14,6 +14,7 @@ import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
+import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 
 /**
  * Emit a log event for UI display (mirrors cos.js helper)
@@ -84,9 +85,13 @@ function selectModelForTask(task, provider) {
     return { model: provider.heavyModel || provider.mediumModel || provider.defaultModel, tier: 'heavy', reason: 'long-context' };
   }
 
-  // Simple/quick tasks → haiku/light
-  if (/fix typo|update text|simple|rename|comment|documentation|readme|format/.test(desc) || contextLen < 100) {
-    return { model: provider.lightModel || provider.defaultModel, tier: 'light', reason: 'simple-task' };
+  // Detect coding/development tasks - these should NEVER use light model
+  const isCodingTask = /\b(fix|bug|implement|develop|code|refactor|test|feature|function|class|module|api|endpoint|component|service|route|schema|migration|script|build|deploy|debug|error|exception|crash|issue|patch)\b/.test(desc);
+
+  // Simple/quick tasks → haiku/light (ONLY for non-coding tasks)
+  // Light model is reserved for documentation, text updates, and formatting only
+  if (!isCodingTask && /fix typo|update text|update docs|edit readme|update readme|write docs|documentation only|format text/.test(desc)) {
+    return { model: provider.lightModel || provider.defaultModel, tier: 'light', reason: 'documentation-task' };
   }
 
   // Standard tasks → sonnet/medium (default)
@@ -136,7 +141,9 @@ async function createAgentRun(agentId, task, model, provider, workspacePath) {
 /**
  * Complete a run entry with final results
  */
-async function completeAgentRun(runId, output, exitCode, duration, error = null) {
+async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null) {
+  if (!runId) return; // Skip if no runId (e.g., agent recovered after restart)
+
   const runDir = join(RUNS_DIR, runId);
   const metaPath = join(runDir, 'metadata.json');
 
@@ -147,15 +154,99 @@ async function completeAgentRun(runId, output, exitCode, duration, error = null)
   metadata.duration = duration;
   metadata.exitCode = exitCode;
   metadata.success = exitCode === 0;
-  metadata.error = error;
   metadata.outputSize = Buffer.byteLength(output || '');
+
+  // Store error details - extract from output if no analysis provided
+  if (exitCode !== 0) {
+    const errorInfo = errorAnalysis || extractErrorFromOutput(output, exitCode);
+    metadata.error = errorInfo.message || `Process exited with code ${exitCode}`;
+    metadata.errorDetails = errorInfo.details || metadata.error;
+    metadata.errorCategory = errorInfo.category || 'unknown';
+    metadata.suggestedFix = errorInfo.suggestedFix || null;
+  }
 
   await writeFile(metaPath, JSON.stringify(metadata, null, 2));
   await writeFile(join(runDir, 'output.txt'), output || '');
 }
 
+/**
+ * Extract error information from output when no pattern matches
+ */
+function extractErrorFromOutput(output, exitCode) {
+  if (!output || output.trim().length === 0) {
+    // Map common exit codes to readable messages
+    const exitCodeMessages = {
+      1: 'General error',
+      2: 'Misuse of shell command',
+      126: 'Command invoked cannot execute (permission or not executable)',
+      127: 'Command not found',
+      128: 'Invalid exit argument',
+      130: 'Script terminated by Ctrl+C',
+      137: 'Process killed (SIGKILL)',
+      143: 'Process terminated (SIGTERM - likely timeout)',
+      255: 'Exit status out of range'
+    };
+    const codeMsg = exitCodeMessages[exitCode] || `Unknown error`;
+    return {
+      message: `${codeMsg} (exit code ${exitCode})`,
+      details: `Process exited with code ${exitCode}. No output was captured.`,
+      category: exitCode === 143 ? 'timeout' : 'unknown'
+    };
+  }
+
+  const lines = output.split('\n').filter(l => l.trim());
+  const lastLines = lines.slice(-20);
+
+  // Look for common error patterns
+  const errorPatterns = [
+    { pattern: /API Error:\s*(\d+)/i, category: 'api-error' },
+    { pattern: /error[:\s]+(.+)/i, category: 'error' },
+    { pattern: /failed[:\s]+(.+)/i, category: 'failure' },
+    { pattern: /exception[:\s]+(.+)/i, category: 'exception' },
+    { pattern: /fatal[:\s]+(.+)/i, category: 'fatal' },
+    { pattern: /not found/i, category: 'not-found' },
+    { pattern: /permission denied/i, category: 'permission' },
+    { pattern: /connection refused/i, category: 'connection' },
+    { pattern: /timeout/i, category: 'timeout' },
+    { pattern: /rate limit/i, category: 'rate-limit' },
+    { pattern: /invalid.*key/i, category: 'auth' },
+    { pattern: /unauthorized/i, category: 'auth' },
+    { pattern: /authentication failed/i, category: 'auth' }
+  ];
+
+  const matchedErrors = [];
+  let category = 'unknown';
+  for (const line of lastLines) {
+    for (const { pattern, category: cat } of errorPatterns) {
+      if (pattern.test(line)) {
+        matchedErrors.push(line.trim());
+        if (category === 'unknown') category = cat;
+        break;
+      }
+    }
+  }
+
+  // Use matched errors or fallback to last lines
+  const errorLines = matchedErrors.length > 0
+    ? matchedErrors.slice(0, 5)
+    : lastLines.slice(-5);
+
+  return {
+    message: errorLines[0] || `Process exited with code ${exitCode}`,
+    details: errorLines.join('\n') || `Process exited with code ${exitCode}`,
+    category
+  };
+}
+
 // Active agent processes
 const activeAgents = new Map();
+
+/**
+ * Get list of active agent IDs (for zombie detection)
+ */
+export function getActiveAgentIds() {
+  return Array.from(activeAgents.keys());
+}
 
 /**
  * Error patterns that warrant investigation tasks
@@ -283,10 +374,67 @@ Review the error, fix the configuration or code issue, and retry the original ta
   return investigationTask;
 }
 
+// Track if using runner mode
+let useRunner = false;
+
 /**
  * Initialize the spawner - listen for task:ready events
  */
-export function initSpawner() {
+export async function initSpawner() {
+  // Check if CoS Runner is available
+  useRunner = await isRunnerAvailable();
+
+  if (useRunner) {
+    console.log('🤖 Sub-agent spawner initialized (using CoS Runner)');
+    initCosRunnerConnection();
+
+    // Sync any agents that were running before server restart
+    const synced = await syncRunnerAgents();
+    if (synced > 0) {
+      console.log(`🔄 Recovered ${synced} agents from CoS Runner`);
+    }
+
+    // Set up event handlers for runner events
+    onCosRunnerEvent('agent:output', async (data) => {
+      const { agentId, text } = data;
+      await appendAgentOutput(agentId, text);
+
+      // Update phase on first output
+      const agent = runnerAgents.get(agentId);
+      if (agent && !agent.hasStartedWorking) {
+        agent.hasStartedWorking = true;
+        clearTimeout(agent.initializationTimeout);
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
+      }
+
+    });
+
+    onCosRunnerEvent('agent:completed', async (data) => {
+      const { agentId, taskId, exitCode, success, duration, outputLength } = data;
+      const agent = runnerAgents.get(agentId);
+      if (agent) {
+        clearTimeout(agent.initializationTimeout);
+      }
+      await handleAgentCompletion(agentId, exitCode, success, duration);
+    });
+
+    onCosRunnerEvent('agent:error', async (data) => {
+      const { agentId, error } = data;
+      console.error(`❌ Agent ${agentId} error from runner: ${error}`);
+      cosEvents.emit('agent:error', { agentId, error });
+      const agent = runnerAgents.get(agentId);
+      if (agent) {
+        clearTimeout(agent.initializationTimeout);
+        await completeAgent(agentId, { success: false, error });
+        await completeAgentRun(agent.runId, '', 1, 0, { message: error, category: 'runner-error' });
+        runnerAgents.delete(agentId);
+      }
+    });
+  } else {
+    console.log('🤖 Sub-agent spawner initialized (direct mode - CoS Runner not available)');
+  }
+
   cosEvents.on('task:ready', async (task) => {
     await spawnAgentForTask(task);
   });
@@ -294,8 +442,62 @@ export function initSpawner() {
   cosEvents.on('agent:terminate', async (agentId) => {
     await terminateAgent(agentId);
   });
+}
 
-  console.log('🤖 Sub-agent spawner initialized');
+// Track runner-spawned agents
+const runnerAgents = new Map();
+
+/**
+ * Sync running agents from the runner (recovery after server restart)
+ * This allows us to receive completion events for agents spawned before restart
+ */
+async function syncRunnerAgents() {
+  const agents = await getActiveAgentsFromRunner().catch(() => []);
+  if (agents.length === 0) return 0;
+
+  console.log(`🔄 Syncing ${agents.length} running agents from CoS Runner`);
+
+  // Get all tasks to find task data for each agent
+  const { getAllTasks } = await import('./cos.js');
+  const allTasksData = await getAllTasks().catch(() => ({ user: {}, cos: {} }));
+
+  // Build a task lookup map from all task sources
+  const taskMap = new Map();
+  const addTasks = (groupedTasks) => {
+    if (!groupedTasks) return;
+    for (const tasks of Object.values(groupedTasks)) {
+      if (Array.isArray(tasks)) {
+        for (const task of tasks) {
+          taskMap.set(task.id, task);
+        }
+      }
+    }
+  };
+
+  addTasks(allTasksData.user?.grouped);
+  addTasks(allTasksData.cos?.grouped);
+
+  let syncedCount = 0;
+  for (const agent of agents) {
+    // Only sync if not already tracked
+    if (!runnerAgents.has(agent.id)) {
+      // Try to find the task in our lookup map
+      const task = taskMap.get(agent.taskId);
+
+      runnerAgents.set(agent.id, {
+        taskId: agent.taskId,
+        task: task || { id: agent.taskId, description: 'Recovered from runner' },
+        runId: null, // Run tracking may be lost on restart
+        model: null,
+        hasStartedWorking: true,
+        startedAt: agent.startedAt
+      });
+      console.log(`🔄 Recovered agent ${agent.id} (task: ${agent.taskId})`);
+      syncedCount++;
+    }
+  }
+
+  return syncedCount;
 }
 
 /**
@@ -344,9 +546,6 @@ export async function spawnAgentForTask(task) {
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath);
 
-  // Build spawn arguments with model selection
-  const spawnArgs = buildSpawnArgs(config, selectedModel);
-
   // Register the agent with model info
   await registerAgent(agentId, task.id, {
     workspacePath,
@@ -357,7 +556,8 @@ export async function spawnAgentForTask(task) {
     modelTier: modelSelection.tier,
     modelReason: modelSelection.reason,
     runId,
-    phase: 'initializing'
+    phase: 'initializing',
+    useRunner
   });
 
   emitLog('info', `Agent ${agentId} initializing...`, { agentId, taskId: task.id });
@@ -368,37 +568,168 @@ export async function spawnAgentForTask(task) {
   // Spawn the Claude CLI process using full path for PM2 compatibility
   const claudePath = process.env.CLAUDE_PATH || '/Users/antic/.nvm/versions/node/v25.2.1/bin/claude';
 
-  // Build full command string for display
+  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct' });
+
+  // Use CoS Runner if available, otherwise spawn directly
+  if (useRunner) {
+    return spawnViaRunner(agentId, task, prompt, workspacePath, selectedModel, provider, runId, claudePath);
+  }
+
+  // Direct spawn mode (fallback)
+  return spawnDirectly(agentId, task, prompt, workspacePath, selectedModel, provider, runId, claudePath, agentDir);
+}
+
+/**
+ * Spawn agent via CoS Runner (isolated PM2 process)
+ */
+async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provider, runId, claudePath) {
+  // Store tracking info for runner-spawned agents
+  const agentInfo = {
+    taskId: task.id,
+    task,
+    runId,
+    model,
+    hasStartedWorking: false,
+    startedAt: Date.now(),
+    initializationTimeout: null
+  };
+  runnerAgents.set(agentId, agentInfo);
+
+  // If no output after 3 seconds, transition from initializing to working to show progress
+  agentInfo.initializationTimeout = setTimeout(async () => {
+    const agent = runnerAgents.get(agentId);
+    if (agent && !agent.hasStartedWorking) {
+      agent.hasStartedWorking = true;
+      await updateAgent(agentId, { metadata: { phase: 'working' } });
+      emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+    }
+  }, 3000);
+
+  const result = await spawnAgentViaRunner({
+    agentId,
+    taskId: task.id,
+    prompt,
+    workspacePath,
+    model,
+    envVars: provider.envVars,
+    claudePath
+  });
+
+  // Store PID in persisted state for zombie detection
+  await updateAgent(agentId, { pid: result.pid });
+
+  emitLog('info', `Agent ${agentId} spawned via runner (PID: ${result.pid})`, { agentId, pid: result.pid });
+  return agentId;
+}
+
+/**
+ * Handle agent completion (from runner events)
+ */
+async function handleAgentCompletion(agentId, exitCode, success, duration) {
+  const agent = runnerAgents.get(agentId);
+  if (!agent) {
+    console.log(`⚠️ Received completion for unknown agent: ${agentId}`);
+    return;
+  }
+
+  const { task, runId, model } = agent;
+
+  // Read output from agent directory
+  const agentDir = join(AGENTS_DIR, agentId);
+  const outputFile = join(agentDir, 'output.txt');
+  let outputBuffer = '';
+  if (existsSync(outputFile)) {
+    outputBuffer = await readFile(outputFile, 'utf-8').catch(() => '');
+  }
+
+  // Analyze failure if applicable
+  const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, model);
+
+  await completeAgent(agentId, {
+    success,
+    exitCode,
+    duration,
+    outputLength: outputBuffer.length,
+    errorAnalysis
+  });
+
+  // Complete run tracking (skip if no runId - agent was recovered after restart)
+  if (runId) {
+    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
+  }
+
+  // Update task status
+  const newStatus = success ? 'completed' : 'pending';
+  await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
+
+  // On failure, create investigation task if actionable
+  if (!success && errorAnalysis?.actionable) {
+    await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
+      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+    });
+  }
+
+  // Extract memories from successful output
+  if (success && outputBuffer.length > 100) {
+    extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
+      console.log(`⚠️ Memory extraction failed: ${err.message}`);
+    });
+  }
+
+  // Handle app cooldown
+  const appId = task.metadata?.app;
+  if (appId) {
+    const config = await getConfig();
+    const cooldownMs = config.appReviewCooldownMs || 3600000;
+
+    const issuesFound = success ? 1 : 0;
+    const issuesFixed = success ? 1 : 0;
+    await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
+      emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
+    });
+
+    await startAppCooldown(appId, cooldownMs).catch(err => {
+      emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
+    });
+
+    emitLog('info', `App ${appId} cooldown started (${Math.round(cooldownMs / 60000)} min)`, { appId, cooldownMs });
+  }
+
+  runnerAgents.delete(agentId);
+}
+
+/**
+ * Spawn agent directly (fallback when runner not available)
+ */
+async function spawnDirectly(agentId, task, prompt, workspacePath, model, provider, runId, claudePath, agentDir) {
+  const spawnArgs = buildSpawnArgs(null, model);
   const fullCommand = `${claudePath} ${spawnArgs.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
 
-  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel });
+  // Ensure workspacePath is valid
+  const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
   const claudeProcess = spawn(claudePath, spawnArgs, {
-    cwd: workspacePath,
+    cwd,
     shell: false,
-    stdio: ['pipe', 'pipe', 'pipe'], // stdin, stdout, stderr
+    stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      // Pass through any provider-specific env vars
       ...provider.envVars
     }
   });
 
-  // Register the spawned agent with its full command for process listing
   registerSpawnedAgent(claudeProcess.pid, {
     fullCommand,
     agentId,
     taskId: task.id,
-    model: selectedModel,
+    model,
     workspacePath,
     prompt: (task.description || '').substring(0, 500)
   });
 
-  // Send prompt via stdin and close it
   claudeProcess.stdin.write(prompt);
   claudeProcess.stdin.end();
 
-  // Store process reference
   activeAgents.set(agentId, {
     process: claudeProcess,
     taskId: task.id,
@@ -407,59 +738,62 @@ export async function spawnAgentForTask(task) {
     pid: claudeProcess.pid
   });
 
-  // Set up output handling
+  // Store PID in persisted state for zombie detection
+  await updateAgent(agentId, { pid: claudeProcess.pid });
+
   let outputBuffer = '';
   let hasStartedWorking = false;
   const outputFile = join(agentDir, 'output.txt');
+
+  // If no output after 3 seconds, transition from initializing to working to show progress
+  const initializationTimeout = setTimeout(async () => {
+    if (!hasStartedWorking && activeAgents.has(agentId)) {
+      hasStartedWorking = true;
+      await updateAgent(agentId, { metadata: { phase: 'working' } });
+      emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+    }
+  }, 3000);
 
   claudeProcess.stdout.on('data', async (data) => {
     const text = data.toString();
     outputBuffer += text;
 
-    // Update phase to 'working' on first output
     if (!hasStartedWorking) {
       hasStartedWorking = true;
-      await updateAgent(agentId, { phase: 'working' });
+      await updateAgent(agentId, { metadata: { phase: 'working' } });
       emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
     }
 
-    // Append to file
     await writeFile(outputFile, outputBuffer).catch(() => {});
-
-    // Emit output event
     await appendAgentOutput(agentId, text);
   });
 
   claudeProcess.stderr.on('data', async (data) => {
     const text = data.toString();
     outputBuffer += `[stderr] ${text}`;
-
-    // Append to file
     await writeFile(outputFile, outputBuffer).catch(() => {});
-
     await appendAgentOutput(agentId, `[stderr] ${text}`);
   });
 
   claudeProcess.on('error', async (err) => {
+    clearTimeout(initializationTimeout);
     console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
     cosEvents.emit('agent:error', { agentId, error: err.message });
     await completeAgent(agentId, { success: false, error: err.message });
-    // Complete the run tracking with error
-    await completeAgentRun(runId, outputBuffer, 1, 0, err.message);
+    await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
     unregisterSpawnedAgent(claudeProcess.pid);
     activeAgents.delete(agentId);
   });
 
   claudeProcess.on('close', async (code) => {
+    clearTimeout(initializationTimeout);
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
 
-    // Save final output
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
-    // Analyze failure and extract error details
-    const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, selectedModel);
+    const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, model);
 
     await completeAgent(agentId, {
       success,
@@ -469,41 +803,34 @@ export async function spawnAgentForTask(task) {
       errorAnalysis
     });
 
-    // Complete the run tracking
-    await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis?.message);
+    await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
 
-    // Update task status based on result
-    const newStatus = success ? 'completed' : 'pending'; // Reset to pending on failure for retry
+    const newStatus = success ? 'completed' : 'pending';
     await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
 
-    // On failure, auto-queue an investigation task if error is actionable
     if (!success && errorAnalysis?.actionable) {
       await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
         emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
       });
     }
 
-    // Extract and store memories from successful agent output
     if (success && outputBuffer.length > 100) {
       extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
         console.log(`⚠️ Memory extraction failed: ${err.message}`);
       });
     }
 
-    // Start cooldown for the app if task had an associated app
     const appId = task.metadata?.app;
     if (appId) {
       const config = await getConfig();
-      const cooldownMs = config.appReviewCooldownMs || 3600000; // 1 hour default
+      const cooldownMs = config.appReviewCooldownMs || 3600000;
 
-      // Mark review completed with stats
-      const issuesFound = success ? 1 : 0; // TODO: Parse from output for accurate count
+      const issuesFound = success ? 1 : 0;
       const issuesFixed = success ? 1 : 0;
       await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
         emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
       });
 
-      // Start cooldown
       await startAppCooldown(appId, cooldownMs).catch(err => {
         emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
       });
@@ -576,6 +903,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 - **Description**: ${task.description}
 ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
+${task.metadata?.screenshots?.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 
 ## Instructions
 1. Analyze the task requirements carefully
@@ -626,12 +954,40 @@ async function getAppWorkspace(appName) {
  * Terminate an agent
  */
 export async function terminateAgent(agentId) {
+  // Check if agent is in runner mode
+  if (runnerAgents.has(agentId)) {
+    const agentInfo = runnerAgents.get(agentId);
+    if (agentInfo?.initializationTimeout) {
+      clearTimeout(agentInfo.initializationTimeout);
+    }
+    const result = await terminateAgentViaRunner(agentId).catch(err => ({
+      success: false,
+      error: err.message
+    }));
+    if (result.success) {
+      // Mark agent as completed with termination status
+      await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
+      // Update task status back to pending
+      const task = agentInfo?.task;
+      if (task) {
+        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user');
+      }
+      runnerAgents.delete(agentId);
+    }
+    return result;
+  }
+
+  // Direct mode
   const agent = activeAgents.get(agentId);
 
   if (!agent) {
     return { success: false, error: 'Agent not found or not running' };
   }
 
+  // Mark agent as completed immediately with termination status
+  await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
+
+  // Kill the process
   agent.process.kill('SIGTERM');
 
   // Give it a moment, then force kill if needed
@@ -651,56 +1007,195 @@ export async function terminateAgent(agentId) {
  */
 export function getActiveAgents() {
   const agents = [];
+
+  // Direct mode agents
   for (const [agentId, agent] of activeAgents) {
     agents.push({
       id: agentId,
       taskId: agent.taskId,
       startedAt: agent.startedAt,
-      runningTime: Date.now() - agent.startedAt
+      runningTime: Date.now() - agent.startedAt,
+      mode: 'direct'
     });
   }
+
+  // Runner mode agents
+  for (const [agentId, agent] of runnerAgents) {
+    agents.push({
+      id: agentId,
+      taskId: agent.taskId,
+      startedAt: agent.startedAt,
+      runningTime: Date.now() - agent.startedAt,
+      mode: 'runner'
+    });
+  }
+
   return agents;
+}
+
+/**
+ * Force kill an agent immediately with SIGKILL (no graceful shutdown)
+ */
+export async function killAgent(agentId) {
+  // Check if agent is in runner mode
+  if (runnerAgents.has(agentId)) {
+    const agentInfo = runnerAgents.get(agentId);
+    if (agentInfo?.initializationTimeout) {
+      clearTimeout(agentInfo.initializationTimeout);
+    }
+    const result = await killAgentViaRunner(agentId).catch(err => ({
+      success: false,
+      error: err.message
+    }));
+    if (result.success) {
+      // Mark agent as completed with kill status
+      await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
+      // Update task status back to pending
+      const task = agentInfo?.task;
+      if (task) {
+        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user');
+      }
+      runnerAgents.delete(agentId);
+    }
+    return result;
+  }
+
+  // Direct mode
+  const agent = activeAgents.get(agentId);
+
+  if (!agent) {
+    return { success: false, error: 'Agent not found or not running' };
+  }
+
+  // Mark agent as completed immediately with kill status
+  await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
+
+  // Kill the process immediately with SIGKILL
+  agent.process.kill('SIGKILL');
+
+  unregisterSpawnedAgent(agent.pid);
+  activeAgents.delete(agentId);
+
+  return { success: true, agentId, pid: agent.pid, signal: 'SIGKILL' };
+}
+
+/**
+ * Get process stats for an agent (CPU, memory usage)
+ */
+export async function getAgentProcessStats(agentId) {
+  // Check if agent is in runner mode - use runner endpoint
+  if (runnerAgents.has(agentId) || useRunner) {
+    const stats = await getAgentStatsFromRunner(agentId);
+    return stats;
+  }
+
+  // Direct mode - get stats locally
+  const agent = activeAgents.get(agentId);
+  if (!agent) {
+    return null;
+  }
+
+  // Get process stats using ps command
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+
+  const result = await execAsync(`ps -p ${agent.pid} -o pid=,pcpu=,rss=,state= 2>/dev/null`).catch(() => ({ stdout: '' }));
+  const line = result.stdout.trim();
+
+  if (!line) {
+    return { active: false, pid: agent.pid, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'dead' };
+  }
+
+  const parts = line.split(/\s+/).filter(Boolean);
+  if (parts.length >= 3) {
+    return {
+      active: true,
+      agentId,
+      pid: parseInt(parts[0], 10),
+      cpu: parseFloat(parts[1]) || 0,
+      memoryKb: parseInt(parts[2], 10) || 0,
+      memoryMb: Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10,
+      state: parts[3] || 'unknown'
+    };
+  }
+
+  return { active: true, agentId, pid: agent.pid, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'unknown' };
 }
 
 /**
  * Kill all active agents
  */
 export async function killAllAgents() {
-  const agentIds = Array.from(activeAgents.keys());
+  const directIds = Array.from(activeAgents.keys());
+  const runnerIds = Array.from(runnerAgents.keys());
 
-  for (const agentId of agentIds) {
+  for (const agentId of directIds) {
     await terminateAgent(agentId);
   }
 
-  return { killed: agentIds.length };
+  for (const agentId of runnerIds) {
+    await terminateAgent(agentId);
+  }
+
+  return { killed: directIds.length + runnerIds.length };
 }
 
 /**
  * Clean up orphaned agents on startup
- * Agents marked as "running" in state but not in activeAgents map are orphaned
+ * Agents marked as "running" in state but not tracked anywhere are orphaned
+ *
+ * Must check:
+ * 1. Local activeAgents map (direct-spawned)
+ * 2. Local runnerAgents map (recently spawned via runner)
+ * 3. CoS Runner service (may have agents from before server restart)
  */
 export async function cleanupOrphanedAgents() {
   const { getAgents, completeAgent: markComplete } = await import('./cos.js');
   const agents = await getAgents();
   let cleanedCount = 0;
 
+  // Get list of agents actively running in the CoS Runner
+  const runnerActiveIds = new Set();
+  const runnerAgentsList = await getActiveAgentsFromRunner().catch(() => []);
+  for (const agent of runnerAgentsList) {
+    runnerActiveIds.add(agent.id);
+  }
+
+  // Also sync runner agents to our local map for event handling
+  if (runnerAgentsList.length > 0) {
+    const synced = await syncRunnerAgents();
+    if (synced > 0) {
+      console.log(`🔄 Synced ${synced} agents from CoS Runner`);
+    }
+  }
+
   for (const agent of agents) {
-    if (agent.status === 'running' && !activeAgents.has(agent.id)) {
-      console.log(`🧹 Cleaning up orphaned agent ${agent.id}`);
-      await markComplete(agent.id, {
-        success: false,
-        error: 'Agent process was orphaned (server restart)',
-        orphaned: true
-      });
-      cleanedCount++;
+    if (agent.status === 'running') {
+      // Check if agent is tracked locally or in the runner
+      const inLocalDirect = activeAgents.has(agent.id);
+      const inLocalRunner = runnerAgents.has(agent.id);
+      const inRemoteRunner = runnerActiveIds.has(agent.id);
+
+      if (!inLocalDirect && !inLocalRunner && !inRemoteRunner) {
+        console.log(`🧹 Cleaning up orphaned agent ${agent.id}`);
+        await markComplete(agent.id, {
+          success: false,
+          error: 'Agent process was orphaned (server restart)',
+          orphaned: true
+        });
+        cleanedCount++;
+      }
     }
   }
 
   return cleanedCount;
 }
 
-// Initialize spawner when module loads
-initSpawner();
+// Initialize spawner when module loads (async)
+initSpawner().catch(err => {
+  console.error(`❌ Failed to initialize spawner: ${err.message}`);
+});
 
 // Clean up orphaned agents after a short delay (let other services init first)
 setTimeout(cleanupOrphanedAgents, 2000);

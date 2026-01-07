@@ -108,14 +108,14 @@ export default function PromptManager() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Prompt Manager</h1>
-          <p className="text-gray-500">Customize AI prompts for backend operations</p>
+          <p className="text-gray-500 text-sm sm:text-base">Customize AI prompts for backend operations</p>
         </div>
         <button
           onClick={loadData}
-          className="p-2 text-gray-400 hover:text-white"
+          className="p-2 text-gray-400 hover:text-white self-end sm:self-auto"
           title="Reload"
         >
           <RefreshCw size={20} />
@@ -123,10 +123,10 @@ export default function PromptManager() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex flex-wrap gap-2 mb-6">
         <button
           onClick={() => setTab('stages')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
             tab === 'stages' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
           }`}
         >
@@ -134,7 +134,7 @@ export default function PromptManager() {
         </button>
         <button
           onClick={() => setTab('variables')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
             tab === 'variables' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
           }`}
         >
@@ -144,7 +144,7 @@ export default function PromptManager() {
 
       {/* Stages Tab */}
       {tab === 'stages' && (
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Stage List */}
           <div className="bg-port-card border border-port-border rounded-xl p-4">
             <h3 className="text-sm font-medium text-gray-400 mb-3">Prompt Stages</h3>
@@ -167,7 +167,7 @@ export default function PromptManager() {
           </div>
 
           {/* Stage Editor */}
-          <div className="col-span-2 space-y-4">
+          <div className="lg:col-span-2 space-y-4">
             {selectedStage ? (
               <>
                 <div className="bg-port-card border border-port-border rounded-xl p-4">
@@ -202,7 +202,7 @@ export default function PromptManager() {
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Model</label>
                       <select
@@ -256,7 +256,7 @@ export default function PromptManager() {
 
       {/* Variables Tab */}
       {tab === 'variables' && (
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Variable List */}
           <div className="bg-port-card border border-port-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
@@ -297,7 +297,7 @@ export default function PromptManager() {
           </div>
 
           {/* Variable Editor */}
-          <div className="col-span-2">
+          <div className="lg:col-span-2">
             <div className="bg-port-card border border-port-border rounded-xl p-4">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-white">
@@ -313,7 +313,7 @@ export default function PromptManager() {
               </div>
 
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Key *</label>
                     <input

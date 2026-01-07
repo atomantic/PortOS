@@ -125,18 +125,18 @@ export default function AIProviders() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-white">AI Providers</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setShowRunPanel(!showRunPanel)}
-            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-sm sm:text-base"
           >
             {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
           </button>
           <button
             onClick={() => { setEditingProvider(null); setShowForm(true); }}
-            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
+            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
           >
             Add Provider
           </button>
@@ -146,11 +146,11 @@ export default function AIProviders() {
       {/* Run Panel */}
       {showRunPanel && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
             <select
               value={activeProviderId || ''}
               onChange={(e) => handleSetActive(e.target.value)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
             >
               <option value="">Select Provider</option>
               {providers.filter(p => p.enabled).map(p => (
@@ -161,7 +161,7 @@ export default function AIProviders() {
             <select
               value={selectedWorkspace}
               onChange={(e) => setSelectedWorkspace(e.target.value)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
             >
               <option value="">No workspace</option>
               {apps.map(app => (
@@ -214,9 +214,9 @@ export default function AIProviders() {
               provider.id === activeProviderId ? 'border-port-accent' : 'border-port-border'
             }`}
           >
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-3">
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-lg font-semibold text-white">{provider.name}</h3>
                   <span className={`text-xs px-2 py-0.5 rounded ${
                     provider.type === 'cli' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
@@ -237,16 +237,16 @@ export default function AIProviders() {
 
                 <div className="mt-2 text-sm text-gray-400 space-y-1">
                   {provider.type === 'cli' && (
-                    <p>Command: <code className="text-gray-300">{provider.command} {provider.args?.join(' ')}</code></p>
+                    <p className="break-words">Command: <code className="text-gray-300 break-all">{provider.command} {provider.args?.join(' ')}</code></p>
                   )}
                   {provider.type === 'api' && (
-                    <p>Endpoint: <code className="text-gray-300">{provider.endpoint}</code></p>
+                    <p className="break-words">Endpoint: <code className="text-gray-300 break-all">{provider.endpoint}</code></p>
                   )}
                   {provider.models?.length > 0 && (
                     <p>Models: {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}</p>
                   )}
                   {provider.defaultModel && (
-                    <p>Default: <code className="text-gray-300">{provider.defaultModel}</code></p>
+                    <p className="break-words">Default: <code className="text-gray-300 break-all">{provider.defaultModel}</code></p>
                   )}
                   {(provider.lightModel || provider.mediumModel || provider.heavyModel) && (
                     <p className="text-xs">
@@ -268,11 +268,11 @@ export default function AIProviders() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => handleTest(provider.id)}
                   disabled={testResults[provider.id]?.testing}
-                  className="px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
                 >
                   {testResults[provider.id]?.testing ? 'Testing...' : 'Test'}
                 </button>
@@ -280,7 +280,7 @@ export default function AIProviders() {
                 {provider.type === 'api' && (
                   <button
                     onClick={() => handleRefreshModels(provider.id)}
-                    className="px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
+                    className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
                     title="Refresh models from API"
                   >
                     Refresh
@@ -289,7 +289,7 @@ export default function AIProviders() {
 
                 <button
                   onClick={() => handleToggleEnabled(provider)}
-                  className={`px-3 py-1 text-sm rounded transition-colors ${
+                  className={`px-3 py-1.5 text-sm rounded transition-colors ${
                     provider.enabled
                       ? 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30'
                       : 'bg-port-success/20 text-port-success hover:bg-port-success/30'
@@ -301,7 +301,7 @@ export default function AIProviders() {
                 {provider.id !== activeProviderId && provider.enabled && (
                   <button
                     onClick={() => handleSetActive(provider.id)}
-                    className="px-3 py-1 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors"
+                    className="px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors"
                   >
                     Set Default
                   </button>
@@ -309,14 +309,14 @@ export default function AIProviders() {
 
                 <button
                   onClick={() => { setEditingProvider(provider); setShowForm(true); }}
-                  className="px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
+                  className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
                 >
                   Edit
                 </button>
 
                 <button
                   onClick={() => handleDelete(provider.id)}
-                  className="px-3 py-1 text-sm bg-port-error/20 text-port-error hover:bg-port-error/30 rounded transition-colors"
+                  className="px-3 py-1.5 text-sm bg-port-error/20 text-port-error hover:bg-port-error/30 rounded transition-colors"
                 >
                   Delete
                 </button>
@@ -340,22 +340,22 @@ export default function AIProviders() {
             {runs.map(run => (
               <div
                 key={run.id}
-                className="bg-port-card border border-port-border rounded-lg p-3 flex items-center justify-between"
+                className="bg-port-card border border-port-border rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
               >
-                <div className="flex items-center gap-4">
-                  <span className={`w-2 h-2 rounded-full ${
+                <div className="flex items-start sm:items-center gap-3 min-w-0">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 sm:mt-0 ${
                     run.success === true ? 'bg-port-success' :
                     run.success === false ? 'bg-port-error' :
                     'bg-port-warning animate-pulse'
                   }`} />
-                  <div>
-                    <p className="text-sm text-white">{run.prompt}</p>
-                    <p className="text-xs text-gray-500">
+                  <div className="min-w-0">
+                    <p className="text-sm text-white break-words">{run.prompt}</p>
+                    <p className="text-xs text-gray-500 break-words">
                       {run.providerName} • {run.workspaceName || 'No workspace'} • {new Date(run.startTime).toLocaleString()}
                     </p>
                   </div>
                 </div>
-                <div className="text-sm text-gray-400">
+                <div className="text-sm text-gray-400 flex-shrink-0 pl-5 sm:pl-0">
                   {run.duration ? `${(run.duration / 1000).toFixed(1)}s` : 'Running...'}
                 </div>
               </div>
@@ -411,8 +411,8 @@ function ProviderForm({ provider, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-port-card border border-port-border rounded-xl p-6 w-full max-w-lg">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <h2 className="text-xl font-bold text-white mb-4">
           {provider ? 'Edit Provider' : 'Add Provider'}
         </h2>
@@ -509,7 +509,7 @@ function ProviderForm({ provider, onClose, onSave }) {
           {/* Model Tiers */}
           <div className="border-t border-port-border pt-4 mt-4">
             <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tiers</h4>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Light (fast)</label>
                 <input

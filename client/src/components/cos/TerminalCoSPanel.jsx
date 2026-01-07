@@ -83,7 +83,7 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
   };
 
   return (
-    <div className="relative flex flex-col p-4 font-mono text-sm bg-[#0d1117] border-b lg:border-b-0 lg:border-r border-gray-700/50 h-full overflow-y-auto scrollbar-hide">
+    <div className="relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[#0d1117] border-b lg:border-b-0 lg:border-r border-gray-700/50 shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none">
       {/* Scanline effect */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.02]"
@@ -93,37 +93,65 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
       />
 
       {/* Terminal header */}
-      <div className="flex items-center gap-3 mb-4 pb-2 border-b border-gray-700/50">
+      <div className="flex items-center gap-3 mb-2 lg:mb-4 pb-2 border-b border-gray-700/50">
         <div className="flex gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-red-500/80"></span>
-          <span className="w-3 h-3 rounded-full bg-yellow-500/80"></span>
-          <span className="w-3 h-3 rounded-full bg-green-500/80"></span>
+          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-red-500/80"></span>
+          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-yellow-500/80"></span>
+          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-green-500/80"></span>
         </div>
         <span className="text-gray-500 text-xs">cos-terminal</span>
+        {/* Mobile-only status indicator */}
+        <div className="flex items-center gap-2 ml-auto lg:hidden">
+          <span className={`w-2 h-2 rounded-full ${running ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}></span>
+          <span className={`text-xs ${running ? 'text-green-400' : 'text-gray-500'}`}>
+            {running ? 'ACTIVE' : 'IDLE'}
+          </span>
+        </div>
       </div>
 
-      {/* ASCII Art + Info */}
-      <div className="flex items-start gap-4 mb-4">
-        <div className="flex-shrink-0">
+      {/* ASCII Art + Info + Controls in row on mobile */}
+      <div className="flex items-center lg:items-start gap-3 lg:gap-4 mb-1 lg:mb-4">
+        {/* ASCII Art - smaller on mobile */}
+        <div className="flex-shrink-0 scale-75 lg:scale-100 origin-top-left -mr-3 lg:mr-0">
           {ascii.map((line, i) => (
             <div
               key={i}
-              className={`whitespace-pre leading-tight ${speaking && [0, 1].includes(i) ? 'animate-pulse' : ''}`}
+              className={`whitespace-pre leading-tight text-xs lg:text-sm ${speaking && [0, 1].includes(i) ? 'animate-pulse' : ''}`}
               style={{ color: stateConfig.color }}
             >
               {line}
             </div>
           ))}
         </div>
-        <div className="flex flex-col text-xs pt-1">
-          <span className="text-white font-bold">CoS Agent v1.0</span>
-          <span className="text-gray-400">PortOS · {stateConfig.label}</span>
-          <span className="text-gray-500">~/portos/cos</span>
+        <div className="flex flex-col text-xs pt-0 lg:pt-1 flex-1 min-w-0">
+          <span className="text-white font-bold text-xs lg:text-sm">CoS Agent v1.0</span>
+          <span className="text-gray-400 truncate">PortOS · {stateConfig.label}</span>
+          <span className="text-gray-500 hidden lg:block">~/portos/cos</span>
+        </div>
+        {/* Mobile control buttons */}
+        <div className="flex lg:hidden gap-2 shrink-0">
+          {running ? (
+            <button
+              onClick={onStop}
+              className="flex items-center gap-1 px-2 py-1 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded border border-red-700/50 text-xs transition-colors"
+            >
+              <Square size={10} />
+              stop
+            </button>
+          ) : (
+            <button
+              onClick={onStart}
+              className="flex items-center gap-1 px-2 py-1 bg-green-900/30 hover:bg-green-900/50 text-green-400 rounded border border-green-700/50 text-xs transition-colors"
+            >
+              <Play size={10} />
+              start
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Status line */}
-      <div className="flex items-center gap-2 mb-3 text-xs">
+      {/* Status line - desktop only */}
+      <div className="hidden lg:flex items-center gap-2 mb-3 text-xs">
         <span className={`w-2 h-2 rounded-full ${running ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}></span>
         <span className={running ? 'text-green-400' : 'text-gray-500'}>
           {running ? 'ACTIVE' : 'IDLE'}
@@ -133,19 +161,21 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
       </div>
 
       {/* Message bubble as terminal output */}
-      <div className="mb-4 px-2 py-1.5 bg-gray-800/50 rounded border-l-2 border-cyan-500/50">
-        <span className="text-cyan-400">$</span>
-        <span className="text-gray-300 ml-2">{statusMessage}</span>
-        {evalCountdown && (
-          <div className="text-xs text-cyan-500/60 mt-1 font-mono">
-            # next_check: {evalCountdown.formatted}
-          </div>
-        )}
+      <div className="mb-1 lg:mb-4 px-2 py-1 lg:py-1.5 bg-gray-800/50 rounded border-l-2 border-cyan-500/50">
+        <div className="flex items-center gap-1 lg:block">
+          <span className="text-cyan-400 text-xs">$</span>
+          <span className="text-gray-300 text-xs lg:ml-2 truncate lg:line-clamp-none flex-1">{statusMessage}</span>
+          {evalCountdown && (
+            <span className="text-[10px] lg:text-xs text-cyan-500/60 font-mono whitespace-nowrap lg:block lg:mt-1">
+              <span className="hidden lg:inline"># next: </span>({evalCountdown.formatted})
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Stats as terminal output */}
+      {/* Stats as terminal output - desktop only */}
       {stats && (
-        <div className="mb-4 text-xs space-y-1">
+        <div className="hidden lg:block mb-4 text-xs space-y-1">
           <div className="text-gray-500">┌─ stats ──────────────────┐</div>
           <div className="text-gray-400 pl-2">│ tasks_completed: <span className="text-green-400">{stats.tasksCompleted || 0}</span></div>
           <div className="text-gray-400 pl-2">│ agents_spawned:  <span className="text-cyan-400">{stats.agentsSpawned || 0}</span></div>
@@ -154,8 +184,8 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
         </div>
       )}
 
-      {/* Event logs as terminal output */}
-      <div className="flex-1 mb-4 flex flex-col min-h-0">
+      {/* Event logs as terminal output - desktop only */}
+      <div className="hidden lg:flex flex-1 mb-4 flex-col min-h-0">
         <div className="text-gray-500 text-xs mb-1">// event_log</div>
         <div className="flex-1 bg-black/30 rounded p-2 overflow-y-auto scrollbar-hide">
           {(!eventLogs || eventLogs.length === 0) ? (
@@ -174,8 +204,8 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
         </div>
       </div>
 
-      {/* Control buttons as terminal commands */}
-      <div className="mt-auto pt-3 border-t border-gray-700/50">
+      {/* Control buttons as terminal commands - desktop only */}
+      <div className="hidden lg:block mt-auto pt-3 border-t border-gray-700/50">
         <div className="flex gap-2">
           {running ? (
             <button

@@ -304,18 +304,18 @@ export default function Layout() {
       {/* Main area */}
       <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
-        <header className="lg:hidden flex items-center justify-between p-4 border-b border-port-border bg-port-card">
+        <header className="lg:hidden flex items-center justify-between px-3 py-2 border-b border-port-border bg-port-card">
           <button
             onClick={() => setMobileOpen(true)}
-            className="p-2 -ml-2 text-gray-400 hover:text-white"
+            className="p-1.5 -ml-1 text-gray-400 hover:text-white"
           >
-            <Menu size={24} />
+            <Menu size={20} />
           </button>
-          <div className="flex items-center gap-2">
-            <Logo size={24} className="text-port-accent" />
-            <span className="font-bold text-port-accent">PortOS</span>
+          <div className="flex items-center gap-1.5">
+            <Logo size={18} className="text-port-accent" />
+            <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
-          <div className="w-10" /> {/* Spacer for centering */}
+          <div className="w-8" /> {/* Spacer for centering */}
         </header>
 
         {/* Main content */}

@@ -1,0 +1,6 @@
+{
+  "name": "portos-cos-runner",
+  "type": "module",
+  "private": true,
+  "description": "Isolated PM2 process for CoS agent spawning"
+}

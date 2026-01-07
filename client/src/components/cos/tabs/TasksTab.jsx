@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Plus, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, RefreshCw, Image, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -23,6 +23,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [showAddTask, setShowAddTask] = useState(false);
   const [newTask, setNewTask] = useState({ id: '', description: '', context: '', model: '', provider: '', app: '' });
   const [userTasksLocal, setUserTasksLocal] = useState([]);
+  const [screenshots, setScreenshots] = useState([]);
+  const fileInputRef = useRef(null);
   const userTasks = tasks.user?.tasks || [];
   const cosTasks = tasks.cos?.tasks || [];
 
@@ -65,6 +67,52 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     }
   };
 
+  // Screenshot handling
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files);
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const result = ev?.target?.result;
+        if (typeof result !== 'string') {
+          console.error('❌ Failed to read file: unexpected FileReader result type');
+          return;
+        }
+
+        const parts = result.split(',');
+        if (parts.length < 2) {
+          console.error('❌ Failed to read file: unexpected data URL format');
+          return;
+        }
+
+        const base64 = parts[1];
+        const uploaded = await api.uploadScreenshot(base64, file.name, file.type).catch((err) => {
+          console.error(`❌ Failed to upload screenshot: ${err.message}`);
+          return null;
+        });
+        if (uploaded) {
+          setScreenshots(prev => [...prev, {
+            id: uploaded.id,
+            filename: uploaded.filename,
+            preview: result,
+            path: uploaded.path
+          }]);
+        }
+      };
+      reader.onerror = (err) => {
+        console.error(`❌ FileReader failed to read file: ${err.message}`);
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  const removeScreenshot = (id) => {
+    setScreenshots(prev => prev.filter(s => s.id !== id));
+  };
+
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
   const availableModels = selectedProvider?.models || [];
@@ -82,7 +130,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       context: newTask.context,
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
-      app: newTask.app || undefined
+      app: newTask.app || undefined,
+      screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined
     }).catch(err => {
       toast.error(err.message);
       return;
@@ -90,6 +139,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
 
     toast.success('Task added');
     setNewTask({ id: '', description: '', context: '', model: '', provider: '', app: '' });
+    setScreenshots([]);
     setShowAddTask(false);
     onRefresh();
   };
@@ -177,9 +227,55 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   ))}
                 </select>
               </div>
+              {/* Screenshot Upload */}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors"
+                >
+                  <Image size={16} />
+                  Add Screenshot
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                {screenshots.length > 0 && (
+                  <span className="text-xs text-gray-500">{screenshots.length} screenshot{screenshots.length > 1 ? 's' : ''} attached</span>
+                )}
+              </div>
+              {/* Screenshot Previews */}
+              {screenshots.length > 0 && (
+                <div className="flex gap-2 flex-wrap">
+                  {screenshots.map(s => (
+                    <div key={s.id} className="relative group">
+                      <img
+                        src={s.preview}
+                        alt={s.filename}
+                        className="w-20 h-20 object-cover rounded-lg border border-port-border"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeScreenshot(s.id)}
+                        className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex justify-end gap-2">
                 <button
-                  onClick={() => setShowAddTask(false)}
+                  onClick={() => {
+                    setShowAddTask(false);
+                    setScreenshots([]);
+                  }}
                   className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
                 >
                   Cancel

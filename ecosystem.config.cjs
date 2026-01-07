@@ -16,6 +16,29 @@ module.exports = {
       max_memory_restart: '500M'
     },
     {
+      name: 'portos-cos',
+      script: 'server/cos-runner/index.js',
+      cwd: __dirname,
+      interpreter: 'node',
+      // CoS Agent Runner - isolated process for spawning Claude CLI agents
+      // Does NOT restart when portos-server restarts, preventing orphaned agents
+      ports: { api: 5558 },
+      env: {
+        NODE_ENV: 'development',
+        PORT: 5558,
+        HOST: '0.0.0.0'
+      },
+      watch: false,
+      autorestart: true,
+      max_restarts: 5,
+      min_uptime: '30s',
+      restart_delay: 10000,
+      max_memory_restart: '1G',
+      // Important: This process manages long-running agent processes
+      // Keep kill_timeout high to allow graceful shutdown of agents
+      kill_timeout: 30000
+    },
+    {
       name: 'portos-client',
       script: 'node_modules/.bin/vite',
       cwd: `${__dirname}/client`,

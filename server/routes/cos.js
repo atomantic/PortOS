@@ -93,13 +93,13 @@ router.post('/tasks/reorder', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired } = req.body;
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired };
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));
@@ -166,8 +166,10 @@ router.post('/health/check', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/cos/agents - Get all agents
+// GET /api/cos/agents - Get all agents (auto-cleans zombies)
 router.get('/agents', asyncHandler(async (req, res) => {
+  // Cleanup zombie agents before returning list
+  await cos.cleanupZombieAgents();
   const agents = await cos.getAgents();
   res.json(agents);
 }));
@@ -181,10 +183,26 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
   res.json(agent);
 }));
 
-// POST /api/cos/agents/:id/terminate - Terminate agent
+// POST /api/cos/agents/:id/terminate - Terminate agent (graceful SIGTERM, then SIGKILL)
 router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
   const result = await cos.terminateAgent(req.params.id);
   res.json(result);
+}));
+
+// POST /api/cos/agents/:id/kill - Force kill agent (immediate SIGKILL)
+router.post('/agents/:id/kill', asyncHandler(async (req, res) => {
+  const result = await cos.killAgent(req.params.id);
+  if (result?.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
+// GET /api/cos/agents/:id/stats - Get process stats for agent (CPU, memory)
+router.get('/agents/:id/stats', asyncHandler(async (req, res) => {
+  const stats = await cos.getAgentProcessStats(req.params.id);
+  // Return success with active:false instead of 404 - this is expected when process isn't running
+  res.json(stats || { active: false, pid: null });
 }));
 
 // DELETE /api/cos/agents/:id - Delete a single agent
