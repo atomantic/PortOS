@@ -17,7 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps } from './apps.js';
-import { shouldSkipTaskType, getAdaptiveCooldownMultiplier, getSkippedTaskTypes } from './taskLearning.js';
+import { shouldSkipTaskType, getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, recordLearningInsight } from './taskLearning.js';
 
 const execAsync = promisify(exec);
 
@@ -571,6 +571,27 @@ export async function evaluateTasks() {
     availableSlots
   });
 
+  // Periodically log performance summary (every 10 evaluations)
+  const evalCount = state.stats.evaluationCount || 0;
+  if (evalCount % 10 === 0 && evalCount > 0) {
+    const perfSummary = await getPerformanceSummary().catch(() => null);
+    if (perfSummary && perfSummary.totalCompleted > 0) {
+      emitLog('info', `Performance: ${perfSummary.overallSuccessRate}% success rate over ${perfSummary.totalCompleted} tasks`, {
+        successRate: perfSummary.overallSuccessRate,
+        totalCompleted: perfSummary.totalCompleted,
+        topPerformers: perfSummary.topPerformers.length,
+        needsAttention: perfSummary.needsAttention.length
+      });
+    }
+  }
+
+  // Update evaluation count
+  await withStateLock(async () => {
+    const s = await loadState();
+    s.stats.evaluationCount = (s.stats.evaluationCount || 0) + 1;
+    await saveState(s);
+  });
+
   // Spawn all ready tasks (up to available slots)
   for (const task of tasksToSpawn) {
     emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
@@ -695,7 +716,8 @@ const SELF_IMPROVEMENT_TYPES = [
   // Goal 4: User Engagement
   'feature-ideas',
   // Goal 5: System Health
-  'accessibility'
+  'accessibility',
+  'dependency-updates'
 ];
 
 /**
@@ -1034,7 +1056,35 @@ Think about ways to make PortOS more useful:
 
 Think creatively but implement practically.
 
-Use model: claude-opus-4-5-20251101 for creative feature development`
+Use model: claude-opus-4-5-20251101 for creative feature development`,
+
+    'dependency-updates': `[Self-Improvement] Dependency Updates and Security Audit
+
+Check PortOS dependencies for updates and security vulnerabilities:
+
+1. Run npm audit in both server/ and client/ directories
+2. Check for outdated packages with npm outdated
+3. Review CRITICAL and HIGH severity vulnerabilities
+4. For each vulnerability:
+   - Assess the actual risk (is the vulnerable code path used?)
+   - Check if an update is available
+   - Test that updates don't break functionality
+
+5. Update dependencies carefully:
+   - Update patch versions first (safest)
+   - Then minor versions
+   - Major versions need more careful review
+
+6. After updating:
+   - Run npm test in server/
+   - Run npm run build in client/
+   - Verify the app starts correctly
+
+7. Commit with clear changelog of what was updated and why
+
+IMPORTANT: Only update one major version bump at a time. If multiple major updates are needed, create separate commits for each.
+
+Use model: claude-opus-4-5-20251101 for thorough security analysis`
   };
 
   const description = taskDescriptions[nextType];

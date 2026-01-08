@@ -48,7 +48,12 @@ const ANALYSIS_TYPES = {
   CONSOLE_ERRORS: 'console-errors',
   SECURITY: 'security',
   PERFORMANCE: 'performance',
-  CODE_QUALITY: 'code-quality'
+  CODE_QUALITY: 'code-quality',
+  COS_ENHANCEMENT: 'cos-enhancement',
+  TEST_COVERAGE: 'test-coverage',
+  DOCUMENTATION: 'documentation',
+  FEATURE_IDEAS: 'feature-ideas',
+  DEPENDENCY_UPDATES: 'dependency-updates'
 };
 
 /**

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2 } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2, RotateCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -355,6 +355,37 @@ export function RunsHistoryPage() {
     });
   };
 
+  const handleResume = async (run, e) => {
+    e.stopPropagation();
+    // Fetch details if not already loaded
+    let details = expandedDetails[run.id];
+    if (!details) {
+      const [prompt, output] = await Promise.all([
+        api.getRunPrompt(run.id).catch(() => ''),
+        api.getRunOutput(run.id).catch(() => '')
+      ]);
+      details = { prompt, output };
+    }
+    navigate('/devtools/runner', {
+      state: {
+        continueFrom: {
+          prompt: details.prompt || run.prompt,
+          output: details.output || '',
+          runId: run.id,
+          providerId: run.providerId,
+          providerName: run.providerName,
+          model: run.model,
+          workspacePath: run.workspacePath,
+          workspaceName: run.workspaceName,
+          error: run.error,
+          errorCategory: run.errorCategory,
+          suggestedFix: run.suggestedFix,
+          success: run.success
+        }
+      }
+    });
+  };
+
   const getExitCodeInfo = (exitCode) => {
     const codeInfo = {
       1: { label: 'Error', description: 'Generic error - check the output for details' },
@@ -476,6 +507,16 @@ export function RunsHistoryPage() {
                     <div className="flex items-center gap-3 pl-8 sm:pl-0">
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
                       <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(run.startTime)}</span>
+                      {run.success !== null && (
+                        <button
+                          onClick={(e) => handleResume(run, e)}
+                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                          title="Resume run"
+                          data-testid={`resume-run-${run.id}`}
+                        >
+                          <RotateCcw size={14} />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => handleDelete(run.id, e)}
                         className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100"
@@ -756,7 +797,27 @@ export function RunnerPage() {
     // Build final prompt, merging with continuation context if present
     let finalPrompt = prompt.trim();
     if (continueContext) {
-      finalPrompt = `CONTINUATION OF PREVIOUS CONVERSATION:
+      if (continueContext.success === false) {
+        // Resuming a failed run - include error context
+        finalPrompt = `RESUMING FAILED RUN:
+
+--- PREVIOUS PROMPT ---
+${continueContext.prompt}
+${continueContext.output ? `
+--- PREVIOUS OUTPUT (BEFORE FAILURE) ---
+${continueContext.output}
+` : ''}
+--- ERROR ---
+${continueContext.error || 'Unknown error'}
+${continueContext.suggestedFix ? `
+--- SUGGESTED FIX ---
+${continueContext.suggestedFix}
+` : ''}
+--- NEW INSTRUCTIONS ---
+${prompt.trim()}`;
+      } else {
+        // Continuing a successful conversation
+        finalPrompt = `CONTINUATION OF PREVIOUS CONVERSATION:
 
 --- PREVIOUS PROMPT ---
 ${continueContext.prompt}
@@ -766,6 +827,7 @@ ${continueContext.output}
 
 --- NEW INSTRUCTIONS ---
 ${prompt.trim()}`;
+      }
     }
 
     setOutput('');
@@ -776,7 +838,8 @@ ${prompt.trim()}`;
       model: selectedModel || undefined,
       prompt: finalPrompt,
       workspacePath: workspacePath || undefined,
-      workspaceName: apps.find(a => a.repoPath === workspacePath)?.name
+      workspaceName: apps.find(a => a.repoPath === workspacePath)?.name,
+      timeout: timeout * 60 * 1000 // Convert minutes to milliseconds
     }).catch(err => ({ error: err.message }));
 
     if (result.error) {
@@ -874,11 +937,13 @@ ${prompt.trim()}`;
 
       {/* Continuation Context Banner */}
       {continueContext && (
-        <div className="bg-port-success/10 border border-port-success/30 rounded-xl p-4" data-testid="continuation-banner">
+        <div className={`${continueContext.success === false ? 'bg-port-warning/10 border-port-warning/30' : 'bg-port-success/10 border-port-success/30'} border rounded-xl p-4`} data-testid="continuation-banner">
           <div className="flex items-start justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Info size={18} className="text-port-success" />
-              <span className="font-medium text-port-success">Continuing Previous Conversation</span>
+              <Info size={18} className={continueContext.success === false ? 'text-port-warning' : 'text-port-success'} />
+              <span className={`font-medium ${continueContext.success === false ? 'text-port-warning' : 'text-port-success'}`}>
+                {continueContext.success === false ? 'Resuming Failed Run' : 'Continuing Previous Conversation'}
+              </span>
               {continueContext.providerName && (
                 <span className="text-xs text-gray-400 bg-port-card px-2 py-0.5 rounded">
                   {continueContext.providerName}
@@ -900,15 +965,35 @@ ${prompt.trim()}`;
                 {continueContext.prompt?.substring(0, 500)}{continueContext.prompt?.length > 500 ? '...' : ''}
               </div>
             </div>
-            <div>
-              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Previous Output</div>
-              <div className="text-gray-300 bg-port-card/50 rounded px-2 py-1 font-mono text-xs max-h-24 overflow-auto">
-                {continueContext.output?.substring(0, 800)}{continueContext.output?.length > 800 ? '...' : ''}
+            {continueContext.success === false && continueContext.error && (
+              <div>
+                <div className="text-xs text-port-error uppercase tracking-wide mb-1">Error</div>
+                <div className="text-port-error/80 bg-port-error/10 rounded px-2 py-1 font-mono text-xs max-h-20 overflow-auto">
+                  {continueContext.error}
+                </div>
               </div>
-            </div>
+            )}
+            {continueContext.success === false && continueContext.suggestedFix && (
+              <div>
+                <div className="text-xs text-port-warning uppercase tracking-wide mb-1">Suggested Fix</div>
+                <div className="text-gray-300 bg-port-warning/10 rounded px-2 py-1 text-xs max-h-20 overflow-auto">
+                  {continueContext.suggestedFix}
+                </div>
+              </div>
+            )}
+            {continueContext.output && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Previous Output</div>
+                <div className="text-gray-300 bg-port-card/50 rounded px-2 py-1 font-mono text-xs max-h-24 overflow-auto">
+                  {continueContext.output?.substring(0, 800)}{continueContext.output?.length > 800 ? '...' : ''}
+                </div>
+              </div>
+            )}
           </div>
           <div className="text-xs text-gray-500 mt-3 italic">
-            Enter your follow-up instructions below. The previous context will be included automatically.
+            {continueContext.success === false
+              ? 'Enter instructions to retry the task. The previous context and error will be included automatically.'
+              : 'Enter your follow-up instructions below. The previous context will be included automatically.'}
           </div>
         </div>
       )}

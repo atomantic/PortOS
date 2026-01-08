@@ -337,4 +337,35 @@ router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/cos/learning/performance - Get performance summary
+router.get('/learning/performance', asyncHandler(async (req, res) => {
+  const summary = await taskLearning.getPerformanceSummary();
+  res.json(summary);
+}));
+
+// GET /api/cos/learning/insights - Get recent learning insights
+router.get('/learning/insights', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 10;
+  const insights = await taskLearning.getRecentInsights(limit);
+  res.json({
+    count: insights.length,
+    insights
+  });
+}));
+
+// POST /api/cos/learning/insights - Record a learning insight
+router.post('/learning/insights', asyncHandler(async (req, res) => {
+  const { type, message, taskType, context } = req.body;
+  if (!message) {
+    throw new ServerError('Insight message is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const insight = await taskLearning.recordLearningInsight({
+    type: type || 'observation',
+    message,
+    taskType,
+    context
+  });
+  res.json({ success: true, insight });
+}));
+
 export default router;

@@ -381,6 +381,86 @@ export async function suggestModelTier(taskType) {
 }
 
 /**
+ * Get a performance summary for logging during task evaluation
+ * Provides insights about how different task types are performing
+ */
+export async function getPerformanceSummary() {
+  const data = await loadLearningData();
+
+  const summary = {
+    totalCompleted: data.totals.completed,
+    overallSuccessRate: data.totals.completed > 0
+      ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
+      : 0,
+    avgDurationMin: Math.round(data.totals.avgDurationMs / 60000),
+    topPerformers: [],
+    needsAttention: [],
+    skipped: []
+  };
+
+  // Analyze each task type
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    if (metrics.completed < 3) continue;
+
+    const entry = {
+      taskType,
+      successRate: metrics.successRate,
+      completed: metrics.completed,
+      avgDurationMin: Math.round(metrics.avgDurationMs / 60000)
+    };
+
+    if (metrics.successRate >= 80) {
+      summary.topPerformers.push(entry);
+    } else if (metrics.successRate < 50 && metrics.completed >= 5) {
+      summary.needsAttention.push(entry);
+      // Also mark as skipped if very low
+      if (metrics.successRate < 30) {
+        summary.skipped.push(entry);
+      }
+    }
+  }
+
+  // Sort by success rate
+  summary.topPerformers.sort((a, b) => b.successRate - a.successRate);
+  summary.needsAttention.sort((a, b) => a.successRate - b.successRate);
+
+  return summary;
+}
+
+/**
+ * Record a learning insight for future reference
+ * Stores observations about what works and what doesn't
+ */
+export async function recordLearningInsight(insight) {
+  const data = await loadLearningData();
+
+  if (!data.insights) {
+    data.insights = [];
+  }
+
+  data.insights.push({
+    ...insight,
+    recordedAt: new Date().toISOString()
+  });
+
+  // Keep only last 50 insights
+  if (data.insights.length > 50) {
+    data.insights = data.insights.slice(-50);
+  }
+
+  await saveLearningData(data);
+  return insight;
+}
+
+/**
+ * Get recent learning insights
+ */
+export async function getRecentInsights(limit = 10) {
+  const data = await loadLearningData();
+  return (data.insights || []).slice(-limit);
+}
+
+/**
  * Get adaptive cooldown multiplier for a task type based on historical performance
  *
  * This allows the CoS to work more efficiently:

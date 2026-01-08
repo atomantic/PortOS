@@ -1345,3 +1345,72 @@ const ALLOWED_COMMANDS = new Set([
 2. **Audit Logging**: Log all command executions for forensic analysis
 3. **Content Security Policy**: Add CSP headers to client responses
 4. **Command Argument Validation**: Consider validating arguments to allowed commands, not just base commands
+
+---
+
+## M27: CoS Capability Enhancements (2026-01-08)
+
+Enhancements to the Chief of Staff system for better task learning, smarter prioritization, and expanded self-improvement capabilities.
+
+### Features
+
+#### 1. New Self-Improvement Task Type: Dependency Updates
+Added `dependency-updates` task type that:
+- Runs `npm audit` in both server and client directories
+- Checks for outdated packages with `npm outdated`
+- Reviews CRITICAL and HIGH severity vulnerabilities
+- Updates dependencies carefully (patch → minor → major)
+- Runs tests and build to verify updates
+- Commits with changelog of what was updated
+
+#### 2. Enhanced Performance Tracking
+New `getPerformanceSummary()` function provides:
+- Overall success rate across all task types
+- Top performing task types (>80% success)
+- Task types needing attention (<50% success)
+- Task types being skipped (<30% success)
+- Average duration statistics
+
+#### 3. Learning Insights System
+New functions for recording and retrieving observations:
+- `recordLearningInsight()` - Store observations about what works/doesn't
+- `getRecentInsights()` - Retrieve recent learning insights
+- Insights stored with timestamp, type, and context
+
+#### 4. Periodic Performance Logging
+Every 10 evaluations, CoS logs:
+- Overall success rate and total tasks completed
+- Count of top performers and tasks needing attention
+- Evaluation count tracking in state
+
+### New API Endpoints
+
+| Route | Description |
+|-------|-------------|
+| GET /api/cos/learning/performance | Get performance summary |
+| GET /api/cos/learning/insights | Get recent learning insights |
+| POST /api/cos/learning/insights | Record a learning insight |
+
+### Self-Improvement Task Types (12 total)
+
+1. **ui-bugs** - Check UI for JavaScript errors
+2. **mobile-responsive** - Test viewport sizes
+3. **security** - Audit for vulnerabilities
+4. **code-quality** - Find DRY violations, dead code
+5. **console-errors** - Fix JS errors
+6. **performance** - Optimize re-renders, queries
+7. **cos-enhancement** - Improve CoS itself
+8. **test-coverage** - Add tests
+9. **documentation** - Update docs
+10. **feature-ideas** - Implement new features
+11. **accessibility** - Check a11y issues
+12. **dependency-updates** - Update npm packages
+
+### Implementation Files
+
+| File | Changes |
+|------|---------|
+| `server/services/cos.js` | Added dependency-updates type, performance logging |
+| `server/services/taskLearning.js` | Added getPerformanceSummary, recordLearningInsight, getRecentInsights |
+| `server/services/selfImprovement.js` | Added new analysis types to constants |
+| `server/routes/cos.js` | Added 3 new API endpoints for learning insights |
