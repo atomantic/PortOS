@@ -24,7 +24,15 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [newTask, setNewTask] = useState({ id: '', description: '', context: '', model: '', provider: '', app: '' });
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
+  const [durations, setDurations] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Fetch task duration estimates from learning data
+  useEffect(() => {
+    api.getCosLearningDurations()
+      .then(setDurations)
+      .catch(() => setDurations(null));
+  }, []);
 
   // Memoize task arrays to prevent unnecessary re-renders
   const userTasks = useMemo(() => tasks.user?.tasks || [], [tasks.user?.tasks]);
@@ -333,7 +341,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             >
               <div className="space-y-2">
                 {userTasksLocal.map(task => (
-                  <SortableTaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} />
+                  <SortableTaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
                 ))}
               </div>
             </SortableContext>
@@ -352,7 +360,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
         ) : (
           <div className="space-y-2">
             {cosTasks.map(task => (
-              <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} />
+              <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
             ))}
           </div>
         )}
@@ -364,7 +372,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <h3 className="text-lg font-semibold text-yellow-500 mb-3">Awaiting Approval</h3>
           <div className="space-y-2">
             {awaitingApproval.map(task => (
-              <TaskItem key={task.id} task={task} awaitingApproval onRefresh={onRefresh} providers={providers} />
+              <TaskItem key={task.id} task={task} awaitingApproval onRefresh={onRefresh} providers={providers} durations={durations} />
             ))}
           </div>
         </div>
