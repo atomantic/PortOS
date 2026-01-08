@@ -238,8 +238,12 @@ export default function Layout() {
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close sidebar"
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
           onClick={() => setMobileOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setMobileOpen(false)}
         />
       )}
 
@@ -267,8 +271,9 @@ export default function Layout() {
               onClick={() => setCollapsed(false)}
               className="hidden lg:block text-port-accent hover:text-port-accent/80 transition-colors"
               title="Expand sidebar"
+              aria-label="Expand sidebar"
             >
-              <Logo size={24} />
+              <Logo size={24} ariaLabel="PortOS logo - click to expand sidebar" />
             </button>
           )}
           {/* Expanded: collapse button */}
@@ -277,16 +282,18 @@ export default function Layout() {
               onClick={() => setCollapsed(true)}
               className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
               title="Collapse sidebar"
+              aria-label="Collapse sidebar"
             >
-              <ChevronLeft size={20} />
+              <ChevronLeft size={20} aria-hidden="true" />
             </button>
           )}
           {/* Mobile close button */}
           <button
             onClick={() => setMobileOpen(false)}
             className="lg:hidden p-1 text-gray-500 hover:text-white"
+            aria-label="Close sidebar"
           >
-            ✕
+            <span aria-hidden="true">✕</span>
           </button>
         </div>
 
@@ -308,8 +315,10 @@ export default function Layout() {
           <button
             onClick={() => setMobileOpen(true)}
             className="p-1.5 -ml-1 text-gray-400 hover:text-white"
+            aria-label="Open navigation menu"
+            aria-expanded={mobileOpen}
           >
-            <Menu size={20} />
+            <Menu size={20} aria-hidden="true" />
           </button>
           <div className="flex items-center gap-1.5">
             <Logo size={18} className="text-port-accent" />

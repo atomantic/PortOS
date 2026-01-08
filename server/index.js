@@ -29,6 +29,7 @@ import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers } from './lib/errorHandler.js';
 import { initAutoFixer } from './services/autoFixer.js';
+import { initTaskLearning } from './services/taskLearning.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,6 +54,9 @@ initSocket(io);
 
 // Initialize auto-fixer for error recovery
 initAutoFixer();
+
+// Initialize task learning system to track agent completions
+initTaskLearning();
 
 // Middleware - allow any origin for Tailscale access
 app.use(cors({

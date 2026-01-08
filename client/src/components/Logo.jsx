@@ -1,6 +1,6 @@
 // PortOS Logo - A portal/gateway with connected nodes representing apps and ports
 
-export default function Logo({ size = 24, className = '' }) {
+export default function Logo({ size = 24, className = '', ariaLabel = 'PortOS logo' }) {
   return (
     <svg
       width={size}
@@ -9,6 +9,8 @@ export default function Logo({ size = 24, className = '' }) {
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
+      role="img"
+      aria-label={ariaLabel}
     >
       {/* Outer portal ring */}
       <circle

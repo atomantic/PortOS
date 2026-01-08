@@ -112,9 +112,9 @@ export default function Dashboard() {
 
 function StatCard({ label, value, icon }) {
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-4">
+    <div className="bg-port-card border border-port-border rounded-lg p-4" role="group" aria-label={`${label}: ${value}`}>
       <div className="flex items-center gap-2 mb-1">
-        <span>{icon}</span>
+        <span aria-hidden="true">{icon}</span>
         <span className="text-sm text-gray-500">{label}</span>
       </div>
       <div className="text-2xl font-bold text-white">{value}</div>

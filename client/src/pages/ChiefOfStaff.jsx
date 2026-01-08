@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
@@ -40,7 +40,7 @@ export default function ChiefOfStaff() {
   const [loading, setLoading] = useState(true);
   const [agentState, setAgentState] = useState('sleeping');
   const [speaking, setSpeaking] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("Ready to help organize your day!");
+  const [statusMessage, setStatusMessage] = useState("Idle - waiting for tasks...");
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
   const socket = useSocket();
@@ -96,8 +96,8 @@ export default function ChiefOfStaff() {
 
     const newState = deriveAgentState(statusData, agentsData, healthData);
     setAgentState(newState);
-    const messages = STATE_MESSAGES[newState];
-    setStatusMessage(messages[Math.floor(Math.random() * messages.length)]);
+    // Use default state message - real messages come from socket events
+    setStatusMessage(STATE_MESSAGES[newState]);
   }, [deriveAgentState]);
 
   useEffect(() => {
@@ -124,7 +124,7 @@ export default function ChiefOfStaff() {
       setStatus(prev => ({ ...prev, running: data.running }));
       if (!data.running) {
         setAgentState('sleeping');
-        setStatusMessage(STATE_MESSAGES.sleeping[0]);
+        setStatusMessage("Stopped - daemon not running");
       }
     });
 
@@ -134,12 +134,15 @@ export default function ChiefOfStaff() {
 
     socket.on('cos:agent:spawned', (data) => {
       setAgentState('coding');
-      setStatusMessage("Working on a task...");
+      // Show actual task description if available
+      const taskDesc = data?.metadata?.taskDescription;
+      const shortDesc = taskDesc ? taskDesc.substring(0, 60) + (taskDesc.length > 60 ? '...' : '') : 'Working on task...';
+      setStatusMessage(`Running: ${shortDesc}`);
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
       // Initialize empty output buffer for new agent
-      if (data?.agentId) {
-        setLiveOutputs(prev => ({ ...prev, [data.agentId]: [] }));
+      if (data?.agentId || data?.id) {
+        setLiveOutputs(prev => ({ ...prev, [data.agentId || data.id]: [] }));
       }
       fetchData();
     });
@@ -163,9 +166,10 @@ export default function ChiefOfStaff() {
       }
     });
 
-    socket.on('cos:agent:completed', () => {
+    socket.on('cos:agent:completed', (data) => {
       setAgentState('reviewing');
-      setStatusMessage("Task completed! Checking results...");
+      const success = data?.result?.success;
+      setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
       fetchData();
@@ -175,7 +179,7 @@ export default function ChiefOfStaff() {
       setHealth({ lastCheck: data.metrics?.timestamp, issues: data.issues });
       if (data.issues?.length > 0) {
         setAgentState('investigating');
-        setStatusMessage("Found some issues to look into...");
+        setStatusMessage(`Health check: ${data.issues.length} issue${data.issues.length > 1 ? 's' : ''} found`);
         setSpeaking(true);
         setTimeout(() => setSpeaking(false), 2000);
       }
@@ -218,7 +222,7 @@ export default function ChiefOfStaff() {
     if (result?.success) {
       toast.success('Chief of Staff started');
       setAgentState('thinking');
-      setStatusMessage("Starting up... Let me see what needs to be done!");
+      setStatusMessage("Starting daemon - scanning for tasks...");
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
       fetchData();
@@ -233,7 +237,7 @@ export default function ChiefOfStaff() {
     if (result?.success) {
       toast.success('Chief of Staff stopped');
       setAgentState('sleeping');
-      setStatusMessage(STATE_MESSAGES.sleeping[0]);
+      setStatusMessage("Stopped - daemon not running");
       fetchData();
     }
   };
@@ -249,7 +253,7 @@ export default function ChiefOfStaff() {
 
   const handleHealthCheck = async () => {
     setAgentState('investigating');
-    setStatusMessage("Running health check...");
+    setStatusMessage("Running system health check...");
     setSpeaking(true);
     const result = await api.forceHealthCheck().catch(err => {
       toast.error(err.message);
@@ -260,13 +264,30 @@ export default function ChiefOfStaff() {
       setHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
       toast.success('Health check complete');
       if (result.issues?.length > 0) {
-        setStatusMessage("Found some issues!");
+        setStatusMessage(`Health: ${result.issues.length} issue${result.issues.length > 1 ? 's' : ''} detected`);
       } else {
-        setAgentState('reviewing');
-        setStatusMessage("All systems healthy!");
+        setAgentState('sleeping');
+        setStatusMessage("Health check passed - all systems OK");
       }
     }
   };
+
+  // Memoize expensive derived state to prevent recalculation on every render
+  // Note: These must be before any early returns to follow React's Rules of Hooks
+  const activeAgentCount = useMemo(() =>
+    agents.filter(a => a.status === 'running').length,
+    [agents]
+  );
+  const hasIssues = useMemo(() =>
+    (health?.issues?.length || 0) > 0,
+    [health?.issues?.length]
+  );
+
+  // Memoize pending task count
+  const pendingTaskCount = useMemo(() =>
+    (tasks.user?.grouped?.pending?.length || 0) + (tasks.cos?.grouped?.pending?.length || 0),
+    [tasks.user?.grouped?.pending?.length, tasks.cos?.grouped?.pending?.length]
+  );
 
   if (loading) {
     return (
@@ -275,9 +296,6 @@ export default function ChiefOfStaff() {
       </div>
     );
   }
-
-  const activeAgentCount = agents.filter(a => a.status === 'running').length;
-  const hasIssues = (health?.issues?.length || 0) > 0;
 
   return (
     <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-screen overflow-hidden">
@@ -367,7 +385,7 @@ export default function ChiefOfStaff() {
             />
             <StatCard
               label="Pending"
-              value={(tasks.user?.grouped?.pending?.length || 0) + (tasks.cos?.grouped?.pending?.length || 0)}
+              value={pendingTaskCount}
               icon={<Clock className="w-4 h-4 text-yellow-500" />}
               compact
             />
@@ -401,7 +419,7 @@ export default function ChiefOfStaff() {
           />
           <StatCard
             label="Pending"
-            value={(tasks.user?.grouped?.pending?.length || 0) + (tasks.cos?.grouped?.pending?.length || 0)}
+            value={pendingTaskCount}
             icon={<Clock className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 text-yellow-500" />}
             mini
           />

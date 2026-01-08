@@ -26,7 +26,7 @@ export const DEFAULT_MEMORY_CONFIG = {
   enabled: true,
   embeddingProvider: 'lmstudio',
   embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
-  embeddingModel: 'nomic-embed-text-v1.5',
+  embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
   embeddingDimension: 768,
   maxMemories: 10000,
   maxContextTokens: 2000,

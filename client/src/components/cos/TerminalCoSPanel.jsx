@@ -160,17 +160,17 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
         <span className="text-gray-400">{stateConfig.icon}</span>
       </div>
 
-      {/* Message bubble as terminal output */}
-      <div className="mb-1 lg:mb-4 px-2 py-1 lg:py-1.5 bg-gray-800/50 rounded border-l-2 border-cyan-500/50">
-        <div className="flex items-center gap-1 lg:block">
-          <span className="text-cyan-400 text-xs">$</span>
-          <span className="text-gray-300 text-xs lg:ml-2 truncate lg:line-clamp-none flex-1">{statusMessage}</span>
-          {evalCountdown && (
-            <span className="text-[10px] lg:text-xs text-cyan-500/60 font-mono whitespace-nowrap lg:block lg:mt-1">
-              <span className="hidden lg:inline"># next: </span>({evalCountdown.formatted})
-            </span>
-          )}
+      {/* Message bubble as terminal output - compact two-line layout */}
+      <div className="mb-1 lg:mb-2 px-2 py-1 bg-gray-800/50 rounded border-l-2 border-cyan-500/50 text-xs">
+        <div className="flex items-center gap-1">
+          <span className="text-cyan-400">$</span>
+          <span className="text-gray-300 truncate">{statusMessage}</span>
         </div>
+        {evalCountdown && (
+          <div className="text-cyan-500/60 font-mono mt-0.5">
+            # next: ({evalCountdown.formatted})
+          </div>
+        )}
       </div>
 
       {/* Stats as terminal output - desktop only */}

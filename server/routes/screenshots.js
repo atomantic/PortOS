@@ -1,16 +1,33 @@
 import { Router } from 'express';
 import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const SCREENSHOTS_DIR = join(__dirname, '../../data/screenshots');
+const SCREENSHOTS_DIR = resolve(__dirname, '../../data/screenshots');
 
 const router = Router();
+
+/**
+ * Validate and sanitize filename to prevent path traversal
+ * @param {string} filename - User-provided filename
+ * @returns {string} - Safe filename
+ */
+function sanitizeFilename(filename) {
+  // Get just the base filename, removing any path components
+  const base = basename(filename);
+  // Remove any remaining path traversal attempts or special characters
+  const sanitized = base.replace(/[^a-zA-Z0-9._-]/g, '_');
+  // Ensure it doesn't start with a dot (hidden files)
+  if (sanitized.startsWith('.')) {
+    return '_' + sanitized.slice(1);
+  }
+  return sanitized;
+}
 
 // Max file size: 10MB
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -72,8 +89,17 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const id = uuidv4();
   const ext = detectedType; // Use detected type, not client-provided
-  const fname = filename || `screenshot-${id}.${ext}`;
+  // Sanitize user-provided filename or generate a safe one
+  const safeName = filename ? sanitizeFilename(filename) : `screenshot-${id}.${ext}`;
+  // Ensure extension matches detected type
+  const fname = safeName.endsWith(`.${ext}`) ? safeName : `${safeName}.${ext}`;
   const filepath = join(SCREENSHOTS_DIR, fname);
+
+  // Double-check path is within screenshots directory (defense in depth)
+  const resolvedPath = resolve(filepath);
+  if (!resolvedPath.startsWith(SCREENSHOTS_DIR)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
 
   await writeFile(filepath, buffer);
 
@@ -90,14 +116,22 @@ router.post('/', asyncHandler(async (req, res) => {
 // GET /api/screenshots/:filename - Serve a screenshot
 router.get('/:filename', asyncHandler(async (req, res) => {
   const { filename } = req.params;
-  const filepath = join(SCREENSHOTS_DIR, filename);
+  // Sanitize filename to prevent path traversal
+  const safeFilename = sanitizeFilename(filename);
+  const filepath = resolve(SCREENSHOTS_DIR, safeFilename);
+
+  // Verify the resolved path is within screenshots directory
+  if (!filepath.startsWith(SCREENSHOTS_DIR)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
 
   if (!existsSync(filepath)) {
     throw new ServerError('Screenshot not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const ext = filename.split('.').pop().toLowerCase();
-  const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+  const ext = safeFilename.split('.').pop().toLowerCase();
+  const mimeTypes = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+  const mimeType = mimeTypes[ext] || 'application/octet-stream';
 
   res.type(mimeType).sendFile(filepath);
 }));

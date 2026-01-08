@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Cpu,
   Square,
@@ -8,11 +8,33 @@ import {
   RotateCcw,
   Loader2,
   Skull,
-  Activity
+  Activity,
+  Clock
 } from 'lucide-react';
 import * as api from '../../../services/api';
 
-export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResume, completed, liveOutput }) {
+// Extract task type from description (matches server-side extractTaskType)
+function extractTaskType(description) {
+  if (!description) return 'general';
+  const d = description.toLowerCase();
+  if (d.includes('fix') || d.includes('bug') || d.includes('error') || d.includes('issue')) return 'bug-fix';
+  if (d.includes('refactor') || d.includes('clean up') || d.includes('improve') || d.includes('optimize')) return 'refactor';
+  if (d.includes('test')) return 'testing';
+  if (d.includes('document') || d.includes('readme') || d.includes('docs')) return 'documentation';
+  if (d.includes('review') || d.includes('audit')) return 'code-review';
+  if (d.includes('mobile') || d.includes('responsive')) return 'mobile-responsive';
+  if (d.includes('security') || d.includes('vulnerability')) return 'security';
+  if (d.includes('performance') || d.includes('speed')) return 'performance';
+  if (d.includes('ui') || d.includes('ux') || d.includes('design') || d.includes('style')) return 'ui-ux';
+  if (d.includes('api') || d.includes('endpoint') || d.includes('route')) return 'api';
+  if (d.includes('database') || d.includes('migration')) return 'database';
+  if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
+  if (d.includes('investigate') || d.includes('debug')) return 'investigation';
+  if (d.includes('self-improvement') || d.includes('feature idea')) return 'self-improvement';
+  return 'feature';
+}
+
+export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResume, completed, liveOutput, durations }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
@@ -78,6 +100,42 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
     return `${seconds}s`;
   };
 
+  // Calculate duration estimate for running agents
+  const durationEstimate = useMemo(() => {
+    if (completed || !durations) return null;
+
+    const taskType = extractTaskType(agent.metadata?.taskDescription);
+    const typeData = durations[taskType];
+    const overallData = durations._overall;
+
+    if (typeData && typeData.avgDurationMs) {
+      return {
+        estimatedMs: typeData.avgDurationMs,
+        basedOn: typeData.completed,
+        taskType,
+        isTypeSpecific: true
+      };
+    }
+
+    if (overallData && overallData.avgDurationMs) {
+      return {
+        estimatedMs: overallData.avgDurationMs,
+        basedOn: overallData.completed,
+        taskType: 'all tasks',
+        isTypeSpecific: false
+      };
+    }
+
+    return null;
+  }, [completed, durations, agent.metadata?.taskDescription]);
+
+  // Calculate progress percentage
+  const progress = useMemo(() => {
+    if (!durationEstimate) return null;
+    const percent = Math.min(100, Math.round((duration / durationEstimate.estimatedMs) * 100));
+    return percent;
+  }, [duration, durationEstimate]);
+
   // For running agents, use live output; for completed, use fetched full output or stored
   const output = completed
     ? (fullOutput || agent.output || [])
@@ -133,7 +191,18 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">{formatDuration(duration)}</span>
+            {/* Duration with estimate for running agents */}
+            {!completed && durationEstimate ? (
+              <span
+                className="flex items-center gap-1 text-sm text-gray-500"
+                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
+              >
+                <Clock size={12} />
+                {formatDuration(duration)} / ~{formatDuration(durationEstimate.estimatedMs)}
+              </span>
+            ) : (
+              <span className="text-sm text-gray-500">{formatDuration(duration)}</span>
+            )}
             {(output.length > 0 || completed) && (
               <button
                 onClick={() => setExpanded(!expanded)}
@@ -190,6 +259,26 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
         {!completed && lastOutput && (
           <div className="text-xs text-gray-500 font-mono truncate bg-port-bg/50 px-2 py-1 rounded">
             {lastOutput.substring(0, 100)}...
+          </div>
+        )}
+
+        {/* Progress bar for running agents with estimates */}
+        {!completed && durationEstimate && progress !== null && (
+          <div className="mt-2">
+            <div className="h-1 bg-port-border rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all duration-1000 ease-linear ${
+                  progress >= 100 ? 'bg-yellow-500' : 'bg-port-accent'
+                }`}
+                style={{ width: `${Math.min(progress, 100)}%` }}
+              />
+            </div>
+            <div className="flex justify-between mt-1 text-xs text-gray-600">
+              <span>{progress}% of typical duration</span>
+              {progress >= 100 && (
+                <span className="text-yellow-500">Running longer than average</span>
+              )}
+            </div>
           </div>
         )}
 

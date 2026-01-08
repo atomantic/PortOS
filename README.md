@@ -39,6 +39,8 @@ Autonomous task manager that monitors your TASKS.md and dispatches AI agents to 
 
 ![Chief of Staff](./docs/media/portos_6.png)
 
+![Chief of Staff](./docs/media/portos_7.png)
+
 ### App Import
 Auto-detect project configuration from your codebase — ports, start commands, and PM2 process names.
 

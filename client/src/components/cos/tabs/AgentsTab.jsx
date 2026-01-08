@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
@@ -7,6 +7,12 @@ import ResumeAgentModal from './ResumeAgentModal';
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {
   const [resumingAgent, setResumingAgent] = useState(null);
+  const [durations, setDurations] = useState(null);
+
+  // Fetch duration estimates for progress indicators
+  useEffect(() => {
+    api.getCosLearningDurations().then(setDurations).catch(() => {});
+  }, []);
 
   const handleTerminate = async (agentId) => {
     await api.terminateCosAgent(agentId).catch(err => toast.error(err.message));
@@ -83,6 +89,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
                 onTerminate={handleTerminate}
                 onKill={handleKill}
                 liveOutput={liveOutputs[agent.id]}
+                durations={durations}
               />
             ))}
           </div>

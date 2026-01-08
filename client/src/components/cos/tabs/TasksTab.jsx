@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Plus, RefreshCw, Image, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -25,8 +25,23 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const fileInputRef = useRef(null);
-  const userTasks = tasks.user?.tasks || [];
-  const cosTasks = tasks.cos?.tasks || [];
+
+  // Memoize task arrays to prevent unnecessary re-renders
+  const userTasks = useMemo(() => tasks.user?.tasks || [], [tasks.user?.tasks]);
+  const cosTasks = useMemo(() => tasks.cos?.tasks || [], [tasks.cos?.tasks]);
+  const awaitingApproval = useMemo(() => tasks.cos?.awaitingApproval || [], [tasks.cos?.awaitingApproval]);
+
+  // Memoize enabled providers for dropdown
+  const enabledProviders = useMemo(() =>
+    providers?.filter(p => p.enabled) || [],
+    [providers]
+  );
+
+  // Memoize sortable item IDs for DndContext
+  const sortableIds = useMemo(() =>
+    userTasksLocal.map(t => t.id),
+    [userTasksLocal]
+  );
 
   // Keep local state in sync with server state
   useEffect(() => {
@@ -217,7 +232,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   className="w-40 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 >
                   <option value="">Auto (default)</option>
-                  {providers?.filter(p => p.enabled).map(p => (
+                  {enabledProviders.map(p => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
@@ -309,7 +324,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             onDragEnd={handleDragEnd}
           >
             <SortableContext
-              items={userTasksLocal.map(t => t.id)}
+              items={sortableIds}
               strategy={verticalListSortingStrategy}
             >
               <div className="space-y-2">
@@ -340,11 +355,11 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       </div>
 
       {/* Awaiting Approval */}
-      {tasks.cos?.awaitingApproval?.length > 0 && (
+      {awaitingApproval.length > 0 && (
         <div>
           <h3 className="text-lg font-semibold text-yellow-500 mb-3">Awaiting Approval</h3>
           <div className="space-y-2">
-            {tasks.cos.awaitingApproval.map(task => (
+            {awaitingApproval.map(task => (
               <TaskItem key={task.id} task={task} awaitingApproval onRefresh={onRefresh} providers={providers} />
             ))}
           </div>

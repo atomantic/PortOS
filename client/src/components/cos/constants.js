@@ -26,14 +26,15 @@ export const AGENT_STATES = {
   ideating: { label: 'Ideating', color: '#f97316', icon: '💡' },
 };
 
+// Default messages shown when no specific event message is available
 export const STATE_MESSAGES = {
-  sleeping: ["Resting... Wake me if you need anything!", "💤 Power saving mode..."],
-  thinking: ["Processing your request...", "Analyzing the situation...", "Let me think about this..."],
-  coding: ["Writing some code...", "Implementing the solution...", "Building something cool..."],
-  investigating: ["Looking into this...", "Researching the topic...", "Gathering information..."],
-  reviewing: ["Checking the details...", "Reviewing for quality...", "Making sure everything's right..."],
-  planning: ["Organizing the approach...", "Mapping out the strategy...", "Creating a plan..."],
-  ideating: ["Brainstorming ideas...", "Getting creative!", "Inspiration incoming..."],
+  sleeping: "Idle - waiting for tasks...",
+  thinking: "Processing...",
+  coding: "Working on task...",
+  investigating: "Investigating issue...",
+  reviewing: "Reviewing results...",
+  planning: "Planning next steps...",
+  ideating: "Analyzing options...",
 };
 
 export const MEMORY_TYPES = ['fact', 'learning', 'observation', 'decision', 'preference', 'context'];

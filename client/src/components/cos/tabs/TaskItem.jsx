@@ -69,16 +69,19 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
             {...dragHandleProps}
             className="mt-0.5 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 transition-colors touch-none"
             title="Drag to reorder"
+            aria-label="Drag to reorder"
           >
-            <GripVertical size={16} />
+            <GripVertical size={16} aria-hidden="true" />
           </button>
         )}
         <button
           onClick={() => handleStatusChange(task.status === 'completed' ? 'pending' : 'completed')}
           className="mt-0.5 hover:scale-110 transition-transform"
           title={task.status === 'completed' ? 'Mark as pending' : 'Mark as completed'}
+          aria-label={task.status === 'completed' ? 'Mark as pending' : 'Mark as completed'}
         >
-          {statusIcons[task.status]}
+          <span aria-hidden="true">{statusIcons[task.status]}</span>
+          <span className="sr-only">Status: {task.status}</span>
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -181,15 +184,17 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 onClick={() => setEditing(true)}
                 className="p-1 text-gray-500 hover:text-white transition-colors"
                 title="Edit"
+                aria-label="Edit task"
               >
-                <Edit3 size={14} />
+                <Edit3 size={14} aria-hidden="true" />
               </button>
               <button
                 onClick={handleDelete}
                 className="p-1 text-gray-500 hover:text-port-error transition-colors"
                 title="Delete"
+                aria-label="Delete task"
               >
-                <Trash2 size={14} />
+                <Trash2 size={14} aria-hidden="true" />
               </button>
             </>
           )}

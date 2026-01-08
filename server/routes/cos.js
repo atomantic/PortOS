@@ -6,6 +6,7 @@ import { Router } from 'express';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
+import * as taskLearning from '../services/taskLearning.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -288,6 +289,24 @@ router.get('/app-activity/:appId', asyncHandler(async (req, res) => {
 router.post('/app-activity/:appId/clear-cooldown', asyncHandler(async (req, res) => {
   const result = await appActivity.clearAppCooldown(req.params.appId);
   res.json({ success: true, appId: req.params.appId, activity: result });
+}));
+
+// GET /api/cos/learning - Get learning insights
+router.get('/learning', asyncHandler(async (req, res) => {
+  const insights = await taskLearning.getLearningInsights();
+  res.json(insights);
+}));
+
+// GET /api/cos/learning/durations - Get all task type duration estimates
+router.get('/learning/durations', asyncHandler(async (req, res) => {
+  const durations = await taskLearning.getAllTaskDurations();
+  res.json(durations);
+}));
+
+// POST /api/cos/learning/backfill - Backfill learning data from history
+router.post('/learning/backfill', asyncHandler(async (req, res) => {
+  const count = await taskLearning.backfillFromHistory();
+  res.json({ success: true, backfilledCount: count });
 }));
 
 export default router;

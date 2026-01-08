@@ -145,7 +145,31 @@ export default function MemoryTab() {
         <div className="space-y-3">
           {displayMemories.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
-              {searchQuery ? 'No memories found for this search' : 'No memories yet. Memories are extracted from agent task completions.'}
+              {searchQuery ? (
+                'No memories found for this search'
+              ) : (
+                <div className="space-y-4">
+                  <p>No memories yet.</p>
+                  {!embeddingStatus?.available && (
+                    <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4 text-left max-w-md mx-auto">
+                      <p className="text-port-warning font-medium mb-2">LM Studio Required</p>
+                      <p className="text-sm text-gray-400">
+                        For the memory system to work, LM Studio must be running with an embedding model:
+                      </p>
+                      <ol className="text-sm text-gray-400 mt-2 list-decimal list-inside space-y-1">
+                        <li>Open LM Studio</li>
+                        <li>Load <code className="text-port-accent">text-embedding-nomic-embed-text-v2-moe</code></li>
+                        <li>Start the local server (port 1234)</li>
+                      </ol>
+                    </div>
+                  )}
+                  {embeddingStatus?.available && (
+                    <p className="text-sm">
+                      Memories are automatically extracted when CoS agents complete tasks successfully.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             displayMemories.map(memory => (

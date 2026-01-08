@@ -166,7 +166,12 @@ const icons = {
 // List of available icon names for the picker
 export const iconNames = Object.keys(icons);
 
-export default function AppIcon({ icon, size = 24, className = '' }) {
+export default function AppIcon({ icon, size = 24, className = '', ariaLabel }) {
   const IconComponent = icons[icon] || icons.package;
-  return <IconComponent size={size} className={className} />;
+  const iconName = icon || 'package';
+  return (
+    <span role="img" aria-label={ariaLabel || `${iconName} icon`} aria-hidden={!ariaLabel ? 'true' : undefined}>
+      <IconComponent size={size} className={className} />
+    </span>
+  );
 }

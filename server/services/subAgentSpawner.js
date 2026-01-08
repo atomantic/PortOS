@@ -12,24 +12,10 @@ import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask } from './cos.js';
+import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner } from './cosRunnerClient.js';
-
-/**
- * Emit a log event for UI display (mirrors cos.js helper)
- */
-function emitLog(level, message, data = {}) {
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    level,
-    message,
-    ...data
-  };
-  console.log(`${level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : 'ℹ️'} ${message}`);
-  cosEvents.emit('log', logEntry);
-}
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider } from './providers.js';
 import { recordSession, recordMessages } from './usage.js';
 import { buildPrompt } from './promptService.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
@@ -1165,6 +1151,9 @@ export async function killAllAgents() {
   return { killed: directIds.length + runnerIds.length };
 }
 
+// Max retries before creating investigation task
+const MAX_ORPHAN_RETRIES = 3;
+
 /**
  * Clean up orphaned agents on startup
  * Agents marked as "running" in state but not tracked anywhere are orphaned
@@ -1173,11 +1162,17 @@ export async function killAllAgents() {
  * 1. Local activeAgents map (direct-spawned)
  * 2. Local runnerAgents map (recently spawned via runner)
  * 3. CoS Runner service (may have agents from before server restart)
+ *
+ * After cleanup:
+ * - Resets associated tasks to pending for auto-retry
+ * - Creates investigation task after max retries exceeded
+ * - Triggers evaluation to spawn new agents
  */
 export async function cleanupOrphanedAgents() {
-  const { getAgents, completeAgent: markComplete } = await import('./cos.js');
+  const { getAgents, completeAgent: markComplete, evaluateTasks, getTaskById } = await import('./cos.js');
   const agents = await getAgents();
   let cleanedCount = 0;
+  const orphanedTaskIds = [];
 
   // Get list of agents actively running in the CoS Runner
   const runnerActiveIds = new Set();
@@ -1209,16 +1204,118 @@ export async function cleanupOrphanedAgents() {
           orphaned: true
         });
         cleanedCount++;
+
+        // Track the task for retry
+        if (agent.taskId) {
+          orphanedTaskIds.push({ taskId: agent.taskId, agentId: agent.id });
+        }
       }
     }
+  }
+
+  // Handle orphaned tasks - reset for retry or create investigation task
+  for (const { taskId, agentId } of orphanedTaskIds) {
+    await handleOrphanedTask(taskId, agentId, getTaskById);
+  }
+
+  // Trigger evaluation to spawn new agents for retried tasks
+  if (cleanedCount > 0) {
+    emitLog('info', `Cleaned up ${cleanedCount} orphaned agents, triggering evaluation`, { cleanedCount });
+    // Small delay to let state settle before evaluation
+    setTimeout(() => {
+      evaluateTasks().catch(err => {
+        console.error(`❌ Failed to evaluate tasks after orphan cleanup: ${err.message}`);
+      });
+    }, 1000);
   }
 
   return cleanedCount;
 }
 
+/**
+ * Handle an orphaned task - retry or create investigation
+ */
+async function handleOrphanedTask(taskId, agentId, getTaskById) {
+  const task = await getTaskById(taskId).catch(() => null);
+  if (!task) {
+    emitLog('warn', `Could not find task ${taskId} for orphaned agent ${agentId}`, { taskId, agentId });
+    return;
+  }
+
+  // Get current retry count from task metadata
+  const retryCount = (task.metadata?.orphanRetryCount || 0) + 1;
+  const taskType = task.taskType || 'user';
+
+  if (retryCount < MAX_ORPHAN_RETRIES) {
+    // Reset task to pending for automatic retry
+    emitLog('info', `Resetting orphaned task ${taskId} for retry (attempt ${retryCount}/${MAX_ORPHAN_RETRIES})`, {
+      taskId,
+      retryCount,
+      maxRetries: MAX_ORPHAN_RETRIES
+    });
+
+    await updateTask(taskId, {
+      status: 'pending',
+      metadata: {
+        ...task.metadata,
+        orphanRetryCount: retryCount,
+        lastOrphanedAt: new Date().toISOString(),
+        lastOrphanedAgentId: agentId
+      }
+    }, taskType);
+  } else {
+    // Max retries exceeded - create auto-approved investigation task
+    emitLog('warn', `Task ${taskId} exceeded max orphan retries (${MAX_ORPHAN_RETRIES}), creating investigation task`, {
+      taskId,
+      retryCount
+    });
+
+    // Mark task as blocked
+    await updateTask(taskId, {
+      status: 'blocked',
+      metadata: {
+        ...task.metadata,
+        orphanRetryCount: retryCount,
+        blockedReason: 'Max orphan retries exceeded'
+      }
+    }, taskType);
+
+    // Create auto-approved investigation task (no approval required for orphan issues)
+    const description = `[Auto-Fix] Investigate repeated agent orphaning for task ${taskId}
+
+**Original Task**: ${(task.description || '').substring(0, 200)}
+**Retry Attempts**: ${retryCount}
+**Last Orphaned Agent**: ${agentId}
+
+This task has failed ${retryCount} times due to agent orphaning. Investigate:
+1. Check CoS Runner logs for errors
+2. Verify process spawning is working correctly
+3. Look for resource constraints (memory, CPU)
+4. Check for network/connection issues between services
+
+Once the issue is resolved, reset the original task to pending.`;
+
+    await addTask({
+      description,
+      priority: 'HIGH',
+      context: `Auto-generated from repeated orphan failures for task ${taskId}`,
+      approvalRequired: false // Auto-approved for orphan issues
+    }, 'internal').catch(err => {
+      emitLog('error', `Failed to create investigation task: ${err.message}`, { taskId, error: err.message });
+    });
+  }
+}
+
 // Initialize spawner when module loads (async)
 initSpawner().catch(err => {
   console.error(`❌ Failed to initialize spawner: ${err.message}`);
+});
+
+// Initialize task learning system
+import('./taskLearning.js').then(taskLearning => {
+  taskLearning.initTaskLearning();
+}).catch(err => {
+  console.error(`❌ Failed to initialize task learning: ${err.message}`);
 });
 
 // Clean up orphaned agents after a short delay (let other services init first)

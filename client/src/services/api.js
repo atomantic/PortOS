@@ -253,6 +253,11 @@ export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');
 export const getCosReport = (date) => request(`/cos/reports/${date}`);
 
+// CoS Learning
+export const getCosLearning = () => request('/cos/learning');
+export const getCosLearningDurations = () => request('/cos/learning/durations');
+export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
+
 // CoS Scripts
 export const getCosScripts = () => request('/cos/scripts');
 export const getCosScript = (id) => request(`/cos/scripts/${id}`);
