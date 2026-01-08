@@ -431,32 +431,42 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             No system tasks.
           </div>
         ) : (
-          <>
-            {pendingSystemTasks.length === 0 ? (
-              <div className="bg-port-card border border-port-border rounded-lg p-4 text-center text-gray-500 text-sm">
-                No pending tasks
+          <div className="space-y-3">
+            {/* Pending Section */}
+            <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
+                <span className="text-sm font-medium text-port-accent">
+                  Pending ({pendingSystemTasks.length})
+                </span>
               </div>
-            ) : (
-              <div className="space-y-2">
-                {pendingSystemTasks.map(task => (
-                  <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
-                ))}
-              </div>
-            )}
+              {pendingSystemTasks.length === 0 ? (
+                <div className="p-4 text-center text-gray-500 text-sm">
+                  No pending tasks
+                </div>
+              ) : (
+                <div className="p-2 space-y-1.5">
+                  {pendingSystemTasks.map(task => (
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              )}
+            </div>
 
-            {/* Completed System Tasks - Collapsible */}
+            {/* Completed Section - Collapsible */}
             {completedSystemTasks.length > 0 && (
-              <div className="mt-3">
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <button
                   onClick={() => setShowCompletedSystemTasks(!showCompletedSystemTasks)}
-                  className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors mb-2"
+                  className="w-full px-3 py-2 bg-port-success/10 border-b border-port-border flex items-center justify-between hover:bg-port-success/20 transition-colors"
                   aria-expanded={showCompletedSystemTasks}
                 >
-                  {showCompletedSystemTasks ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
-                  Completed ({completedSystemTasks.length})
+                  <span className="text-sm font-medium text-port-success flex items-center gap-2">
+                    {showCompletedSystemTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                    Completed ({completedSystemTasks.length})
+                  </span>
                 </button>
                 {showCompletedSystemTasks && (
-                  <div className="space-y-2">
+                  <div className="p-2 space-y-1.5">
                     {completedSystemTasks.map(task => (
                       <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
                     ))}
@@ -464,7 +474,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 )}
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
