@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo, useCallback, useMemo } from 'react';
 import StatusBadge from './StatusBadge';
 import AppIcon from './AppIcon';
 import * as api from '../services/api';
@@ -14,7 +14,8 @@ function getAppUrl(app) {
   return null;
 }
 
-export default function AppTile({ app, onUpdate }) {
+// Memoized component to prevent re-renders when parent polls for updates
+const AppTile = memo(function AppTile({ app, onUpdate }) {
   const [loading, setLoading] = useState(null);
   const appUrl = getAppUrl(app);
 
@@ -115,4 +116,6 @@ export default function AppTile({ app, onUpdate }) {
       </div>
     </div>
   );
-}
+});
+
+export default AppTile;

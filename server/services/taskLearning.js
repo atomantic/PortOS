@@ -381,6 +381,135 @@ export async function suggestModelTier(taskType) {
 }
 
 /**
+ * Get adaptive cooldown multiplier for a task type based on historical performance
+ *
+ * This allows the CoS to work more efficiently:
+ * - High success rate tasks: Reduced cooldown (can work on similar tasks sooner)
+ * - Low success rate tasks: Increased cooldown (give time for fixes/investigation)
+ * - Very low success rate: Skip this task type (needs review)
+ *
+ * @param {string} taskType - The task type (e.g., 'self-improve:ui-bugs')
+ * @returns {Object} Cooldown adjustment info
+ */
+export async function getAdaptiveCooldownMultiplier(taskType) {
+  const data = await loadLearningData();
+
+  const metrics = data.byTaskType[taskType];
+
+  // Not enough data - use default cooldown
+  if (!metrics || metrics.completed < 3) {
+    return {
+      multiplier: 1.0,
+      reason: 'insufficient-data',
+      skip: false,
+      successRate: null,
+      completed: metrics?.completed || 0
+    };
+  }
+
+  const successRate = metrics.successRate;
+
+  // Very high success (90%+): Reduce cooldown by 30% - this task type works well
+  if (successRate >= 90) {
+    return {
+      multiplier: 0.7,
+      reason: 'high-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed,
+      recommendation: `Task type has ${successRate}% success rate - reduced cooldown`
+    };
+  }
+
+  // Good success (75-89%): Slight reduction (15%)
+  if (successRate >= 75) {
+    return {
+      multiplier: 0.85,
+      reason: 'good-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed
+    };
+  }
+
+  // Moderate success (50-74%): Default cooldown
+  if (successRate >= 50) {
+    return {
+      multiplier: 1.0,
+      reason: 'moderate-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed
+    };
+  }
+
+  // Low success (30-49%): Increase cooldown by 50%
+  if (successRate >= 30) {
+    return {
+      multiplier: 1.5,
+      reason: 'low-success',
+      skip: false,
+      successRate,
+      completed: metrics.completed,
+      recommendation: `Task type has only ${successRate}% success rate - increased cooldown`
+    };
+  }
+
+  // Very low success (<30%) with significant attempts: Skip this task type
+  if (metrics.completed >= 5) {
+    return {
+      multiplier: 0, // Effectively infinite cooldown
+      reason: 'skip-failing',
+      skip: true,
+      successRate,
+      completed: metrics.completed,
+      recommendation: `Task type has ${successRate}% success rate after ${metrics.completed} attempts - skipping until reviewed`
+    };
+  }
+
+  // Very low success but few attempts: Double cooldown and keep trying
+  return {
+    multiplier: 2.0,
+    reason: 'very-low-success',
+    skip: false,
+    successRate,
+    completed: metrics.completed,
+    recommendation: `Task type has ${successRate}% success rate - doubled cooldown for retry`
+  };
+}
+
+/**
+ * Get all task types that should be skipped due to poor performance
+ * Useful for filtering out problematic task types in evaluateTasks
+ */
+export async function getSkippedTaskTypes() {
+  const data = await loadLearningData();
+  const skipped = [];
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Skip if: completed >= 5 AND success rate < 30%
+    if (metrics.completed >= 5 && metrics.successRate < 30) {
+      skipped.push({
+        taskType,
+        successRate: metrics.successRate,
+        completed: metrics.completed,
+        lastCompleted: metrics.lastCompleted
+      });
+    }
+  }
+
+  return skipped;
+}
+
+/**
+ * Check if a specific task type should be skipped
+ */
+export async function shouldSkipTaskType(taskType) {
+  const result = await getAdaptiveCooldownMultiplier(taskType);
+  return result.skip;
+}
+
+/**
  * Get estimated duration for a task based on historical averages
  * @param {string} taskDescription - The task description to analyze
  * @returns {Object} Duration estimate with confidence

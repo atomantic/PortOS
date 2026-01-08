@@ -9,6 +9,11 @@ const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '../../data');
 const APPS_FILE = join(DATA_DIR, 'apps.json');
 
+// In-memory cache for apps data
+let appsCache = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 2000; // Cache for 2 seconds to reduce file reads during rapid polling
+
 /**
  * Ensure data directory exists
  */
@@ -19,25 +24,47 @@ async function ensureDataDir() {
 }
 
 /**
- * Load apps registry from disk
+ * Load apps registry from disk (with caching)
  */
 async function loadApps() {
+  const now = Date.now();
+
+  // Return cached data if still valid
+  if (appsCache && (now - cacheTimestamp) < CACHE_TTL_MS) {
+    return appsCache;
+  }
+
   await ensureDataDir();
 
   if (!existsSync(APPS_FILE)) {
-    return { apps: {} };
+    appsCache = { apps: {} };
+    cacheTimestamp = now;
+    return appsCache;
   }
 
   const content = await readFile(APPS_FILE, 'utf-8');
-  return JSON.parse(content);
+  appsCache = JSON.parse(content);
+  cacheTimestamp = now;
+  return appsCache;
 }
 
 /**
- * Save apps registry to disk
+ * Save apps registry to disk (and invalidate cache)
  */
 async function saveApps(data) {
   await ensureDataDir();
   await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
+  // Update cache with saved data
+  appsCache = data;
+  cacheTimestamp = Date.now();
+}
+
+/**
+ * Invalidate the apps cache (call after external changes)
+ */
+export function invalidateCache() {
+  appsCache = null;
+  cacheTimestamp = 0;
 }
 
 /**

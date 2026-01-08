@@ -315,4 +315,26 @@ router.post('/learning/backfill', asyncHandler(async (req, res) => {
   res.json({ success: true, backfilledCount: count });
 }));
 
+// GET /api/cos/learning/skipped - Get task types being skipped due to poor performance
+router.get('/learning/skipped', asyncHandler(async (req, res) => {
+  const skipped = await taskLearning.getSkippedTaskTypes();
+  res.json({
+    skippedCount: skipped.length,
+    skippedTypes: skipped,
+    message: skipped.length > 0
+      ? 'These task types have <30% success rate after 5+ attempts and are being skipped'
+      : 'No task types are currently being skipped'
+  });
+}));
+
+// GET /api/cos/learning/cooldown/:taskType - Get adaptive cooldown for specific task type
+router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const cooldownInfo = await taskLearning.getAdaptiveCooldownMultiplier(taskType);
+  res.json({
+    taskType,
+    ...cooldownInfo
+  });
+}));
+
 export default router;

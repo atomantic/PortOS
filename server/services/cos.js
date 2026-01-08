@@ -17,6 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps } from './apps.js';
+import { shouldSkipTaskType, getAdaptiveCooldownMultiplier, getSkippedTaskTypes } from './taskLearning.js';
 
 const execAsync = promisify(exec);
 
@@ -700,12 +701,70 @@ const SELF_IMPROVEMENT_TYPES = [
 /**
  * Generate a self-improvement task for PortOS itself
  * Uses Playwright and Opus to analyze and fix issues
+ *
+ * Enhanced with adaptive learning:
+ * - Skips task types with consistently poor success rates
+ * - Logs learning-based recommendations
+ * - Falls back to next available task type if current is skipped
  */
 async function generateSelfImprovementTask(state) {
-  // Get the next analysis type in rotation
+  // Get the next analysis type in rotation, but skip failing task types
   const lastType = state.stats.lastSelfImprovementType || '';
-  const currentIndex = SELF_IMPROVEMENT_TYPES.indexOf(lastType);
-  const nextType = SELF_IMPROVEMENT_TYPES[(currentIndex + 1) % SELF_IMPROVEMENT_TYPES.length];
+  let currentIndex = SELF_IMPROVEMENT_TYPES.indexOf(lastType);
+  let nextType = null;
+  let attempts = 0;
+  const maxAttempts = SELF_IMPROVEMENT_TYPES.length;
+
+  // Find next task type that isn't being skipped due to poor performance
+  while (attempts < maxAttempts) {
+    currentIndex = (currentIndex + 1) % SELF_IMPROVEMENT_TYPES.length;
+    const candidateType = SELF_IMPROVEMENT_TYPES[currentIndex];
+    const taskTypeKey = `self-improve:${candidateType}`;
+
+    // Check if this task type should be skipped based on learning data
+    const cooldownInfo = await getAdaptiveCooldownMultiplier(taskTypeKey).catch(() => ({ skip: false }));
+
+    if (cooldownInfo.skip) {
+      emitLog('warn', `Skipping ${candidateType} - poor success rate (${cooldownInfo.successRate}% after ${cooldownInfo.completed} attempts)`, {
+        taskType: candidateType,
+        successRate: cooldownInfo.successRate,
+        completed: cooldownInfo.completed,
+        reason: cooldownInfo.reason
+      });
+      attempts++;
+      continue;
+    }
+
+    // Log if there's a recommendation from learning system
+    if (cooldownInfo.recommendation) {
+      emitLog('info', `Learning insight for ${candidateType}: ${cooldownInfo.recommendation}`, {
+        taskType: candidateType,
+        multiplier: cooldownInfo.multiplier
+      });
+    }
+
+    nextType = candidateType;
+    break;
+  }
+
+  // If all task types are failing, log warning and pick the one that's been failing longest
+  if (!nextType) {
+    const skippedTypes = await getSkippedTaskTypes().catch(() => []);
+    emitLog('warn', `All self-improvement task types are underperforming - selecting oldest failed type for retry`, {
+      skippedCount: skippedTypes.length
+    });
+
+    // Sort by lastCompleted ascending (oldest first) and pick that one
+    if (skippedTypes.length > 0) {
+      skippedTypes.sort((a, b) => new Date(a.lastCompleted || 0) - new Date(b.lastCompleted || 0));
+      const oldestType = skippedTypes[0].taskType.replace('self-improve:', '');
+      nextType = oldestType;
+      emitLog('info', `Retrying ${oldestType} as it hasn't been attempted recently`);
+    } else {
+      // Fallback to first type in rotation
+      nextType = SELF_IMPROVEMENT_TYPES[0];
+    }
+  }
 
   // Update state with new timestamp and type
   await withStateLock(async () => {

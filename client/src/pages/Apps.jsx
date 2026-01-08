@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -16,17 +16,17 @@ export default function Apps() {
   const [refreshingConfig, setRefreshingConfig] = useState({});
   const [standardizing, setStandardizing] = useState({});
 
-  const fetchApps = async () => {
+  const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
     setApps(data);
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     fetchApps();
     const interval = setInterval(fetchApps, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchApps]);
 
   const handleDelete = async (app) => {
     await api.deleteApp(app.id);
