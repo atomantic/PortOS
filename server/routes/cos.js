@@ -7,6 +7,7 @@ import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
 import * as taskLearning from '../services/taskLearning.js';
+import * as weeklyDigest from '../services/weeklyDigest.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -366,6 +367,72 @@ router.post('/learning/insights', asyncHandler(async (req, res) => {
     context
   });
   res.json({ success: true, insight });
+}));
+
+// ============================================================
+// Weekly Digest Routes
+// ============================================================
+
+// GET /api/cos/digest - Get current week's digest
+router.get('/digest', asyncHandler(async (req, res) => {
+  const digest = await weeklyDigest.getWeeklyDigest();
+  res.json(digest);
+}));
+
+// GET /api/cos/digest/list - List all available weekly digests
+router.get('/digest/list', asyncHandler(async (req, res) => {
+  const digests = await weeklyDigest.listWeeklyDigests();
+  res.json({ digests });
+}));
+
+// GET /api/cos/digest/progress - Get current week's progress (live)
+router.get('/digest/progress', asyncHandler(async (req, res) => {
+  const progress = await weeklyDigest.getCurrentWeekProgress();
+  res.json(progress);
+}));
+
+// GET /api/cos/digest/text - Get text summary suitable for notifications
+router.get('/digest/text', asyncHandler(async (req, res) => {
+  const text = await weeklyDigest.generateTextSummary();
+  res.type('text/plain').send(text);
+}));
+
+// GET /api/cos/digest/:weekId - Get digest for specific week
+router.get('/digest/:weekId', asyncHandler(async (req, res) => {
+  const { weekId } = req.params;
+
+  // Validate weekId format (YYYY-WXX)
+  if (!/^\d{4}-W\d{2}$/.test(weekId)) {
+    throw new ServerError('Invalid weekId format. Use YYYY-WXX (e.g., 2026-W02)', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const digest = await weeklyDigest.getWeeklyDigest(weekId);
+  if (!digest) {
+    throw new ServerError('Digest not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(digest);
+}));
+
+// POST /api/cos/digest/generate - Force generate digest for a week
+router.post('/digest/generate', asyncHandler(async (req, res) => {
+  const { weekId } = req.body;
+  const digest = await weeklyDigest.generateWeeklyDigest(weekId || null);
+  res.json(digest);
+}));
+
+// GET /api/cos/digest/compare - Compare two weeks
+router.get('/digest/compare', asyncHandler(async (req, res) => {
+  const { week1, week2 } = req.query;
+
+  if (!week1 || !week2) {
+    throw new ServerError('Both week1 and week2 query parameters are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const comparison = await weeklyDigest.compareWeeks(week1, week2);
+  if (!comparison) {
+    throw new ServerError('One or both weeks not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(comparison);
 }));
 
 export default router;

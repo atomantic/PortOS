@@ -277,6 +277,23 @@ export const runCosScript = (id) => request(`/cos/scripts/${id}/run`, { method: 
 export const getCosScriptRuns = (id) => request(`/cos/scripts/${id}/runs`);
 export const getCosScriptPresets = () => request('/cos/scripts/presets');
 
+// Weekly Digest
+export const getCosWeeklyDigest = (weekId = null) => {
+  if (weekId) return request(`/cos/digest/${weekId}`);
+  return request('/cos/digest');
+};
+export const listCosWeeklyDigests = () => request('/cos/digest/list');
+export const getCosWeekProgress = () => request('/cos/digest/progress');
+export const getCosDigestText = async () => {
+  const response = await fetch('/api/cos/digest/text');
+  return response.text();
+};
+export const generateCosDigest = (weekId = null) => request('/cos/digest/generate', {
+  method: 'POST',
+  body: JSON.stringify({ weekId })
+});
+export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?week1=${week1}&week2=${week2}`);
+
 // Memory
 export const getMemories = (options = {}) => {
   const params = new URLSearchParams();
