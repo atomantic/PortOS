@@ -9,7 +9,8 @@ import {
   Loader2,
   Skull,
   Activity,
-  Clock
+  Clock,
+  Brain
 } from 'lucide-react';
 import * as api from '../../../services/api';
 
@@ -284,11 +285,29 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
         )}
 
         {agent.result && (
-          <div className={`text-sm flex items-center gap-2 ${agent.result.success ? 'text-port-success' : 'text-port-error'}`}>
-            {agent.result.success ? (
-              <><CheckCircle size={14} aria-hidden="true" /> Completed successfully</>
-            ) : (
-              <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className={`text-sm flex items-center gap-2 ${agent.result.success ? 'text-port-success' : 'text-port-error'}`}>
+              {agent.result.success ? (
+                <><CheckCircle size={14} aria-hidden="true" /> Completed successfully</>
+              ) : (
+                <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
+              )}
+            </div>
+            {/* Memory extraction status */}
+            {agent.result.success && (
+              <div className={`text-sm flex items-center gap-1 ${
+                agent.memoryExtraction?.created > 0 ? 'text-purple-400' :
+                agent.memoryExtraction?.pendingApproval > 0 ? 'text-yellow-400' : 'text-gray-500'
+              }`} title={agent.memoryExtraction?.extractedAt ? `Extracted at ${new Date(agent.memoryExtraction.extractedAt).toLocaleString()}` : 'No memories extracted'}>
+                <Brain size={14} aria-hidden="true" />
+                {agent.memoryExtraction?.created > 0 ? (
+                  <span>{agent.memoryExtraction.created} memor{agent.memoryExtraction.created === 1 ? 'y' : 'ies'}</span>
+                ) : agent.memoryExtraction?.pendingApproval > 0 ? (
+                  <span>{agent.memoryExtraction.pendingApproval} pending</span>
+                ) : (
+                  <span className="opacity-50">No memories</span>
+                )}
+              </div>
             )}
           </div>
         )}

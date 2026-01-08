@@ -681,9 +681,20 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 
   // Extract memories from successful output
   if (success && outputBuffer.length > 100) {
-    extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
+    const memoryResult = await extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
       console.log(`⚠️ Memory extraction failed: ${err.message}`);
+      return { created: 0, pendingApproval: 0 };
     });
+    // Update agent with memory extraction result
+    if (memoryResult.created > 0 || memoryResult.pendingApproval > 0) {
+      await updateAgent(agentId, {
+        memoryExtraction: {
+          created: memoryResult.created,
+          pendingApproval: memoryResult.pendingApproval,
+          extractedAt: new Date().toISOString()
+        }
+      });
+    }
   }
 
   // Handle app cooldown
@@ -825,9 +836,20 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     }
 
     if (success && outputBuffer.length > 100) {
-      extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
+      const memoryResult = await extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
         console.log(`⚠️ Memory extraction failed: ${err.message}`);
+        return { created: 0, pendingApproval: 0 };
       });
+      // Update agent with memory extraction result
+      if (memoryResult.created > 0 || memoryResult.pendingApproval > 0) {
+        await updateAgent(agentId, {
+          memoryExtraction: {
+            created: memoryResult.created,
+            pendingApproval: memoryResult.pendingApproval,
+            extractedAt: new Date().toISOString()
+          }
+        });
+      }
     }
 
     const appId = task.metadata?.app;
