@@ -53,6 +53,7 @@ pm2 logs
 - [x] M24: Goal-Driven Proactive Mode (COS-GOALS.md mission file, always-working behavior, expanded task types)
 - [x] M25: Task Learning System (completion tracking, success rate analysis, model effectiveness, recommendations)
 - [x] M26: Scheduled Scripts (cron scheduling, agent triggers, command allowlist, run history)
+- [x] M28: Weekly Digest UI (visual digest tab with insights, accomplishments, week-over-week comparisons)
 
 ### Documentation
 - [Architecture Overview](./docs/ARCHITECTURE.md) - System design, data flow
@@ -1414,3 +1415,49 @@ Every 10 evaluations, CoS logs:
 | `server/services/taskLearning.js` | Added getPerformanceSummary, recordLearningInsight, getRecentInsights |
 | `server/services/selfImprovement.js` | Added new analysis types to constants |
 | `server/routes/cos.js` | Added 3 new API endpoints for learning insights |
+
+---
+
+## M28: Weekly Digest UI (2026-01-08)
+
+Added a visual "Digest" tab to the Chief of Staff page that displays weekly activity summaries with insights, accomplishments, and week-over-week comparisons.
+
+### Features
+
+1. **Weekly Summary View**: Visual dashboard showing tasks completed, success rate, work time, and issue count
+2. **Week-over-Week Comparison**: Shows percentage changes from previous week with trend indicators
+3. **Live Week Progress**: Real-time view of current week progress with projected totals
+4. **Top Accomplishments**: Lists most significant completed tasks sorted by duration
+5. **Task Type Breakdown**: Table view of performance metrics by task type
+6. **Error Patterns**: Highlights recurring errors that need attention
+7. **Actionable Insights**: Auto-generated insights like "Star Performer", "Needs Attention", "Recurring Issue"
+8. **Historical Navigation**: Dropdown to view digests from previous weeks
+9. **Collapsible Sections**: Expandable/collapsible sections for better information density
+
+### UI Components
+
+The DigestTab displays:
+- **Summary Cards**: 4 stat cards showing completed tasks, success rate, work time, and issues
+- **Live Progress Panel**: Shows current week progress with running agents indicator
+- **Insights Section**: Color-coded insight cards (success/warning/action/info)
+- **Accomplishments List**: Top 10 accomplishments with task type and duration
+- **Task Type Table**: Sortable table showing completion counts and success rates
+- **Issues Panel**: Error patterns with occurrence counts and affected tasks
+
+### API Integration
+
+Uses existing Weekly Digest backend endpoints:
+- `GET /api/cos/digest` - Current week's digest
+- `GET /api/cos/digest/list` - List all available digests
+- `GET /api/cos/digest/progress` - Live current week progress
+- `POST /api/cos/digest/generate` - Force regenerate digest
+- `GET /api/cos/digest/:weekId` - Get specific week's digest
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `client/src/components/cos/tabs/DigestTab.jsx` | New Digest tab component |
+| `client/src/components/cos/index.js` | Added DigestTab export |
+| `client/src/components/cos/constants.js` | Added digest tab to TABS array |
+| `client/src/pages/ChiefOfStaff.jsx` | Import and render DigestTab |

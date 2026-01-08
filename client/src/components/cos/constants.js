@@ -4,13 +4,15 @@ import {
   Terminal,
   Brain,
   Activity,
-  Settings
+  Settings,
+  Calendar
 } from 'lucide-react';
 
 export const TABS = [
   { id: 'tasks', label: 'Tasks', icon: FileText },
   { id: 'agents', label: 'Agents', icon: Cpu },
   { id: 'scripts', label: 'Scripts', icon: Terminal },
+  { id: 'digest', label: 'Digest', icon: Calendar },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'health', label: 'Health', icon: Activity },
   { id: 'config', label: 'Config', icon: Settings }
