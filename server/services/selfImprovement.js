@@ -295,6 +295,7 @@ Use Playwright MCP to:
 3. Capture all console messages (errors, warnings)
 4. Identify the source of each error
 5. Fix the underlying issues in the code
+6. Commit fixes with clear descriptions
 
 Model: claude-opus-4-5-20251101`,
 

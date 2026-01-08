@@ -673,7 +673,7 @@ async function generateIdleReviewTask(state) {
         status: 'pending',
         priority: state.config.idleReviewPriority || 'MEDIUM',
         priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
-        description: `[Idle Review] Review ${nextApp.name} codebase for improvements: formatting issues, dead code, DRY violations, typos, and other small fixes that can be auto-approved`,
+        description: `[Idle Review] Review ${nextApp.name} codebase for improvements: formatting issues, dead code, DRY violations, typos, and other small fixes that can be auto-approved. Commit each fix with a clear description.`,
         metadata: {
           app: nextApp.id,
           appName: nextApp.name,
@@ -993,7 +993,8 @@ Analyze and improve test coverage for PortOS:
    - Use appropriate mocks
    - Test edge cases
 
-Run npm test to verify all tests pass.
+5. Run npm test to verify all tests pass
+6. Commit test additions with clear message describing what's covered
 
 Use model: claude-opus-4-5-20251101 for comprehensive test design`,
 
