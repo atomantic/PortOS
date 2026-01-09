@@ -10,7 +10,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents } from './cos.js';
+import { cosEvents, updateAgent } from './cos.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity, cosineSimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
 

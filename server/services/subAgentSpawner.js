@@ -911,7 +911,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 - **Description**: ${task.description}
 ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
-${task.metadata?.screenshots?.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
+${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 
 ## Instructions
 1. Analyze the task requirements carefully
