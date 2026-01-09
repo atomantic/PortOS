@@ -126,6 +126,7 @@ const DEFAULT_STATE = {
     tasksCompleted: 0,
     totalRuntime: 0,
     agentsSpawned: 0,
+    errors: 0,
     lastEvaluation: null,
     lastIdleReview: null               // Track last idle review time
   },
@@ -1734,6 +1735,8 @@ export async function completeAgent(agentId, result = {}) {
 
     if (result.success) {
       state.stats.tasksCompleted++;
+    } else {
+      state.stats.errors = (state.stats.errors || 0) + 1;
     }
 
     await saveState(state);
