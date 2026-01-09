@@ -1,15 +1,28 @@
+// =============================================================================
+// Port Configuration - All ports defined here as single source of truth
+// =============================================================================
+const PORTS = {
+  API: 5554,           // Express API server
+  UI: 5555,            // Vite dev server (client)
+  CDP: 5556,           // Chrome DevTools Protocol (browser automation)
+  CDP_HEALTH: 5557,    // Browser health check endpoint
+  COS: 5558,           // Chief of Staff agent runner
+  AUTOFIXER: 5559,     // Autofixer API
+  AUTOFIXER_UI: 5560   // Autofixer UI
+};
+
 module.exports = {
+  PORTS, // Export for other configs to reference
+
   apps: [
     {
       name: 'portos-server',
       script: 'server/index.js',
       cwd: __dirname,
       interpreter: 'node',
-      // PortOS convention: define all ports used by this process
-      ports: { api: 5554 },
       env: {
         NODE_ENV: 'development',
-        PORT: 5554,
+        PORT: PORTS.API,
         HOST: '0.0.0.0'
       },
       watch: false,
@@ -23,10 +36,9 @@ module.exports = {
       // CoS Agent Runner - isolated process for spawning Claude CLI agents
       // Does NOT restart when portos-server restarts, preventing orphaned agents
       // Security: Binds to localhost only - not exposed externally
-      ports: { api: 5558 },
       env: {
         NODE_ENV: 'development',
-        PORT: 5558,
+        PORT: PORTS.COS,
         HOST: '127.0.0.1'
       },
       watch: false,
@@ -40,13 +52,13 @@ module.exports = {
       kill_timeout: 30000
     },
     {
-      name: 'portos-client',
+      name: 'portos-ui',
       script: 'node_modules/.bin/vite',
       cwd: `${__dirname}/client`,
-      args: '--host 0.0.0.0 --port 5555',
-      ports: { ui: 5555 },
+      args: `--host 0.0.0.0 --port ${PORTS.UI}`,
       env: {
-        NODE_ENV: 'development'
+        NODE_ENV: 'development',
+        VITE_PORT: PORTS.UI
       },
       watch: false
     },
@@ -55,10 +67,9 @@ module.exports = {
       script: 'autofixer/server.js',
       cwd: __dirname,
       interpreter: 'node',
-      ports: { api: 5559 },
       env: {
         NODE_ENV: 'development',
-        PORT: 5559
+        PORT: PORTS.AUTOFIXER
       },
       watch: false,
       autorestart: true,
@@ -71,10 +82,9 @@ module.exports = {
       script: 'autofixer/ui.js',
       cwd: __dirname,
       interpreter: 'node',
-      ports: { ui: 5560 },
       env: {
         NODE_ENV: 'development',
-        PORT: 5560
+        PORT: PORTS.AUTOFIXER_UI
       },
       watch: false,
       autorestart: true,
@@ -89,12 +99,11 @@ module.exports = {
       interpreter: 'node',
       // Security: CDP binds to 127.0.0.1 by default (set CDP_HOST=0.0.0.0 to expose)
       // Remote access should go through portos-server proxy with authentication
-      ports: { cdp: 5556, health: 5557 },
       env: {
         NODE_ENV: 'development',
-        CDP_PORT: 5556,
+        CDP_PORT: PORTS.CDP,
         CDP_HOST: '127.0.0.1',
-        PORT: 5557
+        PORT: PORTS.CDP_HEALTH
       },
       watch: false,
       autorestart: true,

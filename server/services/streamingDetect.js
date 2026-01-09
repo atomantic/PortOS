@@ -20,6 +20,49 @@ export function parseEcosystemConfig(content) {
     portConstants[match[1]] = parseInt(match[2]);
   }
 
+  // Extract PORTS object - handles both flat and nested structures
+  // Flat: const PORTS = { WEB: 5550, API: 5551 }
+  // Nested: const PORTS = { server: { api: 5554 }, client: { ui: 5555 } }
+  const portsObjStart = content.match(/(?:const|let|var)\s+PORTS\s*=\s*\{/);
+  if (portsObjStart) {
+    const startIdx = portsObjStart.index + portsObjStart[0].length - 1;
+    let braceCount = 0;
+    let endIdx = startIdx;
+    for (let i = startIdx; i < content.length; i++) {
+      if (content[i] === '{') braceCount++;
+      if (content[i] === '}') {
+        braceCount--;
+        if (braceCount === 0) {
+          endIdx = i;
+          break;
+        }
+      }
+    }
+    const portsBlock = content.substring(startIdx, endIdx + 1);
+
+    // Parse flat entries: KEY: 5550
+    const flatEntries = portsBlock.matchAll(/(\w+)\s*:\s*(\d+)/g);
+    for (const entry of flatEntries) {
+      portConstants[`PORTS.${entry[1]}`] = parseInt(entry[2]);
+    }
+
+    // Parse nested entries: key: { subkey: 5550 }
+    const nestedMatches = portsBlock.matchAll(/(\w+)\s*:\s*\{([^}]+)\}/g);
+    for (const nestedMatch of nestedMatches) {
+      const parentKey = nestedMatch[1];
+      const nestedContent = nestedMatch[2];
+      const nestedPorts = {};
+      const subEntries = nestedContent.matchAll(/(\w+)\s*:\s*(\d+)/g);
+      for (const subEntry of subEntries) {
+        const port = parseInt(subEntry[2]);
+        portConstants[`PORTS.${parentKey}.${subEntry[1]}`] = port;
+        nestedPorts[subEntry[1]] = port;
+      }
+      // Also store the whole nested object for `ports: PORTS.server` references
+      portConstants[`PORTS.${parentKey}`] = nestedPorts;
+    }
+  }
+
   // Match each app block: { name: '...', ... }
   // This regex captures app objects including nested braces
   const appBlockRegex = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
@@ -95,7 +138,7 @@ export function parseEcosystemConfig(content) {
     // Extract ports - first try the PortOS standard 'ports' object
     let ports = {};
 
-    // Look for ports: { label: port, ... } object (PortOS standard)
+    // Look for ports: { label: port, ... } object with literal values
     const portsObjMatch = appBlock.match(/\bports\s*:\s*\{([^}]+)\}/);
     if (portsObjMatch) {
       const portsContent = portsObjMatch[1];
@@ -105,24 +148,64 @@ export function parseEcosystemConfig(content) {
       }
     }
 
+    // Look for ports: VARIABLE reference (e.g., ports: PORTS.server)
+    if (Object.keys(ports).length === 0) {
+      const portsVarMatch = appBlock.match(/\bports\s*:\s*([\w.]+)/);
+      if (portsVarMatch) {
+        const varRef = portsVarMatch[1];
+        const resolved = portConstants[varRef];
+        if (resolved && typeof resolved === 'object') {
+          ports = { ...resolved };
+        }
+      }
+    }
+
     // Fall back to legacy parsing if no ports object found
     if (Object.keys(ports).length === 0) {
-      // Extract PORT from env
-      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*(\d+)/);
-      if (portMatch) {
-        ports.api = parseInt(portMatch[1]);
+      // Helper to resolve port value (literal or variable reference)
+      const resolvePortValue = (value) => {
+        if (/^\d+$/.test(value)) return parseInt(value);
+        // Try PORTS.XXX reference
+        if (portConstants[value]) return portConstants[value];
+        // Try direct constant reference
+        if (portConstants[value]) return portConstants[value];
+        return null;
+      };
+
+      // Extract CDP_PORT first (Chrome DevTools Protocol port for browser processes)
+      // Word boundary ensures we don't match VITE_CDP_PORT
+      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bCDP_PORT\s*:\s*([\w.]+)/);
+      if (cdpPortMatch) {
+        const resolved = resolvePortValue(cdpPortMatch[1]);
+        if (resolved) ports.cdp = resolved;
       }
 
-      // Extract CDP_PORT (Chrome DevTools Protocol port for browser processes)
-      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*CDP_PORT\s*:\s*(\d+)/);
-      if (cdpPortMatch) {
-        ports.cdp = parseInt(cdpPortMatch[1]);
-      } else {
-        // Check for variable reference (CDP_PORT: CDP_PORT)
-        const cdpVarMatch = appBlock.match(/CDP_PORT\s*:\s*(\w+)/);
-        if (cdpVarMatch && portConstants[cdpVarMatch[1]]) {
-          ports.cdp = portConstants[cdpVarMatch[1]];
+      // Extract PORT from env (handles both literals and variable references)
+      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*([\w.]+)/);
+      if (portMatch) {
+        const resolved = resolvePortValue(portMatch[1]);
+        if (resolved) {
+          // Smart labeling based on process name and context
+          const isUiProcess = /[-_](ui|client)$/i.test(processName);
+          const isBrowserProcess = /[-_]browser$/i.test(processName);
+          const hasCdpPort = ports.cdp !== undefined;
+
+          if (isUiProcess) {
+            ports.ui = resolved;
+          } else if (isBrowserProcess && hasCdpPort) {
+            // Browser processes with CDP_PORT use PORT for health checks
+            ports.health = resolved;
+          } else {
+            ports.api = resolved;
+          }
         }
+      }
+
+      // Extract VITE_PORT for Vite processes
+      const vitePortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*VITE_PORT\s*:\s*([\w.]+)/);
+      if (vitePortMatch) {
+        const resolved = resolvePortValue(vitePortMatch[1]);
+        if (resolved) ports.ui = resolved;
       }
 
       // Also check for --port in args
