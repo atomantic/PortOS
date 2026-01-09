@@ -552,16 +552,21 @@ export async function evaluateTasks() {
     }
   }
 
-  // Background: Queue eligible self-improvement tasks as system tasks (runs regardless of user tasks)
-  // These will be picked up in Priority 2 on subsequent evaluations
-  if (state.config.idleReviewEnabled) {
+  // Check if there are pending user tasks (even if on cooldown)
+  // If user tasks exist, don't run self-improvement - wait for user tasks to be ready
+  const hasPendingUserTasks = pendingUserTasks.length > 0;
+
+  // Background: Queue eligible self-improvement tasks as system tasks
+  // Only queue if there are NO pending user tasks (user tasks always take priority)
+  if (state.config.idleReviewEnabled && !hasPendingUserTasks) {
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
 
-  // Priority 3: Only generate direct idle task if nothing else to do AND no system tasks queued
-  // This is a fallback - normally self-improvement tasks should be queued as system tasks
-  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled) {
-    // Check if we have any pending system tasks that just got queued
+  // Priority 3: Only generate direct idle task if:
+  // 1. Nothing to spawn
+  // 2. No pending user tasks (even on cooldown)
+  // 3. No system tasks queued
+  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks) {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
