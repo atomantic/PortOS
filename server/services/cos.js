@@ -2047,9 +2047,18 @@ export async function cleanupZombieAgents() {
           // Process is still running, don't mark as zombie
           continue;
         }
+      } else {
+        // No PID yet - agent might still be initializing
+        // Give it a 30 second grace period before marking as zombie
+        const startedAt = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
+        const ageMs = Date.now() - startedAt;
+        if (ageMs < 30000) {
+          // Agent is less than 30 seconds old and has no PID - still initializing
+          continue;
+        }
       }
 
-      // Agent is not tracked anywhere and process is dead (or no PID) - it's a zombie
+      // Agent is not tracked anywhere and process is dead (or no PID after grace period) - it's a zombie
       console.log(`🧟 Zombie agent detected: ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
       state.agents[agent.id] = {
         ...agent,
