@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, X, Check, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code } from 'lucide-react';
 
 const NOTIFICATION_TYPE_CONFIG = {
   memory_approval: {

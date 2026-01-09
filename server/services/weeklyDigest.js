@@ -11,7 +11,6 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cosEvents, emitLog, getAgents } from './cos.js';
-import { getLearningInsights, getAllTaskDurations } from './taskLearning.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Plus, RefreshCw, Image, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -43,14 +43,6 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const awaitingApproval = useMemo(() => tasks.cos?.awaitingApproval || [], [tasks.cos?.awaitingApproval]);
 
   // Split tasks into pending (includes in_progress, blocked) and completed
-  const pendingUserTasks = useMemo(() =>
-    userTasks.filter(t => t.status !== 'completed'),
-    [userTasks]
-  );
-  const completedUserTasks = useMemo(() =>
-    userTasks.filter(t => t.status === 'completed'),
-    [userTasks]
-  );
   const pendingSystemTasks = useMemo(() =>
     cosTasks.filter(t => t.status !== 'completed'),
     [cosTasks]

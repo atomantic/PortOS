@@ -17,7 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps } from './apps.js';
-import { shouldSkipTaskType, getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, recordLearningInsight } from './taskLearning.js';
+import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary } from './taskLearning.js';
 
 const execAsync = promisify(exec);
 

@@ -8,9 +8,19 @@ PortOS exposes a REST API on port 5554 and WebSocket events via Socket.IO.
 http://localhost:5554/api
 ```
 
-## Authentication
+## Security Model
 
-No authentication is required. PortOS relies on network-level security (Tailscale) for access control.
+PortOS is designed for personal/developer use on trusted networks. It implements the following security measures:
+
+- **Network isolation**: By default, access should be restricted to trusted networks (e.g., Tailscale VPN, localhost)
+- **Command allowlist**: Shell command execution is restricted to an approved allowlist (see `server/lib/commandAllowlist.js`)
+- **Input validation**: All API inputs are validated using Zod schemas
+- **No application-level authentication**: PortOS assumes network-level access control
+
+**Important**: Do not expose PortOS APIs directly to untrusted networks. For production deployments, consider:
+- Binding to `127.0.0.1` instead of `0.0.0.0`
+- Running behind an authenticated reverse proxy
+- Using Tailscale or similar VPN for remote access
 
 ## REST Endpoints
 
