@@ -242,6 +242,48 @@ function extractErrorFromOutput(output, exitCode) {
   };
 }
 
+/**
+ * Process post-completion tasks: memory extraction and app cooldown
+ * Shared between handleAgentCompletion (runner mode) and spawnDirectly (direct mode)
+ */
+async function processAgentCompletion(agentId, task, success, outputBuffer) {
+  // Extract memories from successful output
+  if (success && outputBuffer.length > 100) {
+    const memoryResult = await extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
+      console.log(`⚠️ Memory extraction failed: ${err.message}`);
+      return { created: 0, pendingApproval: 0 };
+    });
+    if (memoryResult.created > 0 || memoryResult.pendingApproval > 0) {
+      await updateAgent(agentId, {
+        memoryExtraction: {
+          created: memoryResult.created,
+          pendingApproval: memoryResult.pendingApproval,
+          extractedAt: new Date().toISOString()
+        }
+      });
+    }
+  }
+
+  // Handle app cooldown
+  const appId = task.metadata?.app;
+  if (appId) {
+    const config = await getConfig();
+    const cooldownMs = config.appReviewCooldownMs || 3600000;
+
+    const issuesFound = success ? 1 : 0;
+    const issuesFixed = success ? 1 : 0;
+    await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
+      emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
+    });
+
+    await startAppCooldown(appId, cooldownMs).catch(err => {
+      emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
+    });
+
+    emitLog('info', `App ${appId} cooldown started (${Math.round(cooldownMs / 60000)} min)`, { appId, cooldownMs });
+  }
+}
+
 // Active agent processes
 const activeAgents = new Map();
 
@@ -679,42 +721,8 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     });
   }
 
-  // Extract memories from successful output
-  if (success && outputBuffer.length > 100) {
-    const memoryResult = await extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
-      console.log(`⚠️ Memory extraction failed: ${err.message}`);
-      return { created: 0, pendingApproval: 0 };
-    });
-    // Update agent with memory extraction result
-    if (memoryResult.created > 0 || memoryResult.pendingApproval > 0) {
-      await updateAgent(agentId, {
-        memoryExtraction: {
-          created: memoryResult.created,
-          pendingApproval: memoryResult.pendingApproval,
-          extractedAt: new Date().toISOString()
-        }
-      });
-    }
-  }
-
-  // Handle app cooldown
-  const appId = task.metadata?.app;
-  if (appId) {
-    const config = await getConfig();
-    const cooldownMs = config.appReviewCooldownMs || 3600000;
-
-    const issuesFound = success ? 1 : 0;
-    const issuesFixed = success ? 1 : 0;
-    await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
-      emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
-    });
-
-    await startAppCooldown(appId, cooldownMs).catch(err => {
-      emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
-    });
-
-    emitLog('info', `App ${appId} cooldown started (${Math.round(cooldownMs / 60000)} min)`, { appId, cooldownMs });
-  }
+  // Process memory extraction and app cooldown
+  await processAgentCompletion(agentId, task, success, outputBuffer);
 
   runnerAgents.delete(agentId);
 }
@@ -835,40 +843,8 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
       });
     }
 
-    if (success && outputBuffer.length > 100) {
-      const memoryResult = await extractAndStoreMemories(agentId, task.id, outputBuffer, task).catch(err => {
-        console.log(`⚠️ Memory extraction failed: ${err.message}`);
-        return { created: 0, pendingApproval: 0 };
-      });
-      // Update agent with memory extraction result
-      if (memoryResult.created > 0 || memoryResult.pendingApproval > 0) {
-        await updateAgent(agentId, {
-          memoryExtraction: {
-            created: memoryResult.created,
-            pendingApproval: memoryResult.pendingApproval,
-            extractedAt: new Date().toISOString()
-          }
-        });
-      }
-    }
-
-    const appId = task.metadata?.app;
-    if (appId) {
-      const config = await getConfig();
-      const cooldownMs = config.appReviewCooldownMs || 3600000;
-
-      const issuesFound = success ? 1 : 0;
-      const issuesFixed = success ? 1 : 0;
-      await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
-        emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
-      });
-
-      await startAppCooldown(appId, cooldownMs).catch(err => {
-        emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
-      });
-
-      emitLog('info', `App ${appId} cooldown started (${Math.round(cooldownMs / 60000)} min)`, { appId, cooldownMs });
-    }
+    // Process memory extraction and app cooldown
+    await processAgentCompletion(agentId, task, success, outputBuffer);
 
     unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
     activeAgents.delete(agentId);

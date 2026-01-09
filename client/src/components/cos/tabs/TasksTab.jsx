@@ -16,6 +16,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import * as api from '../../../services/api';
+import { processScreenshotUploads } from '../../../utils/fileUpload';
 import TaskItem from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 
@@ -120,51 +121,12 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     }
   };
 
-  // Screenshot handling - limit to 10MB per file
-  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
+  // Screenshot handling using shared utility
   const handleFileSelect = async (e) => {
-    const files = Array.from(e.target.files);
-    for (const file of files) {
-      if (!file.type.startsWith('image/')) continue;
-      if (file.size > MAX_FILE_SIZE) {
-        toast.error(`File "${file.name}" exceeds 10MB limit`);
-        continue;
-      }
-
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        const result = ev?.target?.result;
-        if (typeof result !== 'string') {
-          console.error('❌ Failed to read file: unexpected FileReader result type');
-          return;
-        }
-
-        const parts = result.split(',');
-        if (parts.length < 2) {
-          console.error('❌ Failed to read file: unexpected data URL format');
-          return;
-        }
-
-        const base64 = parts[1];
-        const uploaded = await api.uploadScreenshot(base64, file.name, file.type).catch((err) => {
-          console.error(`❌ Failed to upload screenshot: ${err.message}`);
-          return null;
-        });
-        if (uploaded) {
-          setScreenshots(prev => [...prev, {
-            id: uploaded.id,
-            filename: uploaded.filename,
-            preview: result,
-            path: uploaded.path
-          }]);
-        }
-      };
-      reader.onerror = (err) => {
-        console.error(`❌ FileReader failed to read file: ${err.message}`);
-      };
-      reader.readAsDataURL(file);
-    }
+    await processScreenshotUploads(e.target.files, {
+      onSuccess: (fileInfo) => setScreenshots(prev => [...prev, fileInfo]),
+      onError: (msg) => toast.error(msg)
+    });
     e.target.value = '';
   };
 
