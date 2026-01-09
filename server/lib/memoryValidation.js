@@ -11,7 +11,7 @@ export const memoryTypeEnum = z.enum([
 ]);
 
 // Memory status enum
-export const memoryStatusEnum = z.enum(['active', 'archived', 'expired']);
+export const memoryStatusEnum = z.enum(['active', 'archived', 'expired', 'pending_approval']);
 
 // Memory category enum (extensible, but common ones)
 export const memoryCategoryEnum = z.enum([

@@ -201,6 +201,24 @@ router.put('/:id', asyncHandler(async (req, res) => {
   res.json(updated);
 }));
 
+// POST /api/memory/:id/approve - Approve a pending memory
+router.post('/:id/approve', asyncHandler(async (req, res) => {
+  const result = await memory.approveMemory(req.params.id);
+  if (!result.success) {
+    throw new ServerError(result.error, { status: result.error === 'Memory not found' ? 404 : 400 });
+  }
+  res.json(result);
+}));
+
+// POST /api/memory/:id/reject - Reject a pending memory
+router.post('/:id/reject', asyncHandler(async (req, res) => {
+  const result = await memory.rejectMemory(req.params.id);
+  if (!result.success) {
+    throw new ServerError(result.error, { status: result.error === 'Memory not found' ? 404 : 400 });
+  }
+  res.json(result);
+}));
+
 // DELETE /api/memory/:id - Delete a memory
 router.delete('/:id', asyncHandler(async (req, res) => {
   const hard = req.query.hard === 'true';

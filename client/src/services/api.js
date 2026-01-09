@@ -343,6 +343,23 @@ export const consolidateMemories = (options = {}) => request('/memory/consolidat
   body: JSON.stringify(options)
 });
 export const getEmbeddingStatus = () => request('/memory/embeddings/status');
+export const approveMemory = (id) => request(`/memory/${id}/approve`, { method: 'POST' });
+export const rejectMemory = (id) => request(`/memory/${id}/reject`, { method: 'POST' });
+
+// Notifications
+export const getNotifications = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.type) params.set('type', options.type);
+  if (options.unreadOnly) params.set('unreadOnly', 'true');
+  if (options.limit) params.set('limit', options.limit);
+  return request(`/notifications?${params}`);
+};
+export const getNotificationCount = () => request('/notifications/count');
+export const getNotificationCounts = () => request('/notifications/counts');
+export const markNotificationRead = (id) => request(`/notifications/${id}/read`, { method: 'POST' });
+export const markAllNotificationsRead = () => request('/notifications/read-all', { method: 'POST' });
+export const deleteNotification = (id) => request(`/notifications/${id}`, { method: 'DELETE' });
+export const clearNotifications = () => request('/notifications', { method: 'DELETE' });
 
 // PM2 Standardization
 export const analyzeStandardization = (repoPath, providerId) => request('/standardize/analyze', {

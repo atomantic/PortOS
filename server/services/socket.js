@@ -5,6 +5,7 @@ import { appsEvents } from './apps.js';
 import { errorEvents } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
 import * as pm2Standardizer from './pm2Standardizer.js';
+import { notificationEvents } from './notifications.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -12,6 +13,8 @@ const activeStreams = new Map();
 const cosSubscribers = new Set();
 // Store error subscribers for auto-fix notifications
 const errorSubscribers = new Set();
+// Store notification subscribers
+const notificationSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -183,6 +186,17 @@ export function initSocket(io) {
       socket.emit('errors:unsubscribed');
     });
 
+    // Notification subscriptions
+    socket.on('notifications:subscribe', () => {
+      notificationSubscribers.add(socket);
+      socket.emit('notifications:subscribed');
+    });
+
+    socket.on('notifications:unsubscribe', () => {
+      notificationSubscribers.delete(socket);
+      socket.emit('notifications:unsubscribed');
+    });
+
     // Handle error recovery requests (can trigger auto-fix agents)
     socket.on('error:recover', async ({ code, context }) => {
       console.log(`🔧 Error recovery requested: ${code}`);
@@ -205,6 +219,7 @@ export function initSocket(io) {
       cleanupStream(socket.id);
       cosSubscribers.delete(socket);
       errorSubscribers.delete(socket);
+      notificationSubscribers.delete(socket);
     });
   });
 
@@ -219,6 +234,9 @@ export function initSocket(io) {
 
   // Set up apps event forwarding to all clients
   setupAppsEventForwarding();
+
+  // Set up notification event forwarding
+  setupNotificationEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -310,4 +328,20 @@ function setupAppsEventForwarding() {
       ioInstance.emit('apps:changed', data);
     }
   });
+}
+
+// Broadcast to notification subscribers only
+function broadcastToNotifications(event, data) {
+  for (const socket of notificationSubscribers) {
+    socket.emit(event, data);
+  }
+}
+
+// Set up notification event forwarding
+function setupNotificationEventForwarding() {
+  notificationEvents.on('added', (data) => broadcastToNotifications('notifications:added', data));
+  notificationEvents.on('removed', (data) => broadcastToNotifications('notifications:removed', data));
+  notificationEvents.on('updated', (data) => broadcastToNotifications('notifications:updated', data));
+  notificationEvents.on('count-changed', (count) => broadcastToNotifications('notifications:count', count));
+  notificationEvents.on('cleared', () => broadcastToNotifications('notifications:cleared', {}));
 }

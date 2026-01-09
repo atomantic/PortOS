@@ -24,6 +24,8 @@ import {
 import packageJson from '../../package.json';
 import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
+import { useNotifications } from '../hooks/useNotifications';
+import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -37,7 +39,7 @@ const navItems = [
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
-  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true },
+  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true, showBadge: true },
   {
     label: 'Dev Tools',
     icon: Terminal,
@@ -66,6 +68,16 @@ export default function Layout() {
 
   // Subscribe to server error notifications
   useErrorNotifications();
+
+  // Notifications for user task alerts
+  const {
+    notifications,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    removeNotification,
+    clearAll
+  } = useNotifications();
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));
@@ -161,11 +173,25 @@ export default function Layout() {
           title={collapsed ? item.label : undefined}
         >
           <div className="flex items-center gap-3">
-            <Icon size={20} className="flex-shrink-0" />
+            <div className="relative">
+              <Icon size={20} className="flex-shrink-0" />
+              {/* Badge for collapsed state */}
+              {item.showBadge && unreadCount > 0 && collapsed && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </div>
             <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
               {item.label}
             </span>
           </div>
+          {/* Badge for expanded state */}
+          {item.showBadge && unreadCount > 0 && !collapsed && (
+            <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
         </NavLink>
       );
     }
@@ -324,8 +350,27 @@ export default function Layout() {
             <Logo size={18} className="text-port-accent" />
             <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
-          <div className="w-8" /> {/* Spacer for centering */}
+          <NotificationDropdown
+            notifications={notifications}
+            unreadCount={unreadCount}
+            onMarkAsRead={markAsRead}
+            onMarkAllAsRead={markAllAsRead}
+            onRemove={removeNotification}
+            onClearAll={clearAll}
+          />
         </header>
+
+        {/* Desktop notification dropdown - fixed position top right */}
+        <div className="hidden lg:block fixed top-4 right-4 z-50">
+          <NotificationDropdown
+            notifications={notifications}
+            unreadCount={unreadCount}
+            onMarkAsRead={markAsRead}
+            onMarkAllAsRead={markAllAsRead}
+            onRemove={removeNotification}
+            onClearAll={clearAll}
+          />
+        </div>
 
         {/* Main content */}
         <main className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>

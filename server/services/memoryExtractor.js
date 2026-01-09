@@ -8,6 +8,7 @@
 import { createMemory } from './memory.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos.js';
+import * as notifications from './notifications.js';
 
 /**
  * Parse structured MEMORY blocks from agent output
@@ -265,18 +266,55 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     created.push(memory);
   }
 
-  // Queue medium confidence for approval (just emit event for now)
-  if (mediumConfidence.length > 0) {
-    console.log(`🧠 ${mediumConfidence.length} memories pending approval`);
+  // Store medium confidence memories as pending_approval
+  const pendingMemories = [];
+  for (const mem of mediumConfidence) {
+    const embedding = await generateMemoryEmbedding(mem);
+    const memory = await createMemory({
+      ...mem,
+      sourceAgentId: agentId,
+      sourceTaskId: taskId,
+      status: 'pending_approval'
+    }, embedding);
+    pendingMemories.push(memory);
+  }
+
+  if (pendingMemories.length > 0) {
+    console.log(`🧠 ${pendingMemories.length} memories pending approval`);
     cosEvents.emit('memory:approval-needed', {
       agentId,
       taskId,
-      memories: mediumConfidence.map(m => ({
+      memories: pendingMemories.map(m => ({
+        id: m.id,
         type: m.type,
         content: m.content.substring(0, 200),
         confidence: m.confidence
       }))
     });
+
+    // Create notification for user
+    for (const mem of pendingMemories) {
+      const alreadyExists = await notifications.exists(
+        notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+        'memoryId',
+        mem.id
+      );
+      if (!alreadyExists) {
+        await notifications.addNotification({
+          type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+          title: `Memory needs approval`,
+          description: mem.summary || mem.content.substring(0, 100),
+          priority: notifications.PRIORITY_LEVELS.MEDIUM,
+          link: '/cos/memory',
+          metadata: {
+            memoryId: mem.id,
+            memoryType: mem.type,
+            agentId,
+            taskId
+          }
+        });
+      }
+    }
   }
 
   console.log(`🧠 Extracted ${created.length} memories from agent ${agentId}`);
@@ -284,13 +322,14 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     agentId,
     taskId,
     count: created.length,
-    pendingApproval: mediumConfidence.length
+    pendingApproval: pendingMemories.length
   });
 
   return {
     created: created.length,
-    pendingApproval: mediumConfidence.length,
-    memories: created
+    pendingApproval: pendingMemories.length,
+    memories: created,
+    pendingMemories
   };
 }
 

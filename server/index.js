@@ -24,6 +24,7 @@ import agentsRoutes from './routes/agents.js';
 import cosRoutes from './routes/cos.js';
 import scriptsRoutes from './routes/scripts.js';
 import memoryRoutes from './routes/memory.js';
+import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
@@ -89,6 +90,7 @@ app.use('/api/agents', agentsRoutes);
 app.use('/api/cos/scripts', scriptsRoutes); // Mount before /api/cos to avoid route conflicts
 app.use('/api/cos', cosRoutes);
 app.use('/api/memory', memoryRoutes);
+app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 
 // Initialize script runner

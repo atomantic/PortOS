@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Trash2, X } from 'lucide-react';
+import { RefreshCw, Trash2, X, Check, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
@@ -8,6 +8,7 @@ import MemoryGraph from './MemoryGraph';
 
 export default function MemoryTab() {
   const [memories, setMemories] = useState([]);
+  const [pendingMemories, setPendingMemories] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -18,16 +19,30 @@ export default function MemoryTab() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    const [memoriesRes, statsRes, embRes] = await Promise.all([
+    const [memoriesRes, pendingRes, statsRes, embRes] = await Promise.all([
       api.getMemories({ limit: 100, ...filters }).catch(() => ({ memories: [] })),
+      api.getMemories({ status: 'pending_approval', limit: 50 }).catch(() => ({ memories: [] })),
       api.getMemoryStats().catch(() => null),
       api.getEmbeddingStatus().catch(() => null)
     ]);
     setMemories(memoriesRes.memories || []);
+    setPendingMemories(pendingRes.memories || []);
     setStats(statsRes);
     setEmbeddingStatus(embRes);
     setLoading(false);
   }, [filters]);
+
+  const handleApprove = async (id) => {
+    await api.approveMemory(id);
+    toast.success('Memory approved');
+    fetchData();
+  };
+
+  const handleReject = async (id) => {
+    await api.rejectMemory(id);
+    toast.success('Memory rejected');
+    fetchData();
+  };
 
   useEffect(() => {
     fetchData();
@@ -60,6 +75,7 @@ export default function MemoryTab() {
           <h3 className="text-lg font-semibold text-white">Memory System</h3>
           <p className="text-sm text-gray-500">
             {stats?.active || 0} active memories
+            {stats?.pendingApproval > 0 && <span className="text-yellow-400"> * {stats.pendingApproval} pending</span>}
             {embeddingStatus?.available ? ' * LM Studio connected' : ' * LM Studio offline'}
           </p>
         </div>
@@ -131,6 +147,59 @@ export default function MemoryTab() {
             <div key={type} className={`p-2 rounded-lg border text-center ${MEMORY_TYPE_COLORS[type] || 'border-port-border'}`}>
               <div className="text-lg font-bold">{count}</div>
               <div className="text-xs opacity-75">{type}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pending Approvals */}
+      {pendingMemories.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-lg font-semibold text-yellow-500">Pending Approval ({pendingMemories.length})</h3>
+          {pendingMemories.map(memory => (
+            <div key={memory.id} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`px-2 py-0.5 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
+                      {memory.type}
+                    </span>
+                    <span className="text-xs text-gray-500">{memory.category}</span>
+                    <span className="text-xs text-yellow-400">
+                      {((memory.confidence || 0) * 100).toFixed(0)}% confidence
+                    </span>
+                  </div>
+                  <p className="text-white text-sm">{memory.summary || memory.content?.substring(0, 200)}</p>
+                  {memory.tags?.length > 0 && (
+                    <div className="flex gap-1 mt-2">
+                      {memory.tags.map(tag => (
+                        <span key={tag} className="px-2 py-0.5 text-xs bg-port-border rounded text-gray-400">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-xs text-gray-500 mt-2">
+                    {new Date(memory.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleApprove(memory.id)}
+                    className="p-2 bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors"
+                    title="Approve"
+                  >
+                    <Check size={16} />
+                  </button>
+                  <button
+                    onClick={() => handleReject(memory.id)}
+                    className="p-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors"
+                    title="Reject"
+                  >
+                    <XCircle size={16} />
+                  </button>
+                </div>
+              </div>
             </div>
           ))}
         </div>
