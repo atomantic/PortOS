@@ -78,10 +78,12 @@ export function clearPendingAutoFixTasks() {
  */
 async function handleAIProviderError(error) {
   const ctx = error.context || {};
-  const errorKey = `${error.code}-${ctx.runId}`;
+  // Use stable key based on provider + model to prevent duplicates from different runIds
+  // This ensures we only create one task per unique provider/model combination
+  const errorKey = `${error.code}-${ctx.provider}-${ctx.model}`;
 
   if (isDuplicateError(errorKey)) {
-    console.log(`⏭️ Skipping duplicate AI provider error: ${ctx.runId}`);
+    console.log(`⏭️ Skipping duplicate AI provider error: ${ctx.provider} (${ctx.model})`);
     return;
   }
 
