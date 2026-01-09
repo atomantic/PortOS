@@ -284,14 +284,20 @@ async function processAgentCompletion(agentId, task, success, outputBuffer) {
   }
 }
 
-// Active agent processes
+// Active agent processes (direct spawn mode)
 const activeAgents = new Map();
+
+// Track runner-spawned agents (CoS Runner mode)
+const runnerAgents = new Map();
 
 /**
  * Get list of active agent IDs (for zombie detection)
+ * Includes both direct mode and runner mode agents
  */
 export function getActiveAgentIds() {
-  return Array.from(activeAgents.keys());
+  const directIds = Array.from(activeAgents.keys());
+  const runnerIds = Array.from(runnerAgents.keys());
+  return [...directIds, ...runnerIds];
 }
 
 /**
@@ -492,9 +498,6 @@ export async function initSpawner() {
     await terminateAgent(agentId);
   });
 }
-
-// Track runner-spawned agents
-const runnerAgents = new Map();
 
 /**
  * Sync running agents from the runner (recovery after server restart)
@@ -1221,7 +1224,7 @@ export async function cleanupOrphanedAgents() {
         console.log(`🧹 Cleaning up orphaned agent ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
         await markComplete(agent.id, {
           success: false,
-          error: 'Agent process was orphaned (server restart)',
+          error: 'Agent process terminated unexpectedly',
           orphaned: true
         });
         cleanedCount++;

@@ -59,7 +59,7 @@ export default function Media() {
   }, [selectedVideo, selectedAudio]);
 
   // Set up audio level monitoring
-  const setupAudioAnalyser = useCallback((audioStream) => {
+  const setupAudioAnalyser = useCallback(async (audioStream) => {
     // Clean up existing audio context
     if (audioContextRef.current) {
       audioContextRef.current.close();
@@ -69,6 +69,12 @@ export default function Media() {
     }
 
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Resume AudioContext if suspended (browser autoplay policy)
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+
     const analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaStreamSource(audioStream);
 
@@ -78,12 +84,19 @@ export default function Media() {
     audioContextRef.current = audioContext;
     analyserRef.current = analyser;
 
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // Use time-domain data for better audio level detection
+    const dataArray = new Uint8Array(analyser.fftSize);
 
     const updateLevel = () => {
-      analyser.getByteFrequencyData(dataArray);
-      const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-      setAudioLevel(average / 255);
+      analyser.getByteTimeDomainData(dataArray);
+      // Calculate RMS (root mean square) for accurate audio level
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const normalized = (dataArray[i] - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      setAudioLevel(Math.min(rms * 3, 1)); // Scale up for visibility
       animationFrameRef.current = requestAnimationFrame(updateLevel);
     };
 

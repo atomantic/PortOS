@@ -1861,9 +1861,14 @@ async function isPidAlive(pid) {
  * Cleanup zombie agents - agents marked as running but whose process is dead
  */
 export async function cleanupZombieAgents() {
-  // Also check against activeAgents map from spawner
+  // Check local tracking maps
   const { getActiveAgentIds } = await import('./subAgentSpawner.js');
   const activeIds = getActiveAgentIds();
+
+  // Also check with the CoS runner for agents it's actively tracking
+  const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
+  const runnerAgents = await getActiveAgentsFromRunner().catch(() => []);
+  const runnerAgentIds = new Set(runnerAgents.map(a => a.id));
 
   return withStateLock(async () => {
     const state = await loadState();
@@ -1871,32 +1876,29 @@ export async function cleanupZombieAgents() {
     const cleaned = [];
 
     for (const agent of runningAgents) {
-      let isZombie = false;
+      // Skip if tracked in local maps or runner
+      if (activeIds.includes(agent.id) || runnerAgentIds.has(agent.id)) {
+        continue;
+      }
 
-      // If agent has a PID, check if it's still alive
+      // If agent has a PID, verify the process is actually dead
       if (agent.pid) {
         const alive = await isPidAlive(agent.pid);
-        if (!alive) {
-          isZombie = true;
-        }
-      } else {
-        // No PID stored - check if it's in activeAgents map
-        // If not in map, it's a zombie from before PID tracking
-        if (!activeIds.includes(agent.id)) {
-          isZombie = true;
+        if (alive) {
+          // Process is still running, don't mark as zombie
+          continue;
         }
       }
 
-      if (isZombie) {
-        console.log(`🧟 Zombie agent detected: ${agent.id} (PID ${agent.pid || 'unknown'} is dead)`);
-        state.agents[agent.id] = {
-          ...agent,
-          status: 'completed',
-          completedAt: new Date().toISOString(),
-          result: { success: false, error: 'Agent process was orphaned (server restart)' }
-        };
-        cleaned.push(agent.id);
-      }
+      // Agent is not tracked anywhere and process is dead (or no PID) - it's a zombie
+      console.log(`🧟 Zombie agent detected: ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
+      state.agents[agent.id] = {
+        ...agent,
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        result: { success: false, error: 'Agent process terminated unexpectedly' }
+      };
+      cleaned.push(agent.id);
     }
 
     if (cleaned.length > 0) {
