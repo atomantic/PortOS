@@ -328,9 +328,23 @@ export default function Layout() {
           {navItems.map(renderNavItem)}
         </nav>
 
-        {/* Footer with version */}
-        <div className={`p-4 border-t border-port-border text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
-          <span>v{packageJson.version}</span>
+        {/* Footer with version and notifications */}
+        <div className={`p-4 border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
+          <div className={`flex items-center ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
+            <span className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
+              v{packageJson.version}
+            </span>
+            <div className={collapsed ? '' : ''}>
+              <NotificationDropdown
+                notifications={notifications}
+                unreadCount={unreadCount}
+                onMarkAsRead={markAsRead}
+                onMarkAllAsRead={markAllAsRead}
+                onRemove={removeNotification}
+                onClearAll={clearAll}
+              />
+            </div>
+          </div>
         </div>
       </aside>
 
@@ -357,20 +371,9 @@ export default function Layout() {
             onMarkAllAsRead={markAllAsRead}
             onRemove={removeNotification}
             onClearAll={clearAll}
+            position="top"
           />
         </header>
-
-        {/* Desktop notification dropdown - fixed position top right */}
-        <div className="hidden lg:block fixed top-4 right-4 z-50">
-          <NotificationDropdown
-            notifications={notifications}
-            unreadCount={unreadCount}
-            onMarkAsRead={markAsRead}
-            onMarkAllAsRead={markAllAsRead}
-            onRemove={removeNotification}
-            onClearAll={clearAll}
-          />
-        </div>
 
         {/* Main content */}
         <main className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>

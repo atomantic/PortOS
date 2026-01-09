@@ -49,7 +49,8 @@ export default function NotificationDropdown({
   onMarkAsRead,
   onMarkAllAsRead,
   onRemove,
-  onClearAll
+  onClearAll,
+  position = 'bottom' // 'bottom' opens upward, 'top' opens downward
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -93,9 +94,13 @@ export default function NotificationDropdown({
         )}
       </button>
 
-      {/* Dropdown panel */}
+      {/* Dropdown panel - position determines direction */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden">
+        <div className={`absolute w-80 bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
+          position === 'bottom'
+            ? 'left-0 bottom-full mb-2'  // Opens upward from sidebar footer
+            : 'right-0 top-full mt-2'     // Opens downward from header
+        }`}>
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
             <span className="font-medium text-white">Notifications</span>
