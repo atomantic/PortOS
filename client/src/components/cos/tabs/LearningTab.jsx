@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Brain,
   RefreshCw,
@@ -34,11 +34,7 @@ export default function LearningTab() {
     errors: false
   });
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     const [learningData, performanceData, skippedData, durationsData] = await Promise.all([
       api.getCosLearning().catch(() => null),
@@ -51,41 +47,54 @@ export default function LearningTab() {
     setSkipped(skippedData);
     setDurations(durationsData);
     setLoading(false);
-  };
+  }, []);
 
-  const handleBackfill = async () => {
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleBackfill = useCallback(async () => {
     setBackfilling(true);
     const result = await api.backfillCosLearning().catch(() => null);
     if (result?.success) {
       await loadData();
     }
     setBackfilling(false);
-  };
+  }, [loadData]);
 
-  const toggleSection = (section) => {
+  const toggleSection = useCallback((section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
-  };
+  }, []);
 
-  const getSuccessRateColor = (rate) => {
+  // Memoize helper functions to prevent re-creation on each render
+  const getSuccessRateColor = useCallback((rate) => {
     if (rate >= 80) return 'text-port-success';
     if (rate >= 60) return 'text-port-warning';
     return 'text-port-error';
-  };
+  }, []);
 
-  const getSuccessRateBg = (rate) => {
+  const getSuccessRateBg = useCallback((rate) => {
     if (rate >= 80) return 'bg-port-success';
     if (rate >= 60) return 'bg-port-warning';
     return 'bg-port-error';
-  };
+  }, []);
 
-  const formatDuration = (ms) => {
+  const formatDuration = useCallback((ms) => {
     if (!ms) return '—';
     const minutes = Math.round(ms / 60000);
     if (minutes < 60) return `${minutes}m`;
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
     return `${hours}h ${mins}m`;
-  };
+  }, []);
+
+  // Memoize sorted durations to avoid re-sorting on each render
+  const sortedDurations = useMemo(() => {
+    if (!durations) return [];
+    return Object.entries(durations)
+      .filter(([key]) => key !== '_overall')
+      .sort((a, b) => b[1].avgDurationMs - a[1].avgDurationMs);
+  }, [durations]);
 
   if (loading) {
     return (
@@ -376,23 +385,20 @@ export default function LearningTab() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(durations)
-                        .filter(([key]) => key !== '_overall')
-                        .sort((a, b) => b[1].avgDurationMs - a[1].avgDurationMs)
-                        .map(([taskType, data], idx) => (
-                          <tr key={idx} className="border-t border-port-border">
-                            <td className="p-3 text-gray-300 truncate max-w-[200px]">{taskType}</td>
-                            <td className="p-3 text-right text-cyan-400 font-mono">
-                              {formatDuration(data.avgDurationMs)}
-                            </td>
-                            <td className="p-3 text-right text-gray-500 hidden sm:table-cell">
-                              {data.completed}
-                            </td>
-                            <td className={`p-3 text-right font-mono hidden sm:table-cell ${getSuccessRateColor(data.successRate)}`}>
-                              {data.successRate}%
-                            </td>
-                          </tr>
-                        ))}
+                      {sortedDurations.map(([taskType, data], idx) => (
+                        <tr key={idx} className="border-t border-port-border">
+                          <td className="p-3 text-gray-300 truncate max-w-[200px]">{taskType}</td>
+                          <td className="p-3 text-right text-cyan-400 font-mono">
+                            {formatDuration(data.avgDurationMs)}
+                          </td>
+                          <td className="p-3 text-right text-gray-500 hidden sm:table-cell">
+                            {data.completed}
+                          </td>
+                          <td className={`p-3 text-right font-mono hidden sm:table-cell ${getSuccessRateColor(data.successRate)}`}>
+                            {data.successRate}%
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>

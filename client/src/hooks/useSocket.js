@@ -1,30 +1,26 @@
 import { useEffect, useState } from 'react';
-import { io } from 'socket.io-client';
+import socket from '../services/socket';
 
-let socket = null;
-
+/**
+ * Hook to access the shared socket instance and track connection status.
+ * Uses the singleton socket from services/socket.js to avoid duplicate connections.
+ */
 export function useSocket() {
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(socket.connected);
 
   useEffect(() => {
-    if (!socket) {
-      // Connect to the server - use relative path for Tailscale compatibility
-      socket = io({
-        path: '/socket.io',
-        transports: ['websocket', 'polling']
-      });
+    const handleConnect = () => setConnected(true);
+    const handleDisconnect = () => setConnected(false);
 
-      socket.on('connect', () => {
-        setConnected(true);
-      });
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
 
-      socket.on('disconnect', () => {
-        setConnected(false);
-      });
-    }
+    // Set initial state
+    setConnected(socket.connected);
 
     return () => {
-      // Don't disconnect on component unmount - keep socket alive
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
     };
   }, []);
 
