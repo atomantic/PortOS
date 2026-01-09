@@ -166,7 +166,22 @@ const icons = {
 // List of available icon names for the picker
 export const iconNames = Object.keys(icons);
 
-export default function AppIcon({ icon, size = 24, className = '' }) {
+export default function AppIcon({ icon, size = 24, className = '', ariaLabel }) {
   const IconComponent = icons[icon] || icons.package;
-  return <IconComponent size={size} className={className} />;
+
+  // If ariaLabel is provided, make it accessible; otherwise treat as decorative
+  if (ariaLabel) {
+    return (
+      <span role="img" aria-label={ariaLabel}>
+        <IconComponent size={size} className={className} />
+      </span>
+    );
+  }
+
+  // Decorative icon - hidden from assistive technology
+  return (
+    <span aria-hidden="true">
+      <IconComponent size={size} className={className} />
+    </span>
+  );
 }

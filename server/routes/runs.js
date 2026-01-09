@@ -17,8 +17,8 @@ router.get('/', asyncHandler(async (req, res, next) => {
 
 // POST /api/runs - Create and execute a new run
 router.post('/', asyncHandler(async (req, res, next) => {
-  const { providerId, model, prompt, workspacePath, workspaceName } = req.body;
-  console.log(`🚀 POST /api/runs - provider: ${providerId}, model: ${model}, workspace: ${workspaceName}`);
+  const { providerId, model, prompt, workspacePath, workspaceName, timeout } = req.body;
+  console.log(`🚀 POST /api/runs - provider: ${providerId}, model: ${model}, workspace: ${workspaceName}, timeout: ${timeout}ms`);
 
   if (!providerId) {
     throw new ServerError('providerId is required', {
@@ -39,12 +39,13 @@ router.post('/', asyncHandler(async (req, res, next) => {
     model,
     prompt,
     workspacePath,
-    workspaceName
+    workspaceName,
+    timeout
   });
 
-  const { runId, provider, metadata } = runData;
+  const { runId, provider, metadata, timeout: effectiveTimeout } = runData;
   const io = req.app.get('io');
-  console.log(`🚀 Run created: ${runId}, provider type: ${provider.type}, command: ${provider.command}`);
+  console.log(`🚀 Run created: ${runId}, provider type: ${provider.type}, command: ${provider.command}, timeout: ${effectiveTimeout}ms`);
 
   // Execute based on provider type
   if (provider.type === 'cli') {
@@ -62,7 +63,8 @@ router.post('/', asyncHandler(async (req, res, next) => {
       (finalMetadata) => {
         console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
         io?.emit(`run:${runId}:complete`, finalMetadata);
-      }
+      },
+      effectiveTimeout
     );
   } else if (provider.type === 'api') {
     runner.executeApiRun(

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { cosEvents } from './cos.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity, cosineSimilarity } from '../lib/vectorMath.js';
+import * as notifications from './notifications.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,7 +27,7 @@ export const DEFAULT_MEMORY_CONFIG = {
   enabled: true,
   embeddingProvider: 'lmstudio',
   embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
-  embeddingModel: 'nomic-embed-text-v1.5',
+  embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
   embeddingDimension: 768,
   maxMemories: 10000,
   maxContextTokens: 2000,
@@ -152,8 +153,8 @@ async function deleteMemoryFiles(id) {
 }
 
 /**
- * Generate summary from content (simple truncation for now)
- * TODO: Use LLM for better summaries
+ * Generate summary from content using simple truncation
+ * Note: LLM-based summaries could improve quality but add latency and cost
  */
 function generateSummary(content, maxLength = 150) {
   if (content.length <= maxLength) return content;
@@ -190,7 +191,7 @@ export async function createMemory(data, embedding = null) {
       createdAt: now,
       updatedAt: now,
       expiresAt: data.expiresAt || null,
-      status: 'active'
+      status: data.status || 'active'
     };
 
     // Save full memory
@@ -360,6 +361,74 @@ export async function deleteMemory(id, hard = false) {
 
     console.log(`🧠 Memory deleted: ${id} (hard: ${hard})`);
     cosEvents.emit('memory:deleted', { id, hard });
+
+    return { success: true, id };
+  });
+}
+
+/**
+ * Approve a pending memory (changes status from pending_approval to active)
+ */
+export async function approveMemory(id) {
+  return withMemoryLock(async () => {
+    const memory = await loadMemory(id);
+    if (!memory) return { success: false, error: 'Memory not found' };
+    if (memory.status !== 'pending_approval') {
+      return { success: false, error: 'Memory is not pending approval' };
+    }
+
+    memory.status = 'active';
+    memory.updatedAt = new Date().toISOString();
+    await saveMemory(memory);
+
+    // Update index
+    const index = await loadIndex();
+    const idx = index.memories.findIndex(m => m.id === id);
+    if (idx !== -1) {
+      index.memories[idx].status = 'active';
+      await saveIndex(index);
+    }
+
+    console.log(`🧠 Memory approved: ${id}`);
+    cosEvents.emit('memory:approved', { id, memory });
+
+    // Remove associated notification
+    await notifications.removeByMetadata('memoryId', id);
+
+    return { success: true, memory };
+  });
+}
+
+/**
+ * Reject a pending memory (hard deletes it)
+ */
+export async function rejectMemory(id) {
+  return withMemoryLock(async () => {
+    const memory = await loadMemory(id);
+    if (!memory) return { success: false, error: 'Memory not found' };
+    if (memory.status !== 'pending_approval') {
+      return { success: false, error: 'Memory is not pending approval' };
+    }
+
+    // Hard delete - remove files
+    await deleteMemoryFiles(id);
+
+    // Remove from index
+    const index = await loadIndex();
+    index.memories = index.memories.filter(m => m.id !== id);
+    index.count = index.memories.length;
+    await saveIndex(index);
+
+    // Remove embedding
+    const embeddings = await loadEmbeddings();
+    delete embeddings.vectors[id];
+    await saveEmbeddings(embeddings);
+
+    console.log(`🧠 Memory rejected: ${id}`);
+    cosEvents.emit('memory:rejected', { id });
+
+    // Remove associated notification
+    await notifications.removeByMetadata('memoryId', id);
 
     return { success: true, id };
   });
@@ -737,6 +806,7 @@ export async function getStats() {
     active: byStatus.active || 0,
     archived: byStatus.archived || 0,
     expired: byStatus.expired || 0,
+    pendingApproval: byStatus.pending_approval || 0,
     withEmbeddings: Object.keys(embeddings.vectors).length,
     byType,
     byCategory,

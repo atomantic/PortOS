@@ -1,5 +1,4 @@
 /**
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
  * Scripts API Routes
  *
  * Endpoints for managing scheduled scripts
@@ -19,6 +18,11 @@ router.get('/', async (req, res, next) => {
 // GET /api/cos/scripts/presets - Get available schedule presets
 router.get('/presets', (req, res) => {
   res.json({ presets: scriptRunner.getSchedulePresets() });
+});
+
+// GET /api/cos/scripts/allowed-commands - Get allowed commands for scripts
+router.get('/allowed-commands', (req, res) => {
+  res.json({ commands: scriptRunner.getAllowedScriptCommands() });
 });
 
 // GET /api/cos/scripts/jobs - Get scheduled job info

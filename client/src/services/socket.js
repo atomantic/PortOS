@@ -12,15 +12,15 @@ const socket = io({
 });
 
 socket.on('connect', () => {
-  console.log('Socket connected:', socket.id);
+  // Connection established
 });
 
-socket.on('disconnect', (reason) => {
-  console.log('Socket disconnected:', reason);
+socket.on('disconnect', () => {
+  // Connection lost - Socket.IO will attempt reconnection automatically
 });
 
-socket.on('connect_error', (error) => {
-  console.error('Socket connection error:', error.message);
+socket.on('connect_error', () => {
+  // Connection error - Socket.IO will retry automatically
 });
 
 export default socket;

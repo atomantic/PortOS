@@ -1,13 +1,50 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 
-const execAsync = promisify(exec);
+/**
+ * Execute a git command safely using spawn (prevents shell injection)
+ * @param {string[]} args - Git command arguments
+ * @param {string} cwd - Working directory
+ * @param {object} options - Additional options
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
+function execGit(args, cwd, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', args, {
+      cwd,
+      shell: false,
+      maxBuffer: options.maxBuffer || 10 * 1024 * 1024
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0 && !options.ignoreExitCode) {
+        reject(new Error(stderr || `git exited with code ${code}`));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
 
 /**
  * Get git status for a directory
  */
 export async function getStatus(dir) {
-  const result = await execAsync('git status --porcelain', { cwd: dir });
+  const result = await execGit(['status', '--porcelain'], dir);
   const lines = result.stdout.trim().split('\n').filter(Boolean);
 
   const files = lines.map(line => {
@@ -52,7 +89,7 @@ function parseStatus(status) {
  * Get current branch name
  */
 export async function getBranch(dir) {
-  const result = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: dir });
+  const result = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir);
   return result.stdout.trim();
 }
 
@@ -60,8 +97,10 @@ export async function getBranch(dir) {
  * Get recent commits
  */
 export async function getCommits(dir, limit = 10) {
+  // Validate limit is a positive integer to prevent injection
+  const safeLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
   const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%ci"}';
-  const result = await execAsync(`git log ${format} -n ${limit}`, { cwd: dir });
+  const result = await execGit(['log', format, '-n', String(safeLimit)], dir);
 
   const commits = result.stdout.trim().split('\n').filter(Boolean).map(line => {
     return JSON.parse(line);
@@ -74,8 +113,8 @@ export async function getCommits(dir, limit = 10) {
  * Get diff for unstaged changes
  */
 export async function getDiff(dir, staged = false) {
-  const cmd = staged ? 'git diff --cached' : 'git diff';
-  const result = await execAsync(cmd, { cwd: dir, maxBuffer: 10 * 1024 * 1024 });
+  const args = staged ? ['diff', '--cached'] : ['diff'];
+  const result = await execGit(args, dir, { maxBuffer: 10 * 1024 * 1024 });
   return result.stdout;
 }
 
@@ -83,7 +122,7 @@ export async function getDiff(dir, staged = false) {
  * Get diff stats
  */
 export async function getDiffStats(dir) {
-  const result = await execAsync('git diff --stat', { cwd: dir });
+  const result = await execGit(['diff', '--stat'], dir);
   const statsLine = result.stdout.trim().split('\n').pop() || '';
 
   const filesMatch = statsLine.match(/(\d+) files? changed/);
@@ -98,11 +137,31 @@ export async function getDiffStats(dir) {
 }
 
 /**
+ * Validate file paths to prevent command injection and path traversal
+ * @param {string[]} files - Array of file paths
+ * @returns {string[]} - Sanitized file paths
+ */
+function validateFilePaths(files) {
+  const fileList = Array.isArray(files) ? files : [files];
+  return fileList.map(f => {
+    // Reject paths with null bytes or command separators
+    if (/[\0;|&`$]/.test(f)) {
+      throw new Error(`Invalid character in file path: ${f}`);
+    }
+    // Reject absolute paths or parent directory traversal
+    if (f.startsWith('/') || f.includes('..')) {
+      throw new Error(`Invalid file path: ${f}`);
+    }
+    return f;
+  });
+}
+
+/**
  * Stage files
  */
 export async function stageFiles(dir, files) {
-  const paths = Array.isArray(files) ? files.join(' ') : files;
-  await execAsync(`git add ${paths}`, { cwd: dir });
+  const safePaths = validateFilePaths(files);
+  await execGit(['add', '--', ...safePaths], dir);
   return true;
 }
 
@@ -110,8 +169,8 @@ export async function stageFiles(dir, files) {
  * Unstage files
  */
 export async function unstageFiles(dir, files) {
-  const paths = Array.isArray(files) ? files.join(' ') : files;
-  await execAsync(`git reset HEAD ${paths}`, { cwd: dir });
+  const safePaths = validateFilePaths(files);
+  await execGit(['reset', 'HEAD', '--', ...safePaths], dir);
   return true;
 }
 
@@ -119,7 +178,8 @@ export async function unstageFiles(dir, files) {
  * Create commit
  */
 export async function commit(dir, message) {
-  const result = await execAsync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd: dir });
+  // Using spawn with -m argument passes message safely without shell interpretation
+  const result = await execGit(['commit', '-m', message], dir);
   const hashMatch = result.stdout.match(/\[[\w-]+ ([a-f0-9]+)\]/);
   return {
     hash: hashMatch ? hashMatch[1] : null,
@@ -131,7 +191,7 @@ export async function commit(dir, message) {
  * Check if directory is a git repo
  */
 export async function isRepo(dir) {
-  const result = await execAsync('git rev-parse --is-inside-work-tree', { cwd: dir }).catch(() => null);
+  const result = await execGit(['rev-parse', '--is-inside-work-tree'], dir, { ignoreExitCode: true }).catch(() => null);
   return result?.stdout.trim() === 'true';
 }
 
@@ -139,7 +199,7 @@ export async function isRepo(dir) {
  * Get remote info
  */
 export async function getRemote(dir) {
-  const result = await execAsync('git remote -v', { cwd: dir }).catch(() => null);
+  const result = await execGit(['remote', '-v'], dir, { ignoreExitCode: true }).catch(() => null);
   if (!result) return null;
 
   const lines = result.stdout.trim().split('\n');

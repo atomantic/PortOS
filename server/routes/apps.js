@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import * as appsService from '../services/apps.js';
+import { notifyAppsChanged } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { logAction } from '../services/history.js';
 import { validate, appSchema, appUpdateSchema } from '../lib/validation.js';
@@ -11,10 +12,8 @@ import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 const router = Router();
 
 // GET /api/apps - List all apps
-router.get('/', asyncHandler(async (req, res, next) => {
-  console.log('📱 GET /api/apps - fetching apps list');
+router.get('/', asyncHandler(async (req, res) => {
   const apps = await appsService.getAllApps();
-  console.log(`📱 GET /api/apps - found ${apps.length} apps`);
 
   // Get all PM2 processes once
   const allPm2 = await pm2Service.listProcesses().catch(() => []);
@@ -53,7 +52,6 @@ router.get('/', asyncHandler(async (req, res, next) => {
     };
   }));
 
-  console.log(`📱 GET /api/apps - responding with ${enriched.length} apps`);
   res.json(enriched);
 }));
 
@@ -146,6 +144,7 @@ router.post('/:id/start', asyncHandler(async (req, res, next) => {
 
   const allSuccess = Object.values(results).every(r => r.success !== false);
   await logAction('start', app.id, app.name, { processNames }, allSuccess);
+  notifyAppsChanged('start');
 
   res.json({ success: true, results });
 }));
@@ -168,6 +167,7 @@ router.post('/:id/stop', asyncHandler(async (req, res, next) => {
 
   const allSuccess = Object.values(results).every(r => r.success !== false);
   await logAction('stop', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
+  notifyAppsChanged('stop');
 
   res.json({ success: true, results });
 }));
@@ -190,6 +190,7 @@ router.post('/:id/restart', asyncHandler(async (req, res, next) => {
 
   const allSuccess = Object.values(results).every(r => r.success !== false);
   await logAction('restart', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
+  notifyAppsChanged('restart');
 
   res.json({ success: true, results });
 }));
@@ -234,6 +235,29 @@ router.get('/:id/logs', asyncHandler(async (req, res, next) => {
   res.json({ processName, lines, logs });
 }));
 
+// Allowlist of safe editor commands
+// Security: Only allow known-safe editor commands to prevent arbitrary code execution
+const ALLOWED_EDITORS = new Set([
+  'code',      // VS Code
+  'cursor',    // Cursor
+  'zed',       // Zed
+  'subl',      // Sublime Text
+  'atom',      // Atom
+  'vim',       // Vim
+  'nvim',      // Neovim
+  'nano',      // Nano
+  'emacs',     // Emacs
+  'idea',      // IntelliJ IDEA
+  'pycharm',   // PyCharm
+  'webstorm',  // WebStorm
+  'phpstorm',  // PhpStorm
+  'rubymine',  // RubyMine
+  'goland',    // GoLand
+  'clion',     // CLion
+  'rider',     // Rider
+  'studio'     // Android Studio
+]);
+
 // POST /api/apps/:id/open-editor - Open app in editor
 router.post('/:id/open-editor', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);
@@ -249,11 +273,33 @@ router.post('/:id/open-editor', asyncHandler(async (req, res, next) => {
   const editorCommand = app.editorCommand || 'code .';
   const [cmd, ...args] = editorCommand.split(/\s+/);
 
+  // Security: Validate that the editor command is in our allowlist
+  // This prevents arbitrary command execution via malicious editorCommand values
+  if (!ALLOWED_EDITORS.has(cmd)) {
+    throw new ServerError(`Editor '${cmd}' is not in the allowed editors list`, {
+      status: 400,
+      code: 'INVALID_EDITOR',
+      context: { allowedEditors: Array.from(ALLOWED_EDITORS) }
+    });
+  }
+
+  // Security: Validate args don't contain shell metacharacters
+  const DANGEROUS_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
+  for (const arg of args) {
+    if (DANGEROUS_CHARS.test(arg)) {
+      throw new ServerError('Editor arguments contain disallowed characters', {
+        status: 400,
+        code: 'INVALID_EDITOR_ARGS'
+      });
+    }
+  }
+
   // Spawn the editor process detached so it doesn't block
   const child = spawn(cmd, args, {
     cwd: app.repoPath,
     detached: true,
-    stdio: 'ignore'
+    stdio: 'ignore',
+    shell: false  // Security: Ensure no shell interpretation
   });
   child.unref();
 

@@ -15,33 +15,61 @@ const ALLOWED_COMMANDS = new Set([
   'brew'
 ]);
 
+// Shell metacharacters that could be used for command injection
+// Security: Reject any command containing these to prevent injection via pipes, chaining, etc.
+const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
+
 // Track active commands
 const activeCommands = new Map();
 
 /**
  * Execute a shell command with safety checks
+ *
+ * Security measures:
+ * 1. Base command must be in allowlist
+ * 2. Command cannot contain shell metacharacters that enable injection
+ * 3. Command executed via spawn with shell:false where possible
  */
 export function executeCommand(command, workspacePath, onData, onComplete) {
   const commandId = Date.now().toString(36) + Math.random().toString(36).substr(2);
 
+  // Security: Reject empty or whitespace-only commands
+  const trimmedCommand = command?.trim();
+  if (!trimmedCommand) {
+    const error = 'Empty command provided';
+    onComplete?.({ success: false, error, exitCode: 1 });
+    return null;
+  }
+
   // Parse command to check allowlist
-  const parts = command.trim().split(/\s+/);
+  const parts = trimmedCommand.split(/\s+/);
   const baseCommand = parts[0];
 
   if (!ALLOWED_COMMANDS.has(baseCommand)) {
     const error = `Command '${baseCommand}' is not in the allowlist`;
     onComplete?.({ success: false, error, exitCode: 1 });
-    logAction('command', null, command.substring(0, 50), { command, workspacePath }, false, error);
+    logAction('command', null, trimmedCommand.substring(0, 50), { command: trimmedCommand, workspacePath }, false, error);
+    return null;
+  }
+
+  // Security: Check for dangerous shell metacharacters that could enable command injection
+  // This prevents attacks like: npm; rm -rf / or npm && malicious_cmd or npm | cat /etc/passwd
+  if (DANGEROUS_SHELL_CHARS.test(trimmedCommand)) {
+    const error = 'Command contains disallowed shell characters (security restriction)';
+    onComplete?.({ success: false, error, exitCode: 1 });
+    logAction('command', null, trimmedCommand.substring(0, 50), { command: trimmedCommand, workspacePath }, false, error);
     return null;
   }
 
   const startTime = Date.now();
   let output = '';
 
-  // Use shell to handle pipes, redirects, etc.
-  const child = spawn('sh', ['-c', command], {
+  // Security: Use spawn with array of args (shell:false) to prevent shell injection
+  // The DANGEROUS_SHELL_CHARS check above ensures no metacharacters slip through
+  const child = spawn(baseCommand, parts.slice(1), {
     cwd: workspacePath || process.cwd(),
-    env: { ...process.env, FORCE_COLOR: '1' }
+    env: { ...process.env, FORCE_COLOR: '1' },
+    shell: false
   });
 
   activeCommands.set(commandId, child);

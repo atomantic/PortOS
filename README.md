@@ -13,6 +13,8 @@ Think Umbrel, but for your active git repos and dev environments. Access your de
 - **Real-time Logs** — Stream PM2 logs via Socket.IO with tail length control
 - **Smart Import** — Point to a directory and auto-detect project config from package.json, vite.config, and ecosystem.config
 - **Chief of Staff** — Autonomous task manager that monitors TASKS.md and dispatches AI agents
+- **Task Learning** — Tracks task success rates and duration to improve model selection
+- **Scheduled Scripts** — Cron-based automation with optional agent triggering
 - **Dev Tools** — Process monitor, AI agent tracker, action history, git status, and shell runner
 - **AI Runner** — Execute prompts via Claude Code, Codex, Gemini CLI, Ollama, or LM Studio
 - **Mobile Ready** — Responsive design with collapsible sidebar for on-the-go access
@@ -38,6 +40,8 @@ View all PM2 processes with live log streaming, memory usage, uptime, and restar
 Autonomous task manager that monitors your TASKS.md and dispatches AI agents to complete work.
 
 ![Chief of Staff](./docs/media/portos_6.png)
+
+![Chief of Staff](./docs/media/portos_7.png)
 
 ### App Import
 Auto-detect project configuration from your codebase — ports, start commands, and PM2 process names.
@@ -124,10 +128,15 @@ Configure AI providers for the runner:
 
 ## Documentation
 
+- [Architecture Overview](./docs/ARCHITECTURE.md) — System design and data flow
+- [API Reference](./docs/API.md) — REST endpoints and WebSocket events
 - [Contributing Guide](./docs/CONTRIBUTING.md) — Development setup and code guidelines
+- [PM2 Configuration](./docs/PM2.md) — PM2 patterns and best practices
 - [Port Allocation](./docs/PORTS.md) — Port conventions and allocation guide
 - [Versioning & Releases](./docs/VERSIONING.md) — Version format and release process
-- [Implementation Plan](./PLAN.md) — Detailed feature roadmap and API reference
+- [GitHub Actions](./docs/GITHUB_ACTIONS.md) — CI/CD workflow patterns
+- [Troubleshooting](./docs/TROUBLESHOOTING.md) — Common issues and solutions
+- [Implementation Plan](./PLAN.md) — Detailed feature roadmap
 
 ## License
 

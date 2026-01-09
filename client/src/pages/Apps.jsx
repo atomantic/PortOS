@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
 import IconPicker from '../components/IconPicker';
 import * as api from '../services/api';
+import socket from '../services/socket';
 
 export default function Apps() {
   const [apps, setApps] = useState([]);
@@ -16,17 +17,25 @@ export default function Apps() {
   const [refreshingConfig, setRefreshingConfig] = useState({});
   const [standardizing, setStandardizing] = useState({});
 
-  const fetchApps = async () => {
+  const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
     setApps(data);
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     fetchApps();
-    const interval = setInterval(fetchApps, 5000);
-    return () => clearInterval(interval);
-  }, []);
+
+    // Listen for apps changes via WebSocket instead of polling
+    const handleAppsChanged = () => {
+      fetchApps();
+    };
+    socket.on('apps:changed', handleAppsChanged);
+
+    return () => {
+      socket.off('apps:changed', handleAppsChanged);
+    };
+  }, [fetchApps]);
 
   const handleDelete = async (app) => {
     await api.deleteApp(app.id);
@@ -37,28 +46,19 @@ export default function Apps() {
   const handleStart = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'start' }));
     await api.startApp(app.id).catch(() => null);
-    setTimeout(() => {
-      setActionLoading(prev => ({ ...prev, [app.id]: null }));
-      fetchApps();
-    }, 1500);
+    setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 
   const handleStop = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'stop' }));
     await api.stopApp(app.id).catch(() => null);
-    setTimeout(() => {
-      setActionLoading(prev => ({ ...prev, [app.id]: null }));
-      fetchApps();
-    }, 1500);
+    setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 
   const handleRestart = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'restart' }));
     await api.restartApp(app.id).catch(() => null);
-    setTimeout(() => {
-      setActionLoading(prev => ({ ...prev, [app.id]: null }));
-      fetchApps();
-    }, 2000);
+    setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 
   const handleRefreshConfig = async (app) => {
@@ -155,8 +155,10 @@ export default function Apps() {
                     <button
                       onClick={() => toggleExpand(app.id)}
                       className="text-gray-400 hover:text-white transition-transform flex-shrink-0"
+                      aria-expanded={expandedId === app.id}
+                      aria-label={`${expandedId === app.id ? 'Collapse' : 'Expand'} ${app.name} details`}
                     >
-                      <span className={`inline-block transition-transform ${expandedId === app.id ? 'rotate-90' : ''}`}>▶</span>
+                      <span aria-hidden="true" className={`inline-block transition-transform ${expandedId === app.id ? 'rotate-90' : ''}`}>▶</span>
                     </button>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -194,18 +196,16 @@ export default function Apps() {
                             onClick={() => handleStop(app)}
                             disabled={actionLoading[app.id]}
                             className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
-                            title="Stop"
                           >
-                            <Square size={14} />
+                            <Square size={14} aria-hidden="true" />
                             <span className="text-xs">Stop</span>
                           </button>
                           <button
                             onClick={() => handleRestart(app)}
                             disabled={actionLoading[app.id]}
                             className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
-                            title="Restart"
                           >
-                            <RotateCcw size={14} className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
+                            <RotateCcw size={14} aria-hidden="true" className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
                             <span className="text-xs">Restart</span>
                           </button>
                         </>
@@ -214,9 +214,8 @@ export default function Apps() {
                           onClick={() => handleStart(app)}
                           disabled={actionLoading[app.id]}
                           className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
-                          title="Start"
                         >
-                          <Play size={14} />
+                          <Play size={14} aria-hidden="true" />
                           <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
                         </button>
                       )}
@@ -227,9 +226,9 @@ export default function Apps() {
                       <button
                         onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
                         className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-                        title={`Open ${window.location.hostname}:${app.uiPort}`}
+                        aria-label={`Launch ${app.name} UI`}
                       >
-                        <ExternalLink size={14} />
+                        <ExternalLink size={14} aria-hidden="true" />
                         <span className="text-xs">Launch</span>
                       </button>
                     )}
@@ -282,14 +281,14 @@ export default function Apps() {
                       <div>
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Repository Path</div>
                         <div className="flex items-start gap-2">
-                          <FolderOpen size={16} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+                          <FolderOpen size={16} aria-hidden="true" className="text-yellow-400 flex-shrink-0 mt-0.5" />
                           <code className="text-sm text-gray-300 font-mono break-all">{app.repoPath}</code>
                         </div>
                       </div>
                       <div>
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Editor Command</div>
                         <div className="flex items-center gap-2">
-                          <Code size={16} className="text-blue-400 flex-shrink-0" />
+                          <Code size={16} aria-hidden="true" className="text-blue-400 flex-shrink-0" />
                           <code className="text-sm text-gray-300 font-mono">{app.editorCommand || 'code .'}</code>
                         </div>
                       </div>
@@ -302,7 +301,7 @@ export default function Apps() {
                         <div className="bg-port-card border border-port-border rounded-lg p-3">
                           {app.startCommands.map((cmd, i) => (
                             <div key={i} className="flex items-start gap-2 py-1">
-                              <Terminal size={14} className="text-green-400 flex-shrink-0 mt-0.5" />
+                              <Terminal size={14} aria-hidden="true" className="text-green-400 flex-shrink-0 mt-0.5" />
                               <code className="text-sm text-cyan-300 font-mono break-all">{cmd}</code>
                             </div>
                           ))}
@@ -354,30 +353,30 @@ export default function Apps() {
                         onClick={() => api.openAppInEditor(app.id).catch(() => null)}
                         className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                       >
-                        <Code size={14} /> Open in Editor
+                        <Code size={14} aria-hidden="true" /> Open in Editor
                       </button>
                       <button
                         onClick={() => api.openAppFolder(app.id).catch(() => null)}
                         className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                       >
-                        <FolderOpen size={14} /> Open Folder
+                        <FolderOpen size={14} aria-hidden="true" /> Open Folder
                       </button>
                       <button
                         onClick={() => handleRefreshConfig(app)}
                         disabled={refreshingConfig[app.id]}
                         className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                        title="Re-scan ecosystem config for PM2 processes and ports"
+                        aria-label="Re-scan ecosystem config for PM2 processes and ports"
                       >
-                        <RefreshCw size={14} className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
+                        <RefreshCw size={14} aria-hidden="true" className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
                         Refresh Config
                       </button>
                       <button
                         onClick={() => handleStandardize(app)}
                         disabled={standardizing[app.id]}
                         className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                        title="Standardize PM2 config: move all ports to ecosystem.config.cjs"
+                        aria-label="Standardize PM2 config: move all ports to ecosystem.config.cjs"
                       >
-                        <Wrench size={14} className={standardizing[app.id] ? 'animate-spin' : ''} />
+                        <Wrench size={14} aria-hidden="true" className={standardizing[app.id] ? 'animate-spin' : ''} />
                         {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
                       </button>
                     </div>
@@ -444,9 +443,14 @@ function EditAppModal({ app, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="edit-app-title"
+    >
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-auto">
-        <h2 className="text-xl font-bold text-white mb-4">Edit App</h2>
+        <h2 id="edit-app-title" className="text-xl font-bold text-white mb-4">Edit App</h2>
 
         {error && (
           <div className="mb-4 p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">

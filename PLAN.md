@@ -48,10 +48,22 @@ pm2 logs
 - [x] M19: CoS Agent Runner (isolated PM2 process for agent spawning, prevents orphaned processes)
 - [x] M20: AI Provider Error Handling (error extraction, categorization, CoS investigation tasks)
 - [x] M21: Usage Metrics Integration (usage tracking for all AI runs, mobile responsive design)
+- [x] M22: Orphan Auto-Retry (automatic retry for orphaned agents, investigation task on max retries)
+- [x] M23: Self-Improvement System (automated UI/security/code quality analysis with Playwright and Opus)
+- [x] M24: Goal-Driven Proactive Mode (COS-GOALS.md mission file, always-working behavior, expanded task types)
+- [x] M25: Task Learning System (completion tracking, success rate analysis, model effectiveness, recommendations)
+- [x] M26: Scheduled Scripts (cron scheduling, agent triggers, command allowlist, run history)
+- [x] M28: Weekly Digest UI (visual digest tab with insights, accomplishments, week-over-week comparisons)
 
 ### Documentation
+- [Architecture Overview](./docs/ARCHITECTURE.md) - System design, data flow
+- [API Reference](./docs/API.md) - REST endpoints, WebSocket events
 - [Contributing Guide](./docs/CONTRIBUTING.md) - Code guidelines, git workflow
+- [PM2 Configuration](./docs/PM2.md) - PM2 patterns and best practices
+- [Port Allocation](./docs/PORTS.md) - Port conventions and allocation
 - [Versioning & Releases](./docs/VERSIONING.md) - Version format, release process
+- [GitHub Actions](./docs/GITHUB_ACTIONS.md) - CI/CD workflow patterns
+- [Troubleshooting](./docs/TROUBLESHOOTING.md) - Common issues and solutions
 
 ### Error Handling
 The server implements comprehensive error handling:
@@ -587,13 +599,22 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 | cos:memory:extracted | Memories extracted from agent |
 | cos:memory:approval-needed | Medium-confidence memories pending approval |
 
+### Setup Requirements
+
+**LM Studio** must be running with an embedding model loaded for the memory system to work:
+
+1. Download and install [LM Studio](https://lmstudio.ai/)
+2. Load an embedding model: `text-embedding-nomic-embed-text-v2-moe` (recommended) or `text-embedding-nomic-embed-text-v1.5`
+3. Start the local server on port 1234 (default)
+4. The memory system will automatically connect
+
 ### LM Studio Configuration
 ```javascript
 memory: {
   enabled: true,
   embeddingProvider: 'lmstudio',
   embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
-  embeddingModel: 'nomic-embed-text-v1.5',
+  embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
   embeddingDimension: 768,
   maxContextTokens: 2000,
   minRelevanceThreshold: 0.7,
@@ -926,3 +947,517 @@ executeCliRun() / executeApiRun() / completeAgentRun()
     └─► recordMessages(providerId, model, 1, estimatedTokens)
             └─► updates totalMessages, byProvider, byModel tokens
 ```
+
+---
+
+## M22: Orphan Auto-Retry
+
+Automatic retry for orphaned agents with investigation task creation after repeated failures.
+
+### Problem
+When agents become orphaned (server restart, runner crash, etc.), the task remained stuck and the system didn't automatically retry or investigate the issue.
+
+### Solution
+1. **Auto-Retry**: Reset orphaned tasks to pending for automatic retry (up to 3 attempts)
+2. **Retry Tracking**: Track retry count in task metadata (orphanRetryCount)
+3. **Investigation Task**: After max retries, create auto-approved investigation task
+4. **Evaluation Trigger**: Trigger task evaluation immediately after orphan cleanup
+
+### Retry Flow
+```
+Agent Orphaned
+    └─► cleanupOrphanedAgents() marks agent as completed
+    └─► handleOrphanedTask() checks retry count
+        ├─► retryCount < 3: Reset task to pending, trigger evaluation
+        └─► retryCount >= 3: Mark task blocked, create investigation task
+```
+
+### Task Metadata
+```javascript
+metadata: {
+  orphanRetryCount: number,      // Incremented each orphan
+  lastOrphanedAt: string,        // ISO timestamp
+  lastOrphanedAgentId: string,   // Agent that was orphaned
+  blockedReason: string          // Only if max retries exceeded
+}
+```
+
+### Investigation Task (Auto-Approved)
+When max retries (3) are exceeded, an investigation task is created:
+- Priority: HIGH
+- approvalRequired: false (auto-approved, will run immediately)
+- Contains: original task description, retry count, last agent ID
+- Instructions: Check logs, verify spawning, look for resource constraints
+
+### Implementation Files
+| File | Changes |
+|------|---------|
+| `server/services/subAgentSpawner.js` | Added `handleOrphanedTask()`, updated `cleanupOrphanedAgents()` to reset tasks and trigger evaluation |
+| `server/services/cos.js` | Added `getTaskById()` export, updated `updateTask()` to merge metadata properly |
+
+### Configuration
+| Setting | Value | Description |
+|---------|-------|-------------|
+| MAX_ORPHAN_RETRIES | 3 | Retries before creating investigation task |
+
+---
+
+## M23: Self-Improvement System
+
+Automated self-analysis and improvement system that uses Playwright and Opus to continuously improve PortOS.
+
+### Problem
+CoS idle reviews only checked managed apps for simple fixes. The system wasn't proactively improving itself - checking its own UI for bugs, mobile responsiveness issues, security vulnerabilities, or code quality.
+
+### Solution
+A comprehensive self-improvement system that rotates through 7 analysis types:
+
+1. **ui-bugs**: Navigate to all routes with Playwright, check console errors, fix bugs
+2. **mobile-responsive**: Test at mobile/tablet/desktop viewports, fix layout issues
+3. **security**: Audit server/client code for XSS, injection, path traversal
+4. **code-quality**: Find DRY violations, large functions, dead code
+5. **accessibility**: Check ARIA labels, color contrast, keyboard navigation
+6. **console-errors**: Capture and fix all JavaScript errors
+7. **performance**: Analyze re-renders, N+1 queries, bundle size
+
+### Key Features
+- **Automatic rotation**: Cycles through analysis types when CoS is idle
+- **Opus model**: All self-improvement tasks use claude-opus-4-5-20251101 for thorough analysis
+- **Playwright integration**: Uses MCP browser tools to analyze live UI
+- **Auto-approved**: Tasks run without requiring manual approval
+- **Alternates with app reviews**: Balances self-improvement with managed app maintenance
+
+### Task Flow
+```
+CoS Idle (no user/system tasks)
+    └─► Check lastSelfImprovement vs lastIdleReview
+        ├─► Self-improvement older: Generate self-improvement task
+        │       └─► Rotate to next analysis type
+        │       └─► Spawn Opus agent with Playwright instructions
+        └─► App review older: Generate idle app review (existing behavior)
+```
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/services/cos.js` | Added `generateSelfImprovementTask()`, updated `generateIdleReviewTask()` |
+| `server/services/selfImprovement.js` | Constants, prompt templates, utility functions |
+
+### State Tracking
+```javascript
+stats: {
+  lastSelfImprovement: ISO timestamp,
+  lastSelfImprovementType: 'ui-bugs' | 'mobile-responsive' | ... ,
+  lastIdleReview: ISO timestamp
+}
+```
+
+### Example Task
+```
+[Self-Improvement] UI Bug Analysis
+
+Use Playwright MCP to analyze PortOS UI at http://localhost:5555/
+- Navigate to each route
+- Capture browser snapshots and console messages
+- Fix any bugs found
+- Commit changes
+
+Use model: claude-opus-4-5-20251101
+```
+
+---
+
+## M24: Goal-Driven Proactive Mode
+
+Makes CoS proactive and goal-driven, spending more time working and less time idle.
+
+### Problem
+CoS was too passive - it would sit idle when apps were on cooldown instead of finding other productive work. The system lacked clear goals and mission guidance.
+
+### Solution
+
+#### 1. COS-GOALS.md Mission File
+Created `data/COS-GOALS.md` with:
+- Mission statement and core principles
+- 5 active goals (codebase quality, self-improvement, documentation, user engagement, system health)
+- Task generation priorities
+- Behavior guidelines
+- Metrics to track
+
+#### 2. Always-Working Behavior
+Updated `generateIdleReviewTask()` to ALWAYS return work:
+- First tries self-improvement if it's been longer since last run
+- Then tries app reviews if any apps are off cooldown
+- **Falls back to self-improvement** if apps are on cooldown (instead of returning null)
+
+#### 3. Expanded Task Types
+Added 4 new self-improvement task types:
+- `cos-enhancement`: Improve CoS capabilities and prompts
+- `test-coverage`: Add missing tests
+- `documentation`: Update PLAN.md, docs/, code comments
+- `feature-ideas`: Brainstorm and implement small features
+
+Now 11 task types total, rotating through all goals.
+
+#### 4. Configuration Changes
+| Setting | Old | New |
+|---------|-----|-----|
+| `evaluationIntervalMs` | 300000 (5m) | 60000 (1m) |
+| `appReviewCooldownMs` | 3600000 (1h) | 1800000 (30m) |
+| `idleReviewPriority` | LOW | MEDIUM |
+| `proactiveMode` | (new) | true |
+| `goalsFile` | (new) | data/COS-GOALS.md |
+
+### Task Rotation
+```
+1. ui-bugs          → Check UI for errors
+2. mobile-responsive → Test viewport sizes
+3. security         → Audit for vulnerabilities
+4. code-quality     → Find DRY violations, dead code
+5. console-errors   → Fix JS errors
+6. performance      → Optimize re-renders, queries
+7. cos-enhancement  → Improve CoS itself
+8. test-coverage    → Add tests
+9. documentation    → Update docs
+10. feature-ideas   → Implement new features
+11. accessibility   → Check a11y issues
+```
+
+### Key Behavior Change
+```
+Before: Apps on cooldown → Return null → Idle
+After:  Apps on cooldown → Run self-improvement → Always working
+```
+
+### Implementation Files
+| File | Changes |
+|------|---------|
+| `data/COS-GOALS.md` | New mission and goals file |
+| `server/services/cos.js` | Updated config defaults, expanded task types, always-working logic |
+
+---
+
+## M25: Task Learning System
+
+Tracks patterns from completed tasks to improve future task execution and model selection.
+
+### Features
+1. **Completion Tracking**: Records success/failure for every agent task completion
+2. **Success Rate Analysis**: Calculates success rates by task type and model tier
+3. **Duration Tracking**: Tracks average execution time per task type
+4. **Error Pattern Analysis**: Identifies recurring error categories
+5. **Model Effectiveness**: Compares performance across model tiers (light/medium/heavy)
+6. **Recommendations**: Generates actionable insights based on historical data
+
+### Data Tracked
+| Metric | Grouping | Description |
+|--------|----------|-------------|
+| Completion count | By task type | Total tasks completed per type |
+| Success rate | By task type | Percentage of successful completions |
+| Average duration | By task type | Mean execution time |
+| Error patterns | By category | Recurring error types with affected tasks |
+| Model effectiveness | By tier | Success rate and duration per model |
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| GET /api/cos/learning | Get learning insights and recommendations |
+| GET /api/cos/learning/durations | Get task duration estimates by type |
+| POST /api/cos/learning/backfill | Backfill learning data from history |
+
+### Data Storage
+```
+./data/cos/
+└── learning.json    # Learning metrics and patterns
+```
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/services/taskLearning.js` | Core learning service |
+| `server/routes/cos.js` | Learning API endpoints |
+
+---
+
+## M26: Scheduled Scripts
+
+Cron-based script scheduling with optional agent triggering for automated health checks and maintenance.
+
+### Features
+1. **Schedule Presets**: Common intervals (5min, 15min, hourly, daily, weekly, on-demand)
+2. **Custom Cron**: Full cron expression support for complex schedules
+3. **Command Allowlist**: Security-first design using same allowlist as command runner
+4. **Agent Triggering**: Scripts can spawn CoS agents when issues are detected
+5. **Run History**: Track last execution, output, and exit codes
+6. **Enable/Disable**: Toggle scripts without deleting them
+
+### Schedule Presets
+| Preset | Cron Expression |
+|--------|-----------------|
+| every-5-min | `*/5 * * * *` |
+| every-15-min | `*/15 * * * *` |
+| every-30-min | `*/30 * * * *` |
+| hourly | `0 * * * *` |
+| every-6-hours | `0 */6 * * *` |
+| daily | `0 9 * * *` |
+| weekly | `0 9 * * 1` |
+| on-demand | (manual only) |
+
+### Trigger Actions
+| Action | Description |
+|--------|-------------|
+| log-only | Record output, no further action |
+| spawn-agent | Create CoS task with output as context |
+| create-task | Add task to COS-TASKS.md (not yet implemented) |
+
+### API Endpoints
+| Route | Description |
+|-------|-------------|
+| GET /api/cos/scripts | List all scripts |
+| POST /api/cos/scripts | Create a new script |
+| GET /api/cos/scripts/presets | Get schedule presets |
+| GET /api/cos/scripts/allowed-commands | Get allowed commands |
+| GET /api/cos/scripts/jobs | Get scheduled job info |
+| GET /api/cos/scripts/:id | Get specific script |
+| PUT /api/cos/scripts/:id | Update a script |
+| DELETE /api/cos/scripts/:id | Delete a script |
+| POST /api/cos/scripts/:id/run | Execute immediately |
+| GET /api/cos/scripts/:id/runs | Get run history |
+
+### Data Storage
+```
+./data/cos/
+├── scripts/              # Script output logs
+└── scripts-state.json    # Script configurations
+```
+
+### Socket Events
+| Event | Description |
+|-------|-------------|
+| script:created | New script created |
+| script:updated | Script configuration changed |
+| script:deleted | Script removed |
+| script:started | Execution started |
+| script:completed | Execution finished |
+| script:error | Execution error |
+
+### Implementation Files
+| File | Purpose |
+|------|---------|
+| `server/services/scriptRunner.js` | Script execution and scheduling |
+| `server/routes/scripts.js` | REST API endpoints |
+| `client/src/components/cos/tabs/ScriptCard.jsx` | Script UI component |
+
+---
+
+## Security Audit (2026-01-08)
+
+Comprehensive security audit performed by CoS Self-Improvement agent.
+
+### Vulnerabilities Found and Fixed
+
+#### 1. Command Injection in Git Service (CRITICAL - FIXED)
+**File**: `server/services/git.js`
+
+**Problem**: The service used `exec()` with string concatenation for shell commands, allowing command injection attacks:
+```javascript
+// VULNERABLE - user input directly in shell command
+await execAsync(`git add ${paths}`, { cwd: dir });
+await execAsync(`git commit -m "${message}"`, { cwd: dir });
+```
+
+An attacker could inject shell commands via file paths like `; rm -rf /` or commit messages containing shell metacharacters.
+
+**Fix Applied**:
+- Replaced `exec()` with `spawn()` and `shell: false` to prevent shell interpretation
+- Created `execGit()` helper that uses argument arrays instead of string concatenation
+- Added `validateFilePaths()` to reject paths with:
+  - Null bytes (`\0`)
+  - Shell metacharacters (`;`, `|`, `&`, `` ` ``, `$`)
+  - Path traversal (`..`)
+  - Absolute paths (`/`)
+
+#### 2. Path Traversal in Screenshots Route (HIGH - FIXED)
+**File**: `server/routes/screenshots.js`
+
+**Problem**: User-provided filenames were used directly without sanitization:
+```javascript
+// VULNERABLE - path traversal possible
+const filepath = join(SCREENSHOTS_DIR, filename);
+```
+
+An attacker could access arbitrary files via paths like `../../../etc/passwd`.
+
+**Fix Applied**:
+- Added `sanitizeFilename()` to strip path components and special characters
+- Use `resolve()` to normalize paths, then verify result stays within `SCREENSHOTS_DIR`
+- Defense in depth: check both upload and retrieval endpoints
+
+### No Issues Found (Secure Patterns in Use)
+
+#### Command Execution
+- **`server/services/commands.js`**: Uses allowlist (`ALLOWED_COMMANDS`) to restrict which commands can be executed. Only the base command is checked, but it uses `spawn('sh', ['-c', command])` which allows pipes and redirects for allowed commands only.
+
+#### PM2 Operations
+- **`server/services/pm2.js`**: Uses `spawn('pm2', args, { shell: false })` correctly.
+
+#### Input Validation
+- **Zod schemas**: Routes use Zod validation for structured input (`lib/validation.js`, `lib/memoryValidation.js`)
+- **Type coercion**: Query parameters properly parsed with `parseInt()` with fallback defaults
+
+#### React XSS Protection
+- No `dangerouslySetInnerHTML` usage found
+- React's JSX escapes content by default
+- API client properly uses `JSON.stringify()` for request bodies
+
+#### No Sensitive Data in Client
+- API keys stored server-side only in `data/providers.json`
+- No localStorage usage for sensitive data
+- Client uses relative API paths, no hardcoded secrets
+
+#### CSRF Protection
+- Same-origin deployment (client and server on same domain)
+- JSON content type required for all POST/PUT requests
+
+### Command Allowlist Review
+**File**: `server/services/commands.js`
+
+The allowlist is comprehensive for the intended use case:
+```javascript
+const ALLOWED_COMMANDS = new Set([
+  'npm', 'npx', 'pnpm', 'yarn', 'bun',  // Package managers
+  'node', 'deno',                        // Runtimes
+  'git', 'gh',                           // Git operations
+  'pm2',                                 // Process manager
+  'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc',  // File inspection
+  'pwd', 'which', 'echo', 'env',         // System info
+  'curl', 'wget',                        // Network
+  'docker', 'docker-compose',            // Containers
+  'make', 'cargo', 'go', 'python', 'python3', 'pip', 'pip3',  // Build tools
+  'brew'                                 // macOS package manager
+]);
+```
+
+**Note**: While this prevents arbitrary command execution, the system allows shell pipes/redirects within allowed commands because it uses `spawn('sh', ['-c', command])`. This is intentional for DevTools functionality but could theoretically be abused (e.g., `npm run "$(malicious)"`).
+
+### Recommendations for Future
+
+1. **Rate Limiting**: Consider adding rate limiting to prevent DoS
+2. **Audit Logging**: Log all command executions for forensic analysis
+3. **Content Security Policy**: Add CSP headers to client responses
+4. **Command Argument Validation**: Consider validating arguments to allowed commands, not just base commands
+
+---
+
+## M27: CoS Capability Enhancements (2026-01-08)
+
+Enhancements to the Chief of Staff system for better task learning, smarter prioritization, and expanded self-improvement capabilities.
+
+### Features
+
+#### 1. New Self-Improvement Task Type: Dependency Updates
+Added `dependency-updates` task type that:
+- Runs `npm audit` in both server and client directories
+- Checks for outdated packages with `npm outdated`
+- Reviews CRITICAL and HIGH severity vulnerabilities
+- Updates dependencies carefully (patch → minor → major)
+- Runs tests and build to verify updates
+- Commits with changelog of what was updated
+
+#### 2. Enhanced Performance Tracking
+New `getPerformanceSummary()` function provides:
+- Overall success rate across all task types
+- Top performing task types (>80% success)
+- Task types needing attention (<50% success)
+- Task types being skipped (<30% success)
+- Average duration statistics
+
+#### 3. Learning Insights System
+New functions for recording and retrieving observations:
+- `recordLearningInsight()` - Store observations about what works/doesn't
+- `getRecentInsights()` - Retrieve recent learning insights
+- Insights stored with timestamp, type, and context
+
+#### 4. Periodic Performance Logging
+Every 10 evaluations, CoS logs:
+- Overall success rate and total tasks completed
+- Count of top performers and tasks needing attention
+- Evaluation count tracking in state
+
+### New API Endpoints
+
+| Route | Description |
+|-------|-------------|
+| GET /api/cos/learning/performance | Get performance summary |
+| GET /api/cos/learning/insights | Get recent learning insights |
+| POST /api/cos/learning/insights | Record a learning insight |
+
+### Self-Improvement Task Types (12 total)
+
+1. **ui-bugs** - Check UI for JavaScript errors
+2. **mobile-responsive** - Test viewport sizes
+3. **security** - Audit for vulnerabilities
+4. **code-quality** - Find DRY violations, dead code
+5. **console-errors** - Fix JS errors
+6. **performance** - Optimize re-renders, queries
+7. **cos-enhancement** - Improve CoS itself
+8. **test-coverage** - Add tests
+9. **documentation** - Update docs
+10. **feature-ideas** - Implement new features
+11. **accessibility** - Check a11y issues
+12. **dependency-updates** - Update npm packages
+
+### Implementation Files
+
+| File | Changes |
+|------|---------|
+| `server/services/cos.js` | Added dependency-updates type, performance logging |
+| `server/services/taskLearning.js` | Added getPerformanceSummary, recordLearningInsight, getRecentInsights |
+| `server/services/selfImprovement.js` | Added new analysis types to constants |
+| `server/routes/cos.js` | Added 3 new API endpoints for learning insights |
+
+---
+
+## M28: Weekly Digest UI (2026-01-08)
+
+Added a visual "Digest" tab to the Chief of Staff page that displays weekly activity summaries with insights, accomplishments, and week-over-week comparisons.
+
+### Features
+
+1. **Weekly Summary View**: Visual dashboard showing tasks completed, success rate, work time, and issue count
+2. **Week-over-Week Comparison**: Shows percentage changes from previous week with trend indicators
+3. **Live Week Progress**: Real-time view of current week progress with projected totals
+4. **Top Accomplishments**: Lists most significant completed tasks sorted by duration
+5. **Task Type Breakdown**: Table view of performance metrics by task type
+6. **Error Patterns**: Highlights recurring errors that need attention
+7. **Actionable Insights**: Auto-generated insights like "Star Performer", "Needs Attention", "Recurring Issue"
+8. **Historical Navigation**: Dropdown to view digests from previous weeks
+9. **Collapsible Sections**: Expandable/collapsible sections for better information density
+
+### UI Components
+
+The DigestTab displays:
+- **Summary Cards**: 4 stat cards showing completed tasks, success rate, work time, and issues
+- **Live Progress Panel**: Shows current week progress with running agents indicator
+- **Insights Section**: Color-coded insight cards (success/warning/action/info)
+- **Accomplishments List**: Top 10 accomplishments with task type and duration
+- **Task Type Table**: Sortable table showing completion counts and success rates
+- **Issues Panel**: Error patterns with occurrence counts and affected tasks
+
+### API Integration
+
+Uses existing Weekly Digest backend endpoints:
+- `GET /api/cos/digest` - Current week's digest
+- `GET /api/cos/digest/list` - List all available digests
+- `GET /api/cos/digest/progress` - Live current week progress
+- `POST /api/cos/digest/generate` - Force regenerate digest
+- `GET /api/cos/digest/:weekId` - Get specific week's digest
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `client/src/components/cos/tabs/DigestTab.jsx` | New Digest tab component |
+| `client/src/components/cos/index.js` | Added DigestTab export |
+| `client/src/components/cos/constants.js` | Added digest tab to TABS array |
+| `client/src/pages/ChiefOfStaff.jsx` | Import and render DigestTab |

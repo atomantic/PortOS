@@ -6,6 +6,22 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
+/**
+ * Validate PM2 process name to prevent command injection
+ * PM2 names can contain alphanumeric, hyphens, underscores, and dots
+ */
+function validateProcessName(name) {
+  if (typeof name !== 'string' || !name) {
+    return null;
+  }
+  // Only allow safe characters for PM2 process names
+  // Reject any shell metacharacters
+  if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+    return null;
+  }
+  return name;
+}
+
 // GET /api/logs/processes - List all PM2 processes for log selection
 router.get('/processes', asyncHandler(async (req, res) => {
   const processes = await pm2Service.listProcesses().catch(() => []);
@@ -18,11 +34,17 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   const lines = parseInt(req.query.lines) || 100;
   const follow = req.query.follow === 'true';
 
+  // Security: Validate process name to prevent command injection
+  const safeProcessName = validateProcessName(processName);
+  if (!safeProcessName) {
+    throw new ServerError('Invalid process name', { status: 400, code: 'INVALID_PROCESS_NAME' });
+  }
+
   if (!follow) {
     // Static log fetch
-    const logs = await pm2Service.getLogs(processName, lines)
+    const logs = await pm2Service.getLogs(safeProcessName, lines)
       .catch(err => `Error: ${err.message}`);
-    return res.json({ processName, lines, logs });
+    return res.json({ processName: safeProcessName, lines, logs });
   }
 
   // SSE streaming
@@ -32,10 +54,11 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
 
   // Send initial connection event
-  res.write(`event: connected\ndata: ${JSON.stringify({ processName, timestamp: Date.now() })}\n\n`);
+  res.write(`event: connected\ndata: ${JSON.stringify({ processName: safeProcessName, timestamp: Date.now() })}\n\n`);
 
   // Spawn pm2 logs with --raw flag for clean output
-  const logProcess = spawn('pm2', ['logs', processName, '--raw', '--lines', String(lines)], {
+  // Security: safeProcessName is validated above to only contain safe characters
+  const logProcess = spawn('pm2', ['logs', safeProcessName, '--raw', '--lines', String(lines)], {
     shell: false
   });
 

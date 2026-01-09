@@ -24,6 +24,8 @@ import {
 import packageJson from '../../package.json';
 import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
+import { useNotifications } from '../hooks/useNotifications';
+import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -37,7 +39,7 @@ const navItems = [
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
-  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true },
+  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true, showBadge: true },
   {
     label: 'Dev Tools',
     icon: Terminal,
@@ -66,6 +68,16 @@ export default function Layout() {
 
   // Subscribe to server error notifications
   useErrorNotifications();
+
+  // Notifications for user task alerts
+  const {
+    notifications,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    removeNotification,
+    clearAll
+  } = useNotifications();
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));
@@ -161,11 +173,25 @@ export default function Layout() {
           title={collapsed ? item.label : undefined}
         >
           <div className="flex items-center gap-3">
-            <Icon size={20} className="flex-shrink-0" />
+            <div className="relative">
+              <Icon size={20} className="flex-shrink-0" />
+              {/* Badge for collapsed state */}
+              {item.showBadge && unreadCount > 0 && collapsed && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </div>
             <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
               {item.label}
             </span>
           </div>
+          {/* Badge for expanded state */}
+          {item.showBadge && unreadCount > 0 && !collapsed && (
+            <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
         </NavLink>
       );
     }
@@ -238,8 +264,12 @@ export default function Layout() {
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close sidebar"
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
           onClick={() => setMobileOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setMobileOpen(false)}
         />
       )}
 
@@ -267,8 +297,9 @@ export default function Layout() {
               onClick={() => setCollapsed(false)}
               className="hidden lg:block text-port-accent hover:text-port-accent/80 transition-colors"
               title="Expand sidebar"
+              aria-label="Expand sidebar"
             >
-              <Logo size={24} />
+              <Logo size={24} ariaLabel="PortOS logo - click to expand sidebar" />
             </button>
           )}
           {/* Expanded: collapse button */}
@@ -277,16 +308,18 @@ export default function Layout() {
               onClick={() => setCollapsed(true)}
               className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
               title="Collapse sidebar"
+              aria-label="Collapse sidebar"
             >
-              <ChevronLeft size={20} />
+              <ChevronLeft size={20} aria-hidden="true" />
             </button>
           )}
           {/* Mobile close button */}
           <button
             onClick={() => setMobileOpen(false)}
             className="lg:hidden p-1 text-gray-500 hover:text-white"
+            aria-label="Close sidebar"
           >
-            ✕
+            <span aria-hidden="true">✕</span>
           </button>
         </div>
 
@@ -295,9 +328,23 @@ export default function Layout() {
           {navItems.map(renderNavItem)}
         </nav>
 
-        {/* Footer with version */}
-        <div className={`p-4 border-t border-port-border text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
-          <span>v{packageJson.version}</span>
+        {/* Footer with version and notifications */}
+        <div className={`p-4 border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
+          <div className={`flex items-center ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
+            <span className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
+              v{packageJson.version}
+            </span>
+            <div className={collapsed ? '' : ''}>
+              <NotificationDropdown
+                notifications={notifications}
+                unreadCount={unreadCount}
+                onMarkAsRead={markAsRead}
+                onMarkAllAsRead={markAllAsRead}
+                onRemove={removeNotification}
+                onClearAll={clearAll}
+              />
+            </div>
+          </div>
         </div>
       </aside>
 
@@ -308,14 +355,24 @@ export default function Layout() {
           <button
             onClick={() => setMobileOpen(true)}
             className="p-1.5 -ml-1 text-gray-400 hover:text-white"
+            aria-label="Open navigation menu"
+            aria-expanded={mobileOpen}
           >
-            <Menu size={20} />
+            <Menu size={20} aria-hidden="true" />
           </button>
           <div className="flex items-center gap-1.5">
             <Logo size={18} className="text-port-accent" />
             <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
-          <div className="w-8" /> {/* Spacer for centering */}
+          <NotificationDropdown
+            notifications={notifications}
+            unreadCount={unreadCount}
+            onMarkAsRead={markAsRead}
+            onMarkAllAsRead={markAllAsRead}
+            onRemove={removeNotification}
+            onClearAll={clearAll}
+            position="top"
+          />
         </header>
 
         {/* Main content */}

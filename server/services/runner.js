@@ -306,7 +306,8 @@ export async function createRun(options) {
     model,
     prompt,
     workspacePath,
-    workspaceName
+    workspaceName,
+    timeout
   } = options;
 
   const provider = await getProviderById(providerId);
@@ -351,10 +352,13 @@ export async function createRun(options) {
     console.error(`❌ Failed to record usage session: ${err.message}`);
   });
 
-  return { runId, runDir, provider, metadata };
+  // Use user-specified timeout or fall back to provider default
+  const effectiveTimeout = timeout || provider.timeout;
+
+  return { runId, runDir, provider, metadata, timeout: effectiveTimeout };
 }
 
-export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete) {
+export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
   // Initialize runner events if not already done
   initRunnerEvents();
 
@@ -393,7 +397,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     prompt,
     workspacePath: workspacePath || process.cwd(),
     envVars: provider.envVars || {},
-    timeout: provider.timeout
+    timeout: timeout || provider.timeout
   }).catch(async (err) => {
     console.error(`❌ Failed to delegate run ${runId} to cos-runner: ${err.message}`);
     pendingRunCallbacks.delete(runId);

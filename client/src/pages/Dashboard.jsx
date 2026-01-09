@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AppTile from '../components/AppTile';
 import * as api from '../services/api';
+import socket from '../services/socket';
 
 export default function Dashboard() {
   const [apps, setApps] = useState([]);
@@ -9,7 +10,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setError(null);
     const [appsData, healthData] = await Promise.all([
       api.getApps().catch(err => { setError(err.message); return []; }),
@@ -18,13 +19,29 @@ export default function Dashboard() {
     setApps(appsData);
     setHealth(healthData);
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
-  }, []);
+
+    // Listen for apps changes via WebSocket instead of polling
+    const handleAppsChanged = () => {
+      fetchData();
+    };
+    socket.on('apps:changed', handleAppsChanged);
+
+    return () => {
+      socket.off('apps:changed', handleAppsChanged);
+    };
+  }, [fetchData]);
+
+  // Memoize derived stats to prevent recalculation on every render
+  const appStats = useMemo(() => ({
+    total: apps.length,
+    online: apps.filter(a => a.overallStatus === 'online').length,
+    stopped: apps.filter(a => a.overallStatus === 'stopped').length,
+    notStarted: apps.filter(a => a.overallStatus === 'not_started' || a.overallStatus === 'not_found').length
+  }), [apps]);
 
   if (loading) {
     return (
@@ -86,22 +103,22 @@ export default function Dashboard() {
         <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard
             label="Total Apps"
-            value={apps.length}
+            value={appStats.total}
             icon="📦"
           />
           <StatCard
             label="Online"
-            value={apps.filter(a => a.overallStatus === 'online').length}
+            value={appStats.online}
             icon="🟢"
           />
           <StatCard
             label="Stopped"
-            value={apps.filter(a => a.overallStatus === 'stopped').length}
+            value={appStats.stopped}
             icon="🟡"
           />
           <StatCard
             label="Not Started"
-            value={apps.filter(a => a.overallStatus === 'not_started' || a.overallStatus === 'not_found').length}
+            value={appStats.notStarted}
             icon="⚪"
           />
         </div>
@@ -112,9 +129,9 @@ export default function Dashboard() {
 
 function StatCard({ label, value, icon }) {
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-4">
+    <div className="bg-port-card border border-port-border rounded-lg p-4" role="group" aria-label={`${label}: ${value}`}>
       <div className="flex items-center gap-2 mb-1">
-        <span>{icon}</span>
+        <span aria-hidden="true">{icon}</span>
         <span className="text-sm text-gray-500">{label}</span>
       </div>
       <div className="text-2xl font-bold text-white">{value}</div>

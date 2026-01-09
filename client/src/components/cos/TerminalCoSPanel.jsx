@@ -134,16 +134,18 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
             <button
               onClick={onStop}
               className="flex items-center gap-1 px-2 py-1 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded border border-red-700/50 text-xs transition-colors"
+              aria-label="Stop CoS agent"
             >
-              <Square size={10} />
+              <Square size={10} aria-hidden="true" />
               stop
             </button>
           ) : (
             <button
               onClick={onStart}
               className="flex items-center gap-1 px-2 py-1 bg-green-900/30 hover:bg-green-900/50 text-green-400 rounded border border-green-700/50 text-xs transition-colors"
+              aria-label="Start CoS agent"
             >
-              <Play size={10} />
+              <Play size={10} aria-hidden="true" />
               start
             </button>
           )}
@@ -160,17 +162,17 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
         <span className="text-gray-400">{stateConfig.icon}</span>
       </div>
 
-      {/* Message bubble as terminal output */}
-      <div className="mb-1 lg:mb-4 px-2 py-1 lg:py-1.5 bg-gray-800/50 rounded border-l-2 border-cyan-500/50">
-        <div className="flex items-center gap-1 lg:block">
-          <span className="text-cyan-400 text-xs">$</span>
-          <span className="text-gray-300 text-xs lg:ml-2 truncate lg:line-clamp-none flex-1">{statusMessage}</span>
-          {evalCountdown && (
-            <span className="text-[10px] lg:text-xs text-cyan-500/60 font-mono whitespace-nowrap lg:block lg:mt-1">
-              <span className="hidden lg:inline"># next: </span>({evalCountdown.formatted})
-            </span>
-          )}
+      {/* Message bubble as terminal output - compact two-line layout */}
+      <div className="mb-1 lg:mb-2 px-2 py-1 bg-gray-800/50 rounded border-l-2 border-cyan-500/50 text-xs">
+        <div className="flex items-center gap-1">
+          <span className="text-cyan-400">$</span>
+          <span className="text-gray-300 truncate">{statusMessage}</span>
         </div>
+        {evalCountdown && (
+          <div className="text-cyan-500/60 font-mono mt-0.5">
+            # next: ({evalCountdown.formatted})
+          </div>
+        )}
       </div>
 
       {/* Stats as terminal output - desktop only */}
@@ -211,16 +213,18 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
             <button
               onClick={onStop}
               className="flex items-center gap-2 px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded border border-red-700/50 text-xs transition-colors"
+              aria-label="Stop CoS agent"
             >
-              <Square size={12} />
+              <Square size={12} aria-hidden="true" />
               ./stop
             </button>
           ) : (
             <button
               onClick={onStart}
               className="flex items-center gap-2 px-3 py-1.5 bg-green-900/30 hover:bg-green-900/50 text-green-400 rounded border border-green-700/50 text-xs transition-colors"
+              aria-label="Start CoS agent"
             >
-              <Play size={12} />
+              <Play size={12} aria-hidden="true" />
               ./start
             </button>
           )}

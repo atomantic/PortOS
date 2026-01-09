@@ -101,4 +101,4 @@ cd server && npm run test:watch
 
 ## API Documentation
 
-See [README.md](../README.md#api-endpoints) for API endpoint reference.
+See [API.md](./API.md) for the complete REST API and WebSocket event reference.

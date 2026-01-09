@@ -42,10 +42,12 @@ export default function StatusBadge({ status, size = 'md' }) {
 
   return (
     <span
+      role="status"
+      aria-label={`Status: ${config.text}`}
       className={`inline-flex items-center gap-1.5 rounded-full font-medium text-white ${config.color} ${sizeClasses[size]}`}
     >
       {config.pulse && (
-        <span className="w-2 h-2 rounded-full bg-white animate-pulse-soft" />
+        <span className="w-2 h-2 rounded-full bg-white animate-pulse-soft" aria-hidden="true" />
       )}
       {config.text}
     </span>

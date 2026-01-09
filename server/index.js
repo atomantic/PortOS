@@ -24,11 +24,13 @@ import agentsRoutes from './routes/agents.js';
 import cosRoutes from './routes/cos.js';
 import scriptsRoutes from './routes/scripts.js';
 import memoryRoutes from './routes/memory.js';
+import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers } from './lib/errorHandler.js';
 import { initAutoFixer } from './services/autoFixer.js';
+import { initTaskLearning } from './services/taskLearning.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,6 +55,9 @@ initSocket(io);
 
 // Initialize auto-fixer for error recovery
 initAutoFixer();
+
+// Initialize task learning system to track agent completions
+initTaskLearning();
 
 // Middleware - allow any origin for Tailscale access
 app.use(cors({
@@ -85,6 +90,7 @@ app.use('/api/agents', agentsRoutes);
 app.use('/api/cos/scripts', scriptsRoutes); // Mount before /api/cos to avoid route conflicts
 app.use('/api/cos', cosRoutes);
 app.use('/api/memory', memoryRoutes);
+app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 
 // Initialize script runner

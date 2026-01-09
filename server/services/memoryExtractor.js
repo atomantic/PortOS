@@ -8,6 +8,7 @@
 import { createMemory } from './memory.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos.js';
+import * as notifications from './notifications.js';
 
 /**
  * Parse structured MEMORY blocks from agent output
@@ -55,10 +56,10 @@ function parseMemoryBlocks(output) {
  */
 function extractPatterns(output) {
   const memories = [];
+  let match;
 
   // Pattern: "I learned that..." or "I discovered that..."
   const learnedRegex = /(?:I\s+)?(?:learned|discovered|found out|realized|noticed)\s+that\s+(.+?)(?:\.|$)/gi;
-  let match;
   while ((match = learnedRegex.exec(output)) !== null) {
     memories.push({
       type: 'learning',
@@ -114,6 +115,62 @@ function extractPatterns(output) {
       confidence: 0.65,
       category: 'other',
       tags: ['note']
+    });
+  }
+
+  // Pattern: "No Issues Found" / "No issues detected" / "No fixes required"
+  // High confidence - this is a clear finding that something is working well
+  const noIssuesRegex = /\*\*(?:No\s+(?:Issues?|Problems?|Errors?|Bugs?)\s+Found|No\s+(?:fixes?|changes?)\s+(?:required|needed|necessary))\*\*/gi;
+  if (noIssuesRegex.test(output)) {
+    memories.push({
+      type: 'observation',
+      content: 'Analysis found no issues requiring fixes',
+      confidence: 0.85,
+      category: 'codebase',
+      tags: ['audit-result', 'no-action-needed']
+    });
+  }
+
+  // Pattern: "already well-optimized" / "already has excellent" / "already implemented"
+  // Exclude colons to prevent truncated memories like "Already has excellent responsive design:"
+  const alreadyWorkingRegex = /(?:already|currently)\s+(?:has\s+)?(?:excellent|good|great|proper|well[- ]?optimized|well[- ]?implemented|working\s+well|fully\s+implemented)\s+([^\n.:]+)/gi;
+  while ((match = alreadyWorkingRegex.exec(output)) !== null) {
+    const captured = match[1].trim();
+    // Skip if capture is too short or empty
+    if (captured.length < 5) continue;
+    memories.push({
+      type: 'fact',
+      content: `Already has excellent ${captured}`,
+      confidence: 0.85,
+      category: 'codebase',
+      tags: ['existing-feature', 'no-action-needed']
+    });
+  }
+
+  // Pattern: Conclusion sections - extract the actual conclusion content
+  const conclusionRegex = /#{1,3}\s*Conclusion\s*\n+(.+?)(?:\n\n|\n#|$)/gis;
+  while ((match = conclusionRegex.exec(output)) !== null) {
+    const conclusion = match[1].trim().replace(/\n/g, ' ').substring(0, 300);
+    if (conclusion.length > 20) {
+      memories.push({
+        type: 'learning',
+        content: conclusion,
+        confidence: 0.85,
+        category: 'codebase',
+        tags: ['conclusion', 'audit-result']
+      });
+    }
+  }
+
+  // Pattern: "The application/UI/system is..." followed by positive assessment
+  const assessmentRegex = /(?:The\s+)?(?:application|app|UI|system|codebase|code)\s+(?:is|has)\s+(?:already\s+)?(?:well[- ]?(?:optimized|designed|structured|implemented)|properly\s+(?:configured|set up)|fully\s+(?:functional|working))/gi;
+  while ((match = assessmentRegex.exec(output)) !== null) {
+    memories.push({
+      type: 'observation',
+      content: match[0].trim(),
+      confidence: 0.8,
+      category: 'codebase',
+      tags: ['assessment', 'status']
     });
   }
 
@@ -209,18 +266,55 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     created.push(memory);
   }
 
-  // Queue medium confidence for approval (just emit event for now)
-  if (mediumConfidence.length > 0) {
-    console.log(`🧠 ${mediumConfidence.length} memories pending approval`);
+  // Store medium confidence memories as pending_approval
+  const pendingMemories = [];
+  for (const mem of mediumConfidence) {
+    const embedding = await generateMemoryEmbedding(mem);
+    const memory = await createMemory({
+      ...mem,
+      sourceAgentId: agentId,
+      sourceTaskId: taskId,
+      status: 'pending_approval'
+    }, embedding);
+    pendingMemories.push(memory);
+  }
+
+  if (pendingMemories.length > 0) {
+    console.log(`🧠 ${pendingMemories.length} memories pending approval`);
     cosEvents.emit('memory:approval-needed', {
       agentId,
       taskId,
-      memories: mediumConfidence.map(m => ({
+      memories: pendingMemories.map(m => ({
+        id: m.id,
         type: m.type,
         content: m.content.substring(0, 200),
         confidence: m.confidence
       }))
     });
+
+    // Create notification for user
+    for (const mem of pendingMemories) {
+      const alreadyExists = await notifications.exists(
+        notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+        'memoryId',
+        mem.id
+      );
+      if (!alreadyExists) {
+        await notifications.addNotification({
+          type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+          title: `Memory needs approval`,
+          description: mem.summary || mem.content.substring(0, 100),
+          priority: notifications.PRIORITY_LEVELS.MEDIUM,
+          link: '/cos/memory',
+          metadata: {
+            memoryId: mem.id,
+            memoryType: mem.type,
+            agentId,
+            taskId
+          }
+        });
+      }
+    }
   }
 
   console.log(`🧠 Extracted ${created.length} memories from agent ${agentId}`);
@@ -228,13 +322,14 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     agentId,
     taskId,
     count: created.length,
-    pendingApproval: mediumConfidence.length
+    pendingApproval: pendingMemories.length
   });
 
   return {
     created: created.length,
-    pendingApproval: mediumConfidence.length,
-    memories: created
+    pendingApproval: pendingMemories.length,
+    memories: created,
+    pendingMemories
   };
 }
 

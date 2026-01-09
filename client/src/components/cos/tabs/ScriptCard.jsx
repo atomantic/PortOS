@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
+import { formatTime } from '../../../utils/formatters';
 
 const scheduleLabels = {
   'on-demand': 'On Demand',
@@ -45,17 +46,6 @@ export default function ScriptCard({ script, onRun, onToggle, onDelete, onUpdate
     toast.success('Script updated');
     setEditing(false);
     onUpdate?.();
-  };
-
-  const formatTime = (timestamp) => {
-    if (!timestamp) return 'Never';
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return date.toLocaleDateString();
   };
 
   return (

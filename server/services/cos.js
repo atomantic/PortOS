@@ -17,6 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps } from './apps.js';
+import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary } from './taskLearning.js';
 
 const execAsync = promisify(exec);
 
@@ -35,15 +36,22 @@ export const cosEvents = new EventEmitter();
 
 /**
  * Emit a log event for UI display
+ * Exported for use by other CoS-related services
+ * @param {string} level - Log level: 'info', 'warn', 'error', 'success', 'debug'
+ * @param {string} message - Log message
+ * @param {Object} data - Additional data to include in log entry
+ * @param {string} prefix - Optional prefix for console output (e.g., '[SelfImprovement]')
  */
-function emitLog(level, message, data = {}) {
+export function emitLog(level, message, data = {}, prefix = '') {
   const logEntry = {
     timestamp: new Date().toISOString(),
-    level, // 'info', 'warn', 'error', 'success', 'debug'
+    level,
     message,
     ...data
   };
-  console.log(`${level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : 'ℹ️'} ${message}`);
+  const emoji = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : 'ℹ️';
+  const prefixStr = prefix ? ` ${prefix}` : '';
+  console.log(`${emoji}${prefixStr} ${message}`);
   cosEvents.emit('log', logEntry);
 }
 
@@ -72,27 +80,29 @@ async function withStateLock(fn) {
 const DEFAULT_CONFIG = {
   userTasksFile: 'data/TASKS.md',          // User-defined tasks
   cosTasksFile: 'data/COS-TASKS.md',       // CoS internal/system tasks
-  evaluationIntervalMs: 60000,         // 1 minute (also used for idle check frequency)
-  healthCheckIntervalMs: 900000,       // 15 minutes
+  goalsFile: 'data/COS-GOALS.md',          // Mission and goals file
+  evaluationIntervalMs: 60000,             // 1 minute - stay active, check frequently
+  healthCheckIntervalMs: 900000,           // 15 minutes
   maxConcurrentAgents: 3,
-  maxProcessMemoryMb: 2048,            // Alert if any process exceeds this
-  maxTotalProcesses: 50,               // Alert if total PM2 processes exceed this
+  maxProcessMemoryMb: 2048,                // Alert if any process exceeds this
+  maxTotalProcesses: 50,                   // Alert if total PM2 processes exceed this
   mcpServers: [
     { name: 'filesystem', command: 'npx', args: ['-y', '@anthropic/mcp-server-filesystem'] },
     { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
   ],
-  autoStart: false,                    // Legacy: use alwaysOn instead
-  selfImprovementEnabled: true,        // Allow CoS to suggest improvements to its own prompts
-  avatarStyle: 'svg',                  // UI preference: 'svg' or 'ascii'
+  autoStart: false,                        // Legacy: use alwaysOn instead
+  selfImprovementEnabled: true,            // Allow CoS to suggest improvements to its own prompts
+  avatarStyle: 'svg',                      // UI preference: 'svg' or 'ascii'
   // Always-on mode settings
-  alwaysOn: true,                      // CoS starts automatically and stays active
-  appReviewCooldownMs: 3600000,        // 1 hour between working on same app
-  idleReviewEnabled: true,             // Review apps for improvements when no user tasks
-  idleReviewPriority: 'LOW',           // Priority for auto-generated review tasks
-  immediateExecution: true,            // Execute new tasks immediately, don't wait for interval
+  alwaysOn: true,                          // CoS starts automatically and stays active
+  appReviewCooldownMs: 1800000,            // 30 min between working on same app (was 1 hour)
+  idleReviewEnabled: true,                 // Review apps for improvements when no user tasks
+  idleReviewPriority: 'MEDIUM',            // Priority for auto-generated tasks (was LOW)
+  immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
+  proactiveMode: true,                     // Be proactive about finding work
   autoFixThresholds: {
-    maxLinesChanged: 50,               // Auto-approve if <= this many lines changed
-    allowedCategories: [               // Categories that can auto-execute
+    maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed
+    allowedCategories: [                   // Categories that can auto-execute
       'formatting',
       'dry-violations',
       'dead-code',
@@ -411,6 +421,27 @@ export async function getAllTasks() {
 export const getTasks = getUserTasks;
 
 /**
+ * Get a specific task by ID from any task source
+ */
+export async function getTaskById(taskId) {
+  const { user: userTasks, cos: cosTasks } = await getAllTasks();
+
+  // Search user tasks
+  const userTask = userTasks.tasks?.find(t => t.id === taskId);
+  if (userTask) {
+    return { ...userTask, taskType: 'user' };
+  }
+
+  // Search CoS internal tasks
+  const cosTask = cosTasks.tasks?.find(t => t.id === taskId);
+  if (cosTask) {
+    return { ...cosTask, taskType: 'internal' };
+  }
+
+  return null;
+}
+
+/**
  * Reset orphaned in_progress tasks back to pending
  * (tasks marked in_progress but no running agent)
  */
@@ -540,6 +571,27 @@ export async function evaluateTasks() {
     availableSlots
   });
 
+  // Periodically log performance summary (every 10 evaluations)
+  const evalCount = state.stats.evaluationCount || 0;
+  if (evalCount % 10 === 0 && evalCount > 0) {
+    const perfSummary = await getPerformanceSummary().catch(() => null);
+    if (perfSummary && perfSummary.totalCompleted > 0) {
+      emitLog('info', `Performance: ${perfSummary.overallSuccessRate}% success rate over ${perfSummary.totalCompleted} tasks`, {
+        successRate: perfSummary.overallSuccessRate,
+        totalCompleted: perfSummary.totalCompleted,
+        topPerformers: perfSummary.topPerformers.length,
+        needsAttention: perfSummary.needsAttention.length
+      });
+    }
+  }
+
+  // Update evaluation count
+  await withStateLock(async () => {
+    const s = await loadState();
+    s.stats.evaluationCount = (s.stats.evaluationCount || 0) + 1;
+    await saveState(s);
+  });
+
   // Spawn all ready tasks (up to available slots)
   for (const task of tasksToSpawn) {
     emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
@@ -566,60 +618,495 @@ export async function evaluateTasks() {
 }
 
 /**
- * Generate an idle review task when no user/system tasks are pending
+ * Generate an idle task when no user/system tasks are pending
+ * Alternates between:
+ * 1. Self-improvement tasks (UI analysis, security, code quality)
+ * 2. App reviews for managed apps
  *
  * @param {Object} state - Current CoS state
- * @returns {Object|null} Generated task or null if no apps eligible
+ * @returns {Object|null} Generated task or null if nothing to do
  */
 async function generateIdleReviewTask(state) {
+  // Check if we should run self-improvement (alternates with app reviews)
+  const lastSelfImprovementTime = state.stats.lastSelfImprovement
+    ? new Date(state.stats.lastSelfImprovement).getTime()
+    : 0;
+  const lastIdleReviewTime = state.stats.lastIdleReview
+    ? new Date(state.stats.lastIdleReview).getTime()
+    : 0;
+
+  // Prioritize self-improvement if it hasn't run recently (or ever)
+  const shouldRunSelfImprovement = lastSelfImprovementTime <= lastIdleReviewTime;
+
+  if (shouldRunSelfImprovement && state.config.selfImprovementEnabled) {
+    const selfImprovementTask = await generateSelfImprovementTask(state);
+    if (selfImprovementTask) {
+      return selfImprovementTask;
+    }
+  }
+
+  // Try app reviews
   // Get all managed apps
   const apps = await getAllApps().catch(() => []);
 
-  if (apps.length === 0) {
-    emitLog('debug', 'No managed apps found for idle review');
-    return null;
+  if (apps.length > 0) {
+    // Find next app eligible for review (not on cooldown, oldest review first)
+    const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
+
+    if (nextApp) {
+      // Mark that we're starting an idle review
+      await markIdleReviewStarted();
+      await markAppReviewStarted(nextApp.id, `idle-review-${Date.now()}`);
+
+      // Update lastIdleReview timestamp
+      await withStateLock(async () => {
+        const s = await loadState();
+        s.stats.lastIdleReview = new Date().toISOString();
+        await saveState(s);
+      });
+
+      emitLog('info', `Generating idle review task for ${nextApp.name}`, { appId: nextApp.id });
+
+      // Create an idle review task
+      return {
+        id: `idle-review-${nextApp.id}-${Date.now().toString(36)}`,
+        status: 'pending',
+        priority: state.config.idleReviewPriority || 'MEDIUM',
+        priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
+        description: `[Idle Review] Review ${nextApp.name} codebase for improvements: formatting issues, dead code, DRY violations, typos, and other small fixes that can be auto-approved. Commit each fix with a clear description.`,
+        metadata: {
+          app: nextApp.id,
+          appName: nextApp.name,
+          repoPath: nextApp.repoPath,
+          reviewType: 'idle',
+          autoGenerated: true
+        },
+        taskType: 'internal',
+        autoApproved: true
+      };
+    }
   }
 
-  // Find next app eligible for review (not on cooldown, oldest review first)
-  const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
-
-  if (!nextApp) {
-    emitLog('debug', 'All apps on cooldown - no idle review possible');
-    return null;
+  // All apps on cooldown or no apps - fall back to self-improvement
+  // This ensures CoS is ALWAYS working on something
+  if (state.config.selfImprovementEnabled) {
+    emitLog('info', 'No apps available for review - running self-improvement instead');
+    return await generateSelfImprovementTask(state);
   }
 
-  // Mark that we're starting an idle review
-  await markIdleReviewStarted();
-  await markAppReviewStarted(nextApp.id, `idle-review-${Date.now()}`);
+  emitLog('debug', 'No idle tasks available');
+  return null;
+}
 
-  // Update lastIdleReview timestamp
+// Self-improvement task types (rotates through these)
+// Organized by goal priority from COS-GOALS.md
+const SELF_IMPROVEMENT_TYPES = [
+  // Goal 1: Codebase Quality
+  'ui-bugs',
+  'mobile-responsive',
+  'security',
+  'code-quality',
+  'console-errors',
+  'performance',
+  // Goal 2: Self-Improvement (CoS enhancing itself)
+  'cos-enhancement',
+  'test-coverage',
+  // Goal 3: Documentation
+  'documentation',
+  // Goal 4: User Engagement
+  'feature-ideas',
+  // Goal 5: System Health
+  'accessibility',
+  'dependency-updates'
+];
+
+/**
+ * Generate a self-improvement task for PortOS itself
+ * Uses Playwright and Opus to analyze and fix issues
+ *
+ * Enhanced with adaptive learning:
+ * - Skips task types with consistently poor success rates
+ * - Logs learning-based recommendations
+ * - Falls back to next available task type if current is skipped
+ */
+async function generateSelfImprovementTask(state) {
+  // Get the next analysis type in rotation, but skip failing task types
+  const lastType = state.stats.lastSelfImprovementType || '';
+  let currentIndex = SELF_IMPROVEMENT_TYPES.indexOf(lastType);
+  let nextType = null;
+  let attempts = 0;
+  const maxAttempts = SELF_IMPROVEMENT_TYPES.length;
+
+  // Find next task type that isn't being skipped due to poor performance
+  while (attempts < maxAttempts) {
+    currentIndex = (currentIndex + 1) % SELF_IMPROVEMENT_TYPES.length;
+    const candidateType = SELF_IMPROVEMENT_TYPES[currentIndex];
+    const taskTypeKey = `self-improve:${candidateType}`;
+
+    // Check if this task type should be skipped based on learning data
+    const cooldownInfo = await getAdaptiveCooldownMultiplier(taskTypeKey).catch(() => ({ skip: false }));
+
+    if (cooldownInfo.skip) {
+      emitLog('warn', `Skipping ${candidateType} - poor success rate (${cooldownInfo.successRate}% after ${cooldownInfo.completed} attempts)`, {
+        taskType: candidateType,
+        successRate: cooldownInfo.successRate,
+        completed: cooldownInfo.completed,
+        reason: cooldownInfo.reason
+      });
+      attempts++;
+      continue;
+    }
+
+    // Log if there's a recommendation from learning system
+    if (cooldownInfo.recommendation) {
+      emitLog('info', `Learning insight for ${candidateType}: ${cooldownInfo.recommendation}`, {
+        taskType: candidateType,
+        multiplier: cooldownInfo.multiplier
+      });
+    }
+
+    nextType = candidateType;
+    break;
+  }
+
+  // If all task types are failing, log warning and pick the one that's been failing longest
+  if (!nextType) {
+    const skippedTypes = await getSkippedTaskTypes().catch(() => []);
+    emitLog('warn', `All self-improvement task types are underperforming - selecting oldest failed type for retry`, {
+      skippedCount: skippedTypes.length
+    });
+
+    // Sort by lastCompleted ascending (oldest first) and pick that one
+    if (skippedTypes.length > 0) {
+      skippedTypes.sort((a, b) => new Date(a.lastCompleted || 0) - new Date(b.lastCompleted || 0));
+      const oldestType = skippedTypes[0].taskType.replace('self-improve:', '');
+      nextType = oldestType;
+      emitLog('info', `Retrying ${oldestType} as it hasn't been attempted recently`);
+    } else {
+      // Fallback to first type in rotation
+      nextType = SELF_IMPROVEMENT_TYPES[0];
+    }
+  }
+
+  // Update state with new timestamp and type
   await withStateLock(async () => {
     const s = await loadState();
-    s.stats.lastIdleReview = new Date().toISOString();
+    s.stats.lastSelfImprovement = new Date().toISOString();
+    s.stats.lastSelfImprovementType = nextType;
     await saveState(s);
   });
 
-  emitLog('info', `Generating idle review task for ${nextApp.name}`, { appId: nextApp.id });
+  emitLog('info', `Generating self-improvement task: ${nextType}`);
 
-  // Create an idle review task
-  const reviewTask = {
-    id: `idle-review-${nextApp.id}-${Date.now().toString(36)}`,
-    status: 'pending',
-    priority: state.config.idleReviewPriority || 'LOW',
-    priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 1,
-    description: `[Idle Review] Review ${nextApp.name} codebase for improvements: formatting issues, dead code, DRY violations, typos, and other small fixes that can be auto-approved`,
-    metadata: {
-      app: nextApp.id,
-      appName: nextApp.name,
-      repoPath: nextApp.repoPath,
-      reviewType: 'idle',
-      autoGenerated: true
-    },
-    taskType: 'internal',
-    autoApproved: true // Idle reviews are auto-approved to start, but individual fixes need classification
+  const taskDescriptions = {
+    'ui-bugs': `[Self-Improvement] UI Bug Analysis
+
+Use Playwright MCP (browser_navigate, browser_snapshot, browser_console_messages) to analyze PortOS UI:
+
+1. Navigate to http://localhost:5555/
+2. Check each main route: /, /apps, /cos, /cos/tasks, /cos/agents, /devtools, /devtools/history, /providers, /usage
+3. For each route:
+   - Take a browser_snapshot to see the page structure
+   - Check browser_console_messages for JavaScript errors
+   - Look for broken UI elements, missing data, failed requests
+4. Fix any bugs found in the React components or API routes
+5. Run tests and commit changes
+
+Use model: claude-opus-4-5-20251101 for thorough analysis`,
+
+    'mobile-responsive': `[Self-Improvement] Mobile Responsiveness Analysis
+
+Use Playwright MCP to test PortOS at different viewport sizes:
+
+1. browser_resize to mobile (375x812), then navigate to http://localhost:5555/
+2. Take browser_snapshot and analyze for:
+   - Text overflow or truncation
+   - Buttons too small to tap (< 44px)
+   - Horizontal scrolling issues
+   - Elements overlapping
+   - Navigation usability
+3. Repeat at tablet (768x1024) and desktop (1440x900)
+4. Fix Tailwind CSS responsive classes (sm:, md:, lg:) as needed
+5. Test fixes and commit changes
+
+Focus on these routes: /cos, /cos/tasks, /devtools, /providers
+
+Use model: claude-opus-4-5-20251101 for comprehensive fixes`,
+
+    'security': `[Self-Improvement] Security Audit
+
+Analyze PortOS codebase for security vulnerabilities:
+
+1. Review server/routes/*.js for:
+   - Command injection in exec/spawn calls
+   - Path traversal in file operations
+   - Missing input validation
+   - XSS in rendered content
+
+2. Review server/services/*.js for:
+   - Unsafe eval() or Function()
+   - Hardcoded credentials
+   - SQL/NoSQL injection
+
+3. Review client/src/ for:
+   - XSS vulnerabilities in React
+   - Sensitive data in localStorage
+   - CSRF protection
+
+4. Check server/lib/commandAllowlist.js is comprehensive
+
+Fix any vulnerabilities and commit with security advisory notes.
+
+Use model: claude-opus-4-5-20251101 for thorough security analysis`,
+
+    'code-quality': `[Self-Improvement] Code Quality Review
+
+Analyze PortOS codebase for maintainability:
+
+1. Find DRY violations - similar code in multiple places
+2. Identify functions >50 lines that should be split
+3. Look for missing error handling
+4. Find dead code and unused imports
+5. Check for console.log that should be removed
+6. Look for TODO/FIXME that need addressing
+
+Focus on:
+- server/services/*.js
+- client/src/pages/*.jsx
+- client/src/components/*.jsx
+
+Refactor issues found and commit improvements.
+
+Use model: claude-opus-4-5-20251101 for quality refactoring`,
+
+    'accessibility': `[Self-Improvement] Accessibility Audit
+
+Use Playwright MCP to audit PortOS accessibility:
+
+1. Navigate to http://localhost:5555/
+2. Use browser_snapshot to get accessibility tree
+3. Check each main route for:
+   - Missing ARIA labels
+   - Missing alt text on images
+   - Insufficient color contrast
+   - Keyboard navigation issues
+   - Focus indicators
+
+4. Fix accessibility issues in React components
+5. Add appropriate aria-* attributes
+6. Test and commit changes
+
+Use model: claude-opus-4-5-20251101 for comprehensive a11y fixes`,
+
+    'console-errors': `[Self-Improvement] Console Error Investigation
+
+Use Playwright MCP to find and fix console errors:
+
+1. Navigate to http://localhost:5555/
+2. Call browser_console_messages with level: "error"
+3. Visit each route and capture errors:
+   - /, /apps, /cos, /cos/tasks, /cos/agents
+   - /devtools, /devtools/history, /devtools/runner
+   - /providers, /usage, /prompts
+
+4. For each error:
+   - Identify the source file and line
+   - Understand the root cause
+   - Implement a fix
+
+5. Test fixes and commit changes
+
+Use model: claude-opus-4-5-20251101 for thorough debugging`,
+
+    'performance': `[Self-Improvement] Performance Analysis
+
+Analyze PortOS for performance issues:
+
+1. Review React components for:
+   - Unnecessary re-renders
+   - Missing useMemo/useCallback
+   - Large component files that should be split
+
+2. Review server code for:
+   - N+1 query patterns
+   - Missing caching opportunities
+   - Inefficient file operations
+
+3. Review client bundle for:
+   - Missing code splitting
+   - Large dependencies that could be tree-shaken
+
+4. Check Socket.IO for:
+   - Event handler memory leaks
+   - Unnecessary broadcasts
+
+Optimize and commit improvements.
+
+Use model: claude-opus-4-5-20251101 for performance optimization`,
+
+    'cos-enhancement': `[Self-Improvement] Enhance CoS Capabilities
+
+Review the CoS system and add new capabilities:
+
+1. Read data/COS-GOALS.md to understand the mission and goals
+2. Review server/services/cos.js for improvement opportunities:
+   - Better task prioritization logic
+   - Smarter model selection
+   - More informative status messages
+   - Better error recovery
+
+3. Review the self-improvement task prompts:
+   - Are they comprehensive enough?
+   - Do they lead to quality fixes?
+   - What new analysis types could be added?
+
+4. Consider adding:
+   - New MCP server integrations
+   - Better metrics tracking
+   - Learning from completed tasks
+   - Smarter cooldown logic
+
+5. Implement ONE meaningful enhancement and commit it
+
+Focus on making CoS more autonomous and effective.
+
+Use model: claude-opus-4-5-20251101 for thoughtful enhancement`,
+
+    'test-coverage': `[Self-Improvement] Improve Test Coverage
+
+Analyze and improve test coverage for PortOS:
+
+1. Check existing tests in server/tests/ and client/tests/
+2. Identify untested critical paths:
+   - API routes without tests
+   - Services with complex logic
+   - Error handling paths
+
+3. Add tests for:
+   - CoS task evaluation logic
+   - Agent spawning and lifecycle
+   - Socket.IO event handlers
+   - API endpoints
+
+4. Ensure tests:
+   - Follow existing patterns
+   - Use appropriate mocks
+   - Test edge cases
+
+5. Run npm test to verify all tests pass
+6. Commit test additions with clear message describing what's covered
+
+Use model: claude-opus-4-5-20251101 for comprehensive test design`,
+
+    'documentation': `[Self-Improvement] Update Documentation
+
+Review and improve PortOS documentation:
+
+1. Update PLAN.md:
+   - Mark completed milestones
+   - Add any new features implemented
+   - Document architectural decisions
+
+2. Check docs/ folder:
+   - Are all features documented?
+   - Is the information current?
+   - Add any missing guides
+
+3. Review code comments:
+   - Add JSDoc to exported functions
+   - Document complex algorithms
+   - Explain non-obvious code
+
+4. Update README.md if needed:
+   - Installation instructions
+   - Quick start guide
+   - Feature overview
+
+5. Consider adding:
+   - Architecture diagrams
+   - API documentation
+   - Troubleshooting guide
+
+Commit documentation improvements.
+
+Use model: claude-opus-4-5-20251101 for clear documentation`,
+
+    'feature-ideas': `[Self-Improvement] Brainstorm and Implement Feature
+
+Think about ways to make PortOS more useful:
+
+1. Read data/COS-GOALS.md for context on user goals
+2. Review recent completed tasks to understand patterns
+3. Consider these areas:
+   - User task management improvements
+   - Better progress visualization
+   - New automation capabilities
+   - Enhanced monitoring features
+
+4. Choose ONE small, high-impact feature to implement:
+   - Something that saves user time
+   - Improves the developer experience
+   - Makes CoS more helpful
+
+5. Implement it:
+   - Write clean, tested code
+   - Follow existing patterns
+   - Update relevant documentation
+
+6. Commit with a clear description of the new feature
+
+Think creatively but implement practically.
+
+Use model: claude-opus-4-5-20251101 for creative feature development`,
+
+    'dependency-updates': `[Self-Improvement] Dependency Updates and Security Audit
+
+Check PortOS dependencies for updates and security vulnerabilities:
+
+1. Run npm audit in both server/ and client/ directories
+2. Check for outdated packages with npm outdated
+3. Review CRITICAL and HIGH severity vulnerabilities
+4. For each vulnerability:
+   - Assess the actual risk (is the vulnerable code path used?)
+   - Check if an update is available
+   - Test that updates don't break functionality
+
+5. Update dependencies carefully:
+   - Update patch versions first (safest)
+   - Then minor versions
+   - Major versions need more careful review
+
+6. After updating:
+   - Run npm test in server/
+   - Run npm run build in client/
+   - Verify the app starts correctly
+
+7. Commit with clear changelog of what was updated and why
+
+IMPORTANT: Only update one major version bump at a time. If multiple major updates are needed, create separate commits for each.
+
+Use model: claude-opus-4-5-20251101 for thorough security analysis`
   };
 
-  return reviewTask;
+  const description = taskDescriptions[nextType];
+
+  const task = {
+    id: `self-improve-${nextType}-${Date.now().toString(36)}`,
+    status: 'pending',
+    priority: 'MEDIUM',
+    priorityValue: PRIORITY_VALUES['MEDIUM'],
+    description,
+    metadata: {
+      analysisType: nextType,
+      autoGenerated: true,
+      selfImprovement: true,
+      model: 'claude-opus-4-5-20251101'
+    },
+    taskType: 'internal',
+    autoApproved: true
+  };
+
+  return task;
 }
 
 /**
@@ -1100,6 +1587,89 @@ export async function listReports() {
 }
 
 /**
+ * Get today's activity summary
+ * Returns completed tasks, success rate, time worked, and top accomplishments
+ */
+export async function getTodayActivity() {
+  const state = await loadState();
+  const today = new Date().toISOString().split('T')[0];
+
+  // Filter agents completed today
+  const todayAgents = Object.values(state.agents).filter(a => {
+    if (!a.completedAt) return false;
+    return a.completedAt.startsWith(today);
+  });
+
+  const succeeded = todayAgents.filter(a => a.result?.success);
+  const failed = todayAgents.filter(a => !a.result?.success);
+
+  // Calculate total time worked (sum of agent durations)
+  const totalDurationMs = todayAgents.reduce((sum, a) => {
+    const duration = a.result?.duration || 0;
+    return sum + duration;
+  }, 0);
+
+  // Get currently running agents
+  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
+  const activeTimeMs = runningAgents.reduce((sum, a) => {
+    if (!a.startedAt) return sum;
+    return sum + (Date.now() - new Date(a.startedAt).getTime());
+  }, 0);
+
+  // Format duration as human-readable
+  const formatDuration = (ms) => {
+    const mins = Math.floor(ms / 60000);
+    const hours = Math.floor(mins / 60);
+    const remainingMins = mins % 60;
+    if (hours > 0) {
+      return `${hours}h ${remainingMins}m`;
+    }
+    return `${mins}m`;
+  };
+
+  // Get top accomplishments (successful tasks with description snippets)
+  const accomplishments = succeeded
+    .map(a => ({
+      id: a.id,
+      taskId: a.taskId,
+      description: a.metadata?.taskDescription?.substring(0, 100) || a.taskId,
+      taskType: a.metadata?.analysisType || a.metadata?.taskType || 'task',
+      duration: a.result?.duration || 0,
+      completedAt: a.completedAt
+    }))
+    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+    .slice(0, 5);
+
+  // Calculate success rate
+  const successRate = todayAgents.length > 0
+    ? Math.round((succeeded.length / todayAgents.length) * 100)
+    : 0;
+
+  return {
+    date: today,
+    stats: {
+      completed: todayAgents.length,
+      succeeded: succeeded.length,
+      failed: failed.length,
+      successRate,
+      running: runningAgents.length
+    },
+    time: {
+      totalDurationMs,
+      totalDuration: formatDuration(totalDurationMs),
+      activeDurationMs: activeTimeMs,
+      activeDuration: formatDuration(activeTimeMs),
+      combinedMs: totalDurationMs + activeTimeMs,
+      combined: formatDuration(totalDurationMs + activeTimeMs)
+    },
+    accomplishments,
+    lastEvaluation: state.stats.lastEvaluation,
+    isRunning: daemonRunning,
+    isPaused: state.paused
+  };
+}
+
+/**
  * Clear completed agents from state (keep in files)
  */
 export async function clearCompletedAgents() {
@@ -1205,8 +1775,12 @@ export async function updateTask(taskId, updates, taskType = 'user') {
     return { error: 'Task not found' };
   }
 
-  // Build updated metadata
-  const updatedMetadata = { ...tasks[taskIndex].metadata };
+  // Build updated metadata - merge existing with any new metadata
+  const updatedMetadata = {
+    ...tasks[taskIndex].metadata,
+    ...(updates.metadata || {})
+  };
+  // Handle legacy fields that may be passed directly in updates
   if (updates.context !== undefined) updatedMetadata.context = updates.context || undefined;
   if (updates.model !== undefined) updatedMetadata.model = updates.model || undefined;
   if (updates.provider !== undefined) updatedMetadata.provider = updates.provider || undefined;

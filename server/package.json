@@ -1,13 +1,14 @@
 {
   "name": "portos-server",
-  "version": "0.6.7",
+  "version": "0.7.15",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch index.js",
     "start": "node index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -19,6 +20,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.8",
     "supertest": "^7.1.4",
     "vitest": "^2.1.8"
   }

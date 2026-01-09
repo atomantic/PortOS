@@ -253,6 +253,14 @@ export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');
 export const getCosReport = (date) => request(`/cos/reports/${date}`);
 
+// CoS Activity
+export const getCosTodayActivity = () => request('/cos/activity/today');
+
+// CoS Learning
+export const getCosLearning = () => request('/cos/learning');
+export const getCosLearningDurations = () => request('/cos/learning/durations');
+export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
+
 // CoS Scripts
 export const getCosScripts = () => request('/cos/scripts');
 export const getCosScript = (id) => request(`/cos/scripts/${id}`);
@@ -268,6 +276,23 @@ export const deleteCosScript = (id) => request(`/cos/scripts/${id}`, { method: '
 export const runCosScript = (id) => request(`/cos/scripts/${id}/run`, { method: 'POST' });
 export const getCosScriptRuns = (id) => request(`/cos/scripts/${id}/runs`);
 export const getCosScriptPresets = () => request('/cos/scripts/presets');
+
+// Weekly Digest
+export const getCosWeeklyDigest = (weekId = null) => {
+  if (weekId) return request(`/cos/digest/${weekId}`);
+  return request('/cos/digest');
+};
+export const listCosWeeklyDigests = () => request('/cos/digest/list');
+export const getCosWeekProgress = () => request('/cos/digest/progress');
+export const getCosDigestText = async () => {
+  const response = await fetch('/api/cos/digest/text');
+  return response.text();
+};
+export const generateCosDigest = (weekId = null) => request('/cos/digest/generate', {
+  method: 'POST',
+  body: JSON.stringify({ weekId })
+});
+export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?week1=${week1}&week2=${week2}`);
 
 // Memory
 export const getMemories = (options = {}) => {
@@ -318,6 +343,23 @@ export const consolidateMemories = (options = {}) => request('/memory/consolidat
   body: JSON.stringify(options)
 });
 export const getEmbeddingStatus = () => request('/memory/embeddings/status');
+export const approveMemory = (id) => request(`/memory/${id}/approve`, { method: 'POST' });
+export const rejectMemory = (id) => request(`/memory/${id}/reject`, { method: 'POST' });
+
+// Notifications
+export const getNotifications = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.type) params.set('type', options.type);
+  if (options.unreadOnly) params.set('unreadOnly', 'true');
+  if (options.limit) params.set('limit', options.limit);
+  return request(`/notifications?${params}`);
+};
+export const getNotificationCount = () => request('/notifications/count');
+export const getNotificationCounts = () => request('/notifications/counts');
+export const markNotificationRead = (id) => request(`/notifications/${id}/read`, { method: 'POST' });
+export const markAllNotificationsRead = () => request('/notifications/read-all', { method: 'POST' });
+export const deleteNotification = (id) => request(`/notifications/${id}`, { method: 'DELETE' });
+export const clearNotifications = () => request('/notifications', { method: 'DELETE' });
 
 // PM2 Standardization
 export const analyzeStandardization = (repoPath, providerId) => request('/standardize/analyze', {
