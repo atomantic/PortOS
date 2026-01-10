@@ -11,6 +11,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
@@ -587,7 +588,7 @@ export async function spawnAgentForTask(task) {
     : ROOT_DIR;
 
   // Build the agent prompt
-  const prompt = await buildAgentPrompt(task, config);
+  const prompt = await buildAgentPrompt(task, config, workspacePath);
 
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -877,9 +878,67 @@ function buildSpawnArgs(config, model) {
 }
 
 /**
+ * Read CLAUDE.md files for agent context
+ * Reads both global (~/.claude/CLAUDE.md) and project-specific (./CLAUDE.md)
+ */
+async function getClaudeMdContext(workspaceDir) {
+  const contexts = [];
+
+  // Try to read global CLAUDE.md from ~/.claude/CLAUDE.md
+  try {
+    const globalPath = join(homedir(), '.claude', 'CLAUDE.md');
+    if (existsSync(globalPath)) {
+      const content = await readFile(globalPath, 'utf-8');
+      if (content.trim()) {
+        contexts.push({
+          type: 'Global Instructions',
+          path: globalPath,
+          content: content.trim()
+        });
+      }
+    }
+  } catch (err) {
+    // Silently ignore if global CLAUDE.md doesn't exist or can't be read
+  }
+
+  // Try to read project-specific CLAUDE.md from workspace directory
+  try {
+    const projectPath = join(workspaceDir, 'CLAUDE.md');
+    if (existsSync(projectPath)) {
+      const content = await readFile(projectPath, 'utf-8');
+      if (content.trim()) {
+        contexts.push({
+          type: 'Project Instructions',
+          path: projectPath,
+          content: content.trim()
+        });
+      }
+    }
+  } catch (err) {
+    // Silently ignore if project CLAUDE.md doesn't exist or can't be read
+  }
+
+  // Format as markdown section
+  if (contexts.length === 0) {
+    return null;
+  }
+
+  let section = '## CLAUDE.md Instructions\n\n';
+  section += 'The following instructions must be followed when working on this task:\n\n';
+
+  for (const ctx of contexts) {
+    section += `### ${ctx.type}\n`;
+    section += `Source: \`${ctx.path}\`\n\n`;
+    section += ctx.content + '\n\n';
+  }
+
+  return section;
+}
+
+/**
  * Build the prompt for an agent
  */
-async function buildAgentPrompt(task, config) {
+async function buildAgentPrompt(task, config, workspaceDir) {
   // Get relevant memories for context injection
   const memorySection = await getMemorySection(task, {
     maxTokens: config.memory?.maxContextTokens || 2000
@@ -888,11 +947,18 @@ async function buildAgentPrompt(task, config) {
     return null;
   });
 
+  // Get CLAUDE.md instructions for context injection
+  const claudeMdSection = await getClaudeMdContext(workspaceDir).catch(err => {
+    console.log(`⚠️ CLAUDE.md retrieval failed: ${err.message}`);
+    return null;
+  });
+
   // Try to use the prompt template system
   const promptData = await buildPrompt('cos-agent-briefing', {
     task,
     config,
     memorySection,
+    claudeMdSection,
     timestamp: new Date().toISOString()
   }).catch(() => null);
 
@@ -902,6 +968,8 @@ async function buildAgentPrompt(task, config) {
 
   // Fallback to built-in template
   return `# Chief of Staff Agent Briefing
+
+${claudeMdSection || ''}
 
 ${memorySection || ''}
 
