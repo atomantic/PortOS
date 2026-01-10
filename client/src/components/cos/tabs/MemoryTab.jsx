@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Trash2, X, Check, XCircle } from 'lucide-react';
+import { RefreshCw, Trash2, X, Check, XCircle, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import MemoryTimeline from './MemoryTimeline';
 import MemoryGraph from './MemoryGraph';
+import MemoryEditModal from './MemoryEditModal';
 
-export default function MemoryTab() {
+export default function MemoryTab({ apps = [] }) {
   const [memories, setMemories] = useState([]);
   const [pendingMemories, setPendingMemories] = useState([]);
   const [stats, setStats] = useState(null);
@@ -16,6 +17,7 @@ export default function MemoryTab() {
   const [view, setView] = useState('list'); // list, timeline, graph
   const [filters, setFilters] = useState({ types: [] });
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
+  const [editingMemory, setEditingMemory] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -66,6 +68,13 @@ export default function MemoryTab() {
   };
 
   const displayMemories = searchResults || memories;
+
+  // Get app name for display
+  const getAppName = (appId) => {
+    if (!appId) return null;
+    const app = apps?.find(a => a.id === appId);
+    return app?.name || null;
+  };
 
   return (
     <div className="space-y-6">
@@ -179,11 +188,24 @@ export default function MemoryTab() {
                       ))}
                     </div>
                   )}
-                  <div className="text-xs text-gray-500 mt-2">
-                    {new Date(memory.createdAt).toLocaleDateString()}
+                  <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
+                    <span>{new Date(memory.createdAt).toLocaleDateString()}</span>
+                    {getAppName(memory.sourceAppId) && (
+                      <>
+                        <span>*</span>
+                        <span className="text-port-accent">{getAppName(memory.sourceAppId)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2">
+                  <button
+                    onClick={() => setEditingMemory(memory)}
+                    className="p-2 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg transition-colors"
+                    title="Edit before approving"
+                  >
+                    <Pencil size={16} />
+                  </button>
                   <button
                     onClick={() => handleApprove(memory.id)}
                     className="p-2 bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors"
@@ -264,16 +286,34 @@ export default function MemoryTab() {
                         ))}
                       </div>
                     )}
-                    <div className="text-xs text-gray-500 mt-2">
-                      {new Date(memory.createdAt).toLocaleDateString()} * importance: {((memory.importance || 0.5) * 100).toFixed(0)}%
+                    <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
+                      <span>{new Date(memory.createdAt).toLocaleDateString()}</span>
+                      <span>*</span>
+                      <span>importance: {((memory.importance || 0.5) * 100).toFixed(0)}%</span>
+                      {getAppName(memory.sourceAppId) && (
+                        <>
+                          <span>*</span>
+                          <span className="text-port-accent">{getAppName(memory.sourceAppId)}</span>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDelete(memory.id)}
-                    className="p-2 text-gray-500 hover:text-port-error transition-colors"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setEditingMemory(memory)}
+                      className="p-2 text-gray-500 hover:text-port-accent transition-colors"
+                      title="Edit memory"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(memory.id)}
+                      className="p-2 text-gray-500 hover:text-port-error transition-colors"
+                      title="Archive memory"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))
@@ -283,6 +323,19 @@ export default function MemoryTab() {
         <MemoryTimeline memories={memories} />
       ) : (
         <MemoryGraph />
+      )}
+
+      {/* Edit Modal */}
+      {editingMemory && (
+        <MemoryEditModal
+          memory={editingMemory}
+          apps={apps}
+          onSave={() => {
+            setEditingMemory(null);
+            fetchData();
+          }}
+          onClose={() => setEditingMemory(null)}
+        />
       )}
     </div>
   );

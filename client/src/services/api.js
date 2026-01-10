@@ -259,6 +259,8 @@ export const getCosTodayActivity = () => request('/cos/activity/today');
 // CoS Learning
 export const getCosLearning = () => request('/cos/learning');
 export const getCosLearningDurations = () => request('/cos/learning/durations');
+export const getCosLearningSkipped = () => request('/cos/learning/skipped');
+export const getCosLearningPerformance = () => request('/cos/learning/performance');
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 
 // CoS Scripts
@@ -293,6 +295,35 @@ export const generateCosDigest = (weekId = null) => request('/cos/digest/generat
   body: JSON.stringify({ weekId })
 });
 export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?week1=${week1}&week2=${week2}`);
+
+// Task Schedule (Configurable Intervals)
+export const getCosSchedule = () => request('/cos/schedule');
+export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval-types');
+export const getCosScheduleDueTasks = () => request('/cos/schedule/due');
+export const getCosScheduleDueAppTasks = (appId) => request(`/cos/schedule/due/${appId}`);
+export const updateCosSelfImprovementInterval = (taskType, settings) => request(`/cos/schedule/self-improvement/${taskType}`, {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+export const updateCosAppImprovementInterval = (taskType, settings) => request(`/cos/schedule/app-improvement/${taskType}`, {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+export const triggerCosOnDemandTask = (taskType, category = 'selfImprovement', appId = null) => request('/cos/schedule/trigger', {
+  method: 'POST',
+  body: JSON.stringify({ taskType, category, appId })
+});
+export const getCosOnDemandRequests = () => request('/cos/schedule/on-demand');
+export const resetCosTaskHistory = (taskType, category = 'selfImprovement', appId = null) => request('/cos/schedule/reset', {
+  method: 'POST',
+  body: JSON.stringify({ taskType, category, appId })
+});
+export const getCosScheduleTemplates = () => request('/cos/schedule/templates');
+export const addCosScheduleTemplate = (template) => request('/cos/schedule/templates', {
+  method: 'POST',
+  body: JSON.stringify(template)
+});
+export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/templates/${templateId}`, { method: 'DELETE' });
 
 // Memory
 export const getMemories = (options = {}) => {

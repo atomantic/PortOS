@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   Cpu,
-  Square,
   Trash2,
   CheckCircle,
   AlertCircle,
@@ -35,7 +34,7 @@ function extractTaskType(description) {
   return 'feature';
 }
 
-export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResume, completed, liveOutput, durations }) {
+export default function AgentCard({ agent, onKill, onDelete, onResume, completed, liveOutput, durations }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
@@ -150,15 +149,16 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
         : 'border-port-accent/50'
     }`}>
       <div className="p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Cpu size={16} aria-hidden="true" className={completed ? 'text-gray-500' : 'text-port-accent animate-pulse'} />
-            <span className="font-mono text-sm text-gray-400">{agent.id}</span>
+        {/* Top row: Agent ID, badges, and actions */}
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+            <Cpu size={16} aria-hidden="true" className={`flex-shrink-0 ${completed ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
+            <span className="font-mono text-sm text-gray-400 truncate">{agent.id}</span>
             {isSystemAgent && (
-              <span className="px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded">SYS</span>
+              <span className="px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded flex-shrink-0">SYS</span>
             )}
             {agent.metadata?.model && (
-              <span className={`px-2 py-0.5 text-xs rounded ${
+              <span className={`px-2 py-0.5 text-xs rounded flex-shrink-0 ${
                 agent.metadata.modelTier === 'heavy' ? 'bg-purple-500/20 text-purple-400' :
                 agent.metadata.modelTier === 'light' ? 'bg-green-500/20 text-green-400' :
                 'bg-blue-500/20 text-blue-400'
@@ -167,60 +167,23 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
               </span>
             )}
             {!completed && (
-              <span className={`px-2 py-0.5 text-xs rounded animate-pulse ${
+              <span className={`px-2 py-0.5 text-xs rounded animate-pulse flex-shrink-0 ${
                 agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400' :
                 'bg-port-accent/20 text-port-accent'
               }`}>
                 {agent.metadata?.phase === 'initializing' ? 'Initializing' : 'Working'}
               </span>
             )}
-            {/* Process stats for running agents */}
-            {!completed && processStats?.active && (
-              <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-port-success/20 text-port-success"
-                    title={`PID: ${processStats.pid} | State: ${processStats.state}`}>
-                <Activity size={10} aria-hidden="true" />
-                PID {processStats.pid} | {processStats.cpu?.toFixed(1)}% | {processStats.memoryMb}MB
-              </span>
-            )}
-            {/* Show zombie warning if PID exists but process is dead */}
-            {!completed && agent.pid && processStats && !processStats.active && (
-              <span className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-port-error/20 text-port-error"
-                    title="Process is not running - zombie agent">
-                <Skull size={10} aria-hidden="true" />
-                PID {agent.pid} ZOMBIE
-              </span>
-            )}
           </div>
-          <div className="flex items-center gap-2">
-            {/* Duration with estimate for running agents */}
-            {!completed && durationEstimate ? (
-              <span
-                className="flex items-center gap-1 text-sm text-gray-500"
-                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
-              >
-                <Clock size={12} aria-hidden="true" />
-                {formatDuration(duration)} / ~{formatDuration(durationEstimate.estimatedMs)}
-              </span>
-            ) : (
-              <span className="text-sm text-gray-500">{formatDuration(duration)}</span>
-            )}
+          {/* Actions - right side */}
+          <div className="flex items-center gap-2 flex-shrink-0">
             {(output.length > 0 || completed) && (
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="text-gray-500 hover:text-white transition-colors text-xs"
+                className="text-gray-500 hover:text-white transition-colors text-xs whitespace-nowrap"
                 aria-expanded={expanded}
               >
-                {expanded ? 'Hide' : 'Show'} Output
-              </button>
-            )}
-            {/* Terminate button (graceful) */}
-            {!completed && onTerminate && (
-              <button
-                onClick={() => onTerminate(agent.id)}
-                className="text-gray-500 hover:text-port-warning transition-colors"
-                aria-label="Terminate agent (graceful SIGTERM)"
-              >
-                <Square size={14} aria-hidden="true" />
+                {expanded ? 'Hide' : 'Show'}
               </button>
             )}
             {/* Kill button (force SIGKILL) */}
@@ -228,10 +191,11 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
               <button
                 onClick={handleKill}
                 disabled={killing}
-                className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50"
                 aria-label="Force kill agent (SIGKILL)"
               >
-                {killing ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Skull size={14} aria-hidden="true" />}
+                {killing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Skull size={12} aria-hidden="true" />}
+                <span className="hidden sm:inline">Kill</span>
               </button>
             )}
             {completed && !isSystemAgent && onResume && (
@@ -241,19 +205,61 @@ export default function AgentCard({ agent, onTerminate, onKill, onDelete, onResu
                 aria-label="Create new task from this agent's context"
               >
                 <RotateCcw size={12} aria-hidden="true" />
-                Resume
+                <span className="hidden sm:inline">Resume</span>
               </button>
             )}
             {completed && onDelete && (
               <button
                 onClick={() => onDelete(agent.id)}
-                className="text-gray-500 hover:text-port-error transition-colors"
+                className="p-1 text-gray-500 hover:text-port-error transition-colors"
                 aria-label="Remove agent"
               >
                 <Trash2 size={14} aria-hidden="true" />
               </button>
             )}
           </div>
+        </div>
+
+        {/* Second row: Runtime and process stats - compact inline display */}
+        <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
+          {/* Duration with estimate for running agents */}
+          {!completed && durationEstimate ? (
+            <span
+              className="flex items-center gap-1 text-gray-500 whitespace-nowrap"
+              title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
+            >
+              <Clock size={12} aria-hidden="true" className="flex-shrink-0" />
+              <span className="font-mono">{formatDuration(duration)}</span>
+              <span className="text-gray-600">/</span>
+              <span className="font-mono text-gray-600">~{formatDuration(durationEstimate.estimatedMs)}</span>
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-gray-500 whitespace-nowrap">
+              <Clock size={12} aria-hidden="true" className="flex-shrink-0" />
+              <span className="font-mono">{formatDuration(duration)}</span>
+            </span>
+          )}
+          {/* Process stats for running agents - inline */}
+          {!completed && processStats?.active && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-success/20 text-port-success whitespace-nowrap"
+                  title={`PID: ${processStats.pid} | State: ${processStats.state}`}>
+              <Activity size={10} aria-hidden="true" className="flex-shrink-0" />
+              <span className="font-mono">PID {processStats.pid}</span>
+              <span className="text-port-success/70">|</span>
+              <span className="font-mono">{processStats.cpu?.toFixed(1)}%</span>
+              <span className="text-port-success/70">|</span>
+              <span className="font-mono">{processStats.memoryMb}MB</span>
+            </span>
+          )}
+          {/* Show zombie warning if PID exists but process is dead */}
+          {!completed && agent.pid && processStats && !processStats.active && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-error/20 text-port-error whitespace-nowrap"
+                  title="Process is not running - zombie agent">
+              <Skull size={10} aria-hidden="true" className="flex-shrink-0" />
+              <span className="font-mono">PID {agent.pid}</span>
+              <span>ZOMBIE</span>
+            </span>
+          )}
         </div>
         <p className="text-white text-sm mb-2">{agent.metadata?.taskDescription || agent.taskId}</p>
 

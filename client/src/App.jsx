@@ -7,6 +7,7 @@ import CreateApp from './pages/CreateApp';
 import Templates from './pages/Templates';
 import PromptManager from './pages/PromptManager';
 import ChiefOfStaff from './pages/ChiefOfStaff';
+import Media from './pages/Media';
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="cos/:tab" element={<ChiefOfStaff />} />
           <Route path="apps/create" element={<CreateApp />} />
           <Route path="templates" element={<Templates />} />
+          <Route path="media" element={<Media />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

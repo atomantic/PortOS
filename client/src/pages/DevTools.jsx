@@ -101,7 +101,8 @@ export function HistoryPage() {
           <select
             value={filter.action}
             onChange={(e) => setFilter(prev => ({ ...prev, action: e.target.value }))}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-port-accent"
+            aria-label="Filter by action type"
           >
             <option value="">All Actions</option>
             {actions.map(action => (
@@ -112,7 +113,8 @@ export function HistoryPage() {
           <select
             value={filter.success}
             onChange={(e) => setFilter(prev => ({ ...prev, success: e.target.value }))}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
+            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-port-accent"
+            aria-label="Filter by result status"
           >
             <option value="">All Results</option>
             <option value="true">Success</option>
@@ -162,8 +164,12 @@ export function HistoryPage() {
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <button className="text-gray-400 hover:text-white flex-shrink-0">
-                        <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`}>▶</span>
+                      <button
+                        className="text-gray-400 hover:text-white flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-port-accent rounded"
+                        aria-expanded={expandedId === entry.id}
+                        aria-label={`${expandedId === entry.id ? 'Collapse' : 'Expand'} ${entry.action} details`}
+                      >
+                        <span className={`inline-block transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`} aria-hidden="true">▶</span>
                       </button>
                       <span className="text-xl flex-shrink-0">{getActionIcon(entry.action)}</span>
                       <div className="flex-1 min-w-0">
@@ -182,14 +188,19 @@ export function HistoryPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 pl-8 sm:pl-0">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`} />
+                      <span
+                        className={`w-2 h-2 rounded-full flex-shrink-0 ${entry.success ? 'bg-port-success' : 'bg-port-error'}`}
+                        role="img"
+                        aria-label={entry.success ? 'Success' : 'Failed'}
+                      />
                       <span className="text-sm text-gray-500 flex-shrink-0">{formatTime(entry.timestamp)}</span>
                       <button
                         onClick={(e) => handleDelete(entry.id, e)}
-                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-port-accent rounded"
                         title="Delete entry"
+                        aria-label={`Delete ${entry.action} entry from ${formatTime(entry.timestamp)}`}
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={14} aria-hidden="true" />
                       </button>
                     </div>
                   </div>
@@ -2088,37 +2099,34 @@ export function AgentsPage() {
         <div className="sm:hidden divide-y divide-port-border">
           {agents.map(agent => (
             <div key={agent.pid} className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-white text-sm">{agent.agentName.toLowerCase()}</span>
+              {/* Top row: Name, PID, Runtime, Kill button */}
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <span className="font-mono text-white text-sm truncate">{agent.agentName.toLowerCase()}</span>
                   {agent.source === 'cos' && (
-                    <span className="px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-400 rounded">CoS</span>
+                    <span className="px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-400 rounded flex-shrink-0">CoS</span>
                   )}
+                  <span className="text-gray-500 text-xs flex-shrink-0">#{agent.pid}</span>
+                  <span className="font-mono text-cyan-400 text-xs flex-shrink-0 whitespace-nowrap">{agent.runtimeFormatted}</span>
                 </div>
                 <button
                   onClick={() => handleKill(agent.pid)}
                   disabled={killing[agent.pid]}
-                  className="text-red-400 hover:text-red-300 disabled:opacity-50 p-1"
+                  className="flex-shrink-0 px-2 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
                 >
-                  <XCircle size={18} className={killing[agent.pid] ? 'animate-pulse' : ''} />
+                  <XCircle size={14} className={killing[agent.pid] ? 'animate-pulse' : ''} />
+                  Kill
                 </button>
               </div>
-              <div className="grid grid-cols-4 gap-2 text-xs">
-                <div>
-                  <div className="text-gray-500">PID</div>
-                  <div className="font-mono text-white">{agent.pid}</div>
+              {/* Stats row: CPU & Memory */}
+              <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500">CPU</span>
+                  <span className="font-mono text-green-400">{agent.cpu?.toFixed(1)}%</span>
                 </div>
-                <div>
-                  <div className="text-gray-500">Time</div>
-                  <div className="font-mono text-cyan-400">{agent.runtimeFormatted}</div>
-                </div>
-                <div>
-                  <div className="text-gray-500">CPU</div>
-                  <div className="font-mono text-green-400">{agent.cpu?.toFixed(1)}%</div>
-                </div>
-                <div>
-                  <div className="text-gray-500">Mem</div>
-                  <div className="font-mono text-blue-400">{agent.memory?.toFixed(1)}%</div>
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500">Mem</span>
+                  <span className="font-mono text-blue-400">{agent.memory?.toFixed(1)}%</span>
                 </div>
               </div>
               <button
@@ -2211,10 +2219,11 @@ export function AgentsPage() {
                     <button
                       onClick={() => handleKill(agent.pid)}
                       disabled={killing[agent.pid]}
-                      className="text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
+                      className="px-3 py-1.5 bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 disabled:opacity-50 rounded text-sm font-medium inline-flex items-center gap-1.5 transition-colors"
                       title="Kill process"
                     >
-                      <XCircle size={22} className={killing[agent.pid] ? 'animate-pulse' : ''} />
+                      <XCircle size={16} className={killing[agent.pid] ? 'animate-pulse' : ''} />
+                      Kill
                     </button>
                   </td>
                 </tr>

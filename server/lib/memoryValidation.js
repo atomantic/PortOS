@@ -38,7 +38,8 @@ export const memoryCreateSchema = z.object({
   importance: z.number().min(0).max(1).optional().default(0.5),
   relatedMemories: z.array(z.string().uuid()).optional().default([]),
   sourceTaskId: z.string().optional(),
-  sourceAgentId: z.string().optional()
+  sourceAgentId: z.string().optional(),
+  sourceAppId: z.string().nullable().optional()
 });
 
 // Full memory schema (includes system-generated fields)

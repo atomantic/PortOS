@@ -54,6 +54,8 @@ pm2 logs
 - [x] M25: Task Learning System (completion tracking, success rate analysis, model effectiveness, recommendations)
 - [x] M26: Scheduled Scripts (cron scheduling, agent triggers, command allowlist, run history)
 - [x] M28: Weekly Digest UI (visual digest tab with insights, accomplishments, week-over-week comparisons)
+- [x] M29: Comprehensive App Improvement (self-improvement operations extended to managed apps, 10 analysis types, rotation system)
+- [x] M30: Configurable Task Intervals (per-task-type scheduling: daily, weekly, once, on-demand; schedule UI tab; execution history tracking)
 
 ### Documentation
 - [Architecture Overview](./docs/ARCHITECTURE.md) - System design, data flow
@@ -1461,3 +1463,182 @@ Uses existing Weekly Digest backend endpoints:
 | `client/src/components/cos/index.js` | Added DigestTab export |
 | `client/src/components/cos/constants.js` | Added digest tab to TABS array |
 | `client/src/pages/ChiefOfStaff.jsx` | Import and render DigestTab |
+
+---
+
+## M29: Comprehensive App Improvement (2026-01-09)
+
+Extended the CoS self-improvement system to apply the same comprehensive analysis to managed apps (not just PortOS itself).
+
+### Problem
+
+The CoS had a sophisticated self-improvement system with 12 different analysis types (security, code quality, performance, etc.) for PortOS itself, but managed apps only received simple idle reviews (formatting, dead code, typos). This meant managed apps weren't getting the same level of thorough analysis and improvement.
+
+### Solution
+
+Created an app-agnostic self-improvement system that applies comprehensive analysis to any managed app:
+
+1. **10 Analysis Types for Apps**: Security audit, code quality, test coverage, performance, accessibility, console errors, dependency updates, documentation, error handling, and TypeScript typing
+2. **Rotation System**: Each app tracks its last improvement type and rotates through all 10 types
+3. **App Activity Tracking**: Extended `appActivity.js` to track `lastImprovementType` per app
+4. **Configuration Toggle**: New `comprehensiveAppImprovement` config option (default: true)
+5. **Backward Compatible**: Can fall back to simple idle reviews by disabling the config
+
+### Key Features
+
+- **App-Specific Context**: Each task template includes the app's name and repo path
+- **Opus Model**: All comprehensive improvements use claude-opus-4-5-20251101 for thorough analysis
+- **Auto-Approved**: Tasks run without requiring manual approval
+- **Cooldown Management**: Respects existing 30-minute cooldown between working on the same app
+
+### Analysis Types
+
+| Type | Description |
+|------|-------------|
+| security-audit | Command injection, XSS, path traversal, authentication |
+| code-quality | DRY violations, dead code, magic numbers |
+| test-coverage | Add missing tests for critical paths |
+| performance | N+1 queries, unnecessary re-renders, bundle size |
+| accessibility | ARIA labels, color contrast, keyboard navigation |
+| console-errors | Fix JavaScript and server errors |
+| dependency-updates | npm audit, update packages safely |
+| documentation | README, JSDoc, inline comments |
+| error-handling | Try-catch blocks, error logging |
+| typing | TypeScript type improvements |
+
+### Configuration
+
+```javascript
+comprehensiveAppImprovement: true  // Enable comprehensive analysis for managed apps
+```
+
+### Implementation Files
+
+| File | Changes |
+|------|---------|
+| `server/services/cos.js` | Added `MANAGED_APP_IMPROVEMENT_TYPES` array, `generateManagedAppImprovementTask()` function, updated `generateIdleReviewTask()` |
+| `server/services/appActivity.js` | Added `lastImprovementType` field to app activity tracking |
+
+### Task Flow
+
+```
+CoS Idle → No user/system tasks
+    └─► Try PortOS self-improvement (if older than last app review)
+    └─► Try managed app improvement
+        ├─► Get next app off cooldown
+        ├─► Check comprehensiveAppImprovement config
+        │   ├─► true: Generate comprehensive improvement task (rotates through 10 types)
+        │   └─► false: Generate simple idle review (formatting, dead code, typos)
+        └─► Mark app as reviewed, start cooldown
+```
+
+### Example Task
+
+```
+[App Improvement: MyApp] Security Audit
+
+Analyze the MyApp codebase for security vulnerabilities:
+
+Repository: /Users/user/projects/myapp
+
+1. Review routes/controllers for:
+   - Command injection in exec/spawn calls
+   - Path traversal in file operations
+   - Missing input validation
+   ...
+
+Use model: claude-opus-4-5-20251101
+```
+
+---
+
+## M31: LLM-based Memory Classification (2026-01-09)
+
+Replaced pattern-based memory extraction with intelligent LLM-based evaluation using local LM Studio.
+
+### Problem
+
+The existing memory extraction system used simple regex patterns to extract memories from agent output. This produced low-quality memories like "Task 'fix button': ## Summary" which just echoed task descriptions without any useful information.
+
+### Solution
+
+Created an LLM-based memory classifier that uses LM Studio's gptoss-20b model to intelligently evaluate agent output and extract only genuinely useful memories.
+
+### Key Features
+
+1. **LLM Evaluation**: Uses local LM Studio to analyze agent output
+2. **Quality Filtering**: Rejects task echoes, generic summaries, and incomplete content
+3. **Configurable**: Model, endpoint, confidence thresholds all configurable
+4. **Fallback Support**: Falls back to pattern-based extraction if LLM unavailable
+5. **Reasoning Capture**: Stores LLM's reasoning for why each memory is useful
+
+### Memory Evaluation Criteria
+
+**Good memories:**
+- Codebase facts: File locations, architecture patterns, dependencies
+- User preferences: Coding style, tool preferences, workflow patterns
+- Learnings: Discovered behaviors, gotchas, workarounds
+- Decisions: Architectural choices with reasoning
+
+**Rejected memories:**
+- Task echoes: Just restating what the task was
+- Generic summaries: "The task was successful"
+- Temporary info: Session-specific data, timestamps
+- Truncated/incomplete content
+
+### Configuration
+
+```json
+// data/memory-classifier-config.json
+{
+  "enabled": true,
+  "provider": "lmstudio",
+  "endpoint": "http://localhost:1234/v1/chat/completions",
+  "model": "gptoss-20b",
+  "timeout": 60000,
+  "maxOutputLength": 10000,
+  "minConfidence": 0.6,
+  "fallbackToPatterns": true
+}
+```
+
+### Prompt Template
+
+The `memory-evaluate.md` prompt template guides the LLM to:
+1. Analyze the task context and agent output
+2. Identify genuinely reusable knowledge
+3. Return structured JSON with memories and rejections
+4. Include reasoning for each decision
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `server/services/memoryClassifier.js` | LLM-based classification service |
+| `data/prompts/stages/memory-evaluate.md` | Prompt template for memory evaluation |
+| `data/memory-classifier-config.json` | Classifier configuration |
+| `server/services/memoryExtractor.js` | Updated to use classifier when available |
+| `data/prompts/stage-config.json` | Added memory-evaluate stage |
+| `data/providers.json` | Added gptoss-20b model to LM Studio provider |
+
+### API
+
+The classifier exports:
+- `classifyMemories(task, agentOutput)` - Main classification function
+- `isAvailable()` - Check if LM Studio is reachable
+- `getConfig()` - Get current configuration
+- `updateConfig(updates)` - Update configuration
+
+### Flow
+
+```
+Agent completes task
+    └─► memoryExtractor.extractAndStoreMemories()
+        └─► Check if LLM classifier available
+            ├─► Yes: Call classifyMemories() with LM Studio
+            │       └─► Parse JSON response, filter by confidence
+            └─► No: Fall back to pattern-based extraction
+        └─► Create memories with embeddings
+        └─► Auto-approve high confidence (≥0.8)
+        └─► Queue medium confidence for approval
+```

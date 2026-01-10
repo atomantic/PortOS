@@ -11,6 +11,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
@@ -284,14 +285,20 @@ async function processAgentCompletion(agentId, task, success, outputBuffer) {
   }
 }
 
-// Active agent processes
+// Active agent processes (direct spawn mode)
 const activeAgents = new Map();
+
+// Track runner-spawned agents (CoS Runner mode)
+const runnerAgents = new Map();
 
 /**
  * Get list of active agent IDs (for zombie detection)
+ * Includes both direct mode and runner mode agents
  */
 export function getActiveAgentIds() {
-  return Array.from(activeAgents.keys());
+  const directIds = Array.from(activeAgents.keys());
+  const runnerIds = Array.from(runnerAgents.keys());
+  return [...directIds, ...runnerIds];
 }
 
 /**
@@ -493,9 +500,6 @@ export async function initSpawner() {
   });
 }
 
-// Track runner-spawned agents
-const runnerAgents = new Map();
-
 /**
  * Sync running agents from the runner (recovery after server restart)
  * This allows us to receive completion events for agents spawned before restart
@@ -584,7 +588,7 @@ export async function spawnAgentForTask(task) {
     : ROOT_DIR;
 
   // Build the agent prompt
-  const prompt = await buildAgentPrompt(task, config);
+  const prompt = await buildAgentPrompt(task, config, workspacePath);
 
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -874,9 +878,67 @@ function buildSpawnArgs(config, model) {
 }
 
 /**
+ * Read CLAUDE.md files for agent context
+ * Reads both global (~/.claude/CLAUDE.md) and project-specific (./CLAUDE.md)
+ */
+async function getClaudeMdContext(workspaceDir) {
+  const contexts = [];
+
+  // Try to read global CLAUDE.md from ~/.claude/CLAUDE.md
+  try {
+    const globalPath = join(homedir(), '.claude', 'CLAUDE.md');
+    if (existsSync(globalPath)) {
+      const content = await readFile(globalPath, 'utf-8');
+      if (content.trim()) {
+        contexts.push({
+          type: 'Global Instructions',
+          path: globalPath,
+          content: content.trim()
+        });
+      }
+    }
+  } catch (err) {
+    // Silently ignore if global CLAUDE.md doesn't exist or can't be read
+  }
+
+  // Try to read project-specific CLAUDE.md from workspace directory
+  try {
+    const projectPath = join(workspaceDir, 'CLAUDE.md');
+    if (existsSync(projectPath)) {
+      const content = await readFile(projectPath, 'utf-8');
+      if (content.trim()) {
+        contexts.push({
+          type: 'Project Instructions',
+          path: projectPath,
+          content: content.trim()
+        });
+      }
+    }
+  } catch (err) {
+    // Silently ignore if project CLAUDE.md doesn't exist or can't be read
+  }
+
+  // Format as markdown section
+  if (contexts.length === 0) {
+    return null;
+  }
+
+  let section = '## CLAUDE.md Instructions\n\n';
+  section += 'The following instructions must be followed when working on this task:\n\n';
+
+  for (const ctx of contexts) {
+    section += `### ${ctx.type}\n`;
+    section += `Source: \`${ctx.path}\`\n\n`;
+    section += ctx.content + '\n\n';
+  }
+
+  return section;
+}
+
+/**
  * Build the prompt for an agent
  */
-async function buildAgentPrompt(task, config) {
+async function buildAgentPrompt(task, config, workspaceDir) {
   // Get relevant memories for context injection
   const memorySection = await getMemorySection(task, {
     maxTokens: config.memory?.maxContextTokens || 2000
@@ -885,11 +947,18 @@ async function buildAgentPrompt(task, config) {
     return null;
   });
 
+  // Get CLAUDE.md instructions for context injection
+  const claudeMdSection = await getClaudeMdContext(workspaceDir).catch(err => {
+    console.log(`⚠️ CLAUDE.md retrieval failed: ${err.message}`);
+    return null;
+  });
+
   // Try to use the prompt template system
   const promptData = await buildPrompt('cos-agent-briefing', {
     task,
     config,
     memorySection,
+    claudeMdSection,
     timestamp: new Date().toISOString()
   }).catch(() => null);
 
@@ -899,6 +968,8 @@ async function buildAgentPrompt(task, config) {
 
   // Fallback to built-in template
   return `# Chief of Staff Agent Briefing
+
+${claudeMdSection || ''}
 
 ${memorySection || ''}
 
@@ -911,7 +982,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 - **Description**: ${task.description}
 ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
-${task.metadata?.screenshots?.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
+${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 
 ## Instructions
 1. Analyze the task requirements carefully
@@ -1221,7 +1292,7 @@ export async function cleanupOrphanedAgents() {
         console.log(`🧹 Cleaning up orphaned agent ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
         await markComplete(agent.id, {
           success: false,
-          error: 'Agent process was orphaned (server restart)',
+          error: 'Agent process terminated unexpectedly',
           orphaned: true
         });
         cleanedCount++;

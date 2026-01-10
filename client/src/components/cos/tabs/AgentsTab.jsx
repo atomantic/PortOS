@@ -14,12 +14,6 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
     api.getCosLearningDurations().then(setDurations).catch(() => {});
   }, []);
 
-  const handleTerminate = async (agentId) => {
-    await api.terminateCosAgent(agentId).catch(err => toast.error(err.message));
-    toast.success('Terminate signal sent');
-    onRefresh();
-  };
-
   const handleKill = async (agentId) => {
     await api.killCosAgent(agentId).catch(err => toast.error(err.message));
     toast.success('Agent force killed');
@@ -86,7 +80,6 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
               <AgentCard
                 key={agent.id}
                 agent={agent}
-                onTerminate={handleTerminate}
                 onKill={handleKill}
                 liveOutput={liveOutputs[agent.id]}
                 durations={durations}

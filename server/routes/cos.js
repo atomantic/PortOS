@@ -8,6 +8,7 @@ import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
+import * as taskSchedule from '../services/taskSchedule.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -434,5 +435,164 @@ router.get('/digest/compare', asyncHandler(async (req, res) => {
   }
   res.json(comparison);
 }));
+
+// ============================================================
+// Task Schedule Routes (Configurable Intervals)
+// ============================================================
+
+// GET /api/cos/schedule - Get full schedule status
+router.get('/schedule', asyncHandler(async (req, res) => {
+  const status = await taskSchedule.getScheduleStatus();
+  res.json(status);
+}));
+
+// GET /api/cos/schedule/self-improvement/:taskType - Get interval for self-improvement task
+router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const interval = await taskSchedule.getSelfImprovementInterval(taskType);
+  const shouldRun = await taskSchedule.shouldRunSelfImprovementTask(taskType);
+  res.json({ taskType, interval, shouldRun });
+}));
+
+// PUT /api/cos/schedule/self-improvement/:taskType - Update interval for self-improvement task
+router.put('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const { type, enabled, intervalMs } = req.body;
+
+  const settings = {};
+  if (type !== undefined) settings.type = type;
+  if (enabled !== undefined) settings.enabled = enabled;
+  if (intervalMs !== undefined) settings.intervalMs = intervalMs;
+
+  const result = await taskSchedule.updateSelfImprovementInterval(taskType, settings);
+  res.json({ success: true, taskType, interval: result });
+}));
+
+// GET /api/cos/schedule/app-improvement/:taskType - Get interval for app improvement task
+router.get('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const interval = await taskSchedule.getAppImprovementInterval(taskType);
+  res.json({ taskType, interval });
+}));
+
+// PUT /api/cos/schedule/app-improvement/:taskType - Update interval for app improvement task
+router.put('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const { type, enabled, intervalMs } = req.body;
+
+  const settings = {};
+  if (type !== undefined) settings.type = type;
+  if (enabled !== undefined) settings.enabled = enabled;
+  if (intervalMs !== undefined) settings.intervalMs = intervalMs;
+
+  const result = await taskSchedule.updateAppImprovementInterval(taskType, settings);
+  res.json({ success: true, taskType, interval: result });
+}));
+
+// GET /api/cos/schedule/due - Get all tasks that are due to run
+router.get('/schedule/due', asyncHandler(async (req, res) => {
+  const selfImprovement = await taskSchedule.getDueSelfImprovementTasks();
+  res.json({ selfImprovement, appImprovement: 'requires appId - use /schedule/due/:appId' });
+}));
+
+// GET /api/cos/schedule/due/:appId - Get app improvement tasks due for specific app
+router.get('/schedule/due/:appId', asyncHandler(async (req, res) => {
+  const { appId } = req.params;
+  const appImprovement = await taskSchedule.getDueAppImprovementTasks(appId);
+  res.json({ appId, appImprovement });
+}));
+
+// POST /api/cos/schedule/trigger - Trigger an on-demand task
+router.post('/schedule/trigger', asyncHandler(async (req, res) => {
+  const { taskType, category, appId } = req.body;
+
+  if (!taskType) {
+    throw new ServerError('taskType is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const request = await taskSchedule.triggerOnDemandTask(taskType, category || 'selfImprovement', appId);
+  res.json({ success: true, request });
+}));
+
+// GET /api/cos/schedule/on-demand - Get pending on-demand requests
+router.get('/schedule/on-demand', asyncHandler(async (req, res) => {
+  const requests = await taskSchedule.getOnDemandRequests();
+  res.json({ requests });
+}));
+
+// DELETE /api/cos/schedule/on-demand/:requestId - Clear an on-demand request
+router.delete('/schedule/on-demand/:requestId', asyncHandler(async (req, res) => {
+  const { requestId } = req.params;
+  const cleared = await taskSchedule.clearOnDemandRequest(requestId);
+  if (!cleared) {
+    throw new ServerError('Request not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true, cleared });
+}));
+
+// POST /api/cos/schedule/reset - Reset execution history for a task type
+router.post('/schedule/reset', asyncHandler(async (req, res) => {
+  const { taskType, category, appId } = req.body;
+
+  if (!taskType) {
+    throw new ServerError('taskType is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await taskSchedule.resetExecutionHistory(taskType, category || 'selfImprovement', appId);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
+// GET /api/cos/schedule/templates - Get all template tasks
+router.get('/schedule/templates', asyncHandler(async (req, res) => {
+  const templates = await taskSchedule.getTemplateTasks();
+  res.json({ templates });
+}));
+
+// POST /api/cos/schedule/templates - Add a template task
+router.post('/schedule/templates', asyncHandler(async (req, res) => {
+  const { name, description, category, taskType, priority, metadata } = req.body;
+
+  if (!name || !description) {
+    throw new ServerError('name and description are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const template = await taskSchedule.addTemplateTask({
+    name,
+    description,
+    category,
+    taskType,
+    priority,
+    metadata
+  });
+  res.json({ success: true, template });
+}));
+
+// DELETE /api/cos/schedule/templates/:templateId - Delete a template task
+router.delete('/schedule/templates/:templateId', asyncHandler(async (req, res) => {
+  const { templateId } = req.params;
+  const result = await taskSchedule.deleteTemplateTask(templateId);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
+// GET /api/cos/schedule/interval-types - Get available interval types
+router.get('/schedule/interval-types', (req, res) => {
+  res.json({
+    types: taskSchedule.INTERVAL_TYPES,
+    descriptions: {
+      rotation: 'Runs as part of normal task rotation (default)',
+      daily: 'Runs once per day',
+      weekly: 'Runs once per week',
+      once: 'Runs once per app or globally, then stops',
+      'on-demand': 'Only runs when manually triggered',
+      custom: 'Custom interval in milliseconds'
+    }
+  });
+});
 
 export default router;

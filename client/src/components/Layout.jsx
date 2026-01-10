@@ -19,7 +19,8 @@ import {
   Wrench,
   ExternalLink,
   Crown,
-  Play
+  Play,
+  Camera
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -38,6 +39,7 @@ const navItems = [
     ]
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
+  { to: '/media', label: 'Media', icon: Camera, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
   { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true, showBadge: true },
   {
@@ -261,6 +263,13 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-port-bg flex">
+      {/* Skip to main content link for keyboard users */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-port-accent focus:text-white focus:rounded-lg focus:outline-none"
+      >
+        Skip to main content
+      </a>
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
@@ -376,7 +385,7 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>
+        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>
           {location.pathname.startsWith('/cos') ? (
             <Outlet />
           ) : (
