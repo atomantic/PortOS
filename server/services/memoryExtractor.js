@@ -9,6 +9,7 @@ import { createMemory } from './memory.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos.js';
 import * as notifications from './notifications.js';
+import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
 
 /**
  * Parse structured MEMORY blocks from agent output
@@ -228,22 +229,65 @@ function deduplicateMemories(memories) {
 /**
  * Main extraction function
  * Processes agent output and creates memories
+ *
+ * Uses LLM-based classification when available, falls back to pattern matching.
  */
 export async function extractAndStoreMemories(agentId, taskId, output, task = null) {
   const allMemories = [];
+  let usedLLM = false;
 
-  // Parse structured memory blocks
-  const structured = parseMemoryBlocks(output);
-  allMemories.push(...structured);
+  // Try LLM-based classification first (if available)
+  const classifierAvailable = await isClassifierAvailable().catch(() => false);
 
-  // Extract patterns from text
-  const patterns = extractPatterns(output);
-  allMemories.push(...patterns);
+  if (classifierAvailable && task) {
+    const llmResult = await classifyMemories(task, output).catch(err => {
+      console.log(`⚠️ LLM memory classification failed: ${err.message}`);
+      return null;
+    });
 
-  // Extract task context
-  if (task) {
-    const taskContext = extractTaskContext(task, output, true);
-    allMemories.push(...taskContext);
+    if (llmResult?.memories?.length > 0) {
+      usedLLM = true;
+      console.log(`🧠 LLM classified ${llmResult.memories.length} memories`);
+
+      // Convert LLM results to our format
+      for (const mem of llmResult.memories) {
+        allMemories.push({
+          type: mem.type || 'observation',
+          category: mem.category || 'other',
+          content: mem.content,
+          confidence: mem.confidence || 0.7,
+          tags: mem.tags || [],
+          reasoning: mem.reasoning
+        });
+      }
+    }
+  }
+
+  // Fall back to pattern-based extraction if LLM didn't produce results
+  if (!usedLLM) {
+    // Parse structured memory blocks
+    const structured = parseMemoryBlocks(output);
+    allMemories.push(...structured);
+
+    // Extract patterns from text
+    const patterns = extractPatterns(output);
+    allMemories.push(...patterns);
+
+    // Extract task context (but only if meaningful, not just task echoes)
+    if (task) {
+      const taskContext = extractTaskContext(task, output, true);
+      // Filter out low-quality task context memories
+      const filtered = taskContext.filter(m => {
+        // Reject memories that just echo the task description
+        if (m.content.startsWith(`Task "${task.description.substring(0, 50)}`)) return false;
+        // Reject memories that are just "## Summary" or similar
+        if (/^(##?\s*)?Summary\s*$/i.test(m.content)) return false;
+        // Reject very short memories
+        if (m.content.length < 30) return false;
+        return true;
+      });
+      allMemories.push(...filtered);
+    }
   }
 
   // Deduplicate
@@ -255,13 +299,17 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
 
   const created = [];
 
+  // Extract appId from task metadata if available
+  const sourceAppId = task?.metadata?.app || null;
+
   // Auto-save high confidence memories
   for (const mem of highConfidence) {
     const embedding = await generateMemoryEmbedding(mem);
     const memory = await createMemory({
       ...mem,
       sourceAgentId: agentId,
-      sourceTaskId: taskId
+      sourceTaskId: taskId,
+      sourceAppId
     }, embedding);
     created.push(memory);
   }
@@ -274,6 +322,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
       ...mem,
       sourceAgentId: agentId,
       sourceTaskId: taskId,
+      sourceAppId,
       status: 'pending_approval'
     }, embedding);
     pendingMemories.push(memory);

@@ -10,6 +10,11 @@ const DATA_DIR = join(__dirname, '../../data');
 const HISTORY_FILE = join(DATA_DIR, 'history.json');
 const MAX_ENTRIES = 500;
 
+// In-memory cache with TTL
+let historyCache = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 2000; // 2 second cache TTL
+
 async function ensureDataDir() {
   if (!existsSync(DATA_DIR)) {
     await mkdir(DATA_DIR, { recursive: true });
@@ -17,14 +22,24 @@ async function ensureDataDir() {
 }
 
 async function loadHistory() {
+  // Return cached data if still valid
+  const now = Date.now();
+  if (historyCache && (now - cacheTimestamp) < CACHE_TTL_MS) {
+    return historyCache;
+  }
+
   await ensureDataDir();
 
   if (!existsSync(HISTORY_FILE)) {
-    return { entries: [] };
+    historyCache = { entries: [] };
+    cacheTimestamp = now;
+    return historyCache;
   }
 
   const content = await readFile(HISTORY_FILE, 'utf-8');
-  return JSON.parse(content);
+  historyCache = JSON.parse(content);
+  cacheTimestamp = now;
+  return historyCache;
 }
 
 async function saveHistory(data) {
@@ -33,6 +48,9 @@ async function saveHistory(data) {
   if (data.entries.length > MAX_ENTRIES) {
     data.entries = data.entries.slice(-MAX_ENTRIES);
   }
+  // Update cache with new data
+  historyCache = data;
+  cacheTimestamp = Date.now();
   await writeFile(HISTORY_FILE, JSON.stringify(data, null, 2));
 }
 

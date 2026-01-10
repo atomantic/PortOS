@@ -273,13 +273,36 @@ export function removeTask(tasks, taskId) {
 }
 
 /**
- * Get next pending task (highest priority)
+ * Check if a task is a critical auto-fix task that should be prioritized
+ */
+function isCriticalAutoFix(task) {
+  const desc = (task.description || '').toLowerCase();
+  const isSysTask = task.id?.startsWith('sys-');
+  const isCritical = task.priority === 'CRITICAL';
+  const isHighPriorityFix = task.priority === 'HIGH' && (
+    desc.includes('fix critical error') ||
+    desc.includes('[auto-fix]') ||
+    desc.includes('fix error:') ||
+    task.metadata?.autoFix === true
+  );
+
+  return isSysTask && (isCritical || isHighPriorityFix);
+}
+
+/**
+ * Get next pending task
+ * Priority: Critical auto-fix tasks first, then queue order
  */
 export function getNextTask(tasks) {
   const pending = tasks.filter(t => t.status === 'pending');
   if (pending.length === 0) return null;
 
-  return sortByPriority(pending)[0];
+  // First, check for critical auto-fix tasks that need immediate attention
+  const criticalAutoFix = pending.find(isCriticalAutoFix);
+  if (criticalAutoFix) return criticalAutoFix;
+
+  // Otherwise, return tasks in queue order (first pending task)
+  return pending[0];
 }
 
 /**

@@ -83,12 +83,15 @@ export default function NotificationDropdown({
       {/* Bell button with badge */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 rounded-lg hover:bg-port-card transition-colors"
+        className="relative p-2 rounded-lg hover:bg-port-card transition-colors focus:outline-none focus:ring-2 focus:ring-port-accent focus:ring-offset-2 focus:ring-offset-port-bg"
         title="Notifications"
+        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        aria-expanded={isOpen}
+        aria-haspopup="true"
       >
-        <Bell className={`w-5 h-5 ${unreadCount > 0 ? 'text-yellow-400' : 'text-gray-400'}`} />
+        <Bell className={`w-5 h-5 ${unreadCount > 0 ? 'text-yellow-400' : 'text-gray-400'}`} aria-hidden="true" />
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1" aria-hidden="true">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -96,11 +99,15 @@ export default function NotificationDropdown({
 
       {/* Dropdown panel - position determines direction */}
       {isOpen && (
-        <div className={`absolute w-80 bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
-          position === 'bottom'
-            ? 'left-0 bottom-full mb-2'  // Opens upward from sidebar footer
-            : 'right-0 top-full mt-2'     // Opens downward from header
-        }`}>
+        <div
+          role="menu"
+          aria-label="Notifications menu"
+          className={`absolute w-80 bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
+            position === 'bottom'
+              ? 'left-0 bottom-full mb-2'  // Opens upward from sidebar footer
+              : 'right-0 top-full mt-2'     // Opens downward from header
+          }`}
+        >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
             <span className="font-medium text-white">Notifications</span>
@@ -108,19 +115,21 @@ export default function NotificationDropdown({
               {unreadCount > 0 && (
                 <button
                   onClick={onMarkAllAsRead}
-                  className="p-1.5 rounded hover:bg-port-border transition-colors"
+                  className="p-1.5 rounded hover:bg-port-border transition-colors focus:outline-none focus:ring-2 focus:ring-port-accent"
                   title="Mark all as read"
+                  aria-label="Mark all notifications as read"
                 >
-                  <CheckCheck className="w-4 h-4 text-gray-400" />
+                  <CheckCheck className="w-4 h-4 text-gray-400" aria-hidden="true" />
                 </button>
               )}
               {notifications.length > 0 && (
                 <button
                   onClick={onClearAll}
-                  className="p-1.5 rounded hover:bg-port-border transition-colors"
+                  className="p-1.5 rounded hover:bg-port-border transition-colors focus:outline-none focus:ring-2 focus:ring-port-accent"
                   title="Clear all"
+                  aria-label="Clear all notifications"
                 >
-                  <Trash2 className="w-4 h-4 text-gray-400" />
+                  <Trash2 className="w-4 h-4 text-gray-400" aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -140,16 +149,19 @@ export default function NotificationDropdown({
                 return (
                   <div
                     key={notification.id}
+                    role="menuitem"
+                    tabIndex={0}
                     className={`
                       px-4 py-3 border-b border-port-border last:border-b-0 cursor-pointer
-                      hover:bg-port-border/50 transition-colors
+                      hover:bg-port-border/50 transition-colors focus:outline-none focus:bg-port-border/50
                       ${!notification.read ? 'bg-port-border/30' : ''}
                       border-l-2 ${PRIORITY_COLORS[notification.priority] || PRIORITY_COLORS.medium}
                     `}
                     onClick={() => handleNotificationClick(notification)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleNotificationClick(notification)}
                   >
                     <div className="flex items-start gap-3">
-                      <div className={`p-1.5 rounded ${config.bgColor}`}>
+                      <div className={`p-1.5 rounded ${config.bgColor}`} aria-hidden="true">
                         <Icon className={`w-4 h-4 ${config.color}`} />
                       </div>
                       <div className="flex-1 min-w-0">
@@ -162,9 +174,10 @@ export default function NotificationDropdown({
                               e.stopPropagation();
                               onRemove(notification.id);
                             }}
-                            className="p-1 rounded hover:bg-port-border transition-colors opacity-0 group-hover:opacity-100"
+                            className="p-1 rounded hover:bg-port-border transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-port-accent"
+                            aria-label={`Remove notification: ${notification.title}`}
                           >
-                            <X className="w-3 h-3 text-gray-500" />
+                            <X className="w-3 h-3 text-gray-500" aria-hidden="true" />
                           </button>
                         </div>
                         {notification.description && (

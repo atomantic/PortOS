@@ -48,6 +48,14 @@
       "model": "heavy",
       "returnsJson": true,
       "variables": []
+    },
+    "memory-evaluate": {
+      "name": "Memory Evaluation",
+      "description": "Evaluate agent output to extract useful memories",
+      "model": "lmstudio:gptoss-20b",
+      "provider": "lmstudio",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

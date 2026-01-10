@@ -74,6 +74,7 @@ export async function updateAppActivity(appId, updates) {
       lastTaskCompletedAt: null,
       activeAgentId: null,
       cooldownUntil: null,
+      lastImprovementType: null,  // Track last self-improvement analysis type
       stats: {
         reviewCount: 0,
         issuesFound: 0,

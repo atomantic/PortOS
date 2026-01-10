@@ -413,16 +413,55 @@ describe('Task Parser', () => {
   });
 
   describe('getNextTask', () => {
-    it('should return highest priority pending task', () => {
+    it('should return first pending task in queue order', () => {
       const tasks = [
-        { id: 'task-001', status: 'pending', priorityValue: 1 },
-        { id: 'task-002', status: 'pending', priorityValue: 4 },
-        { id: 'task-003', status: 'pending', priorityValue: 2 }
+        { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1 },
+        { id: 'task-002', status: 'pending', priority: 'HIGH', priorityValue: 4 },
+        { id: 'task-003', status: 'pending', priority: 'MEDIUM', priorityValue: 2 }
       ];
 
       const next = getNextTask(tasks);
 
-      expect(next.id).toBe('task-002');
+      // Should return first in queue, not highest priority
+      expect(next.id).toBe('task-001');
+    });
+
+    it('should prioritize critical auto-fix tasks over queue order', () => {
+      const tasks = [
+        { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1 },
+        { id: 'sys-002', status: 'pending', priority: 'HIGH', priorityValue: 3, description: 'Fix critical error: something broke' },
+        { id: 'task-003', status: 'pending', priority: 'MEDIUM', priorityValue: 2 }
+      ];
+
+      const next = getNextTask(tasks);
+
+      // Should return the critical auto-fix task even though it's not first
+      expect(next.id).toBe('sys-002');
+    });
+
+    it('should prioritize CRITICAL priority system tasks', () => {
+      const tasks = [
+        { id: 'task-001', status: 'pending', priority: 'HIGH', priorityValue: 3 },
+        { id: 'sys-002', status: 'pending', priority: 'CRITICAL', priorityValue: 4, description: 'System issue' },
+        { id: 'task-003', status: 'pending', priority: 'MEDIUM', priorityValue: 2 }
+      ];
+
+      const next = getNextTask(tasks);
+
+      expect(next.id).toBe('sys-002');
+    });
+
+    it('should not prioritize regular system tasks without critical indicators', () => {
+      const tasks = [
+        { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1 },
+        { id: 'sys-002', status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Regular system task' },
+        { id: 'task-003', status: 'pending', priority: 'HIGH', priorityValue: 3 }
+      ];
+
+      const next = getNextTask(tasks);
+
+      // Should return first in queue since sys-002 is not a critical auto-fix
+      expect(next.id).toBe('task-001');
     });
 
     it('should return null if no pending tasks', () => {

@@ -5,7 +5,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { createApp } from '../services/apps.js';
+import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const execAsync = promisify(exec);
@@ -89,9 +89,40 @@ router.post('/templates/create', asyncHandler(async (req, res) => {
   return scaffoldApp(req, res);
 }));
 
+/**
+ * Find the next available ports starting from USER_APP_PORT_START
+ * Returns { apiPort, uiPort } for the next contiguous pair
+ */
+const USER_APP_PORT_START = 5570;
+const USER_APP_PORT_END = 5599;
+
+async function findNextAvailablePorts(needsApi, needsUi) {
+  const reservedPorts = await getReservedPorts();
+  const reserved = new Set(reservedPorts);
+
+  let apiPort = null;
+  let uiPort = null;
+
+  for (let port = USER_APP_PORT_START; port <= USER_APP_PORT_END; port++) {
+    if (reserved.has(port)) continue;
+
+    if (needsApi && !apiPort) {
+      apiPort = port;
+      reserved.add(port);
+    } else if (needsUi && !uiPort) {
+      uiPort = port;
+      reserved.add(port);
+    }
+
+    if ((!needsApi || apiPort) && (!needsUi || uiPort)) break;
+  }
+
+  return { apiPort, uiPort };
+}
+
 // Shared scaffold logic
 async function scaffoldApp(req, res) {
-  const {
+  let {
     name,
     template,
     parentDir,
@@ -107,6 +138,21 @@ async function scaffoldApp(req, res) {
       status: 400,
       code: 'VALIDATION_ERROR'
     });
+  }
+
+  // Auto-allocate ports if not provided
+  const templateNeedsPorts = {
+    'portos-stack': { api: true, ui: true },
+    'vite-express': { api: true, ui: true },
+    'vite-react': { api: false, ui: true },
+    'express-api': { api: true, ui: false }
+  };
+
+  const needs = templateNeedsPorts[template] || { api: false, ui: false };
+  if ((needs.api && !apiPort) || (needs.ui && !uiPort)) {
+    const allocated = await findNextAvailablePorts(needs.api && !apiPort, needs.ui && !uiPort);
+    if (needs.api && !apiPort) apiPort = allocated.apiPort;
+    if (needs.ui && !uiPort) uiPort = allocated.uiPort;
   }
 
   // Sanitize name for directory
@@ -279,7 +325,7 @@ app.listen(PORT, '0.0.0.0', () => {
 
     // === Client package.json ===
     const clientPkg = {
-      name: `${dirName}-client`,
+      name: `${dirName}-ui`,
       version: '0.1.0',
       private: true,
       type: 'module',
@@ -793,71 +839,131 @@ npm run dev
     addStep('Create .env', 'done');
   }
 
-  // Create PM2 ecosystem file
-  const pm2Config = {
-    apps: []
-  };
+  // Create PM2 ecosystem file with proper PORTS constant pattern
+  let ecosystemContent;
 
   if (template === 'portos-stack') {
-    pm2Config.apps.push(
-      {
-        name: `${dirName}-server`,
-        script: 'server/index.js',
-        cwd: repoPath,
-        interpreter: 'node',
-        ports: { api: apiPort || 3001 },
-        env: {
-          NODE_ENV: 'development',
-          PORT: apiPort || 3001,
-          HOST: '0.0.0.0'
-        },
-        watch: false
+    ecosystemContent = `// =============================================================================
+// Port Configuration - All ports defined here as single source of truth
+// =============================================================================
+const PORTS = {
+  API: ${apiPort},    // Express API server
+  UI: ${uiPort}       // Vite dev server (client)
+};
+
+module.exports = {
+  PORTS, // Export for other configs to reference
+
+  apps: [
+    {
+      name: '${dirName}-server',
+      script: 'server/index.js',
+      cwd: __dirname,
+      interpreter: 'node',
+      env: {
+        NODE_ENV: 'development',
+        PORT: PORTS.API,
+        HOST: '0.0.0.0'
       },
-      {
-        name: `${dirName}-client`,
-        script: 'node_modules/.bin/vite',
-        cwd: `${repoPath}/client`,
-        args: `--host 0.0.0.0 --port ${uiPort || 3000}`,
-        ports: { ui: uiPort || 3000 },
-        env: {
-          NODE_ENV: 'development'
-        },
-        watch: false
-      }
-    );
+      watch: false
+    },
+    {
+      name: '${dirName}-ui',
+      script: 'node_modules/.bin/vite',
+      cwd: \`\${__dirname}/client\`,
+      args: \`--host 0.0.0.0 --port \${PORTS.UI}\`,
+      env: {
+        NODE_ENV: 'development',
+        VITE_PORT: PORTS.UI
+      },
+      watch: false
+    }
+  ]
+};
+`;
   } else if (template === 'vite-express') {
-    pm2Config.apps.push(
-      {
-        name: `${dirName}-ui`,
-        script: 'npm',
-        args: 'run dev',
-        cwd: repoPath
-      },
-      {
-        name: `${dirName}-api`,
-        script: 'server/index.js',
-        cwd: repoPath
-      }
-    );
-  } else if (template === 'vite-react') {
-    pm2Config.apps.push({
-      name: dirName,
+    ecosystemContent = `// =============================================================================
+// Port Configuration - All ports defined here as single source of truth
+// =============================================================================
+const PORTS = {
+  API: ${apiPort},    // Express API server
+  UI: ${uiPort}       // Vite dev server
+};
+
+module.exports = {
+  PORTS,
+
+  apps: [
+    {
+      name: '${dirName}-ui',
       script: 'npm',
       args: 'run dev',
-      cwd: repoPath
-    });
+      cwd: __dirname,
+      env: {
+        VITE_PORT: PORTS.UI
+      }
+    },
+    {
+      name: '${dirName}-api',
+      script: 'server/index.js',
+      cwd: __dirname,
+      env: {
+        PORT: PORTS.API
+      }
+    }
+  ]
+};
+`;
+  } else if (template === 'vite-react') {
+    ecosystemContent = `// =============================================================================
+// Port Configuration - All ports defined here as single source of truth
+// =============================================================================
+const PORTS = {
+  UI: ${uiPort}       // Vite dev server
+};
+
+module.exports = {
+  PORTS,
+
+  apps: [
+    {
+      name: '${dirName}',
+      script: 'npm',
+      args: 'run dev',
+      cwd: __dirname,
+      env: {
+        VITE_PORT: PORTS.UI
+      }
+    }
+  ]
+};
+`;
   } else if (template === 'express-api') {
-    pm2Config.apps.push({
-      name: dirName,
+    ecosystemContent = `// =============================================================================
+// Port Configuration - All ports defined here as single source of truth
+// =============================================================================
+const PORTS = {
+  API: ${apiPort}     // Express API server
+};
+
+module.exports = {
+  PORTS,
+
+  apps: [
+    {
+      name: '${dirName}',
       script: 'index.js',
-      cwd: repoPath
-    });
+      cwd: __dirname,
+      env: {
+        PORT: PORTS.API
+      }
+    }
+  ]
+};
+`;
   }
 
-  await writeFile(
-    join(repoPath, 'ecosystem.config.cjs'),
-    `module.exports = ${JSON.stringify(pm2Config, null, 2)};\n`
-  );
+  await writeFile(join(repoPath, 'ecosystem.config.cjs'), ecosystemContent);
   addStep('Create PM2 config', 'done');
 
   // Run npm install
@@ -946,11 +1052,11 @@ Thumbs.db
   let startCmds;
 
   if (template === 'portos-stack') {
-    pm2Names = [`${dirName}-server`, `${dirName}-client`];
-    startCmds = ['npm run dev:server', 'npm run dev:client'];
+    pm2Names = [`${dirName}-server`, `${dirName}-ui`];
+    startCmds = ['npm run dev'];
   } else if (template === 'vite-express') {
     pm2Names = [`${dirName}-ui`, `${dirName}-api`];
-    startCmds = ['npm run dev', 'npm run server'];
+    startCmds = ['npm run dev:all'];
   } else {
     pm2Names = [dirName];
     startCmds = ['npm run dev'];

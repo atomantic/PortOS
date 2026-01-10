@@ -20,7 +20,9 @@ import {
   TasksTab,
   AgentsTab,
   ScriptsTab,
+  ScheduleTab,
   DigestTab,
+  LearningTab,
   MemoryTab,
   HealthTab,
   ConfigTab
@@ -490,14 +492,24 @@ export default function ChiefOfStaff() {
             <ScriptsTab scripts={scripts} onRefresh={fetchData} />
           </div>
         )}
+        {activeTab === 'schedule' && (
+          <div role="tabpanel" id="tabpanel-schedule" aria-labelledby="tab-schedule">
+            <ScheduleTab apps={apps} />
+          </div>
+        )}
         {activeTab === 'digest' && (
           <div role="tabpanel" id="tabpanel-digest" aria-labelledby="tab-digest">
             <DigestTab />
           </div>
         )}
+        {activeTab === 'learning' && (
+          <div role="tabpanel" id="tabpanel-learning" aria-labelledby="tab-learning">
+            <LearningTab />
+          </div>
+        )}
         {activeTab === 'memory' && (
           <div role="tabpanel" id="tabpanel-memory" aria-labelledby="tab-memory">
-            <MemoryTab />
+            <MemoryTab apps={apps} />
           </div>
         )}
         {activeTab === 'health' && (

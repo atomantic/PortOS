@@ -195,7 +195,9 @@ export default function Apps() {
                           <button
                             onClick={() => handleStop(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                            className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-port-error"
+                            aria-label={`Stop ${app.name}`}
+                            aria-busy={actionLoading[app.id] === 'stop'}
                           >
                             <Square size={14} aria-hidden="true" />
                             <span className="text-xs">Stop</span>
@@ -203,7 +205,9 @@ export default function Apps() {
                           <button
                             onClick={() => handleRestart(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
+                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-port-warning"
+                            aria-label={`Restart ${app.name}`}
+                            aria-busy={actionLoading[app.id] === 'restart'}
                           >
                             <RotateCcw size={14} aria-hidden="true" className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
                             <span className="text-xs">Restart</span>
@@ -213,7 +217,9 @@ export default function Apps() {
                         <button
                           onClick={() => handleStart(app)}
                           disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                          className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus:ring-2 focus:ring-port-success"
+                          aria-label={`Start ${app.name}`}
+                          aria-busy={actionLoading[app.id] === 'start'}
                         >
                           <Play size={14} aria-hidden="true" />
                           <span className="text-xs">{actionLoading[app.id] === 'start' ? 'Starting...' : 'Start'}</span>
@@ -235,18 +241,20 @@ export default function Apps() {
 
                     {/* Edit/Delete Actions */}
                     {confirmingDelete === app.id ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2" role="alertdialog" aria-label={`Confirm deletion of ${app.name}`}>
                         <span className="text-xs text-gray-400">Remove?</span>
                         <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
                           <button
                             onClick={() => handleDelete(app)}
-                            className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs"
+                            className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 text-xs focus:outline-none focus:ring-2 focus:ring-port-error"
+                            aria-label={`Confirm delete ${app.name}`}
                           >
                             Yes
                           </button>
                           <button
                             onClick={() => setConfirmingDelete(null)}
-                            className="px-2 py-1 bg-port-border/50 text-gray-400 hover:text-white text-xs border-l border-port-border"
+                            className="px-2 py-1 bg-port-border/50 text-gray-400 hover:text-white text-xs border-l border-port-border focus:outline-none focus:ring-2 focus:ring-port-accent"
+                            aria-label="Cancel deletion"
                           >
                             No
                           </button>
@@ -256,13 +264,15 @@ export default function Apps() {
                       <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
                         <button
                           onClick={() => setEditingApp(app)}
-                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs"
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs focus:outline-none focus:ring-2 focus:ring-port-accent"
+                          aria-label={`Edit ${app.name}`}
                         >
                           Edit
                         </button>
                         <button
                           onClick={() => setConfirmingDelete(app.id)}
-                          className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border"
+                          className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-none focus:ring-2 focus:ring-port-error"
+                          aria-label={`Delete ${app.name}`}
                         >
                           Delete
                         </button>

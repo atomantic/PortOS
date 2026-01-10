@@ -49,8 +49,9 @@
       "type": "api",
       "endpoint": "http://localhost:1234/v1",
       "apiKey": "lm-studio",
-      "models": [],
-      "defaultModel": null,
+      "models": ["gptoss-20b"],
+      "defaultModel": "gptoss-20b",
+      "memoryClassifierModel": "gptoss-20b",
       "timeout": 300000,
       "enabled": true,
       "envVars": {}

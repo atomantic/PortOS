@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "provider": "lmstudio",
+  "endpoint": "http://localhost:1234/v1/chat/completions",
+  "model": "gptoss-20b",
+  "timeout": 60000,
+  "maxOutputLength": 10000,
+  "minConfidence": 0.6,
+  "fallbackToPatterns": true
+}

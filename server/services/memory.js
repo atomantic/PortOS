@@ -10,7 +10,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents } from './cos.js';
+import { cosEvents, updateAgent } from './cos.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity, cosineSimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
 
@@ -182,6 +182,7 @@ export async function createMemory(data, embedding = null) {
       relatedMemories: data.relatedMemories || [],
       sourceTaskId: data.sourceTaskId || null,
       sourceAgentId: data.sourceAgentId || null,
+      sourceAppId: data.sourceAppId || null,
       embedding: embedding || null,
       embeddingModel: embedding ? DEFAULT_MEMORY_CONFIG.embeddingModel : null,
       confidence: data.confidence ?? 0.8,
@@ -206,7 +207,8 @@ export async function createMemory(data, embedding = null) {
       summary: memory.summary,
       importance: memory.importance,
       createdAt: memory.createdAt,
-      status: memory.status
+      status: memory.status,
+      sourceAppId: memory.sourceAppId
     });
     index.count = index.memories.length;
     await saveIndex(index);
@@ -269,6 +271,11 @@ export async function getMemories(options = {}) {
     memories = memories.filter(m => m.tags.some(t => options.tags.includes(t)));
   }
 
+  // Filter by app
+  if (options.appId) {
+    memories = memories.filter(m => m.sourceAppId === options.appId);
+  }
+
   // Sort
   const sortBy = options.sortBy || 'createdAt';
   const sortOrder = options.sortOrder || 'desc';
@@ -296,7 +303,7 @@ export async function updateMemory(id, updates) {
     if (!memory) return null;
 
     // Apply updates
-    const updatableFields = ['content', 'summary', 'category', 'tags', 'confidence', 'importance', 'relatedMemories', 'status', 'expiresAt'];
+    const updatableFields = ['content', 'summary', 'category', 'tags', 'confidence', 'importance', 'relatedMemories', 'status', 'expiresAt', 'sourceAppId'];
     for (const field of updatableFields) {
       if (updates[field] !== undefined) {
         memory[field] = updates[field];
@@ -323,7 +330,8 @@ export async function updateMemory(id, updates) {
         summary: memory.summary,
         importance: memory.importance,
         createdAt: memory.createdAt,
-        status: memory.status
+        status: memory.status,
+        sourceAppId: memory.sourceAppId
       };
       await saveIndex(index);
     }
@@ -331,6 +339,32 @@ export async function updateMemory(id, updates) {
     console.log(`🧠 Memory updated: ${id}`);
     cosEvents.emit('memory:updated', { id, updates });
 
+    return memory;
+  });
+}
+
+/**
+ * Update a memory's embedding
+ */
+export async function updateMemoryEmbedding(id, embedding) {
+  return withMemoryLock(async () => {
+    const memory = await loadMemory(id);
+    if (!memory) return null;
+
+    // Update memory with new embedding
+    memory.embedding = embedding;
+    memory.embeddingModel = DEFAULT_MEMORY_CONFIG.embeddingModel;
+    memory.updatedAt = new Date().toISOString();
+    await saveMemory(memory);
+
+    // Update embeddings file
+    const embeddings = await loadEmbeddings();
+    embeddings.vectors[id] = embedding;
+    embeddings.model = DEFAULT_MEMORY_CONFIG.embeddingModel;
+    embeddings.dimension = embedding.length;
+    await saveEmbeddings(embeddings);
+
+    console.log(`🧠 Memory embedding updated: ${id}`);
     return memory;
   });
 }
@@ -367,6 +401,27 @@ export async function deleteMemory(id, hard = false) {
 }
 
 /**
+ * Helper to decrement agent's pendingApproval count
+ */
+async function decrementAgentPendingApproval(sourceAgentId) {
+  if (!sourceAgentId) return;
+
+  const { getAgent } = await import('./cos.js');
+  const agent = await getAgent(sourceAgentId).catch(() => null);
+  if (!agent?.memoryExtraction?.pendingApproval) return;
+
+  const currentPending = agent.memoryExtraction.pendingApproval;
+  if (currentPending > 0) {
+    await updateAgent(sourceAgentId, {
+      memoryExtraction: {
+        ...agent.memoryExtraction,
+        pendingApproval: currentPending - 1
+      }
+    });
+  }
+}
+
+/**
  * Approve a pending memory (changes status from pending_approval to active)
  */
 export async function approveMemory(id) {
@@ -395,6 +450,9 @@ export async function approveMemory(id) {
     // Remove associated notification
     await notifications.removeByMetadata('memoryId', id);
 
+    // Decrement agent's pendingApproval count
+    await decrementAgentPendingApproval(memory.sourceAgentId);
+
     return { success: true, memory };
   });
 }
@@ -409,6 +467,9 @@ export async function rejectMemory(id) {
     if (memory.status !== 'pending_approval') {
       return { success: false, error: 'Memory is not pending approval' };
     }
+
+    // Store sourceAgentId before deletion
+    const sourceAgentId = memory.sourceAgentId;
 
     // Hard delete - remove files
     await deleteMemoryFiles(id);
@@ -429,6 +490,9 @@ export async function rejectMemory(id) {
 
     // Remove associated notification
     await notifications.removeByMetadata('memoryId', id);
+
+    // Decrement agent's pendingApproval count
+    await decrementAgentPendingApproval(sourceAgentId);
 
     return { success: true, id };
   });
@@ -462,10 +526,11 @@ export async function searchMemories(queryEmbedding, options = {}) {
       const meta = indexMap.get(r.id);
       if (!meta || meta.status !== 'active') return null;
 
-      // Apply type/category/tag filters
+      // Apply type/category/tag/app filters
       if (options.types && options.types.length > 0 && !options.types.includes(meta.type)) return null;
       if (options.categories && options.categories.length > 0 && !options.categories.includes(meta.category)) return null;
       if (options.tags && options.tags.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return null;
+      if (options.appId && meta.sourceAppId !== options.appId) return null;
 
       return { ...meta, similarity: r.similarity };
     })
@@ -492,6 +557,11 @@ export async function getTimeline(options = {}) {
   // Filter by types
   if (options.types && options.types.length > 0) {
     memories = memories.filter(m => options.types.includes(m.type));
+  }
+
+  // Filter by app
+  if (options.appId) {
+    memories = memories.filter(m => m.sourceAppId === options.appId);
   }
 
   // Sort by date descending
@@ -608,8 +678,18 @@ export async function getGraphData() {
   const edges = [];
   const seenEdges = new Set();
 
+  // Batch load all memories to avoid N+1 query pattern
+  // Load all memories in parallel instead of sequential loadMemory calls
+  const memoryLoadPromises = activeMemories.map(m => loadMemory(m.id));
+  const loadedMemories = await Promise.all(memoryLoadPromises);
+  const memoriesById = new Map();
+  loadedMemories.forEach((mem, idx) => {
+    if (mem) memoriesById.set(activeMemories[idx].id, mem);
+  });
+
+  // Build explicit link edges using pre-loaded memories
   for (const memory of activeMemories) {
-    const full = await loadMemory(memory.id);
+    const full = memoriesById.get(memory.id);
     if (!full) continue;
 
     // Explicit links
@@ -731,10 +811,17 @@ export async function applyDecay(decayRate = 0.01) {
   const now = Date.now();
   let updated = 0;
 
-  for (const meta of index.memories) {
-    if (meta.status !== 'active') continue;
+  // Filter active memories first
+  const activeMemories = index.memories.filter(m => m.status === 'active');
 
-    const memory = await loadMemory(meta.id);
+  // Batch load all active memories to avoid N+1 query pattern
+  const memoryLoadPromises = activeMemories.map(m => loadMemory(m.id));
+  const loadedMemories = await Promise.all(memoryLoadPromises);
+
+  // Process each loaded memory
+  for (let i = 0; i < activeMemories.length; i++) {
+    const meta = activeMemories[i];
+    const memory = loadedMemories[i];
     if (!memory) continue;
 
     const ageInDays = (now - new Date(memory.createdAt).getTime()) / (1000 * 60 * 60 * 24);
@@ -768,10 +855,17 @@ export async function clearExpired() {
   const now = new Date().toISOString();
   let cleared = 0;
 
-  for (const meta of index.memories) {
-    if (meta.status !== 'active') continue;
+  // Filter active memories first
+  const activeMemories = index.memories.filter(m => m.status === 'active');
 
-    const memory = await loadMemory(meta.id);
+  // Batch load all active memories to avoid N+1 query pattern
+  const memoryLoadPromises = activeMemories.map(m => loadMemory(m.id));
+  const loadedMemories = await Promise.all(memoryLoadPromises);
+
+  // Process each loaded memory
+  for (let i = 0; i < activeMemories.length; i++) {
+    const meta = activeMemories[i];
+    const memory = loadedMemories[i];
     if (!memory) continue;
 
     if (memory.expiresAt && memory.expiresAt < now) {
