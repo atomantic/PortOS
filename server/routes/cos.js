@@ -96,13 +96,13 @@ router.post('/tasks/reorder', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots } = req.body;
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, position = 'bottom' } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots };
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, position };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));

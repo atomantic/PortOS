@@ -2332,7 +2332,12 @@ export async function addTask(taskData, taskType = 'user') {
     section: 'pending'
   };
 
-  tasks.push(newTask);
+  // Add task to top or bottom based on position parameter
+  if (taskData.position === 'top') {
+    tasks.unshift(newTask);
+  } else {
+    tasks.push(newTask);
+  }
 
   // Write back to file
   const includeApprovalFlags = taskType === 'internal';

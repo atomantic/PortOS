@@ -22,7 +22,8 @@ import SortableTaskItem from './SortableTaskItem';
 
 export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [showAddTask, setShowAddTask] = useState(false);
-  const [newTask, setNewTask] = useState({ id: '', description: '', context: '', model: '', provider: '', app: '' });
+  const [newTask, setNewTask] = useState({ description: '', context: '', model: '', provider: '', app: '' });
+  const [addToTop, setAddToTop] = useState(false);
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -136,23 +137,23 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       return;
     }
 
-    const taskId = newTask.id.trim() || `task-${Date.now()}`;
     await api.addCosTask({
-      id: taskId,
       description: newTask.description,
       context: newTask.context,
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
       app: newTask.app || undefined,
-      screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined
+      screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
+      position: addToTop ? 'top' : 'bottom'
     }).catch(err => {
       toast.error(err.message);
       return;
     });
 
     toast.success('Task added');
-    setNewTask({ id: '', description: '', context: '', model: '', provider: '', app: '' });
+    setNewTask({ description: '', context: '', model: '', provider: '', app: '' });
     setScreenshots([]);
+    setAddToTop(false);
     setShowAddTask(false);
     onRefresh();
   };
@@ -177,7 +178,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             </button>
             <button
               onClick={() => setShowAddTask(!showAddTask)}
-              className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors"
+              className="flex items-center gap-1 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent px-3 py-1.5 rounded-lg transition-colors"
               aria-expanded={showAddTask}
             >
               <Plus size={16} aria-hidden="true" />
@@ -191,17 +192,6 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <div className="bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
             <div className="space-y-3">
               <div>
-                <label htmlFor="task-id" className="sr-only">Task ID</label>
-                <input
-                  id="task-id"
-                  type="text"
-                  placeholder="Task ID (auto-generated if empty)"
-                  value={newTask.id}
-                  onChange={e => setNewTask(t => ({ ...t, id: e.target.value }))}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                />
-              </div>
-              <div>
                 <label htmlFor="task-description" className="sr-only">Task description (required)</label>
                 <input
                   id="task-description"
@@ -212,6 +202,22 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                   aria-required="true"
                 />
+              </div>
+              <div className="flex items-center gap-3">
+                <label htmlFor="add-position" className="text-sm text-gray-400">Queue Position:</label>
+                <button
+                  id="add-position"
+                  type="button"
+                  onClick={() => setAddToTop(!addToTop)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    addToTop
+                      ? 'bg-port-accent/20 text-port-accent border border-port-accent/50'
+                      : 'bg-port-bg text-gray-400 border border-port-border'
+                  }`}
+                  aria-pressed={addToTop}
+                >
+                  {addToTop ? 'Top of Queue' : 'Bottom of Queue'}
+                </button>
               </div>
               <div>
                 <label htmlFor="task-context" className="sr-only">Context</label>
