@@ -6,7 +6,7 @@ import socket from '../services/socket';
  * Uses the singleton socket from services/socket.js to avoid duplicate connections.
  */
 export function useSocket() {
-  const [connected, setConnected] = useState(socket.connected);
+  const [, setConnected] = useState(socket.connected);
 
   useEffect(() => {
     const handleConnect = () => setConnected(true);

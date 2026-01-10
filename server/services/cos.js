@@ -884,21 +884,6 @@ const SELF_IMPROVEMENT_TYPES = [
   'dependency-updates'
 ];
 
-// App-agnostic self-improvement types for managed apps
-// These can be applied to any codebase, not just PortOS
-const MANAGED_APP_IMPROVEMENT_TYPES = [
-  'security-audit',        // Security vulnerabilities
-  'code-quality',          // DRY violations, dead code
-  'test-coverage',         // Add missing tests
-  'performance',           // Optimize queries, re-renders
-  'accessibility',         // A11y issues
-  'console-errors',        // Fix JavaScript errors
-  'dependency-updates',    // Update packages
-  'documentation',         // Update docs and comments
-  'error-handling',        // Improve error handling
-  'typing'                 // Add/fix TypeScript types
-];
-
 /**
  * Generate a self-improvement task for PortOS itself
  * Uses Playwright and Opus to analyze and fix issues
@@ -1357,7 +1342,7 @@ async function generateManagedAppImprovementTask(app, state) {
   );
 
   let nextType;
-  let selectionReason = 'rotation';
+  let selectionReason;
 
   if (appRequests.length > 0) {
     const request = appRequests[0];

@@ -66,8 +66,7 @@ export async function updateConfig(updates) {
     await mkdir(CONFIG_DIR, { recursive: true });
   }
 
-  const { writeFile: write } = await import('fs/promises');
-  await write(MEMORY_CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+  await writeFile(MEMORY_CONFIG_FILE, JSON.stringify(newConfig, null, 2));
   configCache = newConfig;
 
   return newConfig;

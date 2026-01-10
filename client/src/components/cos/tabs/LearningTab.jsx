@@ -96,14 +96,6 @@ export default function LearningTab() {
       .sort((a, b) => b[1].avgDurationMs - a[1].avgDurationMs);
   }, [durations]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-6 h-6 animate-spin text-port-accent" />
-      </div>
-    );
-  }
-
   const hasData = learning?.totals?.completed > 0;
 
   return (
@@ -115,7 +107,7 @@ export default function LearningTab() {
           <h3 className="text-lg font-semibold text-white">Learning Analytics</h3>
         </div>
         <div className="flex gap-2">
-          {!hasData && (
+          {!hasData && !loading && (
             <button
               onClick={handleBackfill}
               disabled={backfilling}
@@ -128,7 +120,7 @@ export default function LearningTab() {
           <button
             onClick={loadData}
             disabled={loading}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors disabled:opacity-50"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Refresh
@@ -136,7 +128,11 @@ export default function LearningTab() {
         </div>
       </div>
 
-      {!hasData ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <RefreshCw className="w-6 h-6 animate-spin text-port-accent" />
+        </div>
+      ) : !hasData ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <Brain className="w-12 h-12 text-gray-600 mx-auto mb-3" />
           <p className="text-gray-400">No learning data available yet.</p>
