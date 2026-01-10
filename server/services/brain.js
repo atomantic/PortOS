@@ -8,6 +8,7 @@
  * - Handle corrections and fixes
  */
 
+import { spawn } from 'child_process';
 import * as storage from './brainStorage.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
@@ -44,6 +45,41 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
   const prompt = await buildPrompt(promptStageName, variables);
   const model = modelOverride || provider.defaultModel;
+
+  if (provider.type === 'cli') {
+    return new Promise((resolve, reject) => {
+      const args = [...(provider.args || []), prompt];
+      let output = '';
+
+      const child = spawn(provider.command, args, {
+        env: { ...process.env, ...provider.envVars },
+        shell: false
+      });
+
+      child.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      child.stderr.on('data', (data) => {
+        output += data.toString();
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve(output);
+        } else {
+          reject(new Error(`CLI exited with code ${code}`));
+        }
+      });
+
+      child.on('error', reject);
+
+      setTimeout(() => {
+        child.kill();
+        reject(new Error('AI request timed out'));
+      }, provider.timeout || 300000);
+    });
+  }
 
   if (provider.type === 'api') {
     const headers = { 'Content-Type': 'application/json' };
@@ -483,8 +519,91 @@ export async function retryClassification(inboxLogId, providerOverride, modelOve
     throw new Error('Inbox log entry not found');
   }
 
-  // Re-run capture logic with the original text
-  return captureThought(inboxLog.capturedText, providerOverride, modelOverride);
+  const meta = await storage.loadMeta();
+  const provider = providerOverride || meta.defaultProvider;
+  const model = modelOverride || meta.defaultModel;
+
+  // Update AI config for this retry
+  await storage.updateInboxLog(inboxLogId, {
+    ai: {
+      providerId: provider,
+      modelId: model,
+      promptTemplateId: 'brain-classifier'
+    },
+    status: 'needs_review',
+    error: null
+  });
+
+  // Attempt AI classification
+  let classification = null;
+  let aiError = null;
+
+  const aiResponse = await callAI(
+    'brain-classifier',
+    { capturedText: inboxLog.capturedText, now: new Date().toISOString() },
+    providerOverride,
+    modelOverride
+  ).catch(err => {
+    aiError = err;
+    return null;
+  });
+
+  if (aiResponse) {
+    const parsed = parseJsonResponse(aiResponse);
+    const validationResult = classifierOutputSchema.safeParse(parsed);
+
+    if (validationResult.success) {
+      classification = validationResult.data;
+    } else {
+      console.error(`🧠 Classification validation failed: ${JSON.stringify(validationResult.error.errors)}`);
+      aiError = new Error('Invalid classification output from AI');
+    }
+  }
+
+  // If AI failed, update entry with error
+  if (!classification) {
+    const errorMessage = aiError?.message || 'AI classification failed';
+    await storage.updateInboxLog(inboxLogId, {
+      classification: {
+        destination: 'unknown',
+        confidence: 0,
+        title: 'Classification failed',
+        extracted: {},
+        reasons: [errorMessage]
+      },
+      status: 'needs_review',
+      error: { message: errorMessage }
+    });
+
+    console.log(`🧠 Retry failed for ${inboxLogId}: ${errorMessage}`);
+    return {
+      inboxLog: await storage.getInboxLogById(inboxLogId),
+      message: 'Classification failed, needs manual review'
+    };
+  }
+
+  // If confidence too low, update but keep as needs_review
+  if (classification.confidence < meta.confidenceThreshold) {
+    await storage.updateInboxLog(inboxLogId, {
+      classification,
+      status: 'needs_review'
+    });
+
+    console.log(`🧠 Retry low confidence for ${inboxLogId}: ${classification.confidence}`);
+    return {
+      inboxLog: await storage.getInboxLogById(inboxLogId),
+      message: `Low confidence (${(classification.confidence * 100).toFixed(0)}%), needs manual review`
+    };
+  }
+
+  // Classification succeeded with high confidence - auto-file
+  const result = await fileThought(inboxLogId, classification.destination, classification.extracted);
+
+  console.log(`🧠 Retry successful for ${inboxLogId} -> ${classification.destination}`);
+  return {
+    inboxLog: result.inboxLog,
+    message: `Successfully classified as ${classification.destination}`
+  };
 }
 
 // Re-export storage functions for convenience
