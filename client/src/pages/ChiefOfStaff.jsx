@@ -509,7 +509,7 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'memory' && (
           <div role="tabpanel" id="tabpanel-memory" aria-labelledby="tab-memory">
-            <MemoryTab />
+            <MemoryTab apps={apps} />
           </div>
         )}
         {activeTab === 'health' && (
