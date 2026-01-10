@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, RefreshCw, Image, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Play, Image, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -165,19 +165,23 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
           <div className="flex items-center gap-2">
             <button
+              onClick={async () => {
+                await api.forceCosEvaluate().catch(err => toast.error(err.message));
+                toast.success('Evaluation triggered');
+              }}
+              className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
+              aria-label="Run tasks now"
+            >
+              <Play size={16} aria-hidden="true" />
+              Run Now
+            </button>
+            <button
               onClick={() => setShowAddTask(!showAddTask)}
               className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors"
               aria-expanded={showAddTask}
             >
               <Plus size={16} aria-hidden="true" />
               Add Task
-            </button>
-            <button
-              onClick={onRefresh}
-              className="text-gray-500 hover:text-white transition-colors"
-              aria-label="Refresh tasks"
-            >
-              <RefreshCw size={16} aria-hidden="true" />
             </button>
           </div>
         </div>
