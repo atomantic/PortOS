@@ -42,7 +42,7 @@ pm2 logs
 - [x] M13: Autofixer Integration (PM2 crash detection, Claude CLI auto-fix, session history UI)
 - [x] M14: Chief of Staff (autonomous agent manager, TASKS.md, system health, self-improvement)
 - [x] M15: Graceful Error Handling (error normalization, auto-fix integration, Socket.IO events)
-- [~] M16: Memory System (semantic memory, LM Studio embeddings, auto-extraction, agent context injection)
+- [x] M16: Memory System (semantic memory, LM Studio embeddings, auto-extraction, agent context injection)
 - [x] M17: PM2 Ecosystem Config Enhancement (per-process port detection, CDP_PORT support, refresh button)
 - [x] M18: PM2 Standardization (LLM-powered config refactoring, import integration, button trigger)
 - [x] M19: CoS Agent Runner (isolated PM2 process for agent spawning, prevents orphaned processes)
@@ -56,6 +56,8 @@ pm2 logs
 - [x] M28: Weekly Digest UI (visual digest tab with insights, accomplishments, week-over-week comparisons)
 - [x] M29: Comprehensive App Improvement (self-improvement operations extended to managed apps, 10 analysis types, rotation system)
 - [x] M30: Configurable Task Intervals (per-task-type scheduling: daily, weekly, once, on-demand; schedule UI tab; execution history tracking)
+- [x] M31: LLM-based Memory Classification (intelligent memory extraction using LM Studio, quality filtering, rejection of task echoes)
+- [x] M32: Brain Second-Brain System (capture-classify-store thoughts, People/Projects/Ideas/Admin databases, daily digests, weekly reviews)
 
 ### Documentation
 - [Architecture Overview](./docs/ARCHITECTURE.md) - System design, data flow
@@ -1642,3 +1644,87 @@ Agent completes task
         └─► Auto-approve high confidence (≥0.8)
         └─► Queue medium confidence for approval
 ```
+
+---
+
+## M32: Brain Second-Brain System (2026-01-10)
+
+Offline-first "second brain" management system for capturing, classifying, and surfacing thoughts.
+
+### Overview
+
+Brain provides a capture-classify-store-surface workflow:
+1. **Capture**: Dump thoughts into a single inbox
+2. **Classify**: AI routes thoughts to appropriate databases
+3. **Store**: Persist to People, Projects, Ideas, or Admin
+4. **Surface**: Daily digests and weekly reviews
+
+### Features
+
+1. **Chat-like Inbox**: Single input for capturing thoughts
+2. **AI Classification**: LM Studio classifies with confidence scores
+3. **Four Databases**: People, Projects, Ideas, Admin
+4. **Needs Review Queue**: Low-confidence items await user decision
+5. **Fix/Correct Flow**: Reclassify misrouted thoughts
+6. **Daily Digest**: AI-generated summary of actions and status
+7. **Weekly Review**: GTD-style open loops and accomplishments
+8. **Trust Panel**: Full audit trail of classifications
+
+### Data Storage
+
+```
+./data/brain/
+├── meta.json           # Settings and scheduler state
+├── inbox_log.jsonl     # All captured thoughts with classifications
+├── people.jsonl        # People records
+├── projects.jsonl      # Projects with status tracking
+├── ideas.jsonl         # Ideas and concepts
+├── admin.jsonl         # Administrative tasks
+├── digests.jsonl       # Daily digest history
+└── reviews.jsonl       # Weekly review history
+```
+
+### API Endpoints
+
+| Route | Description |
+|-------|-------------|
+| POST /api/brain/capture | Capture and classify thought |
+| GET /api/brain/inbox | List inbox log with filters |
+| POST /api/brain/review/resolve | Resolve needs_review item |
+| POST /api/brain/fix | Correct misclassified item |
+| GET/POST/PUT/DELETE /api/brain/people/:id? | People CRUD |
+| GET/POST/PUT/DELETE /api/brain/projects/:id? | Projects CRUD |
+| GET/POST/PUT/DELETE /api/brain/ideas/:id? | Ideas CRUD |
+| GET/POST/PUT/DELETE /api/brain/admin/:id? | Admin CRUD |
+| GET /api/brain/digest/latest | Get latest daily digest |
+| GET /api/brain/review/latest | Get latest weekly review |
+| POST /api/brain/digest/run | Trigger daily digest |
+| POST /api/brain/review/run | Trigger weekly review |
+| GET/PUT /api/brain/settings | Get/update settings |
+
+### Prompt Templates
+
+| Template | Purpose |
+|----------|---------|
+| brain-classifier | Classify captured thoughts |
+| brain-daily-digest | Generate daily summary |
+| brain-weekly-review | Generate weekly review |
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `server/lib/brainValidation.js` | Zod schemas for all Brain entities |
+| `server/services/brain.js` | Core business logic |
+| `server/services/brainStorage.js` | JSONL/JSON file operations |
+| `server/services/brainScheduler.js` | Daily/weekly job scheduler |
+| `server/routes/brain.js` | API endpoints |
+| `client/src/pages/Brain.jsx` | Main page with tabs |
+| `client/src/components/brain/tabs/*.jsx` | Tab components |
+
+### UI Tabs
+
+- **Inbox**: Chat-like capture interface with classification results
+- **Memory**: CRUD views for People, Projects, Ideas, Admin
+- **Digest**: Daily and weekly summaries with run buttons
+- **Trust**: Audit trail with classification confidence and reasoning

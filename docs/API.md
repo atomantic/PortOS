@@ -165,6 +165,18 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | POST | `/cos/scripts/:id/run` | Execute a script immediately |
 | GET | `/cos/scripts/:id/runs` | Get script run history |
 
+### CoS Weekly Digest
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/cos/digest` | Get current week's digest |
+| GET | `/cos/digest/list` | List all available weekly digests |
+| GET | `/cos/digest/progress` | Get current week's live progress |
+| GET | `/cos/digest/text` | Get text summary for notifications |
+| GET | `/cos/digest/:weekId` | Get digest for specific week |
+| POST | `/cos/digest/generate` | Force generate digest for a week |
+| GET | `/cos/digest/compare` | Compare two weeks |
+
 ### Memory System
 
 | Method | Endpoint | Description |
@@ -202,6 +214,41 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | GET | `/usage` | Get usage statistics |
 | GET | `/usage/daily` | Get daily activity |
 | GET | `/usage/hourly` | Get hourly activity |
+
+### Brain (Second Brain)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/brain/capture` | Capture and classify thought |
+| GET | `/brain/inbox` | List inbox log with filters |
+| POST | `/brain/review/resolve` | Resolve needs_review item |
+| POST | `/brain/fix` | Correct misclassified item |
+| GET | `/brain/people` | List people |
+| POST | `/brain/people` | Create person |
+| GET | `/brain/people/:id` | Get person |
+| PUT | `/brain/people/:id` | Update person |
+| DELETE | `/brain/people/:id` | Delete person |
+| GET | `/brain/projects` | List projects |
+| POST | `/brain/projects` | Create project |
+| GET | `/brain/projects/:id` | Get project |
+| PUT | `/brain/projects/:id` | Update project |
+| DELETE | `/brain/projects/:id` | Delete project |
+| GET | `/brain/ideas` | List ideas |
+| POST | `/brain/ideas` | Create idea |
+| GET | `/brain/ideas/:id` | Get idea |
+| PUT | `/brain/ideas/:id` | Update idea |
+| DELETE | `/brain/ideas/:id` | Delete idea |
+| GET | `/brain/admin` | List admin tasks |
+| POST | `/brain/admin` | Create admin task |
+| GET | `/brain/admin/:id` | Get admin task |
+| PUT | `/brain/admin/:id` | Update admin task |
+| DELETE | `/brain/admin/:id` | Delete admin task |
+| GET | `/brain/digest/latest` | Get latest daily digest |
+| GET | `/brain/review/latest` | Get latest weekly review |
+| POST | `/brain/digest/run` | Trigger daily digest |
+| POST | `/brain/review/run` | Trigger weekly review |
+| GET | `/brain/settings` | Get Brain settings |
+| PUT | `/brain/settings` | Update Brain settings |
 
 ## WebSocket Events
 

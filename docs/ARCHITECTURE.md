@@ -79,10 +79,18 @@ PortOS/
 │   ├── TASKS.md               # User task file
 │   ├── COS-TASKS.md           # System task file
 │   ├── COS-GOALS.md           # Mission and goals
-│   └── cos/                   # CoS state and agents
-│       ├── state.json         # Daemon state
-│       ├── agents/            # Agent outputs
-│       └── memory/            # Memory storage
+│   ├── cos/                   # CoS state and agents
+│   │   ├── state.json         # Daemon state
+│   │   ├── agents/            # Agent outputs
+│   │   └── memory/            # Memory storage
+│   └── brain/                 # Brain second-brain data
+│       ├── meta.json          # Settings
+│       ├── inbox_log.jsonl    # Captured thoughts
+│       ├── people.jsonl       # People records
+│       ├── projects.jsonl     # Project records
+│       ├── ideas.jsonl        # Ideas
+│       ├── admin.jsonl        # Admin tasks
+│       └── digests.jsonl      # Daily/weekly digests
 │
 ├── docs/                      # Documentation
 ├── .github/workflows/         # CI/CD
@@ -169,6 +177,12 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - Command allowlist enforcement
 - Agent trigger integration
 - Run history tracking
+
+### Brain Service (`server/services/brain.js`)
+- Thought capture and AI classification
+- CRUD for People, Projects, Ideas, Admin
+- Daily digest and weekly review generation
+- Classification correction workflow
 
 ## Error Handling
 
