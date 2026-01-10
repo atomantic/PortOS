@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import * as providers from '../services/providers.js';
+import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 
 const router = Router();
 
@@ -96,6 +97,38 @@ router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
   }
 
   res.json(provider);
+}));
+
+// GET /api/providers/:id/vision-health - Check vision capability health
+router.get('/:id/vision-health', asyncHandler(async (req, res) => {
+  const result = await checkVisionHealth(req.params.id);
+  res.json(result);
+}));
+
+// POST /api/providers/:id/test-vision - Test vision with a specific image
+router.post('/:id/test-vision', asyncHandler(async (req, res) => {
+  const { imagePath, prompt, expectedContent, model } = req.body;
+
+  if (!imagePath) {
+    throw new ServerError('imagePath is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await testVision({
+    imagePath,
+    prompt: prompt || 'Describe what you see in this image.',
+    expectedContent: expectedContent || [],
+    providerId: req.params.id,
+    model
+  });
+
+  res.json(result);
+}));
+
+// POST /api/providers/:id/vision-suite - Run full vision test suite
+router.post('/:id/vision-suite', asyncHandler(async (req, res) => {
+  const { model } = req.body;
+  const result = await runVisionTestSuite(req.params.id, model);
+  res.json(result);
 }));
 
 export default router;
