@@ -190,11 +190,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   if (validation.data.content) {
     const embedding = await embeddings.generateMemoryEmbedding(updated);
     if (embedding) {
-      // Update embedding in storage
-      const embeddingsData = await memory.loadEmbeddings?.() || {};
-      embeddingsData.vectors = embeddingsData.vectors || {};
-      embeddingsData.vectors[updated.id] = embedding;
-      // Note: This would need to be exposed from memory.js
+      await memory.updateMemoryEmbedding(updated.id, embedding);
     }
   }
 

@@ -299,13 +299,17 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
 
   const created = [];
 
+  // Extract appId from task metadata if available
+  const sourceAppId = task?.metadata?.app || null;
+
   // Auto-save high confidence memories
   for (const mem of highConfidence) {
     const embedding = await generateMemoryEmbedding(mem);
     const memory = await createMemory({
       ...mem,
       sourceAgentId: agentId,
-      sourceTaskId: taskId
+      sourceTaskId: taskId,
+      sourceAppId
     }, embedding);
     created.push(memory);
   }
@@ -318,6 +322,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
       ...mem,
       sourceAgentId: agentId,
       sourceTaskId: taskId,
+      sourceAppId,
       status: 'pending_approval'
     }, embedding);
     pendingMemories.push(memory);
