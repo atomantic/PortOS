@@ -527,3 +527,28 @@ export const runBrainReview = (providerOverride, modelOverride) => request('/bra
   method: 'POST',
   body: JSON.stringify({ providerOverride, modelOverride })
 });
+
+// Media - Server media devices
+export const getMediaDevices = () => request('/media/devices');
+export const getMediaStatus = () => request('/media/status');
+export const startMediaStream = (videoDeviceId, audioDeviceId, video = true, audio = true) => request('/media/start', {
+  method: 'POST',
+  body: JSON.stringify({ videoDeviceId, audioDeviceId, video, audio })
+});
+export const stopMediaStream = () => request('/media/stop', { method: 'POST' });
+
+// Default export for simplified imports
+export default {
+  get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),
+  post: (endpoint, body, options) => request(endpoint, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    ...options
+  }),
+  put: (endpoint, body, options) => request(endpoint, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+    ...options
+  }),
+  delete: (endpoint, options) => request(endpoint, { method: 'DELETE', ...options })
+};
