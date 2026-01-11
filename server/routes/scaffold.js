@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { mkdir, writeFile, readdir, copyFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
+import { homedir } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
@@ -14,6 +15,51 @@ const __dirname = dirname(__filename);
 const TEMPLATES_DIR = join(__dirname, '../../templates');
 
 const router = Router();
+
+// GET /api/directories - Browse directories for directory picker
+router.get('/directories', asyncHandler(async (req, res) => {
+  const { path: dirPath } = req.query;
+
+  // Default to parent of PortOS project if no path provided
+  const defaultPath = resolve(join(__dirname, '../../..'));
+  const targetPath = dirPath ? resolve(dirPath) : defaultPath;
+
+  // Validate path exists and is a directory
+  if (!existsSync(targetPath)) {
+    throw new ServerError('Directory does not exist', {
+      status: 400,
+      code: 'INVALID_PATH'
+    });
+  }
+
+  const stats = await stat(targetPath);
+  if (!stats.isDirectory()) {
+    throw new ServerError('Path is not a directory', {
+      status: 400,
+      code: 'NOT_A_DIRECTORY'
+    });
+  }
+
+  // Read directory contents
+  const entries = await readdir(targetPath, { withFileTypes: true });
+  const directories = entries
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map(entry => ({
+      name: entry.name,
+      path: join(targetPath, entry.name)
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Get parent directory info
+  const parentPath = dirname(targetPath);
+  const canGoUp = parentPath !== targetPath; // Can't go above root
+
+  res.json({
+    currentPath: targetPath,
+    parentPath: canGoUp ? parentPath : null,
+    directories
+  });
+}));
 
 // GET /api/templates - List available templates
 router.get('/templates', asyncHandler(async (req, res) => {

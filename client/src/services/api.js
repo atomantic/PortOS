@@ -94,6 +94,11 @@ export const detectWithAi = (path, providerId) => request('/detect/ai', {
 // Templates & Scaffold
 export const getTemplates = () => request('/templates');
 
+export const getDirectories = (path = null) => {
+  const params = path ? `?path=${encodeURIComponent(path)}` : '';
+  return request(`/directories${params}`);
+};
+
 export const scaffoldApp = (data) => request('/scaffold', {
   method: 'POST',
   body: JSON.stringify(data)
