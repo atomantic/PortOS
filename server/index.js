@@ -12,11 +12,8 @@ import portsRoutes from './routes/ports.js';
 import logsRoutes from './routes/logs.js';
 import detectRoutes from './routes/detect.js';
 import scaffoldRoutes from './routes/scaffold.js';
-import providersRoutes from './routes/providers.js';
-import runsRoutes from './routes/runs.js';
 import historyRoutes from './routes/history.js';
 import commandsRoutes from './routes/commands.js';
-import promptsRoutes from './routes/prompts.js';
 import gitRoutes from './routes/git.js';
 import usageRoutes from './routes/usage.js';
 import screenshotsRoutes from './routes/screenshots.js';
@@ -30,10 +27,18 @@ import brainRoutes from './routes/brain.js';
 import mediaRoutes from './routes/media.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
-import { errorMiddleware, setupProcessErrorHandlers } from './lib/errorHandler.js';
+import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
 import { initAutoFixer } from './services/autoFixer.js';
 import { initTaskLearning } from './services/taskLearning.js';
+import { recordSession, recordMessages } from './services/usage.js';
+import { errorEvents } from './lib/errorHandler.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
+import { createAIToolkit } from '@portos/ai-toolkit/server';
+import { createPortOSProviderRoutes } from './routes/providers.js';
+import { createPortOSRunsRoutes } from './routes/runs.js';
+import { setAIToolkit as setProvidersToolkit } from './services/providers.js';
+import { setAIToolkit as setRunnerToolkit } from './services/runner.js';
+import { setAIToolkit as setPromptsToolkit } from './services/promptService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -54,6 +59,58 @@ const io = new Server(httpServer, {
 
 // Initialize socket handlers
 initSocket(io);
+
+// Initialize AI Toolkit with PortOS configuration and hooks
+const aiToolkit = createAIToolkit({
+  dataDir: './data',
+  providersFile: 'providers.json',
+  runsDir: 'runs',
+  promptsDir: 'prompts',
+  screenshotsDir: './data/screenshots',
+  sampleProvidersFile: './data.sample/providers.json',
+  io,
+  asyncHandler,
+  hooks: {
+    onRunCreated: (metadata) => {
+      recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
+        console.error(`❌ Failed to record usage session: ${err.message}`);
+      });
+    },
+    onRunCompleted: (metadata, output) => {
+      const estimatedTokens = Math.ceil(output.length / 4);
+      recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+        console.error(`❌ Failed to record usage: ${err.message}`);
+      });
+    },
+    onRunFailed: (metadata, error, output) => {
+      errorEvents.emit('error', {
+        code: 'AI_PROVIDER_EXECUTION_FAILED',
+        message: `AI provider ${metadata.providerName} execution failed: ${error}`,
+        severity: 'error',
+        canAutoFix: true,
+        timestamp: Date.now(),
+        context: {
+          runId: metadata.id,
+          provider: metadata.providerName,
+          providerId: metadata.providerId,
+          model: metadata.model,
+          exitCode: metadata.exitCode,
+          duration: metadata.duration,
+          workspacePath: metadata.workspacePath,
+          workspaceName: metadata.workspaceName,
+          errorDetails: error,
+          promptPreview: metadata.prompt,
+          outputTail: output ? output.slice(-2000) : null
+        }
+      });
+    }
+  }
+});
+
+// Initialize compatibility shims for services that import from old service files
+setProvidersToolkit(aiToolkit);
+setRunnerToolkit(aiToolkit);
+setPromptsToolkit(aiToolkit);
 
 // Initialize auto-fixer for error recovery
 initAutoFixer();
@@ -80,11 +137,14 @@ app.use('/api/logs', logsRoutes);
 app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
 app.use('/api', scaffoldRoutes); // Also mount at /api for /api/templates
-app.use('/api/providers', providersRoutes);
-app.use('/api/runs', runsRoutes);
+
+// AI Toolkit routes with PortOS extensions
+app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));
+app.use('/api/runs', createPortOSRunsRoutes(aiToolkit));
+app.use('/api/prompts', aiToolkit.routes.prompts);
+
 app.use('/api/history', historyRoutes);
 app.use('/api/commands', commandsRoutes);
-app.use('/api/prompts', promptsRoutes);
 app.use('/api/git', gitRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/screenshots', screenshotsRoutes);
