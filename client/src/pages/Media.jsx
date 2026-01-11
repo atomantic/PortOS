@@ -21,6 +21,7 @@ export default function Media() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [audioNeedsInteraction, setAudioNeedsInteraction] = useState(false);
 
   // Load saved device preferences
   useEffect(() => {
@@ -67,10 +68,16 @@ export default function Media() {
     }
 
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    console.log(`🎤 AudioContext created, state: ${audioContext.state}`);
 
     // Resume AudioContext if suspended (browser autoplay policy)
     if (audioContext.state === 'suspended') {
-      await audioContext.resume();
+      console.log(`🎤 AudioContext suspended, attempting resume...`);
+      await audioContext.resume().catch(err => {
+        console.error(`❌ Failed to resume AudioContext: ${err.message}`);
+        setAudioNeedsInteraction(true);
+      });
+      console.log(`🎤 AudioContext state after resume: ${audioContext.state}`);
     }
 
     const analyser = audioContext.createAnalyser();
@@ -100,12 +107,34 @@ export default function Media() {
     };
 
     updateLevel();
+    console.log(`🎤 Audio analyser setup complete`);
+  }, []);
+
+  // Enable audio with user interaction (for mobile browsers)
+  const enableAudio = useCallback(async () => {
+    if (audioRef.current && audioContextRef.current) {
+      console.log(`🎤 User interaction: attempting to enable audio`);
+
+      // Resume AudioContext
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+        console.log(`🎤 AudioContext resumed: ${audioContextRef.current.state}`);
+      }
+
+      // Play audio element
+      await audioRef.current.play();
+      console.log(`🎤 Audio playback started`);
+
+      setAudioNeedsInteraction(false);
+      setError(null);
+    }
   }, []);
 
   // Start media stream from server
   const startMedia = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setAudioNeedsInteraction(false);
 
     // Start streaming on server
     await api.post('/media/start', {
@@ -124,19 +153,27 @@ export default function Media() {
     if (!streaming) return;
 
     const timestamp = Date.now();
+    const protocol = window.location.protocol;
 
     // Set video source to server stream
     if (videoRef.current && videoEnabled) {
-      videoRef.current.src = `http://${window.location.hostname}:5554/api/media/video?t=${timestamp}`;
+      videoRef.current.src = `${protocol}//${window.location.hostname}:5554/api/media/video?t=${timestamp}`;
+      console.log(`📹 Video stream URL: ${videoRef.current.src}`);
     }
 
     // Set audio source to server stream and set up analyzer
     if (audioRef.current && audioEnabled) {
-      audioRef.current.src = `http://${window.location.hostname}:5554/api/media/audio?t=${timestamp}`;
+      audioRef.current.src = `${protocol}//${window.location.hostname}:5554/api/media/audio?t=${timestamp}`;
+      console.log(`🎤 Audio stream URL: ${audioRef.current.src}`);
+
       audioRef.current.play().then(() => {
+        console.log(`🎤 Audio playback started successfully`);
         setupAudioAnalyser(audioRef.current);
       }).catch(err => {
-        console.error('Audio playback error:', err);
+        console.error(`❌ Audio playback error: ${err.message}`);
+        // On mobile browsers, autoplay is often blocked - show interaction prompt
+        setAudioNeedsInteraction(true);
+        setupAudioAnalyser(audioRef.current); // Set up analyser anyway for when user enables
       });
     }
   }, [streaming, videoEnabled, audioEnabled, setupAudioAnalyser]);
@@ -244,6 +281,29 @@ export default function Media() {
       {error && (
         <div className="mb-6 p-4 bg-port-error/10 border border-port-error/30 rounded-lg text-port-error">
           {error}
+        </div>
+      )}
+
+      {/* Audio interaction prompt for mobile browsers */}
+      {audioNeedsInteraction && streaming && audioEnabled && (
+        <div className="mb-6 p-4 bg-port-warning/10 border border-port-warning/30 rounded-lg">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <Volume2 size={20} className="text-port-warning" />
+              <div>
+                <p className="text-port-warning font-medium">Audio requires interaction</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  Your browser requires user interaction to enable audio playback
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={enableAudio}
+              className="px-4 py-2 bg-port-warning text-white rounded-lg font-medium hover:bg-port-warning/80 transition-colors whitespace-nowrap"
+            >
+              Enable Audio
+            </button>
+          </div>
         </div>
       )}
 

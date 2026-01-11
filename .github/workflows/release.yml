@@ -46,11 +46,42 @@ jobs:
         id: changelog
         if: steps.tag-check.outputs.exists == 'false'
         run: |
-          # Get the previous tag or use initial commit
-          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          VERSION="${{ steps.package-version.outputs.version }}"
+          MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)
 
-          # Generate changelog from commits (exclude [skip ci] commits)
-          CHANGELOG=$(git log $PREV_TAG..HEAD --pretty=format:"- %s" --no-merges | grep -v "\[skip ci\]" | head -50)
+          # Try exact version first (e.g., v0.10.5.md), then minor.x pattern (e.g., v0.10.x.md)
+          CHANGELOG_FILE_EXACT=".changelog/v${VERSION}.md"
+          CHANGELOG_FILE_PATTERN=".changelog/v${MAJOR_MINOR}.x.md"
+
+          if [ -f "$CHANGELOG_FILE_EXACT" ]; then
+            # Use exact version changelog
+            CHANGELOG=$(cat "$CHANGELOG_FILE_EXACT")
+          elif [ -f "$CHANGELOG_FILE_PATTERN" ]; then
+            # Use minor version pattern changelog (e.g., v0.10.x.md)
+            CHANGELOG=$(cat "$CHANGELOG_FILE_PATTERN")
+            # Replace version placeholder with actual version
+            CHANGELOG=$(echo "$CHANGELOG" | sed "s/v${MAJOR_MINOR}.x/v${VERSION}/g" | sed "s/${MAJOR_MINOR}.x/${VERSION}/g")
+          else
+            # Fallback: Generate changelog from commits (exclude [skip ci] commits)
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
+            COMMIT_LOG=$(git log $PREV_TAG..HEAD --pretty=format:"- %s" --no-merges | grep -v "\[skip ci\]" | head -50)
+
+            # Create a basic changelog structure
+            CHANGELOG="# Release v${VERSION}
+
+          ## Changes
+
+          ${COMMIT_LOG}
+
+          ## Installation
+
+          \`\`\`bash
+          git clone https://github.com/atomantic/PortOS.git
+          cd PortOS
+          npm run install:all
+          pm2 start ecosystem.config.cjs
+          \`\`\`"
+          fi
 
           # Handle multiline output
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
@@ -63,19 +94,7 @@ jobs:
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           name: v${{ steps.package-version.outputs.version }}
-          body: |
-            ## Changes
-
-            ${{ steps.changelog.outputs.changelog }}
-
-            ## Installation
-
-            ```bash
-            git clone https://github.com/atomantic/PortOS.git
-            cd PortOS
-            npm run install:all
-            pm2 start ecosystem.config.cjs
-            ```
+          body: ${{ steps.changelog.outputs.changelog }}
           draft: false
           prerelease: false
         env:
@@ -84,12 +103,11 @@ jobs:
       - name: Prep dev branch for next release
         if: steps.tag-check.outputs.exists == 'false'
         run: |
-          # Get current version
+          # Get current version (the one we just released)
           CURRENT_VERSION=${{ steps.package-version.outputs.version }}
-
-          # Split into parts
           MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
           MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+          MAJOR_MINOR="$MAJOR.$MINOR"
 
           # Increment minor, reset patch to 0
           NEW_MINOR=$((MINOR + 1))
@@ -99,12 +117,36 @@ jobs:
           git fetch origin dev
           git checkout dev
 
-          # Update package.json files
+          # Rename and version the changelog file
+          PATTERN_FILE=".changelog/v${MAJOR_MINOR}.x.md"
+          VERSIONED_FILE=".changelog/v${CURRENT_VERSION}.md"
+
+          if [ -f "$PATTERN_FILE" ]; then
+            # Rename the file (preserves git history)
+            git mv "$PATTERN_FILE" "$VERSIONED_FILE"
+
+            # Replace version placeholders in the renamed file
+            sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g" "$VERSIONED_FILE"
+            rm "${VERSIONED_FILE}.bak"
+
+            # Commit the renamed and updated changelog
+            git add "$VERSIONED_FILE"
+            git commit -m "docs: archive changelog for v${CURRENT_VERSION} [skip ci]"
+            git push origin dev
+
+            # Merge changelog back to main (without triggering CI)
+            git checkout main
+            git cherry-pick HEAD~1
+            git push origin main
+            git checkout dev
+          fi
+
+          # Update package.json files for next version
           npm version $NEW_VERSION --no-git-tag-version
           cd client && npm version $NEW_VERSION --no-git-tag-version && cd ..
           cd server && npm version $NEW_VERSION --no-git-tag-version && cd ..
 
-          # Commit and push
+          # Commit and push version bump
           git add package.json package-lock.json client/package.json server/package.json
           git commit -m "build: prep v$NEW_VERSION for next release [skip ci]"
           git push origin dev

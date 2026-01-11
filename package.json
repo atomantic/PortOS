@@ -3,6 +3,8 @@
   "version": "0.9.10",
   "private": true,
   "description": "Local dev machine App OS portal",
+  "author": "Adam Eivy (@antic|@atomantic)",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
