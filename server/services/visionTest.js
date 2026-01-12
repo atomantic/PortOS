@@ -117,7 +117,16 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
   const startTime = Date.now();
 
   // Get provider configuration
-  const provider = await getProviderById(providerId);
+  let provider;
+  try {
+    provider = await getProviderById(providerId);
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message.includes('not initialized') ? `Provider '${providerId}' not found` : err.message,
+      duration: Date.now() - startTime
+    };
+  }
   if (!provider) {
     return {
       success: false,
@@ -263,7 +272,12 @@ export async function runVisionTestSuite(providerId = 'lmstudio', model) {
  * @returns {Promise<Object>} - Health check result
  */
 export async function checkVisionHealth(providerId = 'lmstudio') {
-  const provider = await getProviderById(providerId);
+  let provider;
+  try {
+    provider = await getProviderById(providerId);
+  } catch (err) {
+    return { available: false, error: err.message };
+  }
 
   if (!provider) {
     return { available: false, error: 'Provider not found' };
