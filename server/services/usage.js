@@ -155,10 +155,103 @@ export async function recordTokens(inputTokens, outputTokens) {
 }
 
 /**
+ * Calculate current activity streak (consecutive days with sessions)
+ */
+function calculateStreak(dailyActivity) {
+  const today = new Date();
+  let streak = 0;
+  let checkDate = new Date(today);
+
+  // Start from today and work backwards
+  while (true) {
+    const dateStr = checkDate.toISOString().split('T')[0];
+    const dayData = dailyActivity[dateStr];
+
+    if (dayData && dayData.sessions > 0) {
+      streak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    } else if (streak === 0) {
+      // If today has no activity, check if yesterday started a streak
+      checkDate.setDate(checkDate.getDate() - 1);
+      const yesterdayStr = checkDate.toISOString().split('T')[0];
+      const yesterdayData = dailyActivity[yesterdayStr];
+      if (!yesterdayData || yesterdayData.sessions === 0) {
+        break; // No streak
+      }
+      // Continue checking from yesterday
+    } else {
+      break; // Streak broken
+    }
+  }
+
+  return streak;
+}
+
+/**
+ * Find the longest streak in history
+ */
+function findLongestStreak(dailyActivity) {
+  const dates = Object.keys(dailyActivity).sort();
+  if (dates.length === 0) return 0;
+
+  let maxStreak = 0;
+  let currentStreak = 0;
+  let prevDate = null;
+
+  for (const dateStr of dates) {
+    const dayData = dailyActivity[dateStr];
+    if (!dayData || dayData.sessions === 0) continue;
+
+    if (prevDate) {
+      const prev = new Date(prevDate);
+      const curr = new Date(dateStr);
+      const diffDays = Math.round((curr - prev) / (1000 * 60 * 60 * 24));
+
+      if (diffDays === 1) {
+        currentStreak++;
+      } else {
+        currentStreak = 1;
+      }
+    } else {
+      currentStreak = 1;
+    }
+
+    maxStreak = Math.max(maxStreak, currentStreak);
+    prevDate = dateStr;
+  }
+
+  return maxStreak;
+}
+
+/**
  * Get usage summary
  */
 export function getUsageSummary() {
-  if (!usageData) return getEmptyUsage();
+  if (!usageData) {
+    const empty = getEmptyUsage();
+    // Generate empty last7Days
+    const last7Days = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      last7Days.push({
+        date: date.toISOString().split('T')[0],
+        label: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        sessions: 0,
+        messages: 0,
+        tokens: 0
+      });
+    }
+    return {
+      ...empty,
+      currentStreak: 0,
+      longestStreak: 0,
+      last7Days,
+      estimatedCost: 0,
+      topProviders: [],
+      topModels: []
+    };
+  }
 
   // Get last 7 days activity
   const last7Days = [];
@@ -173,6 +266,10 @@ export function getUsageSummary() {
     });
   }
 
+  // Calculate streaks
+  const currentStreak = calculateStreak(usageData.dailyActivity);
+  const longestStreak = findLongestStreak(usageData.dailyActivity);
+
   // Calculate totals
   const totalCost = estimateCost(usageData.totalTokens.input, usageData.totalTokens.output);
 
@@ -182,6 +279,8 @@ export function getUsageSummary() {
     totalToolCalls: usageData.totalToolCalls,
     totalTokens: usageData.totalTokens,
     estimatedCost: totalCost,
+    currentStreak,
+    longestStreak,
     last7Days,
     hourlyActivity: usageData.hourlyActivity,
     topProviders: Object.entries(usageData.byProvider)

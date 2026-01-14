@@ -7,17 +7,20 @@ import socket from '../services/socket';
 export default function Dashboard() {
   const [apps, setApps] = useState([]);
   const [health, setHealth] = useState(null);
+  const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const fetchData = useCallback(async () => {
     setError(null);
-    const [appsData, healthData] = await Promise.all([
+    const [appsData, healthData, usageData] = await Promise.all([
       api.getApps().catch(err => { setError(err.message); return []; }),
-      api.checkHealth().catch(() => null)
+      api.checkHealth().catch(() => null),
+      api.getUsage().catch(() => null)
     ]);
     setApps(appsData);
     setHealth(healthData);
+    setUsage(usageData);
     setLoading(false);
   }, []);
 
@@ -95,6 +98,54 @@ export default function Dashboard() {
           {apps.map(app => (
             <AppTile key={app.id} app={app} onUpdate={fetchData} />
           ))}
+        </div>
+      )}
+
+      {/* Activity Streak */}
+      {usage && (usage.currentStreak > 0 || usage.longestStreak > 0) && (
+        <div className="mt-8 bg-port-card border border-port-border rounded-xl p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="text-4xl" aria-hidden="true">
+                {usage.currentStreak >= 7 ? '🔥' : usage.currentStreak >= 3 ? '⚡' : '✨'}
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-white">
+                  {usage.currentStreak} day{usage.currentStreak !== 1 ? 's' : ''}
+                </div>
+                <div className="text-sm text-gray-500">Current streak</div>
+              </div>
+            </div>
+            {usage.longestStreak > usage.currentStreak && (
+              <div className="sm:ml-auto text-right">
+                <div className="text-lg font-semibold text-port-accent">
+                  {usage.longestStreak} days
+                </div>
+                <div className="text-xs text-gray-500">Longest streak</div>
+              </div>
+            )}
+            {usage.currentStreak === usage.longestStreak && usage.currentStreak > 0 && (
+              <div className="sm:ml-auto px-3 py-1 bg-port-success/20 text-port-success text-sm rounded-full">
+                Personal best!
+              </div>
+            )}
+          </div>
+          {/* Mini streak visualization */}
+          <div className="mt-4 flex gap-1">
+            {usage.last7Days?.map((day) => (
+              <div
+                key={day.date}
+                className={`flex-1 h-2 rounded-full ${
+                  day.sessions > 0 ? 'bg-port-success' : 'bg-port-border'
+                }`}
+                title={`${day.label}: ${day.sessions} sessions`}
+              />
+            ))}
+          </div>
+          <div className="mt-1 flex justify-between text-xs text-gray-500">
+            <span>7 days ago</span>
+            <span>Today</span>
+          </div>
         </div>
       )}
 
