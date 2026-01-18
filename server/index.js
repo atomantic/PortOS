@@ -25,6 +25,7 @@ import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
 import mediaRoutes from './routes/media.js';
+import soulRoutes from './routes/soul.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
@@ -162,6 +163,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/soul', soulRoutes);
 
 // Initialize script runner
 initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));

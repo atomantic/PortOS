@@ -542,6 +542,75 @@ export const startMediaStream = (videoDeviceId, audioDeviceId, video = true, aud
 });
 export const stopMediaStream = () => request('/media/stop', { method: 'POST' });
 
+// Soul - Status & Summary
+export const getSoulStatus = () => request('/soul');
+
+// Soul - Documents
+export const getSoulDocuments = () => request('/soul/documents');
+export const getSoulDocument = (id) => request(`/soul/documents/${id}`);
+export const createSoulDocument = (data) => request('/soul/documents', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateSoulDocument = (id, data) => request(`/soul/documents/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteSoulDocument = (id) => request(`/soul/documents/${id}`, { method: 'DELETE' });
+
+// Soul - Testing
+export const getSoulTests = () => request('/soul/tests');
+export const runSoulTests = (providerId, model, testIds = null) => request('/soul/tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds })
+});
+export const runSoulMultiTests = (providers, testIds = null) => request('/soul/tests/run-multi', {
+  method: 'POST',
+  body: JSON.stringify({ providers, testIds })
+});
+export const getSoulTestHistory = (limit = 10) => request(`/soul/tests/history?limit=${limit}`);
+
+// Soul - Enrichment
+export const getSoulEnrichCategories = () => request('/soul/enrich/categories');
+export const getSoulEnrichProgress = () => request('/soul/enrich/progress');
+export const getSoulEnrichQuestion = (category, providerOverride, modelOverride) => request('/soul/enrich/question', {
+  method: 'POST',
+  body: JSON.stringify({ category, providerOverride, modelOverride })
+});
+export const submitSoulEnrichAnswer = (data) => request('/soul/enrich/answer', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+
+// Soul - Export
+export const getSoulExportFormats = () => request('/soul/export/formats');
+export const exportSoul = (format, documentIds = null, includeDisabled = false) => request('/soul/export', {
+  method: 'POST',
+  body: JSON.stringify({ format, documentIds, includeDisabled })
+});
+
+// Soul - Settings
+export const getSoulSettings = () => request('/soul/settings');
+export const updateSoulSettings = (settings) => request('/soul/settings', {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+
+// Soul - Validation & Analysis
+export const getSoulCompleteness = () => request('/soul/validate/completeness');
+export const detectSoulContradictions = (providerId, model) => request('/soul/validate/contradictions', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const generateSoulTests = (providerId, model) => request('/soul/tests/generate', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const analyzeWritingSamples = (samples, providerId, model) => request('/soul/analyze-writing', {
+  method: 'POST',
+  body: JSON.stringify({ samples, providerId, model })
+});
+
 // Default export for simplified imports
 export default {
   get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),

@@ -21,7 +21,9 @@ import {
   Crown,
   Play,
   Camera,
-  Brain
+  Brain,
+  Heart,
+  Fingerprint
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -42,8 +44,15 @@ const navItems = [
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
-  { to: '/brain', label: 'Brain', icon: Brain, single: true },
   { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true, showBadge: true },
+  {
+    label: 'Identity',
+    icon: Fingerprint,
+    children: [
+      { to: '/brain', label: 'Brain', icon: Brain },
+      { to: '/soul', label: 'Soul', icon: Heart }
+    ]
+  },
   {
     label: 'Dev Tools',
     icon: Terminal,
@@ -395,8 +404,8 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') ? (
+        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/soul') ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/soul') ? (
             <Outlet />
           ) : (
             <div className="max-w-7xl mx-auto">

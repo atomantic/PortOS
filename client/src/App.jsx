@@ -9,6 +9,7 @@ import PromptManager from './pages/PromptManager';
 import ChiefOfStaff from './pages/ChiefOfStaff';
 import Brain from './pages/Brain';
 import Media from './pages/Media';
+import Soul from './pages/Soul';
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
@@ -49,6 +50,8 @@ export default function App() {
           <Route path="cos/:tab" element={<ChiefOfStaff />} />
           <Route path="brain" element={<Navigate to="/brain/inbox" replace />} />
           <Route path="brain/:tab" element={<Brain />} />
+          <Route path="soul" element={<Navigate to="/soul/overview" replace />} />
+          <Route path="soul/:tab" element={<Soul />} />
           <Route path="apps/create" element={<CreateApp />} />
           <Route path="templates" element={<Templates />} />
           <Route path="media" element={<Media />} />
