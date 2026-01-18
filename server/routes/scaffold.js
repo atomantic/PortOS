@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { mkdir, writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
+import { mkdir, writeFile, readdir, copyFile, readFile, stat, symlink } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, resolve, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -67,11 +67,11 @@ router.get('/templates', asyncHandler(async (req, res) => {
     {
       id: 'portos-stack',
       name: 'PortOS Stack',
-      description: 'Express + React + Vite with Tailwind, PM2, and GitHub Actions CI/CD',
+      description: 'Express + React + Vite with Tailwind, PM2, AI providers, and GitHub Actions CI/CD',
       type: 'portos-stack',
       icon: 'layers',
       builtIn: true,
-      features: ['Express.js API', 'React + Vite frontend', 'Tailwind CSS', 'PM2 ecosystem', 'GitHub Actions CI/CD', 'Collapsible nav layout'],
+      features: ['Express.js API', 'React + Vite frontend', 'Tailwind CSS', 'PM2 ecosystem', 'AI Provider Integration', 'GitHub Actions CI/CD', 'Collapsible nav layout'],
       ports: { ui: true, api: true }
     },
     {
@@ -587,6 +587,7 @@ body {
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { createAIToolkit } from '@portos/ai-toolkit/server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -598,6 +599,13 @@ const PORT = process.env.PORT || ${apiPort || 3001};
 
 app.use(cors());
 app.use(express.json());
+
+// Initialize AI Toolkit with routes for providers, runs, and prompts
+const aiToolkit = createAIToolkit({
+  dataDir: './data',
+  io
+});
+aiToolkit.mountRoutes(app);
 
 // Health endpoint
 app.get('/api/health', (req, res) => {
@@ -825,11 +833,20 @@ pm2 start ecosystem.config.cjs
 ${name} is a monorepo with Express.js server (port ${apiPort || 3001}) and React/Vite client (port ${uiPort || 3000}). PM2 manages app lifecycles.
 
 ### Server (\`server/\`)
-- **index.js**: Express server with Socket.IO
+- **index.js**: Express server with Socket.IO and AI toolkit integration
 
 ### Client (\`client/src/\`)
 - **App.jsx**: Main component with routing and collapsible nav
 - **main.jsx**: React entry point
+
+### AI Provider Integration
+
+This project includes \`@portos/ai-toolkit\` for AI provider management. The server exposes:
+- \`GET/POST /api/providers\` - Manage AI providers (CLI or API-based)
+- \`GET/POST /api/runs\` - Execute and track AI runs
+- \`GET/POST /api/prompts\` - Manage prompt templates
+
+Provider data is stored in \`./data/providers.json\`.
 
 ## Code Conventions
 
@@ -859,8 +876,16 @@ npm run dev
 
 - **Client**: React + Vite + Tailwind (port ${uiPort || 3000})
 - **Server**: Express + Socket.IO (port ${apiPort || 3001})
+- **AI**: @portos/ai-toolkit for provider management
 - **PM2**: Process management
 - **CI/CD**: GitHub Actions
+
+## API Endpoints
+
+- \`GET /api/health\` - Health check
+- \`GET/POST /api/providers\` - AI provider management
+- \`GET/POST /api/runs\` - AI execution runs
+- \`GET/POST /api/prompts\` - Prompt templates
 
 ## Scripts
 
@@ -1021,6 +1046,32 @@ module.exports = {
     addStep('npm install', 'error', installErr);
   } else {
     addStep('npm install', 'done');
+  }
+
+  // Create @portos/ai-toolkit symlink for portos-stack template
+  if (template === 'portos-stack') {
+    const portosRoot = resolve(__dirname, '../..');
+    const aiToolkitSource = join(portosRoot, 'packages/ai-toolkit');
+    const portosNodeModulesDir = join(repoPath, 'node_modules/@portos');
+    const aiToolkitLink = join(portosNodeModulesDir, 'ai-toolkit');
+
+    // Create @portos directory in node_modules
+    await mkdir(portosNodeModulesDir, { recursive: true });
+
+    // Create relative symlink (better for portability)
+    const relativeSource = relative(portosNodeModulesDir, aiToolkitSource);
+    await symlink(relativeSource, aiToolkitLink).catch(() => {
+      // Symlink may already exist, ignore error
+    });
+
+    // Also create in server/node_modules for the server to find it
+    const serverPortosDir = join(repoPath, 'server/node_modules/@portos');
+    const serverAiToolkitLink = join(serverPortosDir, 'ai-toolkit');
+    await mkdir(serverPortosDir, { recursive: true });
+    const serverRelativeSource = relative(serverPortosDir, aiToolkitSource);
+    await symlink(serverRelativeSource, serverAiToolkitLink).catch(() => {});
+
+    addStep('Link AI toolkit', 'done');
   }
 
   // Initialize git
