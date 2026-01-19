@@ -16,7 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
-import { getActiveProvider } from './providers.js';
+import { getActiveProvider, getProviderById } from './providers.js';
 import { recordSession, recordMessages } from './usage.js';
 import { buildPrompt } from './promptService.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
@@ -592,16 +592,45 @@ export async function spawnAgentForTask(task) {
 
   // Get configuration
   const config = await getConfig();
-  const provider = await getActiveProvider();
+  let provider = await getActiveProvider();
 
   if (!provider) {
     cosEvents.emit('agent:error', { taskId: task.id, error: 'No active AI provider configured' });
     return null;
   }
 
+  // Check if user specified a different provider in task metadata
+  const userProviderId = task.metadata?.provider;
+  if (userProviderId && userProviderId !== provider.id) {
+    const userProvider = await getProviderById(userProviderId);
+    if (userProvider) {
+      emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
+      provider = userProvider;
+    } else {
+      emitLog('warning', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
+    }
+  }
+
   // Select optimal model for this task
   const modelSelection = selectModelForTask(task, provider);
-  const selectedModel = modelSelection.model;
+  let selectedModel = modelSelection.model;
+
+  // Validate model is compatible with provider
+  if (selectedModel && provider.models && provider.models.length > 0) {
+    const modelIsValid = provider.models.includes(selectedModel);
+    if (!modelIsValid) {
+      emitLog('warning', `Model "${selectedModel}" not valid for provider "${provider.id}", falling back to provider default`, {
+        taskId: task.id,
+        requestedModel: selectedModel,
+        providerId: provider.id,
+        validModels: provider.models
+      });
+      // Fall back to the appropriate tier model for this provider
+      selectedModel = modelSelection.tier === 'heavy' ? provider.heavyModel :
+                      modelSelection.tier === 'light' ? provider.lightModel :
+                      provider.mediumModel || provider.defaultModel;
+    }
+  }
 
   emitLog('info', `Model selection: ${selectedModel} (${modelSelection.reason})`, {
     taskId: task.id,
