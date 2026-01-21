@@ -48,6 +48,17 @@ See `docs/PORTS.md` for the full port allocation guide.
 ### Data Flow
 Client → HTTP/WebSocket → Routes (validate) → Services (logic) → JSON files/PM2
 
+### AI Toolkit (`portos-ai-toolkit`)
+
+PortOS depends on `portos-ai-toolkit` as an npm module for AI provider management, run tracking, and prompt templates. The toolkit is a separate project located at `../portos-ai-toolkit` and published to npm.
+
+**Key points:**
+- Provider configuration (models, tiers, fallbacks) is managed by the toolkit's `providers.js`
+- PortOS extends toolkit routes in `server/routes/providers.js` for vision testing and provider status
+- When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update the toolkit's `createProvider()` function
+- The toolkit uses spread in `updateProvider()` so existing providers preserve custom fields, but `createProvider()` has an explicit field list
+- After updating the toolkit, run `npm update portos-ai-toolkit` in PortOS to pull changes
+
 ## Code Conventions
 
 - **No try/catch** - errors bubble to centralized middleware

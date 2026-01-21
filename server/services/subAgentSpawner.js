@@ -671,17 +671,19 @@ export async function spawnAgentForTask(task) {
       reason: status.reason
     });
 
-    // Try to get a fallback provider
+    // Try to get a fallback provider (check task-level, then provider-level, then system default)
     const allProviders = await getAllProviders();
-    const fallbackProvider = await getFallbackProvider(provider.id, allProviders);
+    const taskFallbackId = task.metadata?.fallbackProvider;
+    const fallbackResult = await getFallbackProvider(provider.id, allProviders, taskFallbackId);
 
-    if (fallbackProvider) {
-      emitLog('info', `Using fallback provider: ${fallbackProvider.id}`, {
+    if (fallbackResult) {
+      emitLog('info', `Using fallback provider: ${fallbackResult.provider.id} (source: ${fallbackResult.source})`, {
         taskId: task.id,
         primaryProvider: provider.id,
-        fallbackProvider: fallbackProvider.id
+        fallbackProvider: fallbackResult.provider.id,
+        fallbackSource: fallbackResult.source
       });
-      provider = fallbackProvider;
+      provider = fallbackResult.provider;
     } else {
       // No fallback available - emit error and defer task
       cosEvents.emit('agent:error', {

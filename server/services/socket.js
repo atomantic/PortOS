@@ -6,6 +6,7 @@ import { errorEvents } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
 import * as pm2Standardizer from './pm2Standardizer.js';
 import { notificationEvents } from './notifications.js';
+import { providerStatusEvents } from './providerStatus.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -237,6 +238,9 @@ export function initSocket(io) {
 
   // Set up notification event forwarding
   setupNotificationEventForwarding();
+
+  // Set up provider status event forwarding
+  setupProviderStatusEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -344,4 +348,13 @@ function setupNotificationEventForwarding() {
   notificationEvents.on('updated', (data) => broadcastToNotifications('notifications:updated', data));
   notificationEvents.on('count-changed', (count) => broadcastToNotifications('notifications:count', count));
   notificationEvents.on('cleared', () => broadcastToNotifications('notifications:cleared', {}));
+}
+
+// Set up provider status event forwarding - broadcast to all clients
+function setupProviderStatusEventForwarding() {
+  providerStatusEvents.on('status:changed', (data) => {
+    if (ioInstance) {
+      ioInstance.emit('provider:status:changed', data);
+    }
+  });
 }

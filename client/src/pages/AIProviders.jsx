@@ -256,6 +256,11 @@ export default function AIProviders() {
                       {provider.heavyModel && <span className="ml-1 text-red-400">{provider.heavyModel}</span>}
                     </p>
                   )}
+                  {provider.fallbackProvider && (
+                    <p className="text-xs">
+                      Fallback: <span className="text-port-accent">{providers.find(p => p.id === provider.fallbackProvider)?.name || provider.fallbackProvider}</span>
+                    </p>
+                  )}
                 </div>
 
                 {testResults[provider.id] && !testResults[provider.id].testing && (
@@ -368,6 +373,7 @@ export default function AIProviders() {
       {showForm && (
         <ProviderForm
           provider={editingProvider}
+          allProviders={providers}
           onClose={() => { setShowForm(false); setEditingProvider(null); }}
           onSave={() => { setShowForm(false); setEditingProvider(null); loadData(); }}
         />
@@ -376,7 +382,7 @@ export default function AIProviders() {
   );
 }
 
-function ProviderForm({ provider, onClose, onSave }) {
+function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   const [formData, setFormData] = useState({
     name: provider?.name || '',
     type: provider?.type || 'cli',
@@ -389,11 +395,15 @@ function ProviderForm({ provider, onClose, onSave }) {
     lightModel: provider?.lightModel || '',
     mediumModel: provider?.mediumModel || '',
     heavyModel: provider?.heavyModel || '',
+    fallbackProvider: provider?.fallbackProvider || '',
     timeout: provider?.timeout || 300000,
     enabled: provider?.enabled !== false
   });
 
   const availableModels = formData.models || [];
+
+  // Filter out current provider from fallback options
+  const fallbackOptions = allProviders.filter(p => p.id !== provider?.id && p.enabled);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -648,6 +658,24 @@ function ProviderForm({ provider, onClose, onSave }) {
               onChange={(e) => setFormData(prev => ({ ...prev, timeout: e.target.value }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
             />
+          </div>
+
+          {/* Fallback Provider */}
+          <div className="border-t border-port-border pt-4 mt-4">
+            <label className="block text-sm text-gray-400 mb-1">Fallback Provider</label>
+            <select
+              value={formData.fallbackProvider}
+              onChange={(e) => setFormData(prev => ({ ...prev, fallbackProvider: e.target.value }))}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+            >
+              <option value="">None (use system default)</option>
+              {fallbackOptions.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              If this provider hits a usage limit or becomes unavailable, tasks will automatically use the fallback provider.
+            </p>
           </div>
 
           <label className="flex items-center gap-2">

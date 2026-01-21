@@ -129,6 +129,11 @@ export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DEL
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id) => request(`/providers/${id}/refresh-models`, { method: 'POST' });
 
+// Provider status (usage limits, availability)
+export const getProviderStatuses = () => request('/providers/status');
+export const getProviderStatus = (id) => request(`/providers/${id}/status`);
+export const recoverProvider = (id) => request(`/providers/${id}/status/recover`, { method: 'POST' });
+
 // Runs
 export const getRuns = (limit = 50, offset = 0, source = 'all') =>
   request(`/runs?limit=${limit}&offset=${offset}&source=${source}`);
@@ -542,74 +547,106 @@ export const startMediaStream = (videoDeviceId, audioDeviceId, video = true, aud
 });
 export const stopMediaStream = () => request('/media/stop', { method: 'POST' });
 
-// Soul - Status & Summary
-export const getSoulStatus = () => request('/soul');
+// Digital Twin - Status & Summary
+export const getDigitalTwinStatus = () => request('/digital-twin');
+export const getSoulStatus = getDigitalTwinStatus; // Alias for backwards compatibility
 
-// Soul - Documents
-export const getSoulDocuments = () => request('/soul/documents');
-export const getSoulDocument = (id) => request(`/soul/documents/${id}`);
-export const createSoulDocument = (data) => request('/soul/documents', {
+// Digital Twin - Documents
+export const getDigitalTwinDocuments = () => request('/digital-twin/documents');
+export const getSoulDocuments = getDigitalTwinDocuments;
+export const getDigitalTwinDocument = (id) => request(`/digital-twin/documents/${id}`);
+export const getSoulDocument = getDigitalTwinDocument;
+export const createDigitalTwinDocument = (data) => request('/digital-twin/documents', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateSoulDocument = (id, data) => request(`/soul/documents/${id}`, {
+export const createSoulDocument = createDigitalTwinDocument;
+export const updateDigitalTwinDocument = (id, data) => request(`/digital-twin/documents/${id}`, {
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const deleteSoulDocument = (id) => request(`/soul/documents/${id}`, { method: 'DELETE' });
+export const updateSoulDocument = updateDigitalTwinDocument;
+export const deleteDigitalTwinDocument = (id) => request(`/digital-twin/documents/${id}`, { method: 'DELETE' });
+export const deleteSoulDocument = deleteDigitalTwinDocument;
 
-// Soul - Testing
-export const getSoulTests = () => request('/soul/tests');
-export const runSoulTests = (providerId, model, testIds = null) => request('/soul/tests/run', {
+// Digital Twin - Testing
+export const getDigitalTwinTests = () => request('/digital-twin/tests');
+export const getSoulTests = getDigitalTwinTests;
+export const runDigitalTwinTests = (providerId, model, testIds = null) => request('/digital-twin/tests/run', {
   method: 'POST',
   body: JSON.stringify({ providerId, model, testIds })
 });
-export const runSoulMultiTests = (providers, testIds = null) => request('/soul/tests/run-multi', {
+export const runSoulTests = runDigitalTwinTests;
+export const runDigitalTwinMultiTests = (providers, testIds = null) => request('/digital-twin/tests/run-multi', {
   method: 'POST',
   body: JSON.stringify({ providers, testIds })
 });
-export const getSoulTestHistory = (limit = 10) => request(`/soul/tests/history?limit=${limit}`);
+export const runSoulMultiTests = runDigitalTwinMultiTests;
+export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/tests/history?limit=${limit}`);
+export const getSoulTestHistory = getDigitalTwinTestHistory;
 
-// Soul - Enrichment
-export const getSoulEnrichCategories = () => request('/soul/enrich/categories');
-export const getSoulEnrichProgress = () => request('/soul/enrich/progress');
-export const getSoulEnrichQuestion = (category, providerOverride, modelOverride) => request('/soul/enrich/question', {
+// Digital Twin - Enrichment
+export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enrich/categories');
+export const getSoulEnrichCategories = getDigitalTwinEnrichCategories;
+export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');
+export const getSoulEnrichProgress = getDigitalTwinEnrichProgress;
+export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride) => request('/digital-twin/enrich/question', {
   method: 'POST',
   body: JSON.stringify({ category, providerOverride, modelOverride })
 });
-export const submitSoulEnrichAnswer = (data) => request('/soul/enrich/answer', {
+export const getSoulEnrichQuestion = getDigitalTwinEnrichQuestion;
+export const submitDigitalTwinEnrichAnswer = (data) => request('/digital-twin/enrich/answer', {
   method: 'POST',
   body: JSON.stringify(data)
 });
+export const submitSoulEnrichAnswer = submitDigitalTwinEnrichAnswer;
 
-// Soul - Export
-export const getSoulExportFormats = () => request('/soul/export/formats');
-export const exportSoul = (format, documentIds = null, includeDisabled = false) => request('/soul/export', {
+// Digital Twin - Export
+export const getDigitalTwinExportFormats = () => request('/digital-twin/export/formats');
+export const getSoulExportFormats = getDigitalTwinExportFormats;
+export const exportDigitalTwin = (format, documentIds = null, includeDisabled = false) => request('/digital-twin/export', {
   method: 'POST',
   body: JSON.stringify({ format, documentIds, includeDisabled })
 });
+export const exportSoul = exportDigitalTwin;
 
-// Soul - Settings
-export const getSoulSettings = () => request('/soul/settings');
-export const updateSoulSettings = (settings) => request('/soul/settings', {
+// Digital Twin - Settings
+export const getDigitalTwinSettings = () => request('/digital-twin/settings');
+export const getSoulSettings = getDigitalTwinSettings;
+export const updateDigitalTwinSettings = (settings) => request('/digital-twin/settings', {
   method: 'PUT',
   body: JSON.stringify(settings)
 });
+export const updateSoulSettings = updateDigitalTwinSettings;
 
-// Soul - Validation & Analysis
-export const getSoulCompleteness = () => request('/soul/validate/completeness');
-export const detectSoulContradictions = (providerId, model) => request('/soul/validate/contradictions', {
+// Digital Twin - Validation & Analysis
+export const getDigitalTwinCompleteness = () => request('/digital-twin/validate/completeness');
+export const getSoulCompleteness = getDigitalTwinCompleteness;
+export const detectDigitalTwinContradictions = (providerId, model) => request('/digital-twin/validate/contradictions', {
   method: 'POST',
   body: JSON.stringify({ providerId, model })
 });
-export const generateSoulTests = (providerId, model) => request('/soul/tests/generate', {
+export const detectSoulContradictions = detectDigitalTwinContradictions;
+export const generateDigitalTwinTests = (providerId, model) => request('/digital-twin/tests/generate', {
   method: 'POST',
   body: JSON.stringify({ providerId, model })
 });
-export const analyzeWritingSamples = (samples, providerId, model) => request('/soul/analyze-writing', {
+export const generateSoulTests = generateDigitalTwinTests;
+export const analyzeWritingSamples = (samples, providerId, model) => request('/digital-twin/analyze-writing', {
   method: 'POST',
   body: JSON.stringify({ samples, providerId, model })
 });
+
+// Digital Twin - List-based Enrichment
+export const analyzeEnrichmentList = (category, items, providerId, model) => request('/digital-twin/enrich/analyze-list', {
+  method: 'POST',
+  body: JSON.stringify({ category, items, providerId, model })
+});
+export const saveEnrichmentList = (category, content, items) => request('/digital-twin/enrich/save-list', {
+  method: 'POST',
+  body: JSON.stringify({ category, content, items })
+});
+export const getEnrichmentListItems = (category) => request(`/digital-twin/enrich/list-items/${category}`);
 
 // Default export for simplified imports
 export default {

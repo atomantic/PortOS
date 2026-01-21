@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle, TrendingUp, Brain, Zap, Database, Clock, Trophy, Activity } from 'lucide-react';
 import * as api from '../../../services/api';
+import ProviderStatusCard from './ProviderStatusCard';
 
 export default function HealthTab({ health, onCheck }) {
   const [learning, setLearning] = useState(null);
@@ -147,6 +148,9 @@ export default function HealthTab({ health, onCheck }) {
           </div>
         )}
       </div>
+
+      {/* Provider Status Section */}
+      <ProviderStatusCard />
 
       {/* System Health Section */}
       <div className="flex items-center justify-between">
