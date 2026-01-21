@@ -16,13 +16,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 import { recordSession, recordMessages } from './usage.js';
+import { isProviderAvailable, markProviderUsageLimit, markProviderRateLimited, getFallbackProvider, getProviderStatus, initProviderStatus } from './providerStatus.js';
 import { buildPrompt } from './promptService.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { getMemorySection } from './memoryRetriever.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
-import { getSoulForPrompt } from './soul.js';
+import { getDigitalTwinForPrompt } from './digital-twin.js';
+import { suggestModelTier } from './taskLearning.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,10 +33,34 @@ const AGENTS_DIR = join(__dirname, '../../data/cos/agents');
 const RUNS_DIR = join(__dirname, '../../data/runs');
 
 /**
- * Select optimal model for a task based on complexity analysis
- * User can override by specifying Model: and/or Provider: in task metadata
+ * Extract task type key for learning lookup
+ * Matches the format used in taskLearning.js for consistency
  */
-function selectModelForTask(task, provider) {
+function extractTaskTypeKey(task) {
+  if (task?.metadata?.analysisType) {
+    return `self-improve:${task.metadata.analysisType}`;
+  }
+  if (task?.metadata?.reviewType === 'idle') {
+    return 'idle-review';
+  }
+  const desc = (task?.description || '').toLowerCase();
+  if (desc.includes('[self-improvement]')) {
+    const typeMatch = desc.match(/\[self-improvement\]\s*(\w+)/i);
+    if (typeMatch) return `self-improve:${typeMatch[1]}`;
+  }
+  if (task?.taskType === 'user') return 'user-task';
+  return 'unknown';
+}
+
+/**
+ * Select optimal model for a task based on complexity analysis and historical performance
+ * User can override by specifying Model: and/or Provider: in task metadata
+ *
+ * Enhanced with learning-based model suggestions:
+ * - Uses historical success rates to suggest heavier models for struggling task types
+ * - Automatically upgrades model tier when task type has <60% success rate
+ */
+async function selectModelForTask(task, provider) {
   const desc = (task.description || '').toLowerCase();
   const context = task.metadata?.context || '';
   const contextLen = context.length;
@@ -85,6 +111,20 @@ function selectModelForTask(task, provider) {
   // Light model is reserved for documentation, text updates, and formatting only
   if (!isCodingTask && /fix typo|update text|update docs|edit readme|update readme|write docs|documentation only|format text/.test(desc)) {
     return { model: provider.lightModel || provider.defaultModel, tier: 'light', reason: 'documentation-task' };
+  }
+
+  // Check historical performance for this task type and potentially upgrade model
+  const taskTypeKey = extractTaskTypeKey(task);
+  const learningSuggestion = await suggestModelTier(taskTypeKey).catch(() => null);
+
+  if (learningSuggestion && learningSuggestion.suggested === 'heavy') {
+    console.log(`📊 Learning-based upgrade: ${taskTypeKey} → heavy (${learningSuggestion.reason})`);
+    return {
+      model: provider.heavyModel || provider.defaultModel,
+      tier: 'heavy',
+      reason: 'learning-suggested',
+      learningReason: learningSuggestion.reason
+    };
   }
 
   // Standard tasks → sonnet/medium (default)
@@ -363,6 +403,23 @@ const ERROR_PATTERNS = [
     })
   },
   {
+    pattern: /(?:hit your usage limit|usage limit|quota exceeded|Upgrade to Pro)/i,
+    category: 'usage-limit',
+    actionable: true, // Need to switch provider
+    extract: (match, output) => {
+      // Try to extract the wait time from the message
+      // e.g., "try again in 1 day 1 hour 33 minutes"
+      const timeMatch = output.match(/try again in\s+(.+?)(?:\.|$)/i);
+      const waitTime = timeMatch ? timeMatch[1].trim() : null;
+      return {
+        message: `Usage limit exceeded${waitTime ? ` - retry in ${waitTime}` : ''}`,
+        suggestedFix: 'Provider usage limit reached. Using fallback provider or wait for limit reset.',
+        waitTime,
+        requiresFallback: true
+      };
+    }
+  },
+  {
     pattern: /API Error: 5\d{2}|server error|internal error/i,
     category: 'server-error',
     actionable: false, // Transient
@@ -462,6 +519,11 @@ let useRunner = false;
  * Initialize the spawner - listen for task:ready events
  */
 export async function initSpawner() {
+  // Initialize provider status tracking
+  await initProviderStatus().catch(err => {
+    console.error(`⚠️ Failed to initialize provider status: ${err.message}`);
+  });
+
   // Check if CoS Runner is available
   useRunner = await isRunnerAvailable();
 
@@ -599,6 +661,40 @@ export async function spawnAgentForTask(task) {
     return null;
   }
 
+  // Check provider availability (usage limits, rate limits, etc.)
+  const providerAvailable = isProviderAvailable(provider.id);
+  if (!providerAvailable) {
+    const status = getProviderStatus(provider.id);
+    emitLog('warning', `Provider ${provider.id} unavailable: ${status.message}`, {
+      taskId: task.id,
+      providerId: provider.id,
+      reason: status.reason
+    });
+
+    // Try to get a fallback provider
+    const allProviders = await getAllProviders();
+    const fallbackProvider = await getFallbackProvider(provider.id, allProviders);
+
+    if (fallbackProvider) {
+      emitLog('info', `Using fallback provider: ${fallbackProvider.id}`, {
+        taskId: task.id,
+        primaryProvider: provider.id,
+        fallbackProvider: fallbackProvider.id
+      });
+      provider = fallbackProvider;
+    } else {
+      // No fallback available - emit error and defer task
+      cosEvents.emit('agent:error', {
+        taskId: task.id,
+        error: `Provider ${provider.id} unavailable (${status.message}) and no fallback available`,
+        providerId: provider.id,
+        providerStatus: status
+      });
+      // Don't spawn - task will retry later when provider recovers
+      return null;
+    }
+  }
+
   // Check if user specified a different provider in task metadata
   const userProviderId = task.metadata?.provider;
   if (userProviderId && userProviderId !== provider.id) {
@@ -611,8 +707,8 @@ export async function spawnAgentForTask(task) {
     }
   }
 
-  // Select optimal model for this task
-  const modelSelection = selectModelForTask(task, provider);
+  // Select optimal model for this task (async to allow learning-based suggestions)
+  const modelSelection = await selectModelForTask(task, provider);
   let selectedModel = modelSelection.model;
 
   // Validate model is compatible with provider
@@ -632,11 +728,15 @@ export async function spawnAgentForTask(task) {
     }
   }
 
-  emitLog('info', `Model selection: ${selectedModel} (${modelSelection.reason})`, {
+  const logMessage = modelSelection.learningReason
+    ? `Model selection: ${selectedModel} (${modelSelection.reason} - ${modelSelection.learningReason})`
+    : `Model selection: ${selectedModel} (${modelSelection.reason})`;
+  emitLog('info', logMessage, {
     taskId: task.id,
     model: selectedModel,
     tier: modelSelection.tier,
-    reason: modelSelection.reason
+    reason: modelSelection.reason,
+    ...(modelSelection.learningReason && { learningReason: modelSelection.learningReason })
   });
 
   // Determine workspace path
@@ -736,6 +836,7 @@ async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provi
     task,
     runId,
     model,
+    providerId: provider.id,
     hasStartedWorking: false,
     startedAt: Date.now(),
     initializationTimeout: null
@@ -810,11 +911,34 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
   const newStatus = success ? 'completed' : 'pending';
   await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
 
-  // On failure, create investigation task if actionable
-  if (!success && errorAnalysis?.actionable) {
-    await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-    });
+  // On failure, handle provider status updates and create investigation task if actionable
+  if (!success && errorAnalysis) {
+    // Mark provider unavailable if usage limit hit
+    if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+      const providerId = agent.providerId || (await getActiveProvider())?.id;
+      if (providerId) {
+        await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
+          emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
+        });
+      }
+    }
+
+    // Mark provider rate limited (temporary)
+    if (errorAnalysis.category === 'rate-limit') {
+      const providerId = agent.providerId || (await getActiveProvider())?.id;
+      if (providerId) {
+        await markProviderRateLimited(providerId).catch(err => {
+          emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
+        });
+      }
+    }
+
+    // Create investigation task if actionable
+    if (errorAnalysis.actionable) {
+      await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
+        emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+      });
+    }
   }
 
   // Process memory extraction and app cooldown
@@ -859,7 +983,8 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     taskId: task.id,
     startedAt: Date.now(),
     runId,
-    pid: claudeProcess.pid
+    pid: claudeProcess.pid,
+    providerId: provider.id
   });
 
   // Store PID in persisted state for zombie detection
@@ -932,10 +1057,34 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     const newStatus = success ? 'completed' : 'pending';
     await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
 
-    if (!success && errorAnalysis?.actionable) {
-      await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-        emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-      });
+    // On failure, handle provider status updates and create investigation task if actionable
+    if (!success && errorAnalysis) {
+      // Mark provider unavailable if usage limit hit
+      if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+        const providerId = agentData?.providerId || provider.id;
+        if (providerId) {
+          await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
+            emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
+          });
+        }
+      }
+
+      // Mark provider rate limited (temporary)
+      if (errorAnalysis.category === 'rate-limit') {
+        const providerId = agentData?.providerId || provider.id;
+        if (providerId) {
+          await markProviderRateLimited(providerId).catch(err => {
+            emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
+          });
+        }
+      }
+
+      // Create investigation task if actionable
+      if (errorAnalysis.actionable) {
+        await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
+          emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+        });
+      }
     }
 
     // Process memory extraction and app cooldown
@@ -1081,11 +1230,11 @@ async function buildAgentPrompt(task, config, workspaceDir) {
     return null;
   });
 
-  // Get soul context for persona alignment
-  const soulSection = await getSoulForPrompt({
-    maxTokens: config.soul?.maxContextTokens || 2000
+  // Get digital twin context for persona alignment
+  const digitalTwinSection = await getDigitalTwinForPrompt({
+    maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000
   }).catch(err => {
-    console.log(`⚠️ Soul context retrieval failed: ${err.message}`);
+    console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`);
     return null;
   });
 
@@ -1095,7 +1244,8 @@ async function buildAgentPrompt(task, config, workspaceDir) {
     config,
     memorySection,
     claudeMdSection,
-    soulSection,
+    digitalTwinSection,
+    soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
     timestamp: new Date().toISOString()
   }).catch(() => null);
 
