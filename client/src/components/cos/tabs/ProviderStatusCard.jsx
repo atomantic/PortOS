@@ -61,10 +61,10 @@ export default function ProviderStatusCard() {
     setLoading(true);
     const [statusData, providerData] = await Promise.all([
       api.getProviderStatuses().catch(() => null),
-      api.getProviders().catch(() => [])
+      api.getProviders().catch(() => ({ providers: [] }))
     ]);
     setStatuses(statusData);
-    setProviders(providerData);
+    setProviders(providerData.providers || []);
     setLoading(false);
   };
 
