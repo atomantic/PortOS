@@ -11,10 +11,11 @@ export default function DirectoryPicker({ value, onChange, label = 'Select Direc
   const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    loadDirectories();
+    // Load directories and auto-set value if none provided
+    loadDirectories(value || null, !value);
   }, []);
 
-  const loadDirectories = async (path = null) => {
+  const loadDirectories = async (path = null, setAsValue = false) => {
     setLoading(true);
     setError(null);
 
@@ -27,6 +28,10 @@ export default function DirectoryPicker({ value, onChange, label = 'Select Direc
       setCurrentPath(result.currentPath);
       setParentPath(result.parentPath);
       setDirectories(result.directories);
+      // Auto-set the value if requested (e.g., on initial load with no value)
+      if (setAsValue && result.currentPath) {
+        onChange(result.currentPath);
+      }
     }
 
     setLoading(false);

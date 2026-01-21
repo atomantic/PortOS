@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { mkdir, writeFile, readdir, copyFile, readFile, stat, symlink } from 'fs/promises';
+import { mkdir, writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve, relative } from 'path';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -382,6 +382,7 @@ app.listen(PORT, '0.0.0.0', () => {
       },
       dependencies: {
         'lucide-react': '^0.562.0',
+        'portos-ai-toolkit': '^0.1.0',
         'react': '^18.3.1',
         'react-dom': '^18.3.1',
         'react-hot-toast': '^2.6.0',
@@ -492,10 +493,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 `);
 
     await writeFile(join(clientSrcDir, 'App.jsx'), `import { Routes, Route, Link } from 'react-router-dom';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Home, Brain, Info } from 'lucide-react';
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import AIProviders from './pages/AIProviders';
 
-function Home() {
+function HomePage() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">Welcome to ${name}</h1>
@@ -508,13 +511,14 @@ function About() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">About</h1>
-      <p className="text-gray-400">Express + React + Vite + Tailwind</p>
+      <p className="text-gray-400">Express + React + Vite + Tailwind + AI Provider Integration</p>
     </div>
   );
 }
 
 export default function App() {
   const [navOpen, setNavOpen] = useState(true);
+  const location = useLocation();
 
   return (
     <div className="flex min-h-screen bg-app-bg text-white">
@@ -526,18 +530,27 @@ export default function App() {
         >
           {navOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
-        {navOpen && (
-          <div className="flex flex-col gap-1 p-2">
-            <Link to="/" className="p-2 rounded hover:bg-app-border">Home</Link>
-            <Link to="/about" className="p-2 rounded hover:bg-app-border">About</Link>
-          </div>
-        )}
+        <div className="flex flex-col gap-1 p-2">
+          <Link to="/" className={\`flex items-center gap-2 p-2 rounded hover:bg-app-border \${location.pathname === '/' ? 'bg-app-accent/20 text-app-accent' : ''}\`}>
+            <Home size={18} />
+            {navOpen && <span>Home</span>}
+          </Link>
+          <Link to="/providers" className={\`flex items-center gap-2 p-2 rounded hover:bg-app-border \${location.pathname === '/providers' ? 'bg-app-accent/20 text-app-accent' : ''}\`}>
+            <Brain size={18} />
+            {navOpen && <span>AI Providers</span>}
+          </Link>
+          <Link to="/about" className={\`flex items-center gap-2 p-2 rounded hover:bg-app-border \${location.pathname === '/about' ? 'bg-app-accent/20 text-app-accent' : ''}\`}>
+            <Info size={18} />
+            {navOpen && <span>About</span>}
+          </Link>
+        </div>
       </nav>
 
       {/* Main content */}
-      <main className="flex-1">
+      <main className="flex-1 overflow-auto">
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/providers" element={<AIProviders />} />
           <Route path="/about" element={<About />} />
         </Routes>
       </main>
@@ -553,6 +566,19 @@ export default function App() {
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+`);
+
+    // === Client pages ===
+    const pagesDir = join(clientSrcDir, 'pages');
+    await mkdir(pagesDir, { recursive: true });
+
+    // AIProviders page - uses shared component from ai-toolkit
+    await writeFile(join(pagesDir, 'AIProviders.jsx'), `import { AIProviders } from 'portos-ai-toolkit/client';
+import toast from 'react-hot-toast';
+
+export default function AIProvidersPage() {
+  return <AIProviders onError={toast.error} colorPrefix="app" />;
 }
 `);
 
@@ -573,6 +599,7 @@ body {
       dependencies: {
         'cors': '^2.8.5',
         'express': '^4.21.2',
+        'portos-ai-toolkit': '^0.1.0',
         'socket.io': '^4.8.3',
         'zod': '^3.24.1'
       },
@@ -587,7 +614,7 @@ body {
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { createAIToolkit } from '@portos/ai-toolkit/server';
+import { createAIToolkit } from 'portos-ai-toolkit/server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -637,6 +664,73 @@ export default defineConfig({
 `);
 
     addStep('Create server', 'done');
+
+    // === Default Data (providers, etc.) ===
+    // Data dir at project root (server runs with cwd at project root)
+    const dataDir = join(repoPath, 'data');
+    await mkdir(dataDir, { recursive: true });
+
+    const defaultProviders = {
+      activeProvider: 'claude-code',
+      providers: {
+        'claude-code': {
+          id: 'claude-code',
+          name: 'Claude Code CLI',
+          type: 'cli',
+          command: 'claude',
+          args: ['--print'],
+          models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101'],
+          defaultModel: 'claude-sonnet-4-5-20250929',
+          lightModel: 'claude-haiku-4-5-20251001',
+          mediumModel: 'claude-sonnet-4-5-20250929',
+          heavyModel: 'claude-opus-4-5-20251101',
+          timeout: 300000,
+          enabled: true,
+          envVars: {}
+        },
+        'codex': {
+          id: 'codex',
+          name: 'Codex CLI',
+          type: 'cli',
+          command: 'codex',
+          args: [],
+          models: ['gpt-5', 'gpt-5-codex'],
+          defaultModel: 'gpt-5-codex',
+          lightModel: 'gpt-5',
+          mediumModel: 'gpt-5-codex',
+          heavyModel: 'gpt-5-codex',
+          timeout: 300000,
+          enabled: true,
+          envVars: {}
+        },
+        'lm-studio': {
+          id: 'lm-studio',
+          name: 'LM Studio (Local)',
+          type: 'api',
+          endpoint: 'http://localhost:1234/v1',
+          apiKey: 'lm-studio',
+          models: [],
+          defaultModel: null,
+          timeout: 300000,
+          enabled: false,
+          envVars: {}
+        },
+        'ollama': {
+          id: 'ollama',
+          name: 'Ollama (Local)',
+          type: 'api',
+          endpoint: 'http://localhost:11434/v1',
+          apiKey: '',
+          models: [],
+          defaultModel: null,
+          timeout: 300000,
+          enabled: false,
+          envVars: {}
+        }
+      }
+    };
+    await writeFile(join(dataDir, 'providers.json'), JSON.stringify(defaultProviders, null, 2));
+    addStep('Create default data', 'done');
 
     // === GitHub Actions CI ===
     await writeFile(join(workflowsDir, 'ci.yml'), `name: CI
@@ -841,7 +935,7 @@ ${name} is a monorepo with Express.js server (port ${apiPort || 3001}) and React
 
 ### AI Provider Integration
 
-This project includes \`@portos/ai-toolkit\` for AI provider management. The server exposes:
+This project includes \`portos-ai-toolkit\` for AI provider management. The server exposes:
 - \`GET/POST /api/providers\` - Manage AI providers (CLI or API-based)
 - \`GET/POST /api/runs\` - Execute and track AI runs
 - \`GET/POST /api/prompts\` - Manage prompt templates
@@ -876,7 +970,7 @@ npm run dev
 
 - **Client**: React + Vite + Tailwind (port ${uiPort || 3000})
 - **Server**: Express + Socket.IO (port ${apiPort || 3001})
-- **AI**: @portos/ai-toolkit for provider management
+- **AI**: portos-ai-toolkit for provider management
 - **PM2**: Process management
 - **CI/CD**: GitHub Actions
 
@@ -1046,32 +1140,6 @@ module.exports = {
     addStep('npm install', 'error', installErr);
   } else {
     addStep('npm install', 'done');
-  }
-
-  // Create @portos/ai-toolkit symlink for portos-stack template
-  if (template === 'portos-stack') {
-    const portosRoot = resolve(__dirname, '../..');
-    const aiToolkitSource = join(portosRoot, 'packages/ai-toolkit');
-    const portosNodeModulesDir = join(repoPath, 'node_modules/@portos');
-    const aiToolkitLink = join(portosNodeModulesDir, 'ai-toolkit');
-
-    // Create @portos directory in node_modules
-    await mkdir(portosNodeModulesDir, { recursive: true });
-
-    // Create relative symlink (better for portability)
-    const relativeSource = relative(portosNodeModulesDir, aiToolkitSource);
-    await symlink(relativeSource, aiToolkitLink).catch(() => {
-      // Symlink may already exist, ignore error
-    });
-
-    // Also create in server/node_modules for the server to find it
-    const serverPortosDir = join(repoPath, 'server/node_modules/@portos');
-    const serverAiToolkitLink = join(serverPortosDir, 'ai-toolkit');
-    await mkdir(serverPortosDir, { recursive: true });
-    const serverRelativeSource = relative(serverPortosDir, aiToolkitSource);
-    await symlink(serverRelativeSource, serverAiToolkitLink).catch(() => {});
-
-    addStep('Link AI toolkit', 'done');
   }
 
   // Initialize git

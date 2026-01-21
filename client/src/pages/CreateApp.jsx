@@ -5,6 +5,7 @@ import { CheckCircle, Circle, Loader, AlertCircle, Play, Wrench } from 'lucide-r
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import IconPicker from '../components/IconPicker';
+import FolderPicker from '../components/FolderPicker';
 
 const DETECTION_STEPS = [
   { id: 'validate', label: 'Validating path' },
@@ -49,10 +50,15 @@ export default function CreateApp() {
   const [standardizeResult, setStandardizeResult] = useState(null);
   const [activeProvider, setActiveProvider] = useState(null);
 
-  // Fetch active provider on mount
+  // Fetch active provider and default directory on mount
   useEffect(() => {
     api.getActiveProvider().then(provider => {
       if (provider) setActiveProvider(provider);
+    }).catch(() => {});
+
+    // Set default path to PortOS parent directory
+    api.getDirectories().then(result => {
+      if (result?.currentPath) setRepoPath(result.currentPath);
     }).catch(() => {});
   }, []);
 
@@ -211,19 +217,25 @@ export default function CreateApp() {
         {/* Path Input */}
         <div className="bg-port-card border border-port-border rounded-xl p-6">
           <label className="block text-sm text-gray-400 mb-2">Project Directory</label>
-          <input
-            type="text"
-            value={repoPath}
-            onChange={(e) => { setRepoPath(e.target.value); reset(); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleImport();
-              }
-            }}
-            placeholder="/Users/you/projects/my-app"
-            className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none font-mono"
-          />
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={repoPath}
+              onChange={(e) => { setRepoPath(e.target.value); reset(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleImport();
+                }
+              }}
+              placeholder="/Users/you/projects/my-app"
+              className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none font-mono"
+            />
+            <FolderPicker
+              value={repoPath}
+              onChange={(path) => { setRepoPath(path); reset(); }}
+            />
+          </div>
 
           {/* Detection Progress */}
           {detecting && (
