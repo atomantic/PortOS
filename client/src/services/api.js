@@ -648,6 +648,23 @@ export const saveEnrichmentList = (category, content, items) => request('/digita
 });
 export const getEnrichmentListItems = (category) => request(`/digital-twin/enrich/list-items/${category}`);
 
+// --- Digital Twin Traits & Confidence (Phase 1 & 2) ---
+export const getDigitalTwinTraits = () => request('/digital-twin/traits');
+export const analyzeDigitalTwinTraits = (providerId, model, forceReanalyze = false) => request('/digital-twin/traits/analyze', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, forceReanalyze })
+});
+export const updateDigitalTwinTraits = (updates) => request('/digital-twin/traits', {
+  method: 'PUT',
+  body: JSON.stringify(updates)
+});
+export const getDigitalTwinConfidence = () => request('/digital-twin/confidence');
+export const calculateDigitalTwinConfidence = (providerId, model) => request('/digital-twin/confidence/calculate', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const getDigitalTwinGaps = () => request('/digital-twin/gaps');
+
 // Default export for simplified imports
 export default {
   get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),

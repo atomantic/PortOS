@@ -88,13 +88,79 @@ export const digitalTwinSettingsSchema = z.object({
 });
 export const soulSettingsSchema = digitalTwinSettingsSchema; // Alias for backwards compatibility
 
+// --- Phase 1: Quantitative Personality Modeling Schemas ---
+
+// Big Five personality traits (OCEAN model)
+export const bigFiveSchema = z.object({
+  O: z.number().min(0).max(1).describe('Openness to experience'),
+  C: z.number().min(0).max(1).describe('Conscientiousness'),
+  E: z.number().min(0).max(1).describe('Extraversion'),
+  A: z.number().min(0).max(1).describe('Agreeableness'),
+  N: z.number().min(0).max(1).describe('Neuroticism')
+});
+
+// Communication profile schema
+export const communicationProfileSchema = z.object({
+  formality: z.number().int().min(1).max(10).describe('1=very casual, 10=very formal'),
+  verbosity: z.number().int().min(1).max(10).describe('1=terse, 10=elaborate'),
+  avgSentenceLength: z.number().min(5).max(50).optional(),
+  emojiUsage: z.enum(['never', 'rare', 'occasional', 'frequent']).default('rare'),
+  preferredTone: z.string().max(100).optional(),
+  distinctiveMarkers: z.array(z.string().max(200)).max(10).optional()
+});
+
+// Valued trait with priority
+export const valuedTraitSchema = z.object({
+  value: z.string().min(1).max(100),
+  priority: z.number().int().min(1).max(10),
+  description: z.string().max(500).optional(),
+  conflictsWith: z.array(z.string()).optional()
+});
+
+// Full traits schema
+export const traitsSchema = z.object({
+  bigFive: bigFiveSchema.optional(),
+  valuesHierarchy: z.array(valuedTraitSchema).max(20).optional(),
+  communicationProfile: communicationProfileSchema.optional(),
+  lastAnalyzed: z.string().datetime().optional(),
+  analysisVersion: z.string().optional()
+});
+
+// --- Phase 2: Confidence Scoring Schemas ---
+
+// Confidence dimension enum
+export const confidenceDimensionEnum = z.enum([
+  'openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism',
+  'values', 'communication', 'decision_making', 'boundaries', 'identity'
+]);
+
+// Gap recommendation
+export const gapRecommendationSchema = z.object({
+  dimension: confidenceDimensionEnum,
+  confidence: z.number().min(0).max(1),
+  evidenceCount: z.number().int().min(0),
+  requiredEvidence: z.number().int().min(1),
+  suggestedQuestions: z.array(z.string().max(500)).max(5),
+  suggestedCategory: enrichmentCategoryEnum.optional()
+});
+
+// Full confidence schema
+export const confidenceSchema = z.object({
+  overall: z.number().min(0).max(1),
+  dimensions: z.record(confidenceDimensionEnum, z.number().min(0).max(1)),
+  gaps: z.array(gapRecommendationSchema),
+  lastCalculated: z.string().datetime().optional()
+});
+
 // Full meta.json schema
 export const digitalTwinMetaSchema = z.object({
   version: z.string().default('1.0.0'),
   documents: z.array(documentMetaSchema).default([]),
   testHistory: z.array(testHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
-  settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 })
+  settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
+  traits: traitsSchema.optional(),
+  confidence: confidenceSchema.optional()
 });
 export const soulMetaSchema = digitalTwinMetaSchema; // Alias for backwards compatibility
 
@@ -210,4 +276,26 @@ export const saveListDocumentInputSchema = z.object({
 // Get list items input
 export const getListItemsInputSchema = z.object({
   category: enrichmentCategoryEnum
+});
+
+// --- Input schemas for trait and confidence endpoints ---
+
+// Analyze traits input
+export const analyzeTraitsInputSchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().min(1),
+  forceReanalyze: z.boolean().optional().default(false)
+});
+
+// Update traits input (manual override)
+export const updateTraitsInputSchema = z.object({
+  bigFive: bigFiveSchema.partial().optional(),
+  valuesHierarchy: z.array(valuedTraitSchema).max(20).optional(),
+  communicationProfile: communicationProfileSchema.partial().optional()
+});
+
+// Calculate confidence input
+export const calculateConfidenceInputSchema = z.object({
+  providerId: z.string().min(1).optional(),
+  model: z.string().min(1).optional()
 });

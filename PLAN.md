@@ -614,3 +614,308 @@ Added 3 new categories with 3 preset questions each:
 ##### Context Optimization
 - **Document Weighting**: Priority slider (1-10) on each document
 - Higher weighted documents preserved first when context limits force truncation
+
+---
+
+## M34: Digital Twin Personality Enhancement
+
+### Vision
+
+Transform the Digital Twin from a **document capture system** into a **quantitative personality modeling and prediction system** that can accurately embody a human's values, decision patterns, and communication style.
+
+### Current State Assessment
+
+| Strength | Gap |
+|----------|-----|
+| Rich document storage (14 categories) | No quantitative personality dimensions |
+| Multi-method enrichment | No automated extraction from behavior |
+| Behavioral testing framework | No feedback loop from real usage |
+| Writing sample analysis | No multi-modal capture (voice, video) |
+| Contradiction detection | No personality confidence scoring |
+| CoS integration | No external data source integration |
+
+### Improvement Phases
+
+#### Phase 1: Quantitative Personality Modeling (Foundation)
+
+**Goal**: Add structured personality trait scoring alongside unstructured documents.
+
+**1.1 Big Five Trait Scoring**
+- Add quantified OCEAN scores (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism)
+- Infer scores from existing documents using LLM analysis
+- Allow manual override/adjustment
+- Store in `meta.json` under `traits.bigFive`
+
+**1.2 Values Hierarchy**
+- Extract explicit values from VALUES.md and NON_NEGOTIABLES.md
+- Create ranked values list with conflict resolution rules
+- Store in `meta.json` under `traits.valuesHierarchy`
+
+**1.3 Communication Fingerprint**
+- Quantify writing style: formality (1-10), verbosity (1-10), emoji usage, sentence length avg
+- Extract from WRITING_STYLE.md and writing samples
+- Store in `meta.json` under `traits.communicationProfile`
+
+**Data Structure**:
+```javascript
+traits: {
+  bigFive: { O: 0.75, C: 0.82, E: 0.45, A: 0.68, N: 0.32 },
+  valuesHierarchy: ["authenticity", "growth", "family", ...],
+  communicationProfile: {
+    formality: 6,
+    verbosity: 4,
+    avgSentenceLength: 18,
+    emojiUsage: "rare",
+    preferredTone: "direct-but-warm"
+  },
+  lastAnalyzed: "2026-01-21T..."
+}
+```
+
+**API Endpoints**:
+| Route | Description |
+|-------|-------------|
+| GET /api/digital-twin/traits | Get all trait scores |
+| POST /api/digital-twin/traits/analyze | Analyze documents → extract traits |
+| PUT /api/digital-twin/traits/:category | Manual override trait scores |
+
+---
+
+#### Phase 2: Personality Confidence Scoring
+
+**Goal**: Measure how well-defined each aspect of personality is, guiding enrichment.
+
+**2.1 Coverage Metrics**
+- For each Big Five dimension: evidence count from documents
+- For each value: supporting document count + specificity score
+- For communication: sample diversity, consistency across samples
+
+**2.2 Confidence Algorithm**
+```
+confidence(aspect) = min(1.0,
+  (evidence_count / required_evidence) *
+  (consistency_score) *
+  (recency_weight)
+)
+```
+
+**2.3 Gap Recommendations**
+- Identify lowest-confidence aspects
+- Generate specific questions to fill gaps
+- Prioritize enrichment categories by confidence gap
+
+**UI Enhancement**:
+- Add "Personality Map" visualization showing confidence per dimension
+- Color-code: green (>80%), yellow (50-80%), red (<50%)
+- Click dimension → suggested enrichment questions
+
+---
+
+#### Phase 3: Behavioral Feedback Loop
+
+**Goal**: Learn from real-world twin usage to improve accuracy.
+
+**3.1 Response Validation Interface**
+- When CoS uses twin context, log the interaction
+- User can mark responses: "sounds like me" / "not quite me" / "definitely not me"
+- Store feedback in `data/digital-twin/feedback.json`
+
+**3.2 Feedback Analysis**
+- Periodically analyze feedback patterns
+- Identify which aspects of twin are underperforming
+- Generate document improvement suggestions
+
+**3.3 Adaptive Weighting**
+- Documents that correlate with "sounds like me" responses → increase weight
+- Documents that correlate with misses → flag for review
+- Auto-adjust document weights based on feedback patterns
+
+**Data Structure**:
+```javascript
+feedback: [
+  {
+    id: "uuid",
+    timestamp: "...",
+    context: "summary of interaction",
+    response: "what the twin said",
+    rating: "sounds_like_me" | "not_quite" | "definitely_not",
+    documentsUsed: ["doc-id-1", "doc-id-2"],
+    traits: { /* which traits were relevant */ }
+  }
+]
+```
+
+---
+
+#### Phase 4: External Data Integration
+
+**Goal**: Reduce manual input by importing from external sources.
+
+**4.1 Reading List Import**
+- Goodreads CSV import → analyze for personality insights
+- Extract: genres preferred, themes that resonate, reading patterns
+
+**4.2 Music Profile Import**
+- Spotify listening history → infer emotional patterns, energy levels
+- Last.fm scrobbles → genre preferences, listening habits
+
+**4.3 Social Media Analysis (Optional)**
+- Twitter/X export → communication style, topics of interest
+- LinkedIn export → professional values, career trajectory
+
+**4.4 Calendar Pattern Analysis**
+- iCal export → routine patterns, priorities by time allocation
+- Meeting patterns → social preferences
+
+**Implementation Notes**:
+- All imports are user-initiated, explicit consent
+- Data processed locally, not stored raw
+- Only personality inferences stored, not source data
+
+---
+
+#### Phase 5: Multi-Modal Personality Capture
+
+**Goal**: Capture personality from voice and video, not just text.
+
+**5.1 Voice Analysis**
+- Record voice samples describing self
+- Extract: speech pace, pitch variation, pause patterns
+- Infer: confidence level, emotional expressiveness
+
+**5.2 Video Interview**
+- Guided self-interview with webcam
+- Analyze: facial expressions, gestures, eye contact patterns
+- Generate insights about authentic presentation vs stated identity
+
+**5.3 Audio Transcript Enrichment**
+- Transcribe voice samples → analyze as writing samples
+- Compare spoken vs written style differences
+
+**Technical Approach**:
+- Use Whisper for transcription
+- Use open-source models for facial expression analysis
+- Store only derived insights, not raw recordings
+
+---
+
+#### Phase 6: Advanced Behavioral Testing
+
+**Goal**: More sophisticated twin validation beyond Q&A tests.
+
+**6.1 Scenario Simulation Tests**
+- Complex multi-turn conversations
+- Role-play scenarios (negotiation, conflict, mentoring)
+- Evaluate: consistency across turns, appropriate boundary-setting
+
+**6.2 Ethical Dilemma Tests**
+- Present moral dilemmas aligned with stated values
+- Check if twin's reasoning matches user's value hierarchy
+- Detect values actually held vs values aspired to
+
+**6.3 Communication Style Tests**
+- Generate responses, measure against communication fingerprint
+- Check: formality match, verbosity match, tone match
+- Quantitative scoring instead of pass/fail
+
+**6.4 Adversarial Testing**
+- Prompts designed to elicit non-me responses
+- Check if twin maintains boundaries (error_intolerance)
+- Verify non-negotiables are enforced
+
+---
+
+#### Phase 7: Twin Personas & Context Switching
+
+**Goal**: Support multiple personality variants for different contexts.
+
+**7.1 Persona System**
+- Create named personas (Professional, Casual, Family, Creative)
+- Each persona: subset of documents + weight overrides
+- Context-aware persona selection
+
+**7.2 Blending Rules**
+- Define which traits change per persona vs remain constant
+- Example: formality varies, core values stay constant
+
+**7.3 Persona Testing**
+- Test each persona independently
+- Ensure personas don't violate core identity boundaries
+
+---
+
+### Implementation Priority
+
+| Phase | Priority | Complexity | Impact |
+|-------|----------|------------|--------|
+| P1: Quantitative Modeling | HIGH | Medium | High - enables all other phases |
+| P2: Confidence Scoring | HIGH | Low | High - guides enrichment |
+| P3: Feedback Loop | HIGH | Medium | Very High - enables learning |
+| P4: External Integration | MEDIUM | High | Medium - convenience |
+| P5: Multi-Modal | LOW | Very High | Medium - nice to have |
+| P6: Advanced Testing | MEDIUM | Medium | High - validation quality |
+| P7: Personas | LOW | Medium | Medium - power users |
+
+### Recommended Starting Point
+
+**Phase 1.1 + 2.1 + 2.3** as single implementation:
+1. Add Big Five trait analysis from existing documents
+2. Add confidence scoring per dimension
+3. Add gap recommendations in UI
+
+This provides immediate value by making the enrichment process more guided and measurable.
+
+### Success Metrics
+
+| Metric | Current | Target |
+|--------|---------|--------|
+| Behavioral test pass rate | ~70% | >90% |
+| Enrichment category coverage | Manual | Confidence-guided |
+| User feedback: "sounds like me" | N/A | >85% |
+| Time to usable twin | Hours | <30 min |
+| Trait confidence coverage | 0% | >80% across all dimensions |
+
+---
+
+### Technical Considerations
+
+**New Prompt Templates Needed**:
+- `twin-trait-extractor` - Analyze documents → Big Five scores
+- `twin-values-ranker` - Extract and rank values with conflict rules
+- `twin-confidence-analyzer` - Score document evidence per dimension
+- `twin-feedback-analyzer` - Learn from usage feedback patterns
+- `twin-scenario-generator` - Create multi-turn test scenarios
+- `twin-dilemma-generator` - Create ethical dilemma tests
+
+**Schema Extensions** (`lib/digitalTwinValidation.js`):
+```javascript
+traitsSchema = z.object({
+  bigFive: z.object({
+    O: z.number().min(0).max(1),
+    C: z.number().min(0).max(1),
+    E: z.number().min(0).max(1),
+    A: z.number().min(0).max(1),
+    N: z.number().min(0).max(1)
+  }).optional(),
+  valuesHierarchy: z.array(z.string()).optional(),
+  communicationProfile: communicationProfileSchema.optional(),
+  lastAnalyzed: z.string().datetime().optional()
+});
+
+confidenceSchema = z.object({
+  overall: z.number().min(0).max(1),
+  dimensions: z.record(z.string(), z.number().min(0).max(1)),
+  gaps: z.array(z.object({
+    dimension: z.string(),
+    confidence: z.number(),
+    suggestedQuestions: z.array(z.string())
+  }))
+});
+```
+
+**New UI Components**:
+- `PersonalityMap.jsx` - Radar chart of Big Five + confidence coloring
+- `ConfidenceGauge.jsx` - Per-dimension confidence indicator
+- `FeedbackRater.jsx` - "Sounds like me" rating interface
+- `GapRecommendations.jsx` - Prioritized enrichment suggestions
+- `TraitEditor.jsx` - Manual trait override interface

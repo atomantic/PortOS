@@ -28,7 +28,10 @@ import {
   writingAnalysisInputSchema,
   analyzeListInputSchema,
   saveListDocumentInputSchema,
-  getListItemsInputSchema
+  getListItemsInputSchema,
+  analyzeTraitsInputSchema,
+  updateTraitsInputSchema,
+  calculateConfidenceInputSchema
 } from '../lib/digitalTwinValidation.js';
 
 const router = Router();
@@ -456,6 +459,93 @@ router.post('/analyze-writing', asyncHandler(async (req, res) => {
   const { samples, providerId, model } = validation.data;
   const result = await digitalTwinService.analyzeWritingSamples(samples, providerId, model);
   res.json(result);
+}));
+
+// =============================================================================
+// TRAITS & CONFIDENCE (Phase 1 & 2)
+// =============================================================================
+
+/**
+ * GET /api/digital-twin/traits
+ * Get current personality traits
+ */
+router.get('/traits', asyncHandler(async (req, res) => {
+  const traits = await digitalTwinService.getTraits();
+  res.json({ traits });
+}));
+
+/**
+ * POST /api/digital-twin/traits/analyze
+ * Analyze documents to extract personality traits using AI
+ */
+router.post('/traits/analyze', asyncHandler(async (req, res) => {
+  const validation = validate(analyzeTraitsInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const { providerId, model, forceReanalyze } = validation.data;
+  const result = await digitalTwinService.analyzeTraits(providerId, model, forceReanalyze);
+  res.json(result);
+}));
+
+/**
+ * PUT /api/digital-twin/traits
+ * Manually update personality traits
+ */
+router.put('/traits', asyncHandler(async (req, res) => {
+  const validation = validate(updateTraitsInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const traits = await digitalTwinService.updateTraits(validation.data);
+  res.json({ traits });
+}));
+
+/**
+ * GET /api/digital-twin/confidence
+ * Get current confidence scores
+ */
+router.get('/confidence', asyncHandler(async (req, res) => {
+  const confidence = await digitalTwinService.getConfidence();
+  res.json({ confidence });
+}));
+
+/**
+ * POST /api/digital-twin/confidence/calculate
+ * Calculate confidence scores (optionally with AI analysis)
+ */
+router.post('/confidence/calculate', asyncHandler(async (req, res) => {
+  const validation = validate(calculateConfidenceInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const { providerId, model } = validation.data;
+  const result = await digitalTwinService.calculateConfidence(providerId, model);
+  res.json(result);
+}));
+
+/**
+ * GET /api/digital-twin/gaps
+ * Get gap recommendations for personality enrichment
+ */
+router.get('/gaps', asyncHandler(async (req, res) => {
+  const gaps = await digitalTwinService.getGapRecommendations();
+  res.json({ gaps });
 }));
 
 export default router;

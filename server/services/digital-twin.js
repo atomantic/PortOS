@@ -1692,3 +1692,438 @@ function parseWritingAnalysis(response) {
     suggestedContent
   };
 }
+
+// =============================================================================
+// TRAIT ANALYSIS & CONFIDENCE SCORING (Phase 1 & 2)
+// =============================================================================
+
+/**
+ * Get all twin content for analysis (excludes behavioral tests)
+ */
+async function getAllTwinContent() {
+  const meta = await loadMeta();
+  const enabledDocs = meta.documents.filter(d => d.enabled && d.category !== 'behavioral');
+
+  const contents = [];
+  for (const doc of enabledDocs) {
+    const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
+    if (existsSync(filePath)) {
+      const content = await readFile(filePath, 'utf-8');
+      contents.push(`## ${doc.title} (${doc.filename})\n\n${content}`);
+    }
+  }
+
+  return contents.join('\n\n---\n\n');
+}
+
+/**
+ * Get current traits from meta
+ */
+export async function getTraits() {
+  const meta = await loadMeta();
+  return meta.traits || null;
+}
+
+/**
+ * Update traits manually (partial update)
+ */
+export async function updateTraits(updates) {
+  const meta = await loadMeta();
+  const currentTraits = meta.traits || {};
+
+  const newTraits = {
+    ...currentTraits,
+    lastAnalyzed: new Date().toISOString(),
+    analysisVersion: 'manual'
+  };
+
+  // Merge Big Five if provided
+  if (updates.bigFive) {
+    newTraits.bigFive = { ...currentTraits.bigFive, ...updates.bigFive };
+  }
+
+  // Replace values hierarchy if provided
+  if (updates.valuesHierarchy) {
+    newTraits.valuesHierarchy = updates.valuesHierarchy;
+  }
+
+  // Merge communication profile if provided
+  if (updates.communicationProfile) {
+    newTraits.communicationProfile = {
+      ...currentTraits.communicationProfile,
+      ...updates.communicationProfile
+    };
+  }
+
+  meta.traits = newTraits;
+  await saveMeta(meta);
+  digitalTwinEvents.emit('traits:updated', newTraits);
+
+  return newTraits;
+}
+
+/**
+ * Analyze digital twin documents to extract personality traits
+ */
+export async function analyzeTraits(providerId, model, forceReanalyze = false) {
+  const meta = await loadMeta();
+
+  // Check if we have recent analysis and don't need to reanalyze
+  if (!forceReanalyze && meta.traits?.lastAnalyzed) {
+    const lastAnalyzed = new Date(meta.traits.lastAnalyzed);
+    const hoursSince = (Date.now() - lastAnalyzed.getTime()) / (1000 * 60 * 60);
+    if (hoursSince < 24) {
+      return { traits: meta.traits, cached: true };
+    }
+  }
+
+  const twinContent = await getAllTwinContent();
+  if (!twinContent || twinContent.length < 100) {
+    return { error: 'Not enough digital twin content to analyze. Add more documents first.' };
+  }
+
+  const prompt = await buildPrompt('twin-trait-extractor', {
+    twinContent
+  }).catch(() => null);
+
+  if (!prompt) {
+    return { error: 'Trait extractor prompt template not found' };
+  }
+
+  const provider = await getProviderById(providerId);
+  if (!provider || !provider.enabled) {
+    return { error: 'Provider not found or disabled' };
+  }
+
+  if (provider.type === 'api') {
+    const headers = { 'Content-Type': 'application/json' };
+    if (provider.apiKey) {
+      headers['Authorization'] = `Bearer ${provider.apiKey}`;
+    }
+
+    const response = await fetch(`${provider.endpoint}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 3000
+      })
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const responseText = data.choices?.[0]?.message?.content || '';
+      const parsedTraits = parseTraitsResponse(responseText);
+
+      if (parsedTraits.error) {
+        return parsedTraits;
+      }
+
+      // Save to meta
+      const traits = {
+        bigFive: parsedTraits.bigFive,
+        valuesHierarchy: parsedTraits.valuesHierarchy,
+        communicationProfile: parsedTraits.communicationProfile,
+        lastAnalyzed: new Date().toISOString(),
+        analysisVersion: '1.0'
+      };
+
+      meta.traits = traits;
+      await saveMeta(meta);
+      digitalTwinEvents.emit('traits:analyzed', traits);
+
+      return { traits, analysisNotes: parsedTraits.analysisNotes };
+    }
+
+    return { error: `Provider request failed: ${response.status}` };
+  }
+
+  return { error: 'Provider type not supported for trait analysis' };
+}
+
+function parseTraitsResponse(response) {
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) {
+    const parsed = JSON.parse(jsonMatch[1]);
+    return parsed;
+  }
+
+  if (response.trim().startsWith('{')) {
+    return JSON.parse(response);
+  }
+
+  return { error: 'Failed to parse traits response', rawResponse: response };
+}
+
+/**
+ * Get current confidence scores from meta
+ */
+export async function getConfidence() {
+  const meta = await loadMeta();
+  return meta.confidence || null;
+}
+
+/**
+ * Calculate confidence scores for all personality dimensions
+ */
+export async function calculateConfidence(providerId, model) {
+  const twinContent = await getAllTwinContent();
+  const meta = await loadMeta();
+  const currentTraits = meta.traits || {};
+
+  // If no provider specified, do local calculation
+  if (!providerId || !model) {
+    return calculateLocalConfidence(twinContent, currentTraits, meta);
+  }
+
+  const prompt = await buildPrompt('twin-confidence-analyzer', {
+    twinContent,
+    currentTraits: JSON.stringify(currentTraits, null, 2)
+  }).catch(() => null);
+
+  if (!prompt) {
+    // Fall back to local calculation
+    return calculateLocalConfidence(twinContent, currentTraits, meta);
+  }
+
+  const provider = await getProviderById(providerId);
+  if (!provider || !provider.enabled) {
+    return calculateLocalConfidence(twinContent, currentTraits, meta);
+  }
+
+  if (provider.type === 'api') {
+    const headers = { 'Content-Type': 'application/json' };
+    if (provider.apiKey) {
+      headers['Authorization'] = `Bearer ${provider.apiKey}`;
+    }
+
+    const response = await fetch(`${provider.endpoint}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 2000
+      })
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const responseText = data.choices?.[0]?.message?.content || '';
+      const parsed = parseConfidenceResponse(responseText);
+
+      if (!parsed.error) {
+        const confidence = {
+          ...parsed,
+          lastCalculated: new Date().toISOString()
+        };
+
+        meta.confidence = confidence;
+        await saveMeta(meta);
+        digitalTwinEvents.emit('confidence:calculated', confidence);
+
+        return { confidence };
+      }
+    }
+  }
+
+  // Fall back to local calculation
+  return calculateLocalConfidence(twinContent, currentTraits, meta);
+}
+
+function parseConfidenceResponse(response) {
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
+  if (jsonMatch) {
+    return JSON.parse(jsonMatch[1]);
+  }
+
+  if (response.trim().startsWith('{')) {
+    return JSON.parse(response);
+  }
+
+  return { error: 'Failed to parse confidence response' };
+}
+
+/**
+ * Calculate confidence locally without LLM (simpler heuristic-based)
+ */
+async function calculateLocalConfidence(twinContent, traits, meta) {
+  const contentLower = twinContent.toLowerCase();
+  const documents = await getDocuments();
+  const enabledDocs = documents.filter(d => d.enabled && d.category !== 'behavioral');
+
+  // Evidence counts based on keyword presence and document existence
+  const dimensions = {
+    openness: calculateDimensionConfidence(contentLower, ['curious', 'creative', 'explore', 'novel', 'experiment', 'learn'], traits?.bigFive?.O),
+    conscientiousness: calculateDimensionConfidence(contentLower, ['organize', 'plan', 'discipline', 'routine', 'structure', 'systematic'], traits?.bigFive?.C),
+    extraversion: calculateDimensionConfidence(contentLower, ['social', 'energy', 'people', 'outgoing', 'network', 'collaborate'], traits?.bigFive?.E),
+    agreeableness: calculateDimensionConfidence(contentLower, ['empathy', 'cooperate', 'trust', 'kind', 'help', 'support'], traits?.bigFive?.A),
+    neuroticism: calculateDimensionConfidence(contentLower, ['stress', 'anxiety', 'emotion', 'worry', 'calm', 'stable'], traits?.bigFive?.N),
+    values: calculateDimensionConfidence(contentLower, ['value', 'principle', 'believe', 'important', 'priority', 'matter'], null, enabledDocs.some(d => d.filename.toLowerCase().includes('value'))),
+    communication: calculateDimensionConfidence(contentLower, ['communicate', 'prefer', 'feedback', 'tone', 'style', 'write'], null, enabledDocs.some(d => d.filename.toLowerCase().includes('communi') || d.filename.toLowerCase().includes('writing'))),
+    decision_making: calculateDimensionConfidence(contentLower, ['decision', 'choose', 'heuristic', 'rule', 'approach', 'consider'], null, enabledDocs.some(d => d.filename.toLowerCase().includes('decision'))),
+    boundaries: calculateDimensionConfidence(contentLower, ['never', 'boundary', 'non-negotiable', 'refuse', 'limit', 'error'], null, enabledDocs.some(d => d.filename.toLowerCase().includes('non_negot') || d.filename.toLowerCase().includes('error'))),
+    identity: calculateDimensionConfidence(contentLower, ['name', 'who i am', 'identity', 'role', 'purpose', 'mission'], null, enabledDocs.some(d => d.filename.toLowerCase().includes('soul') || d.category === 'core'))
+  };
+
+  // Calculate overall
+  const scores = Object.values(dimensions);
+  const overall = scores.reduce((a, b) => a + b, 0) / scores.length;
+
+  // Generate gaps for low-confidence dimensions
+  const gaps = generateGapRecommendations(dimensions);
+
+  const confidence = {
+    overall: Math.round(overall * 100) / 100,
+    dimensions,
+    gaps,
+    lastCalculated: new Date().toISOString()
+  };
+
+  meta.confidence = confidence;
+  await saveMeta(meta);
+  digitalTwinEvents.emit('confidence:calculated', confidence);
+
+  return { confidence, method: 'local' };
+}
+
+function calculateDimensionConfidence(content, keywords, existingScore, hasDocument = false) {
+  let score = 0;
+
+  // Keyword evidence (up to 0.5)
+  const keywordHits = keywords.filter(k => content.includes(k)).length;
+  score += Math.min(0.5, keywordHits * 0.1);
+
+  // Document existence bonus (0.2)
+  if (hasDocument) score += 0.2;
+
+  // Existing trait score bonus (0.3)
+  if (existingScore !== undefined && existingScore !== null) score += 0.3;
+
+  return Math.min(1, Math.round(score * 100) / 100);
+}
+
+function generateGapRecommendations(dimensions) {
+  const gaps = [];
+  const threshold = 0.6;
+
+  const dimensionConfig = {
+    openness: {
+      suggestedCategory: 'personality_assessments',
+      questions: [
+        'How do you typically react to new ideas or unconventional approaches?',
+        'What topics or subjects consistently spark your curiosity?',
+        'How comfortable are you with ambiguity and uncertainty?'
+      ]
+    },
+    conscientiousness: {
+      suggestedCategory: 'daily_routines',
+      questions: [
+        'Describe your typical approach to planning and organization.',
+        'How do you handle deadlines and commitments?',
+        'What systems or routines keep you productive?'
+      ]
+    },
+    extraversion: {
+      suggestedCategory: 'communication',
+      questions: [
+        'How do you prefer to spend your free time - with others or alone?',
+        'In group settings, do you tend to lead conversations or observe?',
+        'Where do you get your energy from - social interaction or solitude?'
+      ]
+    },
+    agreeableness: {
+      suggestedCategory: 'values',
+      questions: [
+        'How do you typically handle disagreements with others?',
+        'What role does empathy play in your decision-making?',
+        'How do you balance your needs with the needs of others?'
+      ]
+    },
+    neuroticism: {
+      suggestedCategory: 'personality_assessments',
+      questions: [
+        'How do you typically respond to unexpected setbacks or failures?',
+        'What situations tend to make you feel anxious or stressed?',
+        'How would others describe your emotional stability?'
+      ]
+    },
+    values: {
+      suggestedCategory: 'values',
+      questions: [
+        'What principles guide your most important decisions?',
+        'Which values would you never compromise, even under pressure?',
+        'What do you want to be known for?'
+      ]
+    },
+    communication: {
+      suggestedCategory: 'communication',
+      questions: [
+        'How do you prefer to receive feedback - direct or diplomatic?',
+        'What communication styles do you find most effective?',
+        'How would you describe your writing voice?'
+      ]
+    },
+    decision_making: {
+      suggestedCategory: 'decision_heuristics',
+      questions: [
+        'What mental shortcuts or rules of thumb guide your choices?',
+        'How do you balance intuition vs. analysis in decisions?',
+        'What factors do you prioritize when making important choices?'
+      ]
+    },
+    boundaries: {
+      suggestedCategory: 'non_negotiables',
+      questions: [
+        'What behaviors or requests would you always refuse?',
+        'What principles are absolutely non-negotiable for you?',
+        'What should your digital twin never do or say?'
+      ]
+    },
+    identity: {
+      suggestedCategory: 'core_memories',
+      questions: [
+        'How would you introduce yourself in one sentence?',
+        'What makes you uniquely you?',
+        'What is your core purpose or mission?'
+      ]
+    }
+  };
+
+  for (const [dimension, score] of Object.entries(dimensions)) {
+    if (score < threshold) {
+      const config = dimensionConfig[dimension];
+      gaps.push({
+        dimension,
+        confidence: score,
+        evidenceCount: Math.round(score * 5),
+        requiredEvidence: 5,
+        suggestedQuestions: config?.questions || [],
+        suggestedCategory: config?.suggestedCategory || 'core_memories'
+      });
+    }
+  }
+
+  // Sort by confidence (lowest first)
+  gaps.sort((a, b) => a.confidence - b.confidence);
+
+  return gaps;
+}
+
+/**
+ * Get gap recommendations (prioritized list of what to enrich)
+ */
+export async function getGapRecommendations() {
+  const meta = await loadMeta();
+
+  // If no confidence data, calculate it first
+  if (!meta.confidence) {
+    const result = await calculateConfidence();
+    return result.confidence?.gaps || [];
+  }
+
+  return meta.confidence.gaps || [];
+}

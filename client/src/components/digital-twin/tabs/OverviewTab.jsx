@@ -24,6 +24,9 @@ import {
   formatRelativeTime
 } from '../constants';
 import SoulWizard from '../SoulWizard';
+import PersonalityMap from '../PersonalityMap';
+import ConfidenceGauge from '../ConfidenceGauge';
+import GapRecommendations from '../GapRecommendations';
 
 export default function OverviewTab({ status, settings, onRefresh }) {
   const navigate = useNavigate();
@@ -38,11 +41,26 @@ export default function OverviewTab({ status, settings, onRefresh }) {
   const [providers, setProviders] = useState([]);
   const [selectedProvider, setSelectedProvider] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [traits, setTraits] = useState(null);
+  const [confidence, setConfidence] = useState(null);
+  const [gaps, setGaps] = useState([]);
 
   useEffect(() => {
     loadCompleteness();
     loadProviders();
+    loadTraitsAndConfidence();
   }, []);
+
+  const loadTraitsAndConfidence = async () => {
+    const [traitsData, confidenceData, gapsData] = await Promise.all([
+      api.getDigitalTwinTraits().catch(() => ({ traits: null })),
+      api.getDigitalTwinConfidence().catch(() => ({ confidence: null })),
+      api.getDigitalTwinGaps().catch(() => ({ gaps: [] }))
+    ]);
+    setTraits(traitsData.traits);
+    setConfidence(confidenceData.confidence);
+    setGaps(gapsData.gaps || []);
+  };
 
   const loadCompleteness = async () => {
     setLoadingCompleteness(true);
@@ -255,6 +273,25 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           </div>
         )}
       </div>
+
+      {/* Personality Traits & Confidence - New Phase 1 & 2 Components */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <PersonalityMap
+          traits={traits}
+          confidence={confidence}
+          providers={providers}
+          onAnalyze={loadTraitsAndConfidence}
+        />
+        <ConfidenceGauge
+          confidence={confidence}
+          onRecalculate={loadTraitsAndConfidence}
+        />
+      </div>
+
+      {/* Gap Recommendations */}
+      {gaps.length > 0 && (
+        <GapRecommendations gaps={gaps} maxDisplay={3} />
+      )}
 
       {/* Completeness Score */}
       <div className="bg-port-card rounded-lg border border-port-border p-6">
