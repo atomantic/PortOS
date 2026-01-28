@@ -1,12 +1,10 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data');
+const DATA_DIR = PATHS.data;
 const HISTORY_FILE = join(DATA_DIR, 'history.json');
 const MAX_ENTRIES = 500;
 
@@ -16,9 +14,7 @@ let cacheTimestamp = 0;
 const CACHE_TTL_MS = 2000; // 2 second cache TTL
 
 async function ensureDataDir() {
-  if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
-  }
+  await ensureDir(DATA_DIR);
 }
 
 async function loadHistory() {

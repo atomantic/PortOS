@@ -1,11 +1,9 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data');
+const DATA_DIR = PATHS.data;
 const USAGE_FILE = join(DATA_DIR, 'usage.json');
 
 let usageData = null;
@@ -34,9 +32,7 @@ function getEmptyUsage() {
  * Load usage data from disk
  */
 export async function loadUsage() {
-  if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
-  }
+  await ensureDir(DATA_DIR);
 
   if (existsSync(USAGE_FILE)) {
     usageData = JSON.parse(await readFile(USAGE_FILE, 'utf-8'));

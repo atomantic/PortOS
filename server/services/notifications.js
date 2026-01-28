@@ -8,16 +8,14 @@
  * - Health issues
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data');
+const DATA_DIR = PATHS.data;
 const NOTIFICATIONS_FILE = join(DATA_DIR, 'notifications.json');
 
 // Event emitter for notification changes
@@ -46,9 +44,7 @@ export const PRIORITY_LEVELS = {
  * Ensure data directory exists
  */
 async function ensureDirectory() {
-  if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
-  }
+  await ensureDir(DATA_DIR);
 }
 
 /**
