@@ -329,6 +329,19 @@ router.get('/learning/skipped', asyncHandler(async (req, res) => {
   });
 }));
 
+// POST /api/cos/learning/reset/:taskType - Reset learning data for a specific task type
+router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  if (!taskType) {
+    throw new ServerError('Task type is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const result = await taskLearning.resetTaskTypeLearning(taskType);
+  if (!result.reset) {
+    throw new ServerError(`Task type "${taskType}" not found in learning data`, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
 // GET /api/cos/learning/cooldown/:taskType - Get adaptive cooldown for specific task type
 router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;

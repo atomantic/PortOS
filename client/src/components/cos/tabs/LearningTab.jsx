@@ -15,8 +15,10 @@ import {
   Target,
   ChevronDown,
   ChevronRight,
-  Database
+  Database,
+  RotateCcw
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 
 export default function LearningTab() {
@@ -26,6 +28,7 @@ export default function LearningTab() {
   const [durations, setDurations] = useState(null);
   const [loading, setLoading] = useState(true);
   const [backfilling, setBackfilling] = useState(false);
+  const [resettingType, setResettingType] = useState(null);
   const [expandedSections, setExpandedSections] = useState({
     taskTypes: true,
     skipped: true,
@@ -60,6 +63,16 @@ export default function LearningTab() {
       await loadData();
     }
     setBackfilling(false);
+  }, [loadData]);
+
+  const handleResetTaskType = useCallback(async (taskType) => {
+    setResettingType(taskType);
+    const result = await api.resetCosTaskTypeLearning(taskType).catch(() => null);
+    if (result?.reset) {
+      toast.success(`Reset learning data for ${taskType}`);
+      await loadData();
+    }
+    setResettingType(null);
   }, [loadData]);
 
   const toggleSection = useCallback((section) => {
@@ -343,12 +356,23 @@ export default function LearningTab() {
                             ({item.completed} attempts)
                           </span>
                         </div>
-                        <span className="text-sm text-port-error font-mono">{item.successRate}%</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm text-port-error font-mono">{item.successRate}%</span>
+                          <button
+                            onClick={() => handleResetTaskType(item.taskType)}
+                            disabled={resettingType === item.taskType}
+                            className="flex items-center gap-1 px-2 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors disabled:opacity-50 min-h-[40px]"
+                            title="Reset learning data to re-enable this task type"
+                          >
+                            <RotateCcw size={12} className={resettingType === item.taskType ? 'animate-spin' : ''} />
+                            Reset
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                   <p className="text-xs text-gray-500 mt-3">
-                    Fix underlying issues to re-enable these task types
+                    Reset clears historical metrics so the task type can be retried with a fresh start
                   </p>
                 </div>
               )}

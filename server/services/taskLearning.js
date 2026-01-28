@@ -590,6 +590,66 @@ export async function shouldSkipTaskType(taskType) {
 }
 
 /**
+ * Reset learning data for a specific task type
+ * Used when a previously-failing task type has been fixed and should be retried
+ * Subtracts the task type's metrics from totals and removes the task type entry
+ * @param {string} taskType - The task type to reset (e.g., 'self-improve:ui')
+ * @returns {Object} Summary of what was reset
+ */
+export async function resetTaskTypeLearning(taskType) {
+  const data = await loadLearningData();
+
+  const metrics = data.byTaskType[taskType];
+  if (!metrics) {
+    return { reset: false, reason: 'task-type-not-found', taskType };
+  }
+
+  // Subtract this task type's contribution from totals
+  data.totals.completed -= metrics.completed;
+  data.totals.succeeded -= metrics.succeeded;
+  data.totals.failed -= metrics.failed;
+  data.totals.totalDurationMs -= metrics.totalDurationMs;
+  data.totals.avgDurationMs = data.totals.completed > 0
+    ? Math.round(data.totals.totalDurationMs / data.totals.completed)
+    : 0;
+
+  // Clean up error patterns referencing this task type
+  for (const [category, pattern] of Object.entries(data.errorPatterns)) {
+    const taskTypeCount = pattern.taskTypes[taskType] || 0;
+    if (taskTypeCount > 0) {
+      pattern.count -= taskTypeCount;
+      delete pattern.taskTypes[taskType];
+    }
+    // Remove empty error categories
+    if (pattern.count <= 0) {
+      delete data.errorPatterns[category];
+    }
+  }
+
+  // Remove the task type entry
+  delete data.byTaskType[taskType];
+
+  await saveLearningData(data);
+
+  emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {
+    taskType,
+    previousSuccessRate: metrics.successRate,
+    previousAttempts: metrics.completed
+  }, '📚 TaskLearning');
+
+  return {
+    reset: true,
+    taskType,
+    previousMetrics: {
+      completed: metrics.completed,
+      succeeded: metrics.succeeded,
+      failed: metrics.failed,
+      successRate: metrics.successRate
+    }
+  };
+}
+
+/**
  * Get estimated duration for a task based on historical averages
  * @param {string} taskDescription - The task description to analyze
  * @returns {Object} Duration estimate with confidence
