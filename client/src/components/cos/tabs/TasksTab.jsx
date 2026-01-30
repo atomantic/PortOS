@@ -43,9 +43,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const cosTasks = useMemo(() => tasks.cos?.tasks || [], [tasks.cos?.tasks]);
   const awaitingApproval = useMemo(() => tasks.cos?.awaitingApproval || [], [tasks.cos?.awaitingApproval]);
 
-  // Split tasks into pending (includes in_progress, blocked) and completed
+  // Split tasks by status for system tasks
   const pendingSystemTasks = useMemo(() =>
-    cosTasks.filter(t => t.status !== 'completed'),
+    cosTasks.filter(t => t.status === 'pending'),
+    [cosTasks]
+  );
+  const activeSystemTasks = useMemo(() =>
+    cosTasks.filter(t => t.status === 'in_progress'),
+    [cosTasks]
+  );
+  const blockedSystemTasks = useMemo(() =>
+    cosTasks.filter(t => t.status === 'blocked'),
     [cosTasks]
   );
   const completedSystemTasks = useMemo(() =>
@@ -59,9 +67,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     [providers]
   );
 
-  // Memoize pending tasks from local state for drag-and-drop (only pending tasks are sortable)
+  // Split user tasks by status (only pending tasks are sortable)
   const pendingUserTasksLocal = useMemo(() =>
-    userTasksLocal.filter(t => t.status !== 'completed'),
+    userTasksLocal.filter(t => t.status === 'pending'),
+    [userTasksLocal]
+  );
+  const activeUserTasksLocal = useMemo(() =>
+    userTasksLocal.filter(t => t.status === 'in_progress'),
+    [userTasksLocal]
+  );
+  const blockedUserTasksLocal = useMemo(() =>
+    userTasksLocal.filter(t => t.status === 'blocked'),
     [userTasksLocal]
   );
   const completedUserTasksLocal = useMemo(() =>
@@ -345,25 +361,21 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           </div>
         )}
 
-        {/* Pending User Tasks */}
-        {pendingUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
+        {/* User Tasks Sections */}
+        {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No user tasks. Click "Add Task" or edit TASKS.md directly.
           </div>
         ) : (
           <div className="space-y-3">
             {/* Pending Section */}
-            <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                <span className="text-sm font-medium text-port-accent">
-                  Pending ({pendingUserTasksLocal.length})
-                </span>
-              </div>
-              {pendingUserTasksLocal.length === 0 ? (
-                <div className="p-4 text-center text-gray-500 text-sm">
-                  No pending tasks
+            {pendingUserTasksLocal.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-yellow-500">
+                    Pending ({pendingUserTasksLocal.length})
+                  </span>
                 </div>
-              ) : (
                 <div className="p-2">
                   <DndContext
                     sensors={sensors}
@@ -382,8 +394,40 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     </SortableContext>
                   </DndContext>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Active Section */}
+            {activeUserTasksLocal.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-accent">
+                    Active ({activeUserTasksLocal.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {activeUserTasksLocal.map(task => (
+                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Blocked Section */}
+            {blockedUserTasksLocal.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-error">
+                    Blocked ({blockedUserTasksLocal.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {blockedUserTasksLocal.map(task => (
+                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Completed Section - Collapsible */}
             {completedUserTasksLocal.length > 0 && (
@@ -415,32 +459,60 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       <div>
         <h3 className="text-lg font-semibold text-white mb-3">System Tasks (COS-TASKS.md)</h3>
 
-        {/* Pending System Tasks */}
-        {pendingSystemTasks.length === 0 && completedSystemTasks.length === 0 ? (
+        {/* System Tasks Sections */}
+        {pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && completedSystemTasks.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No system tasks.
           </div>
         ) : (
           <div className="space-y-3">
             {/* Pending Section */}
-            <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                <span className="text-sm font-medium text-port-accent">
-                  Pending ({pendingSystemTasks.length})
-                </span>
-              </div>
-              {pendingSystemTasks.length === 0 ? (
-                <div className="p-4 text-center text-gray-500 text-sm">
-                  No pending tasks
+            {pendingSystemTasks.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-yellow-500">
+                    Pending ({pendingSystemTasks.length})
+                  </span>
                 </div>
-              ) : (
                 <div className="p-2 space-y-1.5">
                   {pendingSystemTasks.map(task => (
                     <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Active Section */}
+            {activeSystemTasks.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-accent">
+                    Active ({activeSystemTasks.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {activeSystemTasks.map(task => (
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Blocked Section */}
+            {blockedSystemTasks.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-error">
+                    Blocked ({blockedSystemTasks.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {blockedSystemTasks.map(task => (
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Completed Section - Collapsible */}
             {completedSystemTasks.length > 0 && (
