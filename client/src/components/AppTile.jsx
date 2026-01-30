@@ -69,7 +69,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
         {app.repoPath}
       </p>
 
-      {/* Actions */}
+      {/* Actions - min-h-10 ensures 40px touch target on mobile */}
       <div className="flex flex-wrap gap-2" role="group" aria-label={`Actions for ${app.name}`}>
         {/* Open UI */}
         {appUrl && isOnline && (
@@ -77,7 +77,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
             href={appUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="px-3 py-1.5 text-sm rounded-lg bg-port-accent hover:bg-port-accent/80 text-white transition-colors"
+            className="px-4 py-2 min-h-10 text-sm rounded-lg bg-port-accent hover:bg-port-accent/80 text-white transition-colors inline-flex items-center"
             aria-label={`Open ${app.name} UI in new tab`}
           >
             Open UI
@@ -89,7 +89,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
           <button
             onClick={() => handleAction('start')}
             disabled={loading === 'start'}
-            className="px-3 py-1.5 text-sm rounded-lg bg-port-success hover:bg-port-success/80 text-white transition-colors disabled:opacity-50"
+            className="px-4 py-2 min-h-10 text-sm rounded-lg bg-port-success hover:bg-port-success/80 text-white transition-colors disabled:opacity-50"
             aria-label={`Start ${app.name}`}
             aria-busy={loading === 'start'}
           >
@@ -103,7 +103,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
             <button
               onClick={() => handleAction('restart')}
               disabled={loading === 'restart'}
-              className="px-3 py-1.5 text-sm rounded-lg bg-port-warning hover:bg-port-warning/80 text-white transition-colors disabled:opacity-50"
+              className="px-4 py-2 min-h-10 text-sm rounded-lg bg-port-warning hover:bg-port-warning/80 text-white transition-colors disabled:opacity-50"
               aria-label={`Restart ${app.name}`}
               aria-busy={loading === 'restart'}
             >
@@ -112,7 +112,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
             <button
               onClick={() => handleAction('stop')}
               disabled={loading === 'stop'}
-              className="px-3 py-1.5 text-sm rounded-lg bg-port-error hover:bg-port-error/80 text-white transition-colors disabled:opacity-50"
+              className="px-4 py-2 min-h-10 text-sm rounded-lg bg-port-error hover:bg-port-error/80 text-white transition-colors disabled:opacity-50"
               aria-label={`Stop ${app.name}`}
               aria-busy={loading === 'stop'}
             >
