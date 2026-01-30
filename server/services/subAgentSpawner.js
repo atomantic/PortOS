@@ -128,8 +128,8 @@ async function selectModelForTask(task, provider) {
     };
   }
 
-  // Standard tasks → sonnet/medium (default)
-  return { model: provider.mediumModel || provider.defaultModel, tier: 'medium', reason: 'standard-task' };
+  // Standard tasks → use provider's default model
+  return { model: provider.defaultModel, tier: 'default', reason: 'standard-task' };
 }
 
 /**
@@ -727,7 +727,8 @@ export async function spawnAgentForTask(task) {
       // Fall back to the appropriate tier model for this provider
       selectedModel = modelSelection.tier === 'heavy' ? provider.heavyModel :
                       modelSelection.tier === 'light' ? provider.lightModel :
-                      provider.mediumModel || provider.defaultModel;
+                      modelSelection.tier === 'medium' ? provider.mediumModel :
+                      provider.defaultModel;
     }
   }
 
