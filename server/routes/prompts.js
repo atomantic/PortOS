@@ -97,6 +97,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
       'cos-evaluate': ['CoS task evaluation'],
       'cos-report-summary': ['CoS daily reports'],
       'cos-self-improvement': ['CoS self-improvement tasks'],
+      'cos-task-enhance': ['CoS task prompt enhancement'],
       'brain-classifier': ['Brain thought classification'],
       'brain-daily-digest': ['Brain daily digest generation'],
       'brain-weekly-review': ['Brain weekly review generation'],
@@ -122,7 +123,7 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     // Check if it's a system stage
     const systemStages = [
       'cos-agent-briefing', 'cos-evaluate', 'cos-report-summary', 'cos-self-improvement',
-      'brain-classifier', 'brain-daily-digest', 'brain-weekly-review',
+      'cos-task-enhance', 'brain-classifier', 'brain-daily-digest', 'brain-weekly-review',
       'memory-evaluate', 'app-detection'
     ];
 

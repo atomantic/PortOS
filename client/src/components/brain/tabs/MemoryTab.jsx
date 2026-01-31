@@ -138,35 +138,35 @@ export default function MemoryTab({ onRefresh }) {
   };
 
   const handleDelete = async (id) => {
-    let result;
+    let failed = false;
     switch (activeType) {
       case 'people':
-        result = await api.deleteBrainPerson(id).catch(err => {
+        await api.deleteBrainPerson(id).catch(err => {
           toast.error(err.message);
-          return null;
+          failed = true;
         });
         break;
       case 'projects':
-        result = await api.deleteBrainProject(id).catch(err => {
+        await api.deleteBrainProject(id).catch(err => {
           toast.error(err.message);
-          return null;
+          failed = true;
         });
         break;
       case 'ideas':
-        result = await api.deleteBrainIdea(id).catch(err => {
+        await api.deleteBrainIdea(id).catch(err => {
           toast.error(err.message);
-          return null;
+          failed = true;
         });
         break;
       case 'admin':
-        result = await api.deleteBrainAdminItem(id).catch(err => {
+        await api.deleteBrainAdminItem(id).catch(err => {
           toast.error(err.message);
-          return null;
+          failed = true;
         });
         break;
     }
 
-    if (result !== null) {
+    if (!failed) {
       toast.success('Deleted');
       fetchRecords();
       onRefresh?.();

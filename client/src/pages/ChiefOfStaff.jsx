@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
-import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu } from 'lucide-react';
+import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 // Import from modular components
@@ -46,6 +46,7 @@ export default function ChiefOfStaff() {
   const [statusMessage, setStatusMessage] = useState("Idle - waiting for tasks...");
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
+  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
   const socket = useSocket();
 
   // Derive avatar style from server config
@@ -323,96 +324,129 @@ export default function ChiefOfStaff() {
           evalCountdown={evalCountdown}
         />
       ) : (
-        <div className="relative flex border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 lg:h-full lg:overflow-y-auto scrollbar-hide">
-          {/* Background Effects */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              background: `
-                radial-gradient(circle at 50% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
-                repeating-linear-gradient(0deg, transparent, transparent 50px, rgba(99, 102, 241, 0.03) 50px, rgba(99, 102, 241, 0.03) 51px)
-              `
-            }}
-          />
-
-          {/* Avatar Column - half width on mobile, full on desktop */}
-          <div className="flex-1 lg:flex-none flex flex-col items-center p-4 lg:p-8 relative z-10">
-            <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
-              Digital Assistant
-            </div>
-            <h1
-              className="text-lg sm:text-xl lg:text-3xl font-bold mb-2 lg:mb-8"
-              style={{
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text'
-              }}
-            >
-              Chief of Staff
-            </h1>
-
-            <CoSCharacter state={agentState} speaking={speaking} />
-            <StateLabel state={agentState} />
-            <div className="hidden sm:block">
-              <StatusBubble message={statusMessage} countdown={evalCountdown} />
-            </div>
-            <div className="hidden lg:block">
-              {status?.running && <EventLog logs={eventLogs} />}
-            </div>
-
-            {/* Control Buttons */}
-            <div className="flex items-center gap-2 sm:gap-3 mt-3 lg:mt-6">
-              {status?.running ? (
-                <button
-                  onClick={handleStop}
-                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
-                  aria-label="Stop Chief of Staff agent"
-                >
-                  <Square size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
-                  Stop
-                </button>
-              ) : (
-                <button
-                  onClick={handleStart}
-                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors"
-                  aria-label="Start Chief of Staff agent"
-                >
-                  <Play size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
-                  Start
-                </button>
-              )}
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 lg:h-full lg:overflow-y-auto scrollbar-hide">
+          {/* Mobile Collapse Toggle Header */}
+          <button
+            onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
+            className="lg:hidden flex items-center justify-between w-full px-4 py-3 bg-slate-900/60 border-b border-indigo-500/20 min-h-[44px]"
+            aria-expanded={!agentPanelCollapsed}
+            aria-controls="cos-agent-panel"
+          >
+            <div className="flex items-center gap-3">
+              <h1
+                className="text-lg font-bold"
+                style={{
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text'
+                }}
+              >
+                Chief of Staff
+              </h1>
               <StatusIndicator running={status?.running} />
             </div>
-          </div>
+            <div className="flex items-center gap-2 text-gray-400">
+              <StateLabel state={agentState} compact />
+              {agentPanelCollapsed ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+            </div>
+          </button>
 
-          {/* Mobile Stats Column - only visible on mobile */}
-          <div className="flex-1 flex flex-col justify-center gap-2 p-3 lg:hidden relative z-10">
-            <StatCard
-              label="Active"
-              value={activeAgentCount}
-              icon={<Cpu className="w-4 h-4 text-port-accent" />}
-              active={activeAgentCount > 0}
-              compact
+          {/* Collapsible Content */}
+          <div
+            id="cos-agent-panel"
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex flex-1`}
+          >
+            {/* Background Effects */}
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background: `
+                  radial-gradient(circle at 50% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+                  repeating-linear-gradient(0deg, transparent, transparent 50px, rgba(99, 102, 241, 0.03) 50px, rgba(99, 102, 241, 0.03) 51px)
+                `
+              }}
             />
-            <StatCard
-              label="Pending"
-              value={pendingTaskCount}
-              icon={<Clock className="w-4 h-4 text-yellow-500" />}
-              compact
-            />
-            <StatCard
-              label="Done"
-              value={status?.stats?.tasksCompleted || 0}
-              icon={<CheckCircle className="w-4 h-4 text-port-success" />}
-              compact
-            />
-            <StatCard
-              label="Issues"
-              value={health?.issues?.length || 0}
-              icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
-              compact
-            />
+
+            {/* Avatar Column - half width on mobile, full on desktop */}
+            <div className="flex-1 lg:flex-none flex flex-col items-center p-4 lg:p-8 relative z-10">
+              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
+                Digital Assistant
+              </div>
+              <h1
+                className="hidden lg:block text-lg sm:text-xl lg:text-3xl font-bold mb-2 lg:mb-8"
+                style={{
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text'
+                }}
+              >
+                Chief of Staff
+              </h1>
+
+              <CoSCharacter state={agentState} speaking={speaking} />
+              <StateLabel state={agentState} />
+              <div className="hidden sm:block">
+                <StatusBubble message={statusMessage} countdown={evalCountdown} />
+              </div>
+              <div className="hidden lg:block">
+                {status?.running && <EventLog logs={eventLogs} />}
+              </div>
+
+              {/* Control Buttons */}
+              <div className="flex items-center gap-2 sm:gap-3 mt-3 lg:mt-6">
+                {status?.running ? (
+                  <button
+                    onClick={handleStop}
+                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors min-h-[40px]"
+                    aria-label="Stop Chief of Staff agent"
+                  >
+                    <Square size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStart}
+                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors min-h-[40px]"
+                    aria-label="Start Chief of Staff agent"
+                  >
+                    <Play size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
+                    Start
+                  </button>
+                )}
+                <StatusIndicator running={status?.running} />
+              </div>
+            </div>
+
+            {/* Mobile Stats Column - only visible on mobile */}
+            <div className="flex-1 flex flex-col justify-center gap-2 p-3 lg:hidden relative z-10">
+              <StatCard
+                label="Active"
+                value={activeAgentCount}
+                icon={<Cpu className="w-4 h-4 text-port-accent" />}
+                active={activeAgentCount > 0}
+                compact
+              />
+              <StatCard
+                label="Pending"
+                value={pendingTaskCount}
+                icon={<Clock className="w-4 h-4 text-yellow-500" />}
+                compact
+              />
+              <StatCard
+                label="Done"
+                value={status?.stats?.tasksCompleted || 0}
+                icon={<CheckCircle className="w-4 h-4 text-port-success" />}
+                compact
+              />
+              <StatCard
+                label="Issues"
+                value={health?.issues?.length || 0}
+                icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
+                compact
+              />
+            </div>
           </div>
         </div>
       )}
@@ -449,8 +483,8 @@ export default function ChiefOfStaff() {
           />
         </div>
 
-        {/* Tabs */}
-        <div role="tablist" aria-label="Chief of Staff sections" className="flex gap-1 mb-6 border-b border-port-border overflow-x-auto scrollbar-hide">
+        {/* Tabs - scrollable on mobile with touch-friendly sizing */}
+        <div role="tablist" aria-label="Chief of Staff sections" className="flex gap-1 mb-4 lg:mb-6 border-b border-port-border overflow-x-auto scrollbar-hide pb-px">
           {TABS.map(tabItem => {
             const Icon = tabItem.icon;
             const isSelected = activeTab === tabItem.id;
@@ -462,7 +496,7 @@ export default function ChiefOfStaff() {
                 aria-controls={`tabpanel-${tabItem.id}`}
                 id={`tab-${tabItem.id}`}
                 onClick={() => navigate(`/cos/${tabItem.id}`)}
-                className={`flex items-center gap-2 px-3 sm:px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
                   isSelected
                     ? 'text-port-accent border-port-accent'
                     : 'text-gray-500 border-transparent hover:text-white'

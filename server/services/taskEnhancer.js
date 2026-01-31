@@ -3,16 +3,20 @@
  *
  * Uses AI to enhance task descriptions/prompts to be more detailed,
  * actionable, and comprehensive for agent execution.
+ *
+ * Uses the 'cos-task-enhance' prompt stage for provider/model configuration.
  */
 
 import { executeApiRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { getConfig } from './cos.js';
+import { getStage, buildPrompt } from './promptService.js';
+
+const STAGE_NAME = 'cos-task-enhance';
 
 /**
- * Default enhancement prompt template
+ * Fallback enhancement prompt template (used if stage template not found)
  */
-const ENHANCEMENT_PROMPT = `You are a task prompt enhancer for an AI agent system. Your job is to take a brief task description and expand it into a comprehensive, detailed prompt that an AI coding agent can execute effectively.
+const FALLBACK_PROMPT = `You are a task prompt enhancer for an AI agent system. Your job is to take a brief task description and expand it into a comprehensive, detailed prompt that an AI coding agent can execute effectively.
 
 ## Guidelines
 
@@ -42,36 +46,42 @@ Provide an enhanced version of this task that an AI agent can execute. Output ON
 export async function enhanceTaskPrompt(description, context = '') {
   console.log(`✨ Enhancing task prompt: "${description.substring(0, 50)}..."`);
 
-  // Get CoS config for default enhancement settings
-  const config = await getConfig();
+  // Get prompt stage configuration for cos-task-enhance
+  const stage = getStage(STAGE_NAME);
 
-  // Determine provider and model to use
-  // Priority: CoS config -> active provider default
-  let provider = await getActiveProvider();
-  let model = 'codex';
+  // Determine provider and model from stage config or fallback
+  let provider;
+  let model;
 
-  // Use OpenAI for enhancement by default if available, otherwise fall back to active provider
-  const openaiProvider = await getProviderById('openai').catch(() => null);
-  if (openaiProvider?.enabled) {
-    provider = openaiProvider;
-    model = 'codex';
-  } else if (provider) {
-    // Fall back to active provider's default model
-    model = provider.defaultModel || provider.models?.[0] || 'claude-sonnet-4-20250514';
+  if (stage?.provider) {
+    // Use stage-configured provider
+    provider = await getProviderById(stage.provider).catch(() => null);
+    model = stage.model || provider?.defaultModel;
+  }
+
+  // Fallback to active provider if stage provider not available
+  if (!provider) {
+    provider = await getActiveProvider();
+    model = stage?.model || provider?.defaultModel || provider?.models?.[0];
   }
 
   if (!provider) {
     throw new Error('No AI provider available for enhancement');
   }
 
-  // Build the enhancement prompt
-  const contextSection = context
-    ? `## Additional Context\n${context}`
-    : '';
+  // Build the enhancement prompt using stage template or fallback
+  let fullPrompt;
+  const templatePrompt = await buildPrompt(STAGE_NAME, { description, context }).catch(() => null);
 
-  const fullPrompt = ENHANCEMENT_PROMPT
-    .replace('{description}', description)
-    .replace('{contextSection}', contextSection);
+  if (templatePrompt) {
+    fullPrompt = templatePrompt;
+  } else {
+    // Fallback to hardcoded template
+    const contextSection = context ? `## Additional Context\n${context}` : '';
+    fullPrompt = FALLBACK_PROMPT
+      .replace('{description}', description)
+      .replace('{contextSection}', contextSection);
+  }
 
   // Create a run for this enhancement
   const { runId } = await createRun({
