@@ -39,12 +39,17 @@ const ALLOWED_COMMANDS = new Set([
 /**
  * Validate that a command is in the allowlist.
  * Extracts the base command name from the full path using path.basename for cross-platform support.
+ * Handles Windows .exe extensions by stripping them before checking.
  */
 function isAllowedCommand(command) {
   if (!command || typeof command !== 'string') return false;
   // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
   // Uses path.basename for correct handling on both Unix and Windows
-  const baseName = basename(command);
+  let baseName = basename(command);
+  // Normalize for Windows: strip trailing .exe (case-insensitive)
+  if (baseName.toLowerCase().endsWith('.exe')) {
+    baseName = baseName.slice(0, -4);
+  }
   return ALLOWED_COMMANDS.has(baseName);
 }
 

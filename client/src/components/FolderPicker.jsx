@@ -71,6 +71,7 @@ export default function FolderPicker({ value, onChange }) {
         onClick={() => setIsOpen(true)}
         className="px-3 py-3 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
         title="Browse folders"
+        aria-label="Browse folders"
       >
         <Folder size={20} />
       </button>
@@ -93,6 +94,7 @@ export default function FolderPicker({ value, onChange }) {
                 type="button"
                 onClick={() => setIsOpen(false)}
                 className="p-1 text-gray-400 hover:text-white"
+                aria-label="Close folder picker"
               >
                 <X size={20} />
               </button>

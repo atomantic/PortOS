@@ -141,16 +141,21 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
     setSaving(true);
     const content = generateSoulDocument();
 
-    await api.createSoulDocument({
-      filename: 'SOUL.md',
-      title: 'Soul',
-      category: 'core',
-      content
-    });
+    try {
+      await api.createSoulDocument({
+        filename: 'SOUL.md',
+        title: 'Soul',
+        category: 'core',
+        content
+      });
 
-    toast.success('Soul document created!');
-    setSaving(false);
-    onComplete();
+      toast.success('Soul document created!');
+      onComplete();
+    } catch (error) {
+      toast.error('Failed to create soul document. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
