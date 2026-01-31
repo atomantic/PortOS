@@ -5,7 +5,7 @@
  * Replaces setInterval with more robust scheduling.
  */
 
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Maximum safe setTimeout value (2^31 - 1 ms, ~24.8 days)
 const MAX_TIMEOUT = 2147483647

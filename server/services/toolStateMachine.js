@@ -6,7 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Tool execution states
 const STATES = {

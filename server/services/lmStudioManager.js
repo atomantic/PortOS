@@ -5,7 +5,7 @@
  * Provides model discovery, loading, unloading, and downloading.
  */
 
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Default LM Studio configuration
 const DEFAULT_CONFIG = {

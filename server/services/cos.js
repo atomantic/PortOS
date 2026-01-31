@@ -9,7 +9,6 @@ import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { EventEmitter } from 'events';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
@@ -20,6 +19,9 @@ import { getAllApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
+// Import and re-export cosEvents from separate module to avoid circular dependencies
+import { cosEvents as _cosEvents } from './cosEvents.js';
+export const cosEvents = _cosEvents;
 
 const execAsync = promisify(exec);
 
@@ -33,16 +35,13 @@ const REPORTS_DIR = join(COS_DIR, 'reports');
 const SCRIPTS_DIR = join(COS_DIR, 'scripts');
 const ROOT_DIR = join(__dirname, '../../');
 
-// Event emitter for CoS events
-export const cosEvents = new EventEmitter();
-
 /**
  * Emit a log event for UI display
  * Exported for use by other CoS-related services
  * @param {string} level - Log level: 'info', 'warn', 'error', 'success', 'debug'
  * @param {string} message - Log message
  * @param {Object} data - Additional data to include in log entry
- * @param {string} prefix - Optional prefix for console output (e.g., '🔧 SelfImprovement')
+ * @param {string} prefix - Optional prefix for console output (e.g., 'SelfImprovement')
  */
 export function emitLog(level, message, data = {}, prefix = '') {
   const logEntry = {

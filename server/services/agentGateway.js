@@ -5,7 +5,7 @@
  * Provides request deduplication, caching, and coordination.
  */
 
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Request deduplication cache
 const pendingRequests = new Map()
