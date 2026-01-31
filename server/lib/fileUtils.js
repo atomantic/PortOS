@@ -113,10 +113,6 @@ export function isValidJSON(str, { allowArray = true } = {}) {
 
   if (!isObject && !(allowArray && isArray)) return false;
 
-  // Check for common corruption patterns
-  if (isObject && (trimmed.endsWith('}}') || trimmed.includes('}{'))) return false;
-  if (isArray && (trimmed.endsWith(']]') || trimmed.includes(']['))) return false;
-
   return true;
 }
 
