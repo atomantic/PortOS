@@ -13,7 +13,7 @@ export default function DirectoryPicker({ value, onChange, label = 'Select Direc
   useEffect(() => {
     // Load directories and auto-set value if none provided
     loadDirectories(value || null, !value);
-  }, []);
+  }, [value]);
 
   const loadDirectories = async (path = null, setAsValue = false) => {
     setLoading(true);

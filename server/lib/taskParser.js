@@ -87,19 +87,23 @@ function parseTaskLine(line) {
   };
 }
 
+// Sentinel prefix for JSON-encoded metadata values
+const JSON_SENTINEL = '__json__:';
+
 /**
  * Unescape newlines in metadata values.
  *
- * For values stored as JSON string literals (produced by escapeNewlines),
+ * For values prefixed with the JSON sentinel (produced by escapeNewlines),
  * this uses JSON.parse to correctly restore backslashes, newlines, etc.
  * For legacy or simple values, falls back to simple replacement for backwards compatibility.
  */
 function unescapeNewlines(value) {
   if (typeof value !== 'string') return value;
-  // Check if this looks like a JSON-encoded string (starts and ends with quotes)
-  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+  // Check for explicit JSON sentinel prefix
+  if (value.startsWith(JSON_SENTINEL)) {
+    const jsonPart = value.slice(JSON_SENTINEL.length);
     try {
-      return JSON.parse(value);
+      return JSON.parse(jsonPart);
     } catch {
       // Fall through to legacy behavior if parsing fails
     }
@@ -112,13 +116,13 @@ function unescapeNewlines(value) {
  * Escape newlines in metadata values.
  *
  * For values containing special characters (newlines, backslashes), uses JSON
- * string escaping for reversibility. Simple values are stored as-is.
+ * string escaping with a sentinel prefix for reversibility. Simple values are stored as-is.
  */
 function escapeNewlines(value) {
   if (typeof value !== 'string') return String(value);
   // Only use JSON encoding if the value contains characters that need escaping
   if (value.includes('\n') || value.includes('\\')) {
-    return JSON.stringify(value);
+    return JSON_SENTINEL + JSON.stringify(value);
   }
   return value;
 }

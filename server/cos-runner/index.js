@@ -220,7 +220,16 @@ app.post('/spawn', async (req, res) => {
   let command, spawnArgs;
   if (cliCommand && cliArgs) {
     command = cliCommand;
-    spawnArgs = cliArgs;
+    // Normalize cliArgs to an array
+    if (Array.isArray(cliArgs)) {
+      spawnArgs = cliArgs;
+    } else if (typeof cliArgs === 'string') {
+      spawnArgs = [cliArgs];
+    } else {
+      return res.status(400).json({
+        error: 'Invalid cliArgs: expected an array or string'
+      });
+    }
   } else {
     // Legacy: Claude-specific args
     command = claudePath;

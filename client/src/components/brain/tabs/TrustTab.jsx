@@ -45,8 +45,14 @@ export default function TrustTab({ onRefresh }) {
   }, [fetchData]);
 
   const handleSaveSettings = async () => {
+    const threshold = parseFloat(settingsForm.confidenceThreshold);
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      toast.error('Confidence threshold must be a number between 0 and 1');
+      return;
+    }
+
     const result = await api.updateBrainSettings({
-      confidenceThreshold: parseFloat(settingsForm.confidenceThreshold),
+      confidenceThreshold: threshold,
       dailyDigestTime: settingsForm.dailyDigestTime,
       weeklyReviewTime: settingsForm.weeklyReviewTime,
       weeklyReviewDay: settingsForm.weeklyReviewDay

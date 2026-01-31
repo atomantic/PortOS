@@ -155,7 +155,13 @@ export default function PromptManager() {
 
   const deleteStage = async (stageName) => {
     // Check if stage is in use
-    const usageRes = await fetch(`/api/prompts/${stageName}/usage`).then(r => r.json());
+    let usageRes;
+    const usageResponse = await fetch(`/api/prompts/${stageName}/usage`).catch(() => null);
+    if (!usageResponse || !usageResponse.ok) {
+      usageRes = { isSystemStage: false, usedBy: [] };
+    } else {
+      usageRes = await usageResponse.json().catch(() => ({ isSystemStage: false, usedBy: [] }));
+    }
 
     let confirmMessage = `Delete stage "${stageName}"?`;
 
