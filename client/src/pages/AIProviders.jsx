@@ -402,8 +402,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
 
   const availableModels = formData.models || [];
 
-  // Filter out current provider from fallback options
-  const fallbackOptions = allProviders.filter(p => p.id !== provider?.id && p.enabled);
+  // Filter out current provider from fallback options (treat undefined enabled as enabled)
+  const fallbackOptions = allProviders.filter(p => p.id !== provider?.id && p.enabled !== false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

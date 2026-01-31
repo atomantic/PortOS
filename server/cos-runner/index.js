@@ -218,7 +218,7 @@ app.post('/spawn', async (req, res) => {
 
   // Use new CLI params if provided, otherwise fallback to legacy Claude defaults
   let command, spawnArgs;
-  if (cliCommand && cliArgs) {
+  if (cliCommand && cliArgs !== undefined) {
     command = cliCommand;
     // Normalize cliArgs to an array
     if (Array.isArray(cliArgs)) {

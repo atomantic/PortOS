@@ -76,14 +76,19 @@ export default function FolderPicker({ value, onChange }) {
       </button>
 
       {isOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="folder-picker-title"
+        >
           <div
             ref={modalRef}
             className="bg-port-card border border-port-border rounded-xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl"
           >
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-port-border">
-              <h3 className="text-lg font-semibold text-white">Select Folder</h3>
+              <h3 id="folder-picker-title" className="text-lg font-semibold text-white">Select Folder</h3>
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}

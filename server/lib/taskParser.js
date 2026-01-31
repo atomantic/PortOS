@@ -108,7 +108,10 @@ function unescapeNewlines(value) {
       // Fall through to legacy behavior if parsing fails
     }
   }
-  // Legacy fallback for backwards compatibility with existing data
+  // Legacy fallback for backwards compatibility with pre-sentinel data only.
+  // New values with special characters always use the sentinel prefix (see escapeNewlines),
+  // so this branch only runs on historical data that was escaped with the old method.
+  // Values that were never intended to be newline-escaped won't have \\n sequences.
   return value.replace(/\\n/g, '\n');
 }
 

@@ -63,14 +63,18 @@ const io = new Server(httpServer, {
 // Initialize socket handlers
 initSocket(io);
 
+// Build absolute paths from __dirname to ensure consistency regardless of cwd
+const DATA_DIR = `${__dirname}/../data`;
+const DATA_SAMPLE_DIR = `${__dirname}/../data.sample`;
+
 // Initialize AI Toolkit with PortOS configuration and hooks
 const aiToolkit = createAIToolkit({
-  dataDir: './data',
+  dataDir: DATA_DIR,
   providersFile: 'providers.json',
   runsDir: 'runs',
   promptsDir: 'prompts',
-  screenshotsDir: './data/screenshots',
-  sampleProvidersFile: './data.sample/providers.json',
+  screenshotsDir: `${DATA_DIR}/screenshots`,
+  sampleProvidersFile: `${DATA_SAMPLE_DIR}/providers.json`,
   io,
   asyncHandler,
   hooks: {

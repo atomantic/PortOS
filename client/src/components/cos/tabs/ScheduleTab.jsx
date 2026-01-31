@@ -60,9 +60,12 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
   const handleProviderChange = async (newProviderId) => {
     setUpdating(true);
     setSelectedProviderId(newProviderId);
+    // Reset model when provider changes to avoid stale/invalid model selection
+    setSelectedModel('');
     const providerId = newProviderId === '' ? null : newProviderId;
-    await onUpdate(taskType, { providerId }).catch(() => {
+    await onUpdate(taskType, { providerId, model: null }).catch(() => {
       setSelectedProviderId(config.providerId || '');
+      setSelectedModel(config.model || '');
     });
     setUpdating(false);
   };

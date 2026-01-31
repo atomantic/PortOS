@@ -132,11 +132,14 @@ jobs:
             # Commit the renamed and updated changelog
             git add "$VERSIONED_FILE"
             git commit -m "docs: archive changelog for v${CURRENT_VERSION} [skip ci]"
+
+            # Capture the changelog commit hash before switching branches
+            CHANGELOG_COMMIT=$(git rev-parse HEAD)
             git push origin dev
 
             # Merge changelog back to main (without triggering CI)
             git checkout main
-            git cherry-pick HEAD~1
+            git cherry-pick "$CHANGELOG_COMMIT"
             git push origin main
             git checkout dev
           fi
