@@ -238,6 +238,10 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
             >
               <option value="">Default model</option>
+              {/* Show current model even if not in availableModels (e.g., provider not loaded yet) */}
+              {selectedModel && !availableModels.includes(selectedModel) && (
+                <option value={selectedModel}>{selectedModel}</option>
+              )}
               {availableModels.map(model => (
                 <option key={model} value={model}>
                   {model}

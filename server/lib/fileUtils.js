@@ -5,7 +5,6 @@
  */
 
 import { mkdir, readFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -31,6 +30,7 @@ export const PATHS = {
 
 /**
  * Ensure a directory exists, creating it recursively if needed.
+ * Uses mkdir with recursive: true which is idempotent and avoids TOCTOU races.
  *
  * @param {string} dir - Directory path to ensure exists
  * @returns {Promise<void>}
@@ -40,9 +40,8 @@ export const PATHS = {
  * await ensureDir('/custom/path/to/dir');
  */
 export async function ensureDir(dir) {
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
+  // mkdir with recursive: true is idempotent - it succeeds if dir exists
+  await mkdir(dir, { recursive: true });
 }
 
 /**
@@ -170,11 +169,20 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
  * const items = await readJSONFile('./items.json', []);
  */
 export async function readJSONFile(filePath, defaultValue = null, { allowArray = true, logError = true } = {}) {
-  if (!existsSync(filePath)) {
+  let content;
+  try {
+    content = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    // ENOENT = file doesn't exist, return default silently
+    if (err.code === 'ENOENT') {
+      return defaultValue;
+    }
+    // Log other I/O errors if requested
+    if (logError) {
+      console.error(`⚠️ Failed to read file ${filePath}: ${err.message}`);
+    }
     return defaultValue;
   }
-
-  const content = await readFile(filePath, 'utf-8');
   return safeJSONParse(content, defaultValue, { allowArray, logError, context: filePath });
 }
 
@@ -220,10 +228,19 @@ export function safeJSONLParse(content, { logErrors = false, context = '' } = {}
  * const entries = await readJSONLFile('./logs.jsonl');
  */
 export async function readJSONLFile(filePath, { logErrors = false } = {}) {
-  if (!existsSync(filePath)) {
+  let content;
+  try {
+    content = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    // ENOENT = file doesn't exist, return empty array silently
+    if (err.code === 'ENOENT') {
+      return [];
+    }
+    // Log other I/O errors if requested
+    if (logErrors) {
+      console.error(`⚠️ Failed to read file ${filePath}: ${err.message}`);
+    }
     return [];
   }
-
-  const content = await readFile(filePath, 'utf-8');
   return safeJSONLParse(content, { logErrors, context: filePath });
 }

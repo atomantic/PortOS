@@ -27,6 +27,26 @@ const PORT = process.env.PORT || 5558;
 const HOST = process.env.HOST || '127.0.0.1';
 const RUNS_DIR = join(ROOT_DIR, 'data/runs');
 
+// Allowlist of permitted CLI commands to prevent arbitrary code execution.
+// Only commands in this list can be spawned by the runner.
+const ALLOWED_COMMANDS = new Set([
+  'claude',
+  'aider',
+  'codex',
+  'copilot'
+]);
+
+/**
+ * Validate that a command is in the allowlist.
+ * Extracts the base command name from the full path.
+ */
+function isAllowedCommand(command) {
+  if (!command || typeof command !== 'string') return false;
+  // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
+  const baseName = command.split('/').pop();
+  return ALLOWED_COMMANDS.has(baseName);
+}
+
 // Active agent processes (in memory)
 const activeAgents = new Map();
 
@@ -219,6 +239,12 @@ app.post('/spawn', async (req, res) => {
   // Use new CLI params if provided, otherwise fallback to legacy Claude defaults
   let command, spawnArgs;
   if (cliCommand && cliArgs !== undefined) {
+    // Validate command against allowlist to prevent arbitrary code execution
+    if (!isAllowedCommand(cliCommand)) {
+      return res.status(400).json({
+        error: `Command not allowed: ${cliCommand}. Permitted commands: ${[...ALLOWED_COMMANDS].join(', ')}`
+      });
+    }
     command = cliCommand;
     // Normalize cliArgs to an array
     if (Array.isArray(cliArgs)) {

@@ -8,9 +8,9 @@ LLMs can embody specific personas, but creating comprehensive identity documents
 
 ## Architecture
 
-- **Soul Service** (`server/services/soul.js`): Document management, testing, enrichment
-- **Soul Routes** (`server/routes/soul.js`): REST API endpoints
-- **Soul Page** (`client/src/pages/Soul.jsx`): Overview, Documents, Test, Enrich, Export tabs
+- **Digital Twin Service** (`server/services/digitalTwin.js`): Document management, testing, enrichment
+- **Digital Twin Routes** (`server/routes/digital-twin.js`): REST API endpoints mounted under `/api/digital-twin/*`
+- **Digital Twin Page** (`client/src/pages/DigitalTwin.jsx`): Overview, Documents, Test, Enrich, Export tabs
 
 ## Features
 
@@ -89,22 +89,22 @@ data/soul/
 
 | Route | Description |
 |-------|-------------|
-| GET /api/soul | Status summary |
-| GET /api/soul/documents | List documents |
-| POST /api/soul/documents | Create document |
-| PUT /api/soul/documents/:id | Update document |
-| DELETE /api/soul/documents/:id | Delete document |
-| GET /api/soul/tests | Get test suite |
-| POST /api/soul/tests/run | Run single-model tests |
-| POST /api/soul/tests/run-multi | Run multi-model tests |
-| GET /api/soul/enrich/categories | List enrichment categories |
-| POST /api/soul/enrich/question | Get next question |
-| POST /api/soul/enrich/answer | Submit answer |
-| POST /api/soul/export | Export soul |
-| GET /api/soul/validate/completeness | Check soul completeness |
-| POST /api/soul/validate/contradictions | Detect contradictions |
-| POST /api/soul/tests/generate | Generate dynamic tests |
-| POST /api/soul/analyze-writing | Analyze writing samples |
+| GET /api/digital-twin | Status summary |
+| GET /api/digital-twin/documents | List documents |
+| POST /api/digital-twin/documents | Create document |
+| PUT /api/digital-twin/documents/:id | Update document |
+| DELETE /api/digital-twin/documents/:id | Delete document |
+| GET /api/digital-twin/tests | Get test suite |
+| POST /api/digital-twin/tests/run | Run single-model tests |
+| POST /api/digital-twin/tests/run-multi | Run multi-model tests |
+| GET /api/digital-twin/enrich/categories | List enrichment categories |
+| POST /api/digital-twin/enrich/question | Get next question |
+| POST /api/digital-twin/enrich/answer | Submit answer |
+| POST /api/digital-twin/export | Export soul |
+| GET /api/digital-twin/validate/completeness | Check soul completeness |
+| POST /api/digital-twin/validate/contradictions | Detect contradictions |
+| POST /api/digital-twin/tests/generate | Generate dynamic tests |
+| POST /api/digital-twin/analyze-writing | Analyze writing samples |
 
 ## Related Features
 
