@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { Brain as BrainIcon, RefreshCw } from 'lucide-react';
-import toast from 'react-hot-toast';
 
 import {
   TABS,
