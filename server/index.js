@@ -106,7 +106,7 @@ const aiToolkit = createAIToolkit({
           duration: metadata.duration,
           workspacePath: metadata.workspacePath,
           workspaceName: metadata.workspaceName,
-          errorDetails: errorMessage
+          errorDetails: errorMessage,
           // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
         }
       });

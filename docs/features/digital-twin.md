@@ -9,7 +9,7 @@ Transform the Digital Twin from a document capture system into a quantitative pe
 ## Architecture
 
 - **Digital Twin Service** (`server/services/digitalTwin.js`): Trait analysis, confidence scoring, gap recommendations
-- **Digital Twin Routes** (`server/routes/digitalTwin.js`): REST API endpoints
+- **Digital Twin Routes** (`server/routes/digital-twin.js`): REST API endpoints
 - **Digital Twin Validation** (`server/lib/digitalTwinValidation.js`): Zod schemas for trait data
 
 ## Features
