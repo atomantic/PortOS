@@ -28,16 +28,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Install client dependencies
-        working-directory: ./client
-        run: npm ci
-
-      - name: Install server dependencies
-        working-directory: ./server
-        run: npm ci
+      - name: Install all dependencies
+        run: npm run install:all
 
       - name: Run server tests
         working-directory: ./server
