@@ -403,7 +403,22 @@ export async function deleteMemory(id, hard = false) {
         .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
     } else {
       // Soft delete - mark as archived
-      await updateMemory(id, { status: 'archived' });
+      // Note: We can't call updateMemory here as it would cause deadlock (both use withMemoryLock)
+      // Instead, we handle the soft delete logic directly within this lock
+      const memory = await loadMemory(id);
+      if (memory) {
+        memory.status = 'archived';
+        memory.updatedAt = new Date().toISOString();
+        await saveMemory(memory);
+
+        // Update index
+        const index = await loadIndex();
+        const idx = index.memories.findIndex(m => m.id === id);
+        if (idx !== -1) {
+          index.memories[idx].status = 'archived';
+          await saveIndex(index);
+        }
+      }
     }
 
     console.log(`🧠 Memory deleted: ${id} (hard: ${hard})`);
