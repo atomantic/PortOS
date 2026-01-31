@@ -31,7 +31,7 @@ LLMs can embody specific personas, but creating comprehensive identity documents
 ## Directory Structure
 
 ```
-data/soul/
+data/digital-twin/
 ├── meta.json              # Document metadata, test history, settings
 ├── SOUL.md                # Core identity
 ├── Expanded.md            # High-fidelity spec

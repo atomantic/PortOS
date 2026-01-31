@@ -234,7 +234,7 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
             <select
               value={selectedModel}
               onChange={(e) => handleModelChange(e.target.value)}
-              disabled={updating || (!selectedProviderId && !selectedModel)}
+              disabled={updating}
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
             >
               <option value="">Default model</option>

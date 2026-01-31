@@ -4,7 +4,7 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 
 import healthRoutes from './routes/health.js';
 import appsRoutes from './routes/apps.js';
@@ -64,8 +64,8 @@ const io = new Server(httpServer, {
 initSocket(io);
 
 // Build absolute paths from __dirname to ensure consistency regardless of cwd
-const DATA_DIR = `${__dirname}/../data`;
-const DATA_SAMPLE_DIR = `${__dirname}/../data.sample`;
+const DATA_DIR = join(__dirname, '..', 'data');
+const DATA_SAMPLE_DIR = join(__dirname, '..', 'data.sample');
 
 // Initialize AI Toolkit with PortOS configuration and hooks
 const aiToolkit = createAIToolkit({
@@ -73,8 +73,8 @@ const aiToolkit = createAIToolkit({
   providersFile: 'providers.json',
   runsDir: 'runs',
   promptsDir: 'prompts',
-  screenshotsDir: `${DATA_DIR}/screenshots`,
-  sampleProvidersFile: `${DATA_SAMPLE_DIR}/providers.json`,
+  screenshotsDir: join(DATA_DIR, 'screenshots'),
+  sampleProvidersFile: join(DATA_SAMPLE_DIR, 'providers.json'),
   io,
   asyncHandler,
   hooks: {

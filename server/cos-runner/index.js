@@ -10,7 +10,7 @@
 
 import express from 'express';
 import { spawn } from 'child_process';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -38,12 +38,13 @@ const ALLOWED_COMMANDS = new Set([
 
 /**
  * Validate that a command is in the allowlist.
- * Extracts the base command name from the full path.
+ * Extracts the base command name from the full path using path.basename for cross-platform support.
  */
 function isAllowedCommand(command) {
   if (!command || typeof command !== 'string') return false;
   // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
-  const baseName = command.split('/').pop();
+  // Uses path.basename for correct handling on both Unix and Windows
+  const baseName = basename(command);
   return ALLOWED_COMMANDS.has(baseName);
 }
 
@@ -238,7 +239,7 @@ app.post('/spawn', async (req, res) => {
 
   // Use new CLI params if provided, otherwise fallback to legacy Claude defaults
   let command, spawnArgs;
-  if (cliCommand && cliArgs !== undefined) {
+  if (cliCommand) {
     // Validate command against allowlist to prevent arbitrary code execution
     if (!isAllowedCommand(cliCommand)) {
       return res.status(400).json({
@@ -246,11 +247,13 @@ app.post('/spawn', async (req, res) => {
       });
     }
     command = cliCommand;
+    // Default to empty args if cliArgs not provided
+    const args = cliArgs ?? [];
     // Normalize cliArgs to an array
-    if (Array.isArray(cliArgs)) {
-      spawnArgs = cliArgs;
-    } else if (typeof cliArgs === 'string') {
-      spawnArgs = [cliArgs];
+    if (Array.isArray(args)) {
+      spawnArgs = args;
+    } else if (typeof args === 'string') {
+      spawnArgs = [args];
     } else {
       return res.status(400).json({
         error: 'Invalid cliArgs: expected an array or string'

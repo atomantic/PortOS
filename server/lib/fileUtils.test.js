@@ -192,6 +192,18 @@ describe('fileUtils', () => {
       const result = safeJSONLParse(content);
       expect(result).toEqual([{ complete: true }]);
     });
+
+    it('should handle CRLF line endings (Windows)', () => {
+      const content = '{"a": 1}\r\n{"b": 2}\r\n{"c": 3}';
+      const result = safeJSONLParse(content);
+      expect(result).toEqual([{ a: 1 }, { b: 2 }, { c: 3 }]);
+    });
+
+    it('should handle mixed LF and CRLF line endings', () => {
+      const content = '{"a": 1}\n{"b": 2}\r\n{"c": 3}';
+      const result = safeJSONLParse(content);
+      expect(result).toEqual([{ a: 1 }, { b: 2 }, { c: 3 }]);
+    });
   });
 
   describe('readJSONFile', () => {

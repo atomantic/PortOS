@@ -203,7 +203,11 @@ export async function readJSONFile(filePath, defaultValue = null, { allowArray =
 export function safeJSONLParse(content, { logErrors = false, context = '' } = {}) {
   if (!content || !content.trim()) return [];
 
-  const lines = content.split('\n').filter(line => line.trim());
+  // Split on CRLF or LF to handle both Windows and Unix line endings
+  const lines = content
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
   const results = [];
 
   for (const line of lines) {

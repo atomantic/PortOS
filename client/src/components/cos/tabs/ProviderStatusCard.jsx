@@ -95,6 +95,29 @@ export default function ProviderStatusCard() {
     );
   }
 
+  // Handle case when statuses failed to load
+  if (!statuses) {
+    return (
+      <div className="bg-port-card border border-port-warning/50 rounded-lg p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} className="text-port-warning" />
+            <span className="text-sm text-gray-400">AI Providers</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-port-warning">Unable to load status</span>
+            <button
+              onClick={loadData}
+              className="ml-2 text-gray-500 hover:text-white transition-colors"
+            >
+              <RefreshCw size={12} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // All providers healthy - show compact success state
   if (unavailableCount === 0) {
     return (
