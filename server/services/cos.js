@@ -18,6 +18,8 @@ import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTas
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
+import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 
 const execAsync = promisify(exec);
 
@@ -57,8 +59,6 @@ export function emitLog(level, message, data = {}, prefix = '') {
 
 // In-memory daemon state
 let daemonRunning = false;
-let evaluationInterval = null;
-let healthCheckInterval = null;
 
 // Mutex lock for state operations to prevent race conditions
 let stateLock = Promise.resolve();
@@ -270,15 +270,27 @@ export async function start() {
   // Then reset any orphaned in_progress tasks (no running agent)
   await resetOrphanedTasks();
 
-  // Start evaluation loop
-  evaluationInterval = setInterval(async () => {
-    await evaluateTasks();
-  }, state.config.evaluationIntervalMs);
+  // Start evaluation loop using event scheduler
+  scheduleEvent({
+    id: 'cos-evaluation',
+    type: 'interval',
+    intervalMs: state.config.evaluationIntervalMs,
+    handler: async () => {
+      await evaluateTasks();
+    },
+    metadata: { description: 'CoS task evaluation loop' }
+  });
 
-  // Start health check loop
-  healthCheckInterval = setInterval(async () => {
-    await runHealthCheck();
-  }, state.config.healthCheckIntervalMs);
+  // Start health check loop using event scheduler
+  scheduleEvent({
+    id: 'cos-health-check',
+    type: 'interval',
+    intervalMs: state.config.healthCheckIntervalMs,
+    handler: async () => {
+      await runHealthCheck();
+    },
+    metadata: { description: 'CoS health check loop' }
+  });
 
   // Run initial evaluation and health check
   emitLog('info', 'Running initial task evaluation...');
@@ -298,15 +310,9 @@ export async function stop() {
     return { success: false, error: 'Not running' };
   }
 
-  // Clear intervals
-  if (evaluationInterval) {
-    clearInterval(evaluationInterval);
-    evaluationInterval = null;
-  }
-  if (healthCheckInterval) {
-    clearInterval(healthCheckInterval);
-    healthCheckInterval = null;
-  }
+  // Cancel scheduled events
+  cancelEvent('cos-evaluation');
+  cancelEvent('cos-health-check');
 
   const state = await loadState();
   state.running = false;
@@ -552,7 +558,33 @@ export async function evaluateTasks() {
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
 
-  // Priority 3: Only generate direct idle task if:
+  // Priority 3: Mission-driven proactive tasks (if no user tasks)
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.proactiveMode) {
+    const missionTasks = await generateMissionTasks({ maxTasks: availableSlots - tasksToSpawn.length }).catch(err => {
+      emitLog('debug', `Mission task generation failed: ${err.message}`);
+      return [];
+    });
+
+    for (const missionTask of missionTasks) {
+      if (tasksToSpawn.length >= availableSlots) break;
+      // Convert mission task to COS task format
+      tasksToSpawn.push({
+        id: missionTask.id,
+        description: missionTask.description,
+        priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
+        status: 'pending',
+        metadata: missionTask.metadata,
+        taskType: 'internal',
+        approvalRequired: !missionTask.autoApprove
+      });
+      emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
+        missionId: missionTask.metadata?.missionId,
+        appId: missionTask.metadata?.appId
+      });
+    }
+  }
+
+  // Priority 4: Only generate direct idle task if:
   // 1. Nothing to spawn
   // 2. No pending user tasks (even on cooldown)
   // 3. No system tasks queued

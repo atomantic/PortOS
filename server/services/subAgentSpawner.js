@@ -26,6 +26,9 @@ import { extractAndStoreMemories } from './memoryExtractor.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { suggestModelTier } from './taskLearning.js';
 import { readJSONFile } from '../lib/fileUtils.js';
+import { createToolExecution, startExecution, updateExecution, completeExecution, errorExecution, getExecution, getStats as getToolStats } from './toolStateMachine.js';
+import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
+import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -57,17 +60,18 @@ function extractTaskTypeKey(task) {
  * Select optimal model for a task based on complexity analysis and historical performance
  * User can override by specifying Model: and/or Provider: in task metadata
  *
- * Enhanced with learning-based model suggestions:
- * - Uses historical success rates to suggest heavier models for struggling task types
- * - Automatically upgrades model tier when task type has <60% success rate
+ * Enhanced with:
+ * - Thinking levels hierarchy (task → agent → provider)
+ * - Learning-based model suggestions from historical success rates
+ * - Automatic upgrades when task type has <60% success rate
  */
-async function selectModelForTask(task, provider) {
+async function selectModelForTask(task, provider, agent = {}) {
   const desc = (task.description || '').toLowerCase();
   const context = task.metadata?.context || '';
   const contextLen = context.length;
   const priority = task.priority || 'MEDIUM';
 
-  // Check for user-specified model preference
+  // Check for user-specified model preference (highest priority)
   const userModel = task.metadata?.model;
   const userProvider = task.metadata?.provider;
 
@@ -79,6 +83,24 @@ async function selectModelForTask(task, provider) {
       reason: 'user-preference',
       userProvider: userProvider || null
     };
+  }
+
+  // Check thinking level hierarchy (task → agent → provider)
+  // This resolves the appropriate thinking level based on configuration hierarchy
+  const thinkingResult = resolveThinkingLevel(task, agent, provider);
+  if (thinkingResult.resolvedFrom !== 'default') {
+    const modelFromLevel = getModelForLevel(thinkingResult.level, provider);
+    if (modelFromLevel) {
+      const isLocal = isLocalPreferred(thinkingResult.level);
+      console.log(`🧠 Thinking level: ${thinkingResult.level} → ${modelFromLevel} (from ${thinkingResult.resolvedFrom}${isLocal ? ', local-preferred' : ''})`);
+      return {
+        model: modelFromLevel,
+        tier: thinkingResult.level,
+        reason: `thinking-level-${thinkingResult.resolvedFrom}`,
+        thinkingLevel: thinkingResult.level,
+        localPreferred: isLocal
+      };
+    }
   }
 
   // Image/visual analysis → would route to gemini if available
@@ -653,11 +675,45 @@ async function syncRunnerAgents() {
 export async function spawnAgentForTask(task) {
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
+  // Determine execution lane and acquire slot
+  const laneName = determineLane(task);
+  if (!hasCapacity(laneName)) {
+    // Wait for lane availability (max 30 seconds)
+    const laneResult = await waitForLane(laneName, agentId, { timeoutMs: 30000, metadata: { taskId: task.id } });
+    if (!laneResult.success) {
+      emitLog('warning', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
+      cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'lane-capacity', lane: laneName });
+      return null;
+    }
+  } else {
+    const laneResult = acquire(laneName, agentId, { taskId: task.id });
+    if (!laneResult.success) {
+      emitLog('warning', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
+      return null;
+    }
+  }
+
+  // Create tool execution for state tracking
+  const toolExecution = createToolExecution('agent-spawn', agentId, {
+    taskId: task.id,
+    lane: laneName,
+    priority: task.priority
+  });
+  startExecution(toolExecution.id);
+
+  // Helper to cleanup on early exit
+  const cleanupOnError = (error) => {
+    release(agentId);
+    errorExecution(toolExecution.id, { message: error });
+    completeExecution(toolExecution.id, { success: false });
+  };
+
   // Get configuration
   const config = await getConfig();
   let provider = await getActiveProvider();
 
   if (!provider) {
+    cleanupOnError('No active AI provider configured');
     cosEvents.emit('agent:error', { taskId: task.id, error: 'No active AI provider configured' });
     return null;
   }
@@ -687,9 +743,11 @@ export async function spawnAgentForTask(task) {
       provider = fallbackResult.provider;
     } else {
       // No fallback available - emit error and defer task
+      const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
+      cleanupOnError(errorMsg);
       cosEvents.emit('agent:error', {
         taskId: task.id,
-        error: `Provider ${provider.id} unavailable (${status.message}) and no fallback available`,
+        error: errorMsg,
         providerId: provider.id,
         providerStatus: status
       });
@@ -785,15 +843,15 @@ export async function spawnAgentForTask(task) {
   // Build CLI-specific spawn configuration
   const cliConfig = buildCliSpawnConfig(provider, selectedModel);
 
-  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command });
+  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName });
 
   // Use CoS Runner if available, otherwise spawn directly
   if (useRunner) {
-    return spawnViaRunner(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig);
+    return spawnViaRunner(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, toolExecution.id, laneName);
   }
 
   // Direct spawn mode (fallback)
-  return spawnDirectly(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, agentDir);
+  return spawnDirectly(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, agentDir, toolExecution.id, laneName);
 }
 
 /**
@@ -830,7 +888,7 @@ async function waitForRunnerStability() {
 /**
  * Spawn agent via CoS Runner (isolated PM2 process)
  */
-async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig) {
+async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, executionId, laneName) {
   // Wait for runner to be stable to prevent orphaned agents during rolling restarts
   await waitForRunnerStability();
 
@@ -843,7 +901,9 @@ async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provi
     providerId: provider.id,
     hasStartedWorking: false,
     startedAt: Date.now(),
-    initializationTimeout: null
+    initializationTimeout: null,
+    executionId,
+    laneName
   };
   runnerAgents.set(agentId, agentInfo);
 
@@ -885,7 +945,22 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     return;
   }
 
-  const { task, runId, model } = agent;
+  const { task, runId, model, executionId, laneName } = agent;
+
+  // Release execution lane
+  if (laneName) {
+    release(agentId);
+  }
+
+  // Complete tool execution tracking
+  if (executionId) {
+    if (success) {
+      completeExecution(executionId, { success: true, duration });
+    } else {
+      errorExecution(executionId, { message: `Agent exited with code ${exitCode}`, code: exitCode });
+      completeExecution(executionId, { success: false });
+    }
+  }
 
   // Read output from agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -954,7 +1029,7 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 /**
  * Spawn agent directly (fallback when runner not available)
  */
-async function spawnDirectly(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, agentDir) {
+async function spawnDirectly(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, agentDir, executionId, laneName) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
 
   // Ensure workspacePath is valid
@@ -988,7 +1063,9 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     startedAt: Date.now(),
     runId,
     pid: claudeProcess.pid,
-    providerId: provider.id
+    providerId: provider.id,
+    executionId,
+    laneName
   });
 
   // Store PID in persisted state for zombie detection
@@ -1031,6 +1108,18 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
   claudeProcess.on('error', async (err) => {
     clearTimeout(initializationTimeout);
     console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
+
+    // Release execution lane
+    if (laneName) {
+      release(agentId);
+    }
+
+    // Complete tool execution tracking with error
+    if (executionId) {
+      errorExecution(executionId, { message: err.message, category: 'spawn-error' });
+      completeExecution(executionId, { success: false });
+    }
+
     cosEvents.emit('agent:error', { agentId, error: err.message });
     await completeAgent(agentId, { success: false, error: err.message });
     await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
@@ -1043,6 +1132,21 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
+
+    // Release execution lane
+    if (agentData?.laneName) {
+      release(agentId);
+    }
+
+    // Complete tool execution tracking
+    if (agentData?.executionId) {
+      if (success) {
+        completeExecution(agentData.executionId, { success: true, duration });
+      } else {
+        errorExecution(agentData.executionId, { message: `Agent exited with code ${code}`, code });
+        completeExecution(agentData.executionId, { success: false });
+      }
+    }
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 

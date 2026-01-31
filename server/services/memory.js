@@ -14,6 +14,7 @@ import { cosEvents, updateAgent } from './cos.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity, cosineSimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
 import { readJSONFile } from '../lib/fileUtils.js';
+import * as memoryBM25 from './memoryBM25.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -209,6 +210,15 @@ export async function createMemory(data, embedding = null) {
       await saveEmbeddings(embeddings);
     }
 
+    // Index in BM25 for text search (async, non-blocking)
+    memoryBM25.indexMemory({
+      id: memory.id,
+      content: memory.content,
+      type: memory.type,
+      tags: memory.tags,
+      source: memory.sourceAppId
+    }).catch(err => console.error(`⚠️ BM25 index error: ${err.message}`));
+
     console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
     cosEvents.emit('memory:created', { id, type: memory.type, summary: memory.summary });
 
@@ -324,6 +334,17 @@ export async function updateMemory(id, updates) {
       await saveIndex(index);
     }
 
+    // Update BM25 index if content changed
+    if (updates.content || updates.tags) {
+      memoryBM25.indexMemory({
+        id: memory.id,
+        content: memory.content,
+        type: memory.type,
+        tags: memory.tags,
+        source: memory.sourceAppId
+      }).catch(err => console.error(`⚠️ BM25 index error: ${err.message}`));
+    }
+
     console.log(`🧠 Memory updated: ${id}`);
     cosEvents.emit('memory:updated', { id, updates });
 
@@ -376,6 +397,10 @@ export async function deleteMemory(id, hard = false) {
       const embeddings = await loadEmbeddings();
       delete embeddings.vectors[id];
       await saveEmbeddings(embeddings);
+
+      // Remove from BM25 index
+      memoryBM25.removeMemoryFromIndex(id)
+        .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
     } else {
       // Soft delete - mark as archived
       await updateMemory(id, { status: 'archived' });
@@ -473,6 +498,10 @@ export async function rejectMemory(id) {
     delete embeddings.vectors[id];
     await saveEmbeddings(embeddings);
 
+    // Remove from BM25 index
+    memoryBM25.removeMemoryFromIndex(id)
+      .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
+
     console.log(`🧠 Memory rejected: ${id}`);
     cosEvents.emit('memory:rejected', { id });
 
@@ -525,6 +554,119 @@ export async function searchMemories(queryEmbedding, options = {}) {
     .filter(Boolean);
 
   return { total: results.length, memories: results };
+}
+
+/**
+ * Hybrid search combining BM25 text matching and vector similarity
+ * Uses Reciprocal Rank Fusion (RRF) to merge rankings
+ *
+ * @param {string} query - Text query for BM25
+ * @param {number[]} queryEmbedding - Vector embedding for semantic search
+ * @param {Object} options - Search options
+ * @returns {Promise<{total: number, memories: Array}>}
+ */
+export async function hybridSearchMemories(query, queryEmbedding, options = {}) {
+  const { limit = 20, minRelevance = 0.5, bm25Weight = 0.4, vectorWeight = 0.6 } = options
+
+  const index = await loadIndex()
+  const embeddings = await loadEmbeddings()
+  const indexMap = new Map(index.memories.map(m => [m.id, m]))
+
+  // Get BM25 results
+  const bm25Results = query
+    ? await memoryBM25.searchBM25(query, { limit: limit * 2, threshold: 0.05 })
+    : []
+
+  // Get vector results
+  let vectorResults = []
+  if (queryEmbedding && Object.keys(embeddings.vectors).length > 0) {
+    const similar = findAboveThreshold(queryEmbedding, embeddings.vectors, minRelevance * 0.5)
+    vectorResults = similar.slice(0, limit * 2).map(r => ({
+      id: r.id,
+      score: r.similarity
+    }))
+  }
+
+  // Apply Reciprocal Rank Fusion (RRF)
+  // RRF score = sum(1 / (k + rank)) across all rankings
+  const RRF_K = 60 // Standard RRF constant
+  const rrfScores = new Map()
+
+  // Add BM25 contributions
+  bm25Results.forEach((result, rank) => {
+    const current = rrfScores.get(result.id) || { bm25Rank: null, vectorRank: null, rrfScore: 0 }
+    current.bm25Rank = rank + 1
+    current.rrfScore += bm25Weight / (RRF_K + rank + 1)
+    rrfScores.set(result.id, current)
+  })
+
+  // Add vector contributions
+  vectorResults.forEach((result, rank) => {
+    const current = rrfScores.get(result.id) || { bm25Rank: null, vectorRank: null, rrfScore: 0 }
+    current.vectorRank = rank + 1
+    current.rrfScore += vectorWeight / (RRF_K + rank + 1)
+    rrfScores.set(result.id, current)
+  })
+
+  // Filter and sort by RRF score
+  let results = Array.from(rrfScores.entries())
+    .map(([id, data]) => {
+      const meta = indexMap.get(id)
+      if (!meta || meta.status !== 'active') return null
+
+      // Apply type/category/tag/app filters
+      if (options.types?.length > 0 && !options.types.includes(meta.type)) return null
+      if (options.categories?.length > 0 && !options.categories.includes(meta.category)) return null
+      if (options.tags?.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return null
+      if (options.appId && meta.sourceAppId !== options.appId) return null
+
+      return {
+        ...meta,
+        rrfScore: data.rrfScore,
+        bm25Rank: data.bm25Rank,
+        vectorRank: data.vectorRank,
+        searchMethod: data.bm25Rank && data.vectorRank ? 'hybrid' :
+                     data.bm25Rank ? 'bm25' : 'vector'
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.rrfScore - a.rrfScore)
+    .slice(0, limit)
+
+  return { total: results.length, memories: results }
+}
+
+/**
+ * Rebuild the BM25 index from all memories
+ * Call this after bulk imports or to fix index inconsistencies
+ */
+export async function rebuildBM25Index() {
+  const index = await loadIndex()
+  const activeMemories = index.memories.filter(m => m.status === 'active')
+
+  // Load full content for each memory
+  const documents = []
+  for (const meta of activeMemories) {
+    const memory = await loadMemory(meta.id)
+    if (memory) {
+      documents.push({
+        id: memory.id,
+        content: memory.content,
+        type: memory.type,
+        tags: memory.tags,
+        source: memory.sourceAppId
+      })
+    }
+  }
+
+  return memoryBM25.rebuildIndex(documents)
+}
+
+/**
+ * Get BM25 index statistics
+ */
+export async function getBM25Stats() {
+  return memoryBM25.getStats()
 }
 
 /**
@@ -902,4 +1044,11 @@ export async function getStats() {
 export function invalidateCaches() {
   indexCache = null;
   embeddingsCache = null;
+}
+
+/**
+ * Flush BM25 index to disk
+ */
+export async function flushBM25Index() {
+  return memoryBM25.flush();
 }
