@@ -157,11 +157,11 @@ export default function Layout() {
     return false;
   };
 
-  const renderNavItem = (item) => {
+  const renderNavItem = (item, index) => {
     // Separator
     if (item.separator) {
       return (
-        <div key="separator" className="mx-4 my-2 border-t border-port-border" />
+        <div key={`separator-${index}`} className="mx-4 my-2 border-t border-port-border" />
       );
     }
 

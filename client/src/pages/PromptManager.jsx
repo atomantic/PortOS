@@ -122,11 +122,23 @@ export default function PromptManager() {
 
   const createStage = async () => {
     setSaving(true);
-    await fetch('/api/prompts', {
+    const res = await fetch('/api/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newStageForm)
     });
+
+    if (!res.ok) {
+      let message = 'Failed to create stage';
+      const errorBody = await res.json().catch(() => null);
+      if (errorBody?.error || errorBody?.message) {
+        message = errorBody.error || errorBody.message;
+      }
+      setSaving(false);
+      alert(message);
+      return;
+    }
+
     setSaving(false);
     setCreatingStage(false);
     setNewStageForm({

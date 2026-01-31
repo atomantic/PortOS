@@ -323,13 +323,18 @@ export function RunsHistoryPage() {
     setLoading(false);
   };
 
-  // Filter runs by status
+  // Filter runs by source and status
   const filteredRuns = runs.filter(run => {
-    if (statusFilter === 'all') return true;
-    if (statusFilter === 'success') return run.success === true;
-    if (statusFilter === 'running') return run.success === null;
-    if (statusFilter === 'failed') return run.success === false;
-    return true;
+    // Source filter (already applied via API, but kept for client-side consistency)
+    const matchesSource = sourceFilter === 'all' || run.source === sourceFilter;
+
+    // Status filter
+    let matchesStatus = true;
+    if (statusFilter === 'success') matchesStatus = run.success === true;
+    else if (statusFilter === 'running') matchesStatus = run.success === null;
+    else if (statusFilter === 'failed') matchesStatus = run.success === false;
+
+    return matchesSource && matchesStatus;
   });
 
   const handleDelete = async (id, e) => {

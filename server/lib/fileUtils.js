@@ -142,10 +142,16 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
     return defaultValue;
   }
 
-  // Attempt actual parse - the validation above catches most issues
-  // but we still need to handle syntax errors gracefully
-  const result = JSON.parse(str);
-  return result;
+  // Attempt actual parse - the validation above catches structural issues
+  // but syntax errors like trailing commas still need handling
+  try {
+    return JSON.parse(str);
+  } catch (err) {
+    if (logError) {
+      console.error(`⚠️ Failed to parse JSON${context ? ` in ${context}` : ''}: ${err.message}`);
+    }
+    return defaultValue;
+  }
 }
 
 /**

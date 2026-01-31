@@ -86,9 +86,10 @@ const aiToolkit = createAIToolkit({
       });
     },
     onRunFailed: (metadata, error, output) => {
+      const errorMessage = error?.message ?? String(error);
       errorEvents.emit('error', {
         code: 'AI_PROVIDER_EXECUTION_FAILED',
-        message: `AI provider ${metadata.providerName} execution failed: ${error}`,
+        message: `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
         severity: 'error',
         canAutoFix: true,
         timestamp: Date.now(),
@@ -101,9 +102,8 @@ const aiToolkit = createAIToolkit({
           duration: metadata.duration,
           workspacePath: metadata.workspacePath,
           workspaceName: metadata.workspaceName,
-          errorDetails: error,
-          promptPreview: metadata.prompt,
-          outputTail: output ? output.slice(-2000) : null
+          errorDetails: errorMessage
+          // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
         }
       });
     }

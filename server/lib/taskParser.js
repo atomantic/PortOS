@@ -88,19 +88,39 @@ function parseTaskLine(line) {
 }
 
 /**
- * Unescape newlines in metadata values
- * Converts \\n back to actual newlines
+ * Unescape newlines in metadata values.
+ *
+ * For values stored as JSON string literals (produced by escapeNewlines),
+ * this uses JSON.parse to correctly restore backslashes, newlines, etc.
+ * For legacy or simple values, falls back to simple replacement for backwards compatibility.
  */
 function unescapeNewlines(value) {
+  if (typeof value !== 'string') return value;
+  // Check if this looks like a JSON-encoded string (starts and ends with quotes)
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      // Fall through to legacy behavior if parsing fails
+    }
+  }
+  // Legacy fallback for backwards compatibility with existing data
   return value.replace(/\\n/g, '\n');
 }
 
 /**
- * Escape newlines in metadata values
- * Converts newlines to \\n for single-line storage
+ * Escape newlines in metadata values.
+ *
+ * For values containing special characters (newlines, backslashes), uses JSON
+ * string escaping for reversibility. Simple values are stored as-is.
  */
 function escapeNewlines(value) {
-  return value.replace(/\n/g, '\\n');
+  if (typeof value !== 'string') return String(value);
+  // Only use JSON encoding if the value contains characters that need escaping
+  if (value.includes('\n') || value.includes('\\')) {
+    return JSON.stringify(value);
+  }
+  return value;
 }
 
 /**
