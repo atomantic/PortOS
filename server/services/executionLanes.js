@@ -5,7 +5,7 @@
  * Lanes: critical (1), standard (2), background (3)
  */
 
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Lane configuration
 const LANES = {

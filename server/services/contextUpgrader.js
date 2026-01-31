@@ -7,7 +7,7 @@
 
 import * as thinkingLevels from './thinkingLevels.js'
 import * as localThinking from './localThinking.js'
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Upgrade triggers
 const UPGRADE_TRIGGERS = {

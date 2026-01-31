@@ -7,7 +7,7 @@
 
 import { createMemory } from './memory.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
-import { cosEvents } from './cos.js';
+import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
 

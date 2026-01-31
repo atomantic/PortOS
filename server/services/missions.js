@@ -8,7 +8,7 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'missions')
 

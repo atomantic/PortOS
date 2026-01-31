@@ -5,7 +5,7 @@
  * Provides structured error handling for agent operations.
  */
 
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Recovery strategies
 const STRATEGIES = {

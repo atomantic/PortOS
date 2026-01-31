@@ -6,7 +6,7 @@
  */
 
 import * as lmStudio from './lmStudioManager.js'
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Task complexity thresholds for escalation
 const COMPLEXITY_THRESHOLDS = {

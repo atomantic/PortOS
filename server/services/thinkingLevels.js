@@ -5,7 +5,7 @@
  * Hierarchy: task → hooks → agent → provider defaults
  */
 
-import { cosEvents } from './cos.js'
+import { cosEvents } from './cosEvents.js'
 
 // Thinking level definitions
 const THINKING_LEVELS = {

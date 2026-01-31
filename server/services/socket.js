@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { streamDetection } from './streamingDetect.js';
-import { cosEvents } from './cos.js';
+import { cosEvents } from './cosEvents.js';
 import { appsEvents } from './apps.js';
 import { errorEvents } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
