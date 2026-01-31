@@ -74,14 +74,11 @@ export async function enhanceTaskPrompt(description, context = '') {
     .replace('{contextSection}', contextSection);
 
   // Create a run for this enhancement
-  const runId = `enhance-${Date.now().toString(36)}`;
-  await createRun({
-    id: runId,
+  const { runId } = await createRun({
     providerId: provider.id,
     model,
     prompt: fullPrompt,
-    source: 'task-enhancement',
-    status: 'running'
+    source: 'task-enhancement'
   });
 
   // Collect the response
