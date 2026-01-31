@@ -10,7 +10,7 @@ export default function PromptManager() {
   // System stages that are protected
   const systemStages = [
     'cos-agent-briefing', 'cos-evaluate', 'cos-report-summary', 'cos-self-improvement',
-    'brain-classifier', 'brain-daily-digest', 'brain-weekly-review',
+    'cos-task-enhance', 'brain-classifier', 'brain-daily-digest', 'brain-weekly-review',
     'memory-evaluate', 'app-detection'
   ];
 
@@ -238,7 +238,7 @@ export default function PromptManager() {
               </button>
             </div>
             <div className="space-y-1">
-              {Object.entries(stages).map(([name, config]) => (
+              {Object.entries(stages).sort(([a], [b]) => a.localeCompare(b)).map(([name, config]) => (
                 <div
                   key={name}
                   className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
@@ -376,7 +376,7 @@ export default function PromptManager() {
               </button>
             </div>
             <div className="space-y-1">
-              {Object.entries(variables).map(([key, v]) => (
+              {Object.entries(variables).sort(([a], [b]) => a.localeCompare(b)).map(([key, v]) => (
                 <div
                   key={key}
                   className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
