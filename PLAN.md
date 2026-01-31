@@ -56,6 +56,7 @@ pm2 logs
 - [x] M31: LLM Memory Classification - Intelligent memory extraction with quality filtering
 - [x] M32: Brain System - Second-brain capture and classification. See [Brain System](./docs/features/brain-system.md)
 - [x] M33: Soul System - Digital twin identity scaffold management
+- [x] M35: Chief of Staff Enhancement - Proactive autonomous agent with hybrid memory, missions, LM Studio, thinking levels
 
 ### Documentation
 - [Architecture Overview](./docs/ARCHITECTURE.md) - System design, data flow
@@ -923,3 +924,136 @@ confidenceSchema = z.object({
 - `FeedbackRater.jsx` - "Sounds like me" rating interface
 - `GapRecommendations.jsx` - Prioritized enrichment suggestions
 - `TraitEditor.jsx` - Manual trait override interface
+
+---
+
+## M35: Chief of Staff Enhancement
+
+Comprehensive upgrade to COS from reactive task executor to proactive autonomous agent.
+
+### Implementation Status
+
+| Phase | Component | Status | Files Created |
+|-------|-----------|--------|---------------|
+| **Phase 1: Memory** | BM25 Algorithm | ✅ Complete | `server/lib/bm25.js` |
+| | BM25 Index Manager | ✅ Complete | `server/services/memoryBM25.js` |
+| | Session Delta Tracker | ✅ Complete | `server/services/sessionDelta.js` |
+| | Hybrid Search (BM25+Vector) | ✅ Complete | Modified `memory.js`, `memoryRetriever.js` |
+| **Phase 5: Architecture** | Tool State Machine | ✅ Complete | `server/services/toolStateMachine.js` |
+| | Agent Gateway | ✅ Complete | `server/services/agentGateway.js` |
+| | Error Recovery | ✅ Complete | `server/services/errorRecovery.js` |
+| | Agent Run Cache | ✅ Complete | `server/services/agentRunCache.js` |
+| | Spawner Integration | ✅ Complete | Modified `subAgentSpawner.js` |
+| **Phase 2: Execution** | Event Scheduler | ✅ Complete | `server/services/eventScheduler.js` |
+| | Execution Lanes | ✅ Complete | `server/services/executionLanes.js` |
+| | Missions Service | ✅ Complete | `server/services/missions.js` |
+| | Mission Data Files | ✅ Complete | `data/cos/missions/*.json` |
+| | COS Event-Driven Updates | ✅ Complete | Modified `cos.js` |
+| | Mission Task Generation | ✅ Complete | Modified `cos.js` |
+| **Phase 3: LM Studio** | LM Studio Manager | ✅ Complete | `server/services/lmStudioManager.js` |
+| | Local Thinking | ✅ Complete | `server/services/localThinking.js` |
+| | LM Studio Routes | ✅ Complete | `server/routes/lmstudio.js` |
+| **Phase 4: Thinking** | Thinking Levels | ✅ Complete | `server/services/thinkingLevels.js` |
+| | Context Upgrader | ✅ Complete | `server/services/contextUpgrader.js` |
+| | COS Evolution | ✅ Complete | `server/services/cosEvolution.js` |
+| | Spawner Thinking Levels | ✅ Complete | Modified `subAgentSpawner.js` |
+
+### Features Added
+
+**Phase 1: Hybrid Memory Search**
+- BM25 algorithm with IDF weighting and inverted index
+- Reciprocal Rank Fusion (RRF) combining BM25 + vector search
+- 40% BM25 / 60% vector weighting for optimal retrieval
+- Session delta tracking for pending bytes/messages
+
+**Phase 5: Agent Architecture**
+- Tool execution state machine (IDLE → START → RUNNING → UPDATE → END → ERROR)
+- Agent gateway with request deduplication and 10-minute cache
+- Error recovery with 6 strategies: retry, escalate, fallback, decompose, defer, investigate
+- Agent run cache for outputs, tool results, and contexts
+
+**Phase 2: Proactive Execution**
+- Event scheduler with cron expressions and timeout-safe timers (clamps to 2^31-1)
+- Execution lanes: critical (1), standard (2), background (3) concurrent slots
+- Mission system for long-term goals with sub-tasks
+- Initial missions: pump-funner and solana-accounts improvements
+
+**Phase 3: Local Model Integration**
+- LM Studio availability checking and model discovery
+- Quick completions for local thinking without cloud costs
+- Memory classification using local models
+- Embeddings via local LM Studio
+
+**Phase 4: Dynamic Model Selection**
+- Thinking levels: off, minimal, low, medium, high, xhigh
+- Level resolution hierarchy: task → hooks → agent → provider
+- Context upgrader with complexity analysis
+- COS self-evolution with automatic model changes
+
+### New API Endpoints
+
+| Route | Description |
+|-------|-------------|
+| GET /api/lmstudio/status | Check LM Studio availability |
+| GET /api/lmstudio/models | List loaded models |
+| POST /api/lmstudio/completion | Local model completion |
+| POST /api/lmstudio/analyze-task | Analyze task complexity |
+| POST /api/lmstudio/classify-memory | Classify memory content |
+
+### Design Decisions
+
+1. **Mission Autonomy**: Full autonomy - COS can implement changes, run tests, commit without approval for managed apps
+2. **Model Usage**: Local-first with LM Studio, no cloud API costs for thinking
+3. **Self-Modification**: Full autonomy - COS can change its own base thinking model without user approval
+
+### Test Suite
+
+All COS Enhancement modules have comprehensive unit tests:
+
+| Test File | Module | Tests |
+|-----------|--------|-------|
+| `server/lib/bm25.test.js` | BM25 Algorithm | Tokenization, IDF, indexing, search, serialization |
+| `server/services/toolStateMachine.test.js` | Tool State Machine | State transitions, execution lifecycle, error recovery |
+| `server/services/thinkingLevels.test.js` | Thinking Levels | Level resolution, model selection, upgrade/downgrade |
+| `server/services/executionLanes.test.js` | Execution Lanes | Lane acquisition, release, capacity, promotion |
+| `server/services/errorRecovery.test.js` | Error Recovery | Error analysis, strategy selection, execution |
+| `server/services/agentRunCache.test.js` | Agent Run Cache | Caching, TTL, invalidation, statistics |
+| `server/services/missions.test.js` | Missions Service | CRUD, sub-tasks, proactive generation, archiving |
+
+Run all tests:
+```bash
+cd server && npm test
+# 24 test files, 722 tests
+```
+
+### Integration Complete
+
+All M35 phases have been integrated into the main codebase:
+
+1. ✅ Tool state machine integrated into `subAgentSpawner.js`
+   - Creates execution tracking per agent spawn
+   - Releases lanes on completion/error
+   - Completes executions with success/failure status
+
+2. ✅ Event scheduler integrated into `cos.js`
+   - Replaced setInterval with `scheduleEvent()` for evaluation loop
+   - Replaced setInterval with `scheduleEvent()` for health check loop
+   - Events use timeout-safe timers (clamps to 2^31-1)
+
+3. ✅ Thinking levels integrated into `subAgentSpawner.js`
+   - `resolveThinkingLevel()` checks task → agent → provider hierarchy
+   - `getModelForLevel()` maps thinking levels to actual models
+   - `isLocalPreferred()` identifies local-first execution opportunities
+
+4. ✅ Execution lanes integrated into `subAgentSpawner.js`
+   - `determineLane()` assigns lane based on task priority
+   - `acquire()` and `waitForLane()` manage lane slots
+   - `release()` frees lane on agent completion
+
+5. ✅ Missions connected to proactive task generation
+   - `generateMissionTasks()` generates tasks from active missions
+   - Mission tasks inserted after user/system tasks, before idle review
+   - Tasks respect `autonomyLevel` for approval requirements
+3. Update `subAgentSpawner.js` to use thinking levels and context upgrader
+4. Add lane acquisition before agent spawning
+5. Connect missions to proactive task generation
