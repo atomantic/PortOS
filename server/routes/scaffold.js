@@ -1,12 +1,14 @@
 import { Router } from 'express';
-import { mkdir, writeFile, readdir, copyFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
+import { homedir } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -15,17 +17,62 @@ const TEMPLATES_DIR = join(__dirname, '../../templates');
 
 const router = Router();
 
+// GET /api/directories - Browse directories for directory picker
+router.get('/directories', asyncHandler(async (req, res) => {
+  const { path: dirPath } = req.query;
+
+  // Default to parent of PortOS project if no path provided
+  const defaultPath = resolve(join(__dirname, '../../..'));
+  const targetPath = dirPath ? resolve(dirPath) : defaultPath;
+
+  // Validate path exists and is a directory
+  if (!existsSync(targetPath)) {
+    throw new ServerError('Directory does not exist', {
+      status: 400,
+      code: 'INVALID_PATH'
+    });
+  }
+
+  const stats = await stat(targetPath);
+  if (!stats.isDirectory()) {
+    throw new ServerError('Path is not a directory', {
+      status: 400,
+      code: 'NOT_A_DIRECTORY'
+    });
+  }
+
+  // Read directory contents
+  const entries = await readdir(targetPath, { withFileTypes: true });
+  const directories = entries
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map(entry => ({
+      name: entry.name,
+      path: join(targetPath, entry.name)
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Get parent directory info
+  const parentPath = dirname(targetPath);
+  const canGoUp = parentPath !== targetPath; // Can't go above root
+
+  res.json({
+    currentPath: targetPath,
+    parentPath: canGoUp ? parentPath : null,
+    directories
+  });
+}));
+
 // GET /api/templates - List available templates
 router.get('/templates', asyncHandler(async (req, res) => {
   const templates = [
     {
       id: 'portos-stack',
       name: 'PortOS Stack',
-      description: 'Express + React + Vite with Tailwind, PM2, and GitHub Actions CI/CD',
+      description: 'Express + React + Vite with Tailwind, PM2, AI providers, and GitHub Actions CI/CD',
       type: 'portos-stack',
       icon: 'layers',
       builtIn: true,
-      features: ['Express.js API', 'React + Vite frontend', 'Tailwind CSS', 'PM2 ecosystem', 'GitHub Actions CI/CD', 'Collapsible nav layout'],
+      features: ['Express.js API', 'React + Vite frontend', 'Tailwind CSS', 'PM2 ecosystem', 'AI Provider Integration', 'GitHub Actions CI/CD', 'Collapsible nav layout'],
       ports: { ui: true, api: true }
     },
     {
@@ -243,7 +290,8 @@ app.listen(PORT, '0.0.0.0', () => {
 
       // Update package.json to add express and server script
       const pkgPath = join(repoPath, 'package.json');
-      const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
+      const pkgContent = await readFile(pkgPath, 'utf-8');
+      const pkg = safeJSONParse(pkgContent, { dependencies: {}, devDependencies: {}, scripts: {} });
       pkg.dependencies = pkg.dependencies || {};
       pkg.dependencies.express = '^4.21.2';
       pkg.dependencies.cors = '^2.8.5';
@@ -336,6 +384,7 @@ app.listen(PORT, '0.0.0.0', () => {
       },
       dependencies: {
         'lucide-react': '^0.562.0',
+        'portos-ai-toolkit': '^0.1.0',
         'react': '^18.3.1',
         'react-dom': '^18.3.1',
         'react-hot-toast': '^2.6.0',
@@ -446,10 +495,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 `);
 
     await writeFile(join(clientSrcDir, 'App.jsx'), `import { Routes, Route, Link } from 'react-router-dom';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Home, Brain, Info } from 'lucide-react';
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import AIProviders from './pages/AIProviders';
 
-function Home() {
+function HomePage() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">Welcome to ${name}</h1>
@@ -462,13 +513,14 @@ function About() {
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">About</h1>
-      <p className="text-gray-400">Express + React + Vite + Tailwind</p>
+      <p className="text-gray-400">Express + React + Vite + Tailwind + AI Provider Integration</p>
     </div>
   );
 }
 
 export default function App() {
   const [navOpen, setNavOpen] = useState(true);
+  const location = useLocation();
 
   return (
     <div className="flex min-h-screen bg-app-bg text-white">
@@ -480,18 +532,27 @@ export default function App() {
         >
           {navOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
-        {navOpen && (
-          <div className="flex flex-col gap-1 p-2">
-            <Link to="/" className="p-2 rounded hover:bg-app-border">Home</Link>
-            <Link to="/about" className="p-2 rounded hover:bg-app-border">About</Link>
-          </div>
-        )}
+        <div className="flex flex-col gap-1 p-2">
+          <Link to="/" className={\`flex items-center gap-2 p-2 rounded hover:bg-app-border \${location.pathname === '/' ? 'bg-app-accent/20 text-app-accent' : ''}\`}>
+            <Home size={18} />
+            {navOpen && <span>Home</span>}
+          </Link>
+          <Link to="/providers" className={\`flex items-center gap-2 p-2 rounded hover:bg-app-border \${location.pathname === '/providers' ? 'bg-app-accent/20 text-app-accent' : ''}\`}>
+            <Brain size={18} />
+            {navOpen && <span>AI Providers</span>}
+          </Link>
+          <Link to="/about" className={\`flex items-center gap-2 p-2 rounded hover:bg-app-border \${location.pathname === '/about' ? 'bg-app-accent/20 text-app-accent' : ''}\`}>
+            <Info size={18} />
+            {navOpen && <span>About</span>}
+          </Link>
+        </div>
       </nav>
 
       {/* Main content */}
-      <main className="flex-1">
+      <main className="flex-1 overflow-auto">
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/providers" element={<AIProviders />} />
           <Route path="/about" element={<About />} />
         </Routes>
       </main>
@@ -507,6 +568,19 @@ export default function App() {
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+`);
+
+    // === Client pages ===
+    const pagesDir = join(clientSrcDir, 'pages');
+    await mkdir(pagesDir, { recursive: true });
+
+    // AIProviders page - uses shared component from ai-toolkit
+    await writeFile(join(pagesDir, 'AIProviders.jsx'), `import { AIProviders } from 'portos-ai-toolkit/client';
+import toast from 'react-hot-toast';
+
+export default function AIProvidersPage() {
+  return <AIProviders onError={toast.error} colorPrefix="app" />;
 }
 `);
 
@@ -527,6 +601,7 @@ body {
       dependencies: {
         'cors': '^2.8.5',
         'express': '^4.21.2',
+        'portos-ai-toolkit': '^0.1.0',
         'socket.io': '^4.8.3',
         'zod': '^3.24.1'
       },
@@ -541,6 +616,7 @@ body {
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { createAIToolkit } from 'portos-ai-toolkit/server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -552,6 +628,13 @@ const PORT = process.env.PORT || ${apiPort || 3001};
 
 app.use(cors());
 app.use(express.json());
+
+// Initialize AI Toolkit with routes for providers, runs, and prompts
+const aiToolkit = createAIToolkit({
+  dataDir: './data',
+  io
+});
+aiToolkit.mountRoutes(app);
 
 // Health endpoint
 app.get('/api/health', (req, res) => {
@@ -583,6 +666,73 @@ export default defineConfig({
 `);
 
     addStep('Create server', 'done');
+
+    // === Default Data (providers, etc.) ===
+    // Data dir at project root (server runs with cwd at project root)
+    const dataDir = join(repoPath, 'data');
+    await mkdir(dataDir, { recursive: true });
+
+    const defaultProviders = {
+      activeProvider: 'claude-code',
+      providers: {
+        'claude-code': {
+          id: 'claude-code',
+          name: 'Claude Code CLI',
+          type: 'cli',
+          command: 'claude',
+          args: ['--print'],
+          models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101'],
+          defaultModel: 'claude-sonnet-4-5-20250929',
+          lightModel: 'claude-haiku-4-5-20251001',
+          mediumModel: 'claude-sonnet-4-5-20250929',
+          heavyModel: 'claude-opus-4-5-20251101',
+          timeout: 300000,
+          enabled: true,
+          envVars: {}
+        },
+        'codex': {
+          id: 'codex',
+          name: 'Codex CLI',
+          type: 'cli',
+          command: 'codex',
+          args: [],
+          models: ['gpt-5', 'gpt-5-codex'],
+          defaultModel: 'gpt-5-codex',
+          lightModel: 'gpt-5',
+          mediumModel: 'gpt-5-codex',
+          heavyModel: 'gpt-5-codex',
+          timeout: 300000,
+          enabled: true,
+          envVars: {}
+        },
+        'lm-studio': {
+          id: 'lm-studio',
+          name: 'LM Studio (Local)',
+          type: 'api',
+          endpoint: 'http://localhost:1234/v1',
+          apiKey: 'lm-studio',
+          models: [],
+          defaultModel: null,
+          timeout: 300000,
+          enabled: false,
+          envVars: {}
+        },
+        'ollama': {
+          id: 'ollama',
+          name: 'Ollama (Local)',
+          type: 'api',
+          endpoint: 'http://localhost:11434/v1',
+          apiKey: '',
+          models: [],
+          defaultModel: null,
+          timeout: 300000,
+          enabled: false,
+          envVars: {}
+        }
+      }
+    };
+    await writeFile(join(dataDir, 'providers.json'), JSON.stringify(defaultProviders, null, 2));
+    addStep('Create default data', 'done');
 
     // === GitHub Actions CI ===
     await writeFile(join(workflowsDir, 'ci.yml'), `name: CI
@@ -779,11 +929,20 @@ pm2 start ecosystem.config.cjs
 ${name} is a monorepo with Express.js server (port ${apiPort || 3001}) and React/Vite client (port ${uiPort || 3000}). PM2 manages app lifecycles.
 
 ### Server (\`server/\`)
-- **index.js**: Express server with Socket.IO
+- **index.js**: Express server with Socket.IO and AI toolkit integration
 
 ### Client (\`client/src/\`)
 - **App.jsx**: Main component with routing and collapsible nav
 - **main.jsx**: React entry point
+
+### AI Provider Integration
+
+This project includes \`portos-ai-toolkit\` for AI provider management. The server exposes:
+- \`GET/POST /api/providers\` - Manage AI providers (CLI or API-based)
+- \`GET/POST /api/runs\` - Execute and track AI runs
+- \`GET/POST /api/prompts\` - Manage prompt templates
+
+Provider data is stored in \`./data/providers.json\`.
 
 ## Code Conventions
 
@@ -813,8 +972,16 @@ npm run dev
 
 - **Client**: React + Vite + Tailwind (port ${uiPort || 3000})
 - **Server**: Express + Socket.IO (port ${apiPort || 3001})
+- **AI**: portos-ai-toolkit for provider management
 - **PM2**: Process management
 - **CI/CD**: GitHub Actions
+
+## API Endpoints
+
+- \`GET /api/health\` - Health check
+- \`GET/POST /api/providers\` - AI provider management
+- \`GET/POST /api/runs\` - AI execution runs
+- \`GET/POST /api/prompts\` - Prompt templates
 
 ## Scripts
 

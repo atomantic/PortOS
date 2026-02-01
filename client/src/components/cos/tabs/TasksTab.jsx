@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, RefreshCw, Image, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -22,12 +22,15 @@ import SortableTaskItem from './SortableTaskItem';
 
 export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [showAddTask, setShowAddTask] = useState(false);
-  const [newTask, setNewTask] = useState({ id: '', description: '', context: '', model: '', provider: '', app: '' });
+  const [newTask, setNewTask] = useState({ description: '', context: '', model: '', provider: '', app: '' });
+  const [addToTop, setAddToTop] = useState(false);
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [durations, setDurations] = useState(null);
   const [showCompletedUserTasks, setShowCompletedUserTasks] = useState(false);
   const [showCompletedSystemTasks, setShowCompletedSystemTasks] = useState(false);
+  const [enhancePrompt, setEnhancePrompt] = useState(false);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   const fileInputRef = useRef(null);
 
   // Fetch task duration estimates from learning data
@@ -42,9 +45,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const cosTasks = useMemo(() => tasks.cos?.tasks || [], [tasks.cos?.tasks]);
   const awaitingApproval = useMemo(() => tasks.cos?.awaitingApproval || [], [tasks.cos?.awaitingApproval]);
 
-  // Split tasks into pending (includes in_progress, blocked) and completed
+  // Split tasks by status for system tasks
   const pendingSystemTasks = useMemo(() =>
-    cosTasks.filter(t => t.status !== 'completed'),
+    cosTasks.filter(t => t.status === 'pending'),
+    [cosTasks]
+  );
+  const activeSystemTasks = useMemo(() =>
+    cosTasks.filter(t => t.status === 'in_progress'),
+    [cosTasks]
+  );
+  const blockedSystemTasks = useMemo(() =>
+    cosTasks.filter(t => t.status === 'blocked'),
     [cosTasks]
   );
   const completedSystemTasks = useMemo(() =>
@@ -58,9 +69,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     [providers]
   );
 
-  // Memoize pending tasks from local state for drag-and-drop (only pending tasks are sortable)
+  // Split user tasks by status (only pending tasks are sortable)
   const pendingUserTasksLocal = useMemo(() =>
-    userTasksLocal.filter(t => t.status !== 'completed'),
+    userTasksLocal.filter(t => t.status === 'pending'),
+    [userTasksLocal]
+  );
+  const activeUserTasksLocal = useMemo(() =>
+    userTasksLocal.filter(t => t.status === 'in_progress'),
+    [userTasksLocal]
+  );
+  const blockedUserTasksLocal = useMemo(() =>
+    userTasksLocal.filter(t => t.status === 'blocked'),
     [userTasksLocal]
   );
   const completedUserTasksLocal = useMemo(() =>
@@ -136,23 +155,47 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       return;
     }
 
-    const taskId = newTask.id.trim() || `task-${Date.now()}`;
+    let finalDescription = newTask.description;
+
+    // If enhance checkbox is checked, call the enhance API first
+    if (enhancePrompt) {
+      setIsEnhancing(true);
+      const enhanceResult = await api.enhanceCosTaskPrompt({
+        description: newTask.description,
+        context: newTask.context
+      }).catch(err => {
+        toast.error(`Enhancement failed: ${err.message}`);
+        setIsEnhancing(false);
+        return null;
+      });
+
+      if (!enhanceResult) {
+        return;
+      }
+
+      finalDescription = enhanceResult.enhancedDescription;
+      toast.success('Prompt enhanced');
+      setIsEnhancing(false);
+    }
+
     await api.addCosTask({
-      id: taskId,
-      description: newTask.description,
+      description: finalDescription,
       context: newTask.context,
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
       app: newTask.app || undefined,
-      screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined
+      screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
+      position: addToTop ? 'top' : 'bottom'
     }).catch(err => {
       toast.error(err.message);
       return;
     });
 
     toast.success('Task added');
-    setNewTask({ id: '', description: '', context: '', model: '', provider: '', app: '' });
+    setNewTask({ description: '', context: '', model: '', provider: '', app: '' });
     setScreenshots([]);
+    setAddToTop(false);
+    setEnhancePrompt(false);
     setShowAddTask(false);
     onRefresh();
   };
@@ -165,19 +208,23 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
           <div className="flex items-center gap-2">
             <button
+              onClick={async () => {
+                await api.forceCosEvaluate().catch(err => toast.error(err.message));
+                toast.success('Evaluation triggered');
+              }}
+              className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
+              aria-label="Run tasks now"
+            >
+              <Play size={16} aria-hidden="true" />
+              Run Now
+            </button>
+            <button
               onClick={() => setShowAddTask(!showAddTask)}
-              className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors"
+              className="flex items-center gap-1 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent px-3 py-1.5 rounded-lg transition-colors"
               aria-expanded={showAddTask}
             >
               <Plus size={16} aria-hidden="true" />
               Add Task
-            </button>
-            <button
-              onClick={onRefresh}
-              className="text-gray-500 hover:text-white transition-colors"
-              aria-label="Refresh tasks"
-            >
-              <RefreshCw size={16} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -186,17 +233,6 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
         {showAddTask && (
           <div className="bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
             <div className="space-y-3">
-              <div>
-                <label htmlFor="task-id" className="sr-only">Task ID</label>
-                <input
-                  id="task-id"
-                  type="text"
-                  placeholder="Task ID (auto-generated if empty)"
-                  value={newTask.id}
-                  onChange={e => setNewTask(t => ({ ...t, id: e.target.value }))}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                />
-              </div>
               <div>
                 <label htmlFor="task-description" className="sr-only">Task description (required)</label>
                 <input
@@ -208,6 +244,36 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                   aria-required="true"
                 />
+              </div>
+              <div className="flex items-center gap-6 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <label htmlFor="add-position" className="text-sm text-gray-400">Queue Position:</label>
+                  <button
+                    id="add-position"
+                    type="button"
+                    onClick={() => setAddToTop(!addToTop)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      addToTop
+                        ? 'bg-port-accent/20 text-port-accent border border-port-accent/50'
+                        : 'bg-port-bg text-gray-400 border border-port-border'
+                    }`}
+                    aria-pressed={addToTop}
+                  >
+                    {addToTop ? 'Top of Queue' : 'Bottom of Queue'}
+                  </button>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enhancePrompt}
+                    onChange={(e) => setEnhancePrompt(e.target.checked)}
+                    className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                  />
+                  <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                    <Sparkles size={14} className="text-yellow-500" />
+                    Enhance with AI
+                  </span>
+                </label>
               </div>
               <div>
                 <label htmlFor="task-context" className="sr-only">Context</label>
@@ -318,42 +384,50 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   onClick={() => {
                     setShowAddTask(false);
                     setScreenshots([]);
+                    setEnhancePrompt(false);
                   }}
                   className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+                  disabled={isEnhancing}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleAddTask}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors"
+                  disabled={isEnhancing}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[40px]"
                 >
-                  <Plus size={14} aria-hidden="true" />
-                  Add
+                  {isEnhancing ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                      Enhancing...
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={14} aria-hidden="true" />
+                      {enhancePrompt ? 'Enhance & Add' : 'Add'}
+                    </>
+                  )}
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Pending User Tasks */}
-        {pendingUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
+        {/* User Tasks Sections */}
+        {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No user tasks. Click "Add Task" or edit TASKS.md directly.
           </div>
         ) : (
           <div className="space-y-3">
             {/* Pending Section */}
-            <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                <span className="text-sm font-medium text-port-accent">
-                  Pending ({pendingUserTasksLocal.length})
-                </span>
-              </div>
-              {pendingUserTasksLocal.length === 0 ? (
-                <div className="p-4 text-center text-gray-500 text-sm">
-                  No pending tasks
+            {pendingUserTasksLocal.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-yellow-500">
+                    Pending ({pendingUserTasksLocal.length})
+                  </span>
                 </div>
-              ) : (
                 <div className="p-2">
                   <DndContext
                     sensors={sensors}
@@ -372,8 +446,40 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     </SortableContext>
                   </DndContext>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Active Section */}
+            {activeUserTasksLocal.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-accent">
+                    Active ({activeUserTasksLocal.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {activeUserTasksLocal.map(task => (
+                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Blocked Section */}
+            {blockedUserTasksLocal.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-error">
+                    Blocked ({blockedUserTasksLocal.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {blockedUserTasksLocal.map(task => (
+                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Completed Section - Collapsible */}
             {completedUserTasksLocal.length > 0 && (
@@ -405,32 +511,60 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       <div>
         <h3 className="text-lg font-semibold text-white mb-3">System Tasks (COS-TASKS.md)</h3>
 
-        {/* Pending System Tasks */}
-        {pendingSystemTasks.length === 0 && completedSystemTasks.length === 0 ? (
+        {/* System Tasks Sections */}
+        {pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && completedSystemTasks.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No system tasks.
           </div>
         ) : (
           <div className="space-y-3">
             {/* Pending Section */}
-            <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                <span className="text-sm font-medium text-port-accent">
-                  Pending ({pendingSystemTasks.length})
-                </span>
-              </div>
-              {pendingSystemTasks.length === 0 ? (
-                <div className="p-4 text-center text-gray-500 text-sm">
-                  No pending tasks
+            {pendingSystemTasks.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-yellow-500">
+                    Pending ({pendingSystemTasks.length})
+                  </span>
                 </div>
-              ) : (
                 <div className="p-2 space-y-1.5">
                   {pendingSystemTasks.map(task => (
                     <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Active Section */}
+            {activeSystemTasks.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-accent">
+                    Active ({activeSystemTasks.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {activeSystemTasks.map(task => (
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Blocked Section */}
+            {blockedSystemTasks.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-error">
+                    Blocked ({blockedSystemTasks.length})
+                  </span>
+                </div>
+                <div className="p-2 space-y-1.5">
+                  {blockedSystemTasks.map(task => (
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Completed Section - Collapsible */}
             {completedSystemTasks.length > 0 && (

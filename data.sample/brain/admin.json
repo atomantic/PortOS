@@ -1,0 +1,31 @@
+{
+  "records": {
+    "ad1a2b3c-d4e5-4f6a-7b8c-9d0e1f2a3b4c": {
+      "title": "Renew car registration",
+      "status": "open",
+      "dueDate": "2024-01-31T23:59:59.000Z",
+      "nextAction": "Go to DMV website and complete renewal",
+      "notes": "Registration expires end of January. Can do online.",
+      "createdAt": "2024-01-02T09:00:00.000Z",
+      "updatedAt": "2024-01-02T09:00:00.000Z"
+    },
+    "ad2b3c4d-e5f6-4a7b-8c9d-0e1f2a3b4c5d": {
+      "title": "Schedule annual physical",
+      "status": "waiting",
+      "dueDate": "2024-02-15T23:59:59.000Z",
+      "nextAction": "Waiting for callback from doctor's office",
+      "notes": "Called and left message. They said they'd call back to schedule.",
+      "createdAt": "2024-01-05T10:00:00.000Z",
+      "updatedAt": "2024-01-08T09:00:00.000Z"
+    },
+    "ad3c4d5e-f6a7-4b8c-9d0e-1f2a3b4c5d6e": {
+      "title": "File Q4 expenses",
+      "status": "done",
+      "dueDate": "2024-01-10T23:59:59.000Z",
+      "nextAction": null,
+      "notes": "Submitted all Q4 expense reports. Approved and reimbursement processed.",
+      "createdAt": "2024-01-03T09:00:00.000Z",
+      "updatedAt": "2024-01-09T11:00:00.000Z"
+    }
+  }
+}

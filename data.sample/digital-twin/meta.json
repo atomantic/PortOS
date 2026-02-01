@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "documents": [
+    {
+      "id": "soul-core",
+      "filename": "SOUL.md",
+      "title": "Soul Document - Core Identity",
+      "category": "core",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "id": "soul-tests",
+      "filename": "BEHAVIORAL_TEST_SUITE.md",
+      "title": "Behavioral Test Suite",
+      "category": "behavioral",
+      "enabled": true,
+      "priority": 100
+    }
+  ],
+  "testHistory": [],
+  "enrichment": {
+    "completedCategories": [],
+    "lastSession": null,
+    "questionsAnswered": {}
+  },
+  "settings": {
+    "autoInjectToCoS": true,
+    "maxContextTokens": 4000
+  }
+}

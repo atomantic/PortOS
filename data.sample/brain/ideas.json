@@ -1,0 +1,28 @@
+{
+  "records": {
+    "i1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c": {
+      "title": "Voice-first capture mode",
+      "oneLiner": "Add voice transcription to Brain so thoughts can be captured hands-free via Whisper",
+      "notes": "Could use OpenAI Whisper API or local whisper.cpp. Would be great for capturing ideas while walking or driving.",
+      "tags": ["brain", "feature", "voice"],
+      "createdAt": "2024-01-07T08:00:00.000Z",
+      "updatedAt": "2024-01-07T08:00:00.000Z"
+    },
+    "i2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d": {
+      "title": "Weekly email digest",
+      "oneLiner": "Send the weekly review as an email so it reaches me even when I'm not using PortOS",
+      "notes": "Could integrate with SendGrid or use local SMTP. Include quick action links.",
+      "tags": ["brain", "email"],
+      "createdAt": "2024-01-06T14:00:00.000Z",
+      "updatedAt": "2024-01-06T14:00:00.000Z"
+    },
+    "i3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e": {
+      "title": "Spaced repetition for people",
+      "oneLiner": "Surface people you haven't contacted in a while using spaced repetition algorithm",
+      "notes": "Like Anki but for relationships. Remind me to reach out to people before the connection goes cold.",
+      "tags": ["brain", "people", "relationships"],
+      "createdAt": "2024-01-04T11:00:00.000Z",
+      "updatedAt": "2024-01-04T11:00:00.000Z"
+    }
+  }
+}

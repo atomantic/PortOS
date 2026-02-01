@@ -1,5 +1,6 @@
 import pm2 from 'pm2';
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
 
 /**
  * Connect to PM2 daemon and run an action
@@ -227,5 +228,48 @@ export async function startWithCommand(name, cwd, command) {
         resolve({ success: true, process: proc });
       });
     });
+  });
+}
+
+/**
+ * Start app(s) using ecosystem.config.cjs/js file
+ * This properly uses all env vars, scripts, args defined in the config
+ * @param {string} cwd Working directory containing ecosystem config
+ * @param {string[]} processNames Optional: specific processes to start (--only flag)
+ */
+export async function startFromEcosystem(cwd, processNames = []) {
+  return new Promise((resolve, reject) => {
+    const ecosystemFile = ['ecosystem.config.cjs', 'ecosystem.config.js']
+      .find(f => existsSync(`${cwd}/${f}`));
+
+    if (!ecosystemFile) {
+      return reject(new Error('No ecosystem.config.cjs or ecosystem.config.js found'));
+    }
+
+    const args = ['start', ecosystemFile];
+    if (processNames.length > 0) {
+      args.push('--only', processNames.join(','));
+    }
+
+    const child = spawn('pm2', args, { cwd, shell: false });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(stderr || `pm2 start exited with code ${code}`));
+      }
+      resolve({ success: true, output: stdout });
+    });
+
+    child.on('error', reject);
   });
 }

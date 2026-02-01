@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const execAsync = promisify(exec);
 
@@ -344,29 +345,33 @@ export async function streamDetection(socket, dirPath) {
   if (existsSync(pkgPath)) {
     const content = await readFile(pkgPath, 'utf-8').catch(() => null);
     if (content) {
-      const pkg = JSON.parse(content);
-      result.name = pkg.name || result.name;
-      result.description = pkg.description || '';
+      const pkg = safeJSONParse(content, null);
+      if (!pkg) {
+        emit('package', 'error', { message: 'Invalid package.json format' });
+      } else {
+        result.name = pkg.name || result.name;
+        result.description = pkg.description || '';
 
-      // Detect project type
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if (deps.vite && deps.express) result.type = 'vite+express';
-      else if (deps.vite || deps.react || deps.vue) result.type = 'vite';
-      else if (deps.express || deps.fastify || deps.koa) result.type = 'single-node-server';
-      else if (deps.next) result.type = 'nextjs';
+        // Detect project type
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        if (deps.vite && deps.express) result.type = 'vite+express';
+        else if (deps.vite || deps.react || deps.vue) result.type = 'vite';
+        else if (deps.express || deps.fastify || deps.koa) result.type = 'single-node-server';
+        else if (deps.next) result.type = 'nextjs';
 
-      // Get start commands
-      const scripts = pkg.scripts || {};
-      if (scripts.dev) result.startCommands.push('npm run dev');
-      if (scripts.start && !scripts.dev) result.startCommands.push('npm start');
+        // Get start commands
+        const scripts = pkg.scripts || {};
+        if (scripts.dev) result.startCommands.push('npm run dev');
+        if (scripts.start && !scripts.dev) result.startCommands.push('npm start');
 
-      emit('package', 'done', {
-        message: `Found: ${result.name}`,
-        name: result.name,
-        description: result.description,
-        type: result.type,
-        startCommands: result.startCommands
-      });
+        emit('package', 'done', {
+          message: `Found: ${result.name}`,
+          name: result.name,
+          description: result.description,
+          type: result.type,
+          startCommands: result.startCommands
+        });
+      }
     }
   } else {
     emit('package', 'done', { message: 'No package.json found' });
@@ -461,7 +466,7 @@ export async function streamDetection(socket, dirPath) {
   // Step 5: Check PM2 status
   emit('pm2', 'running', { message: 'Checking PM2 processes...' });
   const { stdout } = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
-  const pm2Processes = JSON.parse(stdout);
+  const pm2Processes = safeJSONParse(stdout, []);
 
   // Look for processes that might be this app
   const possibleNames = [

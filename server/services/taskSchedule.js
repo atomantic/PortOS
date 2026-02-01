@@ -16,11 +16,12 @@
  * - 'custom': Custom interval in milliseconds
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
+import { readJSONFile } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,34 +43,537 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
+// Default prompts for self-improvement task types
+const DEFAULT_SELF_IMPROVEMENT_PROMPTS = {
+  'ui-bugs': `[Self-Improvement] UI Bug Analysis
+
+Use Playwright MCP (browser_navigate, browser_snapshot, browser_console_messages) to analyze PortOS UI:
+
+1. Navigate to http://localhost:5555/
+2. Check each main route: /, /apps, /cos, /cos/tasks, /cos/agents, /devtools, /devtools/history, /providers, /usage
+3. For each route:
+   - Take a browser_snapshot to see the page structure
+   - Check browser_console_messages for JavaScript errors
+   - Look for broken UI elements, missing data, failed requests
+4. Fix any bugs found in the React components or API routes
+5. Run tests and commit changes`,
+
+  'mobile-responsive': `[Self-Improvement] Mobile Responsiveness Analysis
+
+Use Playwright MCP to test PortOS at different viewport sizes:
+
+1. browser_resize to mobile (375x812), then navigate to http://localhost:5555/
+2. Take browser_snapshot and analyze for:
+   - Text overflow or truncation
+   - Buttons too small to tap (< 44px)
+   - Horizontal scrolling issues
+   - Elements overlapping
+   - Navigation usability
+3. Repeat at tablet (768x1024) and desktop (1440x900)
+4. Fix Tailwind CSS responsive classes (sm:, md:, lg:) as needed
+5. Test fixes and commit changes
+
+Focus on these routes: /cos, /cos/tasks, /devtools, /providers`,
+
+  'security': `[Self-Improvement] Security Audit
+
+Analyze PortOS codebase for security vulnerabilities:
+
+1. Review server/routes/*.js for:
+   - Command injection in exec/spawn calls
+   - Path traversal in file operations
+   - Missing input validation
+   - XSS in rendered content
+
+2. Review server/services/*.js for:
+   - Unsafe eval() or Function()
+   - Hardcoded credentials
+   - SQL/NoSQL injection
+
+3. Review client/src/ for:
+   - XSS vulnerabilities in React
+   - Sensitive data in localStorage
+   - CSRF protection
+
+4. Check server/lib/commandAllowlist.js is comprehensive
+
+Fix any vulnerabilities and commit with security advisory notes.`,
+
+  'code-quality': `[Self-Improvement] Code Quality Review
+
+Analyze PortOS codebase for maintainability:
+
+1. Find DRY violations - similar code in multiple places
+2. Identify functions >50 lines that should be split
+3. Look for missing error handling
+4. Find dead code and unused imports
+5. Check for console.log that should be removed
+6. Look for TODO/FIXME that need addressing
+
+Focus on:
+- server/services/*.js
+- client/src/pages/*.jsx
+- client/src/components/*.jsx
+
+Refactor issues found and commit improvements.`,
+
+  'console-errors': `[Self-Improvement] Console Error Investigation
+
+Use Playwright MCP to find and fix console errors:
+
+1. Navigate to http://localhost:5555/
+2. Call browser_console_messages with level: "error"
+3. Visit each route and capture errors:
+   - /, /apps, /cos, /cos/tasks, /cos/agents
+   - /devtools, /devtools/history, /devtools/runner
+   - /providers, /usage, /prompts
+
+4. For each error:
+   - Identify the source file and line
+   - Understand the root cause
+   - Implement a fix
+
+5. Test fixes and commit changes`,
+
+  'performance': `[Self-Improvement] Performance Analysis
+
+Analyze PortOS for performance issues:
+
+1. Review React components for:
+   - Unnecessary re-renders
+   - Missing useMemo/useCallback
+   - Large component files that should be split
+
+2. Review server code for:
+   - N+1 query patterns
+   - Missing caching opportunities
+   - Inefficient file operations
+
+3. Review client bundle for:
+   - Missing code splitting
+   - Large dependencies that could be tree-shaken
+
+4. Check Socket.IO for:
+   - Event handler memory leaks
+   - Unnecessary broadcasts
+
+Optimize and commit improvements.`,
+
+  'cos-enhancement': `[Self-Improvement] Enhance CoS Capabilities
+
+Review the CoS system and add new capabilities:
+
+1. Read data/COS-GOALS.md to understand the mission and goals
+2. Review server/services/cos.js for improvement opportunities:
+   - Better task prioritization logic
+   - Smarter model selection
+   - More informative status messages
+   - Better error recovery
+
+3. Review the self-improvement task prompts:
+   - Are they comprehensive enough?
+   - Do they lead to quality fixes?
+   - What new analysis types could be added?
+
+4. Consider adding:
+   - New MCP server integrations
+   - Better metrics tracking
+   - Learning from completed tasks
+   - Smarter cooldown logic
+
+5. Implement ONE meaningful enhancement and commit it
+
+Focus on making CoS more autonomous and effective.`,
+
+  'test-coverage': `[Self-Improvement] Improve Test Coverage
+
+Analyze and improve test coverage for PortOS:
+
+1. Check existing tests in server/tests/ and client/tests/
+2. Identify untested critical paths:
+   - API routes without tests
+   - Services with complex logic
+   - Error handling paths
+
+3. Add tests for:
+   - CoS task evaluation logic
+   - Agent spawning and lifecycle
+   - Socket.IO event handlers
+   - API endpoints
+
+4. Ensure tests:
+   - Follow existing patterns
+   - Use appropriate mocks
+   - Test edge cases
+
+5. Run npm test to verify all tests pass
+6. Commit test additions with clear message describing what's covered`,
+
+  'documentation': `[Self-Improvement] Update Documentation
+
+Review and improve PortOS documentation:
+
+1. Update PLAN.md:
+   - Mark completed milestones
+   - Add any new features implemented
+   - Document architectural decisions
+
+2. Check docs/ folder:
+   - Are all features documented?
+   - Is the information current?
+   - Add any missing guides
+
+3. Review code comments:
+   - Add JSDoc to exported functions
+   - Document complex algorithms
+   - Explain non-obvious code
+
+4. Update README.md if needed:
+   - Installation instructions
+   - Quick start guide
+   - Feature overview
+
+5. Consider adding:
+   - Architecture diagrams
+   - API documentation
+   - Troubleshooting guide
+
+Commit documentation improvements.`,
+
+  'feature-ideas': `[Self-Improvement] Brainstorm and Implement Feature
+
+Think about ways to make PortOS more useful:
+
+1. Read data/COS-GOALS.md for context on user goals
+2. Review recent completed tasks to understand patterns
+3. Consider these areas:
+   - User task management improvements
+   - Better progress visualization
+   - New automation capabilities
+   - Enhanced monitoring features
+
+4. Choose ONE small, high-impact feature to implement:
+   - Something that saves user time
+   - Improves the developer experience
+   - Makes CoS more helpful
+
+5. Implement it:
+   - Write clean, tested code
+   - Follow existing patterns
+   - Update relevant documentation
+
+6. Commit with a clear description of the new feature
+
+Think creatively but implement practically.`,
+
+  'accessibility': `[Self-Improvement] Accessibility Audit
+
+Use Playwright MCP to audit PortOS accessibility:
+
+1. Navigate to http://localhost:5555/
+2. Use browser_snapshot to get accessibility tree
+3. Check each main route for:
+   - Missing ARIA labels
+   - Missing alt text on images
+   - Insufficient color contrast
+   - Keyboard navigation issues
+   - Focus indicators
+
+4. Fix accessibility issues in React components
+5. Add appropriate aria-* attributes
+6. Test and commit changes`,
+
+  'dependency-updates': `[Self-Improvement] Dependency Updates and Security Audit
+
+Check PortOS dependencies for updates and security vulnerabilities:
+
+1. Run npm audit in both server/ and client/ directories
+2. Check for outdated packages with npm outdated
+3. Review CRITICAL and HIGH severity vulnerabilities
+4. For each vulnerability:
+   - Assess the actual risk (is the vulnerable code path used?)
+   - Check if an update is available
+   - Test that updates don't break functionality
+
+5. Update dependencies carefully:
+   - Update patch versions first (safest)
+   - Then minor versions
+   - Major versions need more careful review
+
+6. After updating:
+   - Run npm test in server/
+   - Run npm run build in client/
+   - Verify the app starts correctly
+
+7. Commit with clear changelog of what was updated and why`
+};
+
 // Default interval settings for self-improvement task types
 const DEFAULT_SELF_IMPROVEMENT_INTERVALS = {
-  'ui-bugs': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'mobile-responsive': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'security': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'code-quality': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'console-errors': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'performance': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'cos-enhancement': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'test-coverage': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'documentation': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'feature-ideas': { type: INTERVAL_TYPES.DAILY, enabled: true },
-  'accessibility': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true }
+  'ui-bugs': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'mobile-responsive': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'security': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'code-quality': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'console-errors': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'performance': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'cos-enhancement': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'test-coverage': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'documentation': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'feature-ideas': { type: INTERVAL_TYPES.DAILY, enabled: true, providerId: null, model: null, prompt: null },
+  'accessibility': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null }
+};
+
+// Default prompts for app improvement task types (templates with {appName} and {repoPath} variables)
+const DEFAULT_APP_IMPROVEMENT_PROMPTS = {
+  'security-audit': `[App Improvement: {appName}] Security Audit
+
+Analyze the {appName} codebase for security vulnerabilities:
+
+Repository: {repoPath}
+
+1. Review routes/controllers for:
+   - Command injection in exec/spawn calls
+   - Path traversal in file operations
+   - Missing input validation
+   - XSS vulnerabilities
+   - SQL/NoSQL injection
+
+2. Review services for:
+   - Unsafe eval() or Function()
+   - Hardcoded credentials
+   - Insecure dependencies
+
+3. Review client code for:
+   - XSS vulnerabilities
+   - Sensitive data in localStorage
+   - CSRF protection
+
+4. Check authentication and authorization:
+   - Secure password handling
+   - Token management
+   - Access control
+
+Fix any vulnerabilities found and commit with security advisory notes.`,
+
+  'code-quality': `[App Improvement: {appName}] Code Quality Review
+
+Analyze {appName} for maintainability improvements:
+
+Repository: {repoPath}
+
+1. Find DRY violations - similar code in multiple places
+2. Identify functions >50 lines that should be split
+3. Look for missing error handling
+4. Find dead code and unused imports
+5. Check for console.log that should be removed
+6. Look for TODO/FIXME that need addressing
+7. Identify magic numbers that should be constants
+
+Focus on the main source directories. Refactor issues found and commit improvements.`,
+
+  'test-coverage': `[App Improvement: {appName}] Improve Test Coverage
+
+Analyze and improve test coverage for {appName}:
+
+Repository: {repoPath}
+
+1. Check existing tests and identify untested critical paths
+2. Look for:
+   - API routes without tests
+   - Services with complex logic
+   - Error handling paths
+   - Edge cases
+
+3. Add tests following existing patterns in the project
+4. Ensure tests:
+   - Use appropriate mocks
+   - Test edge cases
+   - Follow naming conventions
+
+5. Run tests to verify all pass
+6. Commit test additions with clear message describing coverage`,
+
+  'performance': `[App Improvement: {appName}] Performance Analysis
+
+Analyze {appName} for performance issues:
+
+Repository: {repoPath}
+
+1. Review components/views for:
+   - Unnecessary re-renders
+   - Missing memoization
+   - Large files that should be split
+
+2. Review backend for:
+   - N+1 query patterns
+   - Missing caching opportunities
+   - Inefficient file operations
+   - Slow API endpoints
+
+3. Review build/bundle for:
+   - Missing code splitting
+   - Large dependencies that could be optimized
+
+4. Check for:
+   - Memory leaks
+   - Unnecessary broadcasts/events
+
+Optimize and commit improvements.`,
+
+  'accessibility': `[App Improvement: {appName}] Accessibility Audit
+
+Audit {appName} for accessibility issues:
+
+Repository: {repoPath}
+
+If the app has a web UI:
+1. Navigate to the app's UI
+2. Check for:
+   - Missing ARIA labels
+   - Missing alt text on images
+   - Insufficient color contrast
+   - Keyboard navigation issues
+   - Focus indicators
+   - Semantic HTML usage
+
+3. Fix accessibility issues in components
+4. Add appropriate aria-* attributes
+5. Test and commit changes`,
+
+  'console-errors': `[App Improvement: {appName}] Console Error Investigation
+
+Find and fix console errors in {appName}:
+
+Repository: {repoPath}
+
+1. If the app has a UI, check browser console for errors
+2. Check server logs for errors
+3. For each error:
+   - Identify the source file and line
+   - Understand the root cause
+   - Implement a fix
+
+4. Test fixes and commit changes`,
+
+  'dependency-updates': `[App Improvement: {appName}] Dependency Updates
+
+Check {appName} dependencies for updates and security vulnerabilities:
+
+Repository: {repoPath}
+
+1. Run npm audit (or equivalent package manager)
+2. Check for outdated packages
+3. Review CRITICAL and HIGH severity vulnerabilities
+4. For each vulnerability:
+   - Assess actual risk
+   - Check if update available
+   - Test updates don't break functionality
+
+5. Update dependencies carefully:
+   - Patch versions first (safest)
+   - Then minor versions
+   - Major versions need careful review
+
+6. After updating:
+   - Run tests
+   - Verify the app starts correctly
+
+7. Commit with clear changelog
+
+IMPORTANT: Only update one major version bump at a time.`,
+
+  'documentation': `[App Improvement: {appName}] Update Documentation
+
+Review and improve {appName} documentation:
+
+Repository: {repoPath}
+
+1. Check README.md:
+   - Installation instructions current?
+   - Quick start guide clear?
+   - Feature overview complete?
+
+2. Review inline documentation:
+   - Add JSDoc to exported functions
+   - Document complex algorithms
+   - Explain non-obvious code
+
+3. Check for docs/ folder:
+   - Are all features documented?
+   - Is information current?
+   - Add missing guides if needed
+
+4. Update PLAN.md or similar if present:
+   - Mark completed milestones
+   - Document architectural decisions
+
+Commit documentation improvements.`,
+
+  'error-handling': `[App Improvement: {appName}] Improve Error Handling
+
+Enhance error handling in {appName}:
+
+Repository: {repoPath}
+
+1. Review code for:
+   - Missing try-catch blocks where needed
+   - Silent failures (empty catch blocks)
+   - Errors that should be logged
+   - User-facing error messages
+
+2. Add error handling for:
+   - Network requests
+   - File operations
+   - Database queries
+   - External API calls
+
+3. Ensure errors are:
+   - Logged appropriately
+   - Have clear messages
+   - Include relevant context
+   - Don't expose sensitive data
+
+4. Test error paths and commit improvements`,
+
+  'typing': `[App Improvement: {appName}] TypeScript Type Improvements
+
+Improve TypeScript types in {appName}:
+
+Repository: {repoPath}
+
+1. Review TypeScript files for:
+   - 'any' types that should be specific
+   - Missing type annotations
+   - Type assertions that could be avoided
+   - Missing interfaces/types for objects
+
+2. Add types for:
+   - Function parameters and returns
+   - Component props
+   - API responses
+   - Configuration objects
+
+3. Ensure:
+   - Types are properly exported
+   - No implicit any
+   - Types are reusable
+
+4. Run type checking and commit improvements`
 };
 
 // Default interval settings for managed app improvement task types
 const DEFAULT_APP_IMPROVEMENT_INTERVALS = {
-  'security-audit': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'code-quality': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'test-coverage': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'performance': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'accessibility': { type: INTERVAL_TYPES.ONCE, enabled: true },
-  'console-errors': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true },
-  'documentation': { type: INTERVAL_TYPES.ONCE, enabled: true },
-  'error-handling': { type: INTERVAL_TYPES.ROTATION, enabled: true },
-  'typing': { type: INTERVAL_TYPES.ONCE, enabled: true }
+  'security-audit': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'code-quality': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'test-coverage': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'performance': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'accessibility': { type: INTERVAL_TYPES.ONCE, enabled: true, providerId: null, model: null, prompt: null },
+  'console-errors': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'documentation': { type: INTERVAL_TYPES.ONCE, enabled: true, providerId: null, model: null, prompt: null },
+  'error-handling': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
+  'typing': { type: INTERVAL_TYPES.ONCE, enabled: true, providerId: null, model: null, prompt: null }
 };
 
 /**
@@ -113,15 +617,13 @@ async function ensureDir() {
 export async function loadSchedule() {
   await ensureDir();
 
-  if (!existsSync(SCHEDULE_FILE)) {
+  const loaded = await readJSONFile(SCHEDULE_FILE, null);
+  if (!loaded) {
     return { ...DEFAULT_SCHEDULE };
   }
 
-  const content = await readFile(SCHEDULE_FILE, 'utf-8');
-  const loaded = JSON.parse(content);
-
   // Merge with defaults to ensure all task types have settings
-  return {
+  const schedule = {
     ...DEFAULT_SCHEDULE,
     ...loaded,
     selfImprovement: {
@@ -135,6 +637,29 @@ export async function loadSchedule() {
     executions: loaded.executions || {},
     templates: loaded.templates || []
   };
+
+  // Populate prompts from defaults if they don't exist
+  let needsSave = false;
+  for (const [taskType, config] of Object.entries(schedule.selfImprovement)) {
+    if (!config.prompt && DEFAULT_SELF_IMPROVEMENT_PROMPTS[taskType]) {
+      config.prompt = DEFAULT_SELF_IMPROVEMENT_PROMPTS[taskType];
+      needsSave = true;
+    }
+  }
+
+  for (const [taskType, config] of Object.entries(schedule.appImprovement)) {
+    if (!config.prompt && DEFAULT_APP_IMPROVEMENT_PROMPTS[taskType]) {
+      config.prompt = DEFAULT_APP_IMPROVEMENT_PROMPTS[taskType];
+      needsSave = true;
+    }
+  }
+
+  // Save if we populated any prompts
+  if (needsSave) {
+    await saveSchedule(schedule);
+  }
+
+  return schedule;
 }
 
 /**
@@ -151,7 +676,7 @@ async function saveSchedule(schedule) {
  */
 export async function getSelfImprovementInterval(taskType) {
   const schedule = await loadSchedule();
-  return schedule.selfImprovement[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: true };
+  return schedule.selfImprovement[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null };
 }
 
 /**
@@ -159,7 +684,7 @@ export async function getSelfImprovementInterval(taskType) {
  */
 export async function getAppImprovementInterval(taskType) {
   const schedule = await loadSchedule();
-  return schedule.appImprovement[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: true };
+  return schedule.appImprovement[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null };
 }
 
 /**
@@ -169,7 +694,7 @@ export async function updateSelfImprovementInterval(taskType, settings) {
   const schedule = await loadSchedule();
 
   if (!schedule.selfImprovement[taskType]) {
-    schedule.selfImprovement[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: true };
+    schedule.selfImprovement[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null };
   }
 
   schedule.selfImprovement[taskType] = {
@@ -178,7 +703,7 @@ export async function updateSelfImprovementInterval(taskType, settings) {
   };
 
   await saveSchedule(schedule);
-  emitLog('info', `Updated self-improvement interval for ${taskType}`, { taskType, settings }, '[TaskSchedule]');
+  emitLog('info', `Updated self-improvement interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
   cosEvents.emit('schedule:changed', { category: 'selfImprovement', taskType, settings });
 
   return schedule.selfImprovement[taskType];
@@ -191,7 +716,7 @@ export async function updateAppImprovementInterval(taskType, settings) {
   const schedule = await loadSchedule();
 
   if (!schedule.appImprovement[taskType]) {
-    schedule.appImprovement[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: true };
+    schedule.appImprovement[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null };
   }
 
   schedule.appImprovement[taskType] = {
@@ -200,7 +725,7 @@ export async function updateAppImprovementInterval(taskType, settings) {
   };
 
   await saveSchedule(schedule);
-  emitLog('info', `Updated app improvement interval for ${taskType}`, { taskType, settings }, '[TaskSchedule]');
+  emitLog('info', `Updated app improvement interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
   cosEvents.emit('schedule:changed', { category: 'appImprovement', taskType, settings });
 
   return schedule.appImprovement[taskType];
@@ -525,7 +1050,7 @@ export async function addTemplateTask(template) {
   schedule.templates.push(newTemplate);
   await saveSchedule(schedule);
 
-  emitLog('info', `Added template task: ${newTemplate.name}`, { templateId: newTemplate.id }, '[TaskSchedule]');
+  emitLog('info', `Added template task: ${newTemplate.name}`, { templateId: newTemplate.id }, '📅 TaskSchedule');
   return newTemplate;
 }
 
@@ -551,7 +1076,7 @@ export async function deleteTemplateTask(templateId) {
   const deleted = schedule.templates.splice(index, 1)[0];
   await saveSchedule(schedule);
 
-  emitLog('info', `Deleted template task: ${deleted.name}`, { templateId }, '[TaskSchedule]');
+  emitLog('info', `Deleted template task: ${deleted.name}`, { templateId }, '📅 TaskSchedule');
   return { success: true, deleted };
 }
 
@@ -579,7 +1104,7 @@ export async function triggerOnDemandTask(taskType, category = 'selfImprovement'
   schedule.onDemandRequests.push(request);
   await saveSchedule(schedule);
 
-  emitLog('info', `On-demand task requested: ${taskType}`, { category, appId }, '[TaskSchedule]');
+  emitLog('info', `On-demand task requested: ${taskType}`, { category, appId }, '📅 TaskSchedule');
   cosEvents.emit('task:on-demand-requested', request);
 
   return request;
@@ -673,7 +1198,42 @@ export async function resetExecutionHistory(taskType, category = 'selfImprovemen
   }
 
   await saveSchedule(schedule);
-  emitLog('info', `Reset execution history for ${taskType}`, { category, appId }, '[TaskSchedule]');
+  emitLog('info', `Reset execution history for ${taskType}`, { category, appId }, '📅 TaskSchedule');
 
   return { success: true, taskType, appId };
+}
+
+/**
+ * Get default prompt for a self-improvement task type
+ */
+export function getDefaultSelfImprovementPrompt(taskType) {
+  return DEFAULT_SELF_IMPROVEMENT_PROMPTS[taskType] || null;
+}
+
+/**
+ * Get default prompt for an app improvement task type (with template variables)
+ */
+export function getDefaultAppImprovementPrompt(taskType) {
+  return DEFAULT_APP_IMPROVEMENT_PROMPTS[taskType] || null;
+}
+
+/**
+ * Get the prompt for a self-improvement task type
+ */
+export async function getSelfImprovementPrompt(taskType) {
+  const interval = await getSelfImprovementInterval(taskType);
+  return interval.prompt || `[Self-Improvement] ${taskType} analysis`;
+}
+
+/**
+ * Get the prompt for an app improvement task type
+ */
+export async function getAppImprovementPrompt(taskType) {
+  const interval = await getAppImprovementInterval(taskType);
+  return interval.prompt || `[App Improvement] ${taskType} analysis
+
+Repository: {repoPath}
+
+Perform ${taskType} analysis on {appName}.
+Analyze the codebase and make improvements. Commit changes with clear descriptions.`;
 }

@@ -53,7 +53,7 @@ module.exports = {
     },
     {
       name: 'portos-ui',
-      script: 'node_modules/.bin/vite',
+      script: `${__dirname}/node_modules/.bin/vite`,
       cwd: `${__dirname}/client`,
       args: `--host 0.0.0.0 --port ${PORTS.UI}`,
       env: {

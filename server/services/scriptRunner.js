@@ -12,7 +12,7 @@ import { writeFile, readFile, mkdir, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import Cron from 'croner';
-import { cosEvents } from './cos.js';
+import { cosEvents } from './cosEvents.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

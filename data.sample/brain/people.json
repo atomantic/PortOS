@@ -1,0 +1,49 @@
+{
+  "records": {
+    "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d": {
+      "name": "Sarah Chen",
+      "context": "Product manager at Acme Corp. Met at tech conference in Austin. Works on developer tools.",
+      "followUps": ["Ask about the API redesign project", "Follow up on coffee meeting"],
+      "lastTouched": "2024-01-05T10:30:00.000Z",
+      "tags": ["work", "product"],
+      "createdAt": "2024-01-01T09:00:00.000Z",
+      "updatedAt": "2024-01-05T10:30:00.000Z"
+    },
+    "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e": {
+      "name": "Marcus Johnson",
+      "context": "Old college friend. Now runs a startup in the AI space. Good for advice on fundraising.",
+      "followUps": ["Congratulate on Series A"],
+      "lastTouched": "2024-01-02T14:00:00.000Z",
+      "tags": ["friend", "startup"],
+      "createdAt": "2024-01-01T09:00:00.000Z",
+      "updatedAt": "2024-01-02T14:00:00.000Z"
+    },
+    "c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f": {
+      "name": "Dr. Emily Foster",
+      "context": "Dentist. Annual checkups. Office on Main Street.",
+      "followUps": [],
+      "lastTouched": "2023-12-15T09:00:00.000Z",
+      "tags": ["health"],
+      "createdAt": "2023-12-15T09:00:00.000Z",
+      "updatedAt": "2023-12-15T09:00:00.000Z"
+    },
+    "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a": {
+      "name": "Jake Reynolds",
+      "context": "Contractor who did the kitchen renovation. Reliable, fair pricing.",
+      "followUps": ["Get quote for bathroom work"],
+      "lastTouched": "2024-01-03T11:00:00.000Z",
+      "tags": ["home", "contractor"],
+      "createdAt": "2023-11-01T09:00:00.000Z",
+      "updatedAt": "2024-01-03T11:00:00.000Z"
+    },
+    "e5f6a7b8-c9d0-4e1f-2a3b-4c5d6e7f8a9b": {
+      "name": "Lisa Park",
+      "context": "Mentor from previous job. VP of Engineering at TechGiant. Great career advice.",
+      "followUps": ["Schedule quarterly catch-up", "Ask about engineering leadership books"],
+      "lastTouched": "2023-12-20T16:00:00.000Z",
+      "tags": ["mentor", "career"],
+      "createdAt": "2023-06-01T09:00:00.000Z",
+      "updatedAt": "2023-12-20T16:00:00.000Z"
+    }
+  }
+}

@@ -10,7 +10,7 @@
 
 import express from 'express';
 import { spawn } from 'child_process';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -26,6 +26,32 @@ const AGENTS_DIR = join(ROOT_DIR, 'data/cos/agents');
 const PORT = process.env.PORT || 5558;
 const HOST = process.env.HOST || '127.0.0.1';
 const RUNS_DIR = join(ROOT_DIR, 'data/runs');
+
+// Allowlist of permitted CLI commands to prevent arbitrary code execution.
+// Only commands in this list can be spawned by the runner.
+const ALLOWED_COMMANDS = new Set([
+  'claude',
+  'aider',
+  'codex',
+  'copilot'
+]);
+
+/**
+ * Validate that a command is in the allowlist.
+ * Extracts the base command name from the full path using path.basename for cross-platform support.
+ * Handles Windows .exe extensions by stripping them before checking.
+ */
+function isAllowedCommand(command) {
+  if (!command || typeof command !== 'string') return false;
+  // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
+  // Uses path.basename for correct handling on both Unix and Windows
+  let baseName = basename(command);
+  // Normalize for Windows: strip trailing .exe (case-insensitive)
+  if (baseName.toLowerCase().endsWith('.exe')) {
+    baseName = baseName.slice(0, -4);
+  }
+  return ALLOWED_COMMANDS.has(baseName);
+}
 
 // Active agent processes (in memory)
 const activeAgents = new Map();
@@ -205,6 +231,10 @@ app.post('/spawn', async (req, res) => {
     workspacePath,
     model,
     envVars = {},
+    // New: CLI-agnostic parameters
+    cliCommand,
+    cliArgs,
+    // Legacy: Claude-specific (deprecated)
     claudePath = '/Users/antic/.nvm/versions/node/v25.2.1/bin/claude'
   } = req.body;
 
@@ -212,23 +242,47 @@ app.post('/spawn', async (req, res) => {
     return res.status(400).json({ error: 'Missing required fields: agentId, taskId, prompt' });
   }
 
-  // Build spawn arguments
-  const spawnArgs = [
-    '--dangerously-skip-permissions',
-    '--print'
-  ];
-
-  if (model) {
-    spawnArgs.push('--model', model);
+  // Use new CLI params if provided, otherwise fallback to legacy Claude defaults
+  let command, spawnArgs;
+  if (cliCommand) {
+    // Validate command against allowlist to prevent arbitrary code execution
+    if (!isAllowedCommand(cliCommand)) {
+      return res.status(400).json({
+        error: `Command not allowed: ${cliCommand}. Permitted commands: ${[...ALLOWED_COMMANDS].join(', ')}`
+      });
+    }
+    command = cliCommand;
+    // Default to empty args if cliArgs not provided
+    const args = cliArgs ?? [];
+    // Normalize cliArgs to an array
+    if (Array.isArray(args)) {
+      spawnArgs = args;
+    } else if (typeof args === 'string') {
+      spawnArgs = [args];
+    } else {
+      return res.status(400).json({
+        error: 'Invalid cliArgs: expected an array or string'
+      });
+    }
+  } else {
+    // Legacy: Claude-specific args
+    command = claudePath;
+    spawnArgs = [
+      '--dangerously-skip-permissions',
+      '--print'
+    ];
+    if (model) {
+      spawnArgs.push('--model', model);
+    }
   }
 
-  console.log(`🤖 Spawning agent ${agentId} for task ${taskId}`);
+  console.log(`🤖 Spawning agent ${agentId} for task ${taskId} (CLI: ${command})`);
 
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  // Spawn the Claude CLI process
-  const claudeProcess = spawn(claudePath, spawnArgs, {
+  // Spawn the CLI process
+  const claudeProcess = spawn(command, spawnArgs, {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],

@@ -5,10 +5,11 @@
  * Prevents the CoS from working on the same app in a loop.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { readJSONFile } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,12 +39,8 @@ async function ensureDir() {
 export async function loadAppActivity() {
   await ensureDir();
 
-  if (!existsSync(ACTIVITY_FILE)) {
-    return { ...DEFAULT_ACTIVITY };
-  }
-
-  const content = await readFile(ACTIVITY_FILE, 'utf-8');
-  return { ...DEFAULT_ACTIVITY, ...JSON.parse(content) };
+  const loaded = await readJSONFile(ACTIVITY_FILE, null);
+  return loaded ? { ...DEFAULT_ACTIVITY, ...loaded } : { ...DEFAULT_ACTIVITY };
 }
 
 /**

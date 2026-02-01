@@ -6,6 +6,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const execAsync = promisify(exec);
 const router = Router();
@@ -53,29 +54,33 @@ router.post('/repo', asyncHandler(async (req, res) => {
     result.hasPackageJson = true;
     const content = await readFile(packageJsonPath, 'utf-8').catch(() => null);
     if (content) {
-      const pkg = JSON.parse(content);
-      result.packageJson = {
-        name: pkg.name,
-        scripts: pkg.scripts || {}
-      };
+      const pkg = safeJSONParse(content, null);
+      if (!pkg) {
+        result.packageJson = null;
+      } else {
+        result.packageJson = {
+          name: pkg.name,
+          scripts: pkg.scripts || {}
+        };
 
-      // Detect type from dependencies/scripts
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if (deps.vite && deps.express) {
-        result.type = 'vite+express';
-      } else if (deps.vite || deps.react || deps.vue) {
-        result.type = 'vite';
-      } else if (deps.express || deps.fastify || deps.koa) {
-        result.type = 'single-node-server';
-      } else if (deps.next) {
-        result.type = 'nextjs';
+        // Detect type from dependencies/scripts
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        if (deps.vite && deps.express) {
+          result.type = 'vite+express';
+        } else if (deps.vite || deps.react || deps.vue) {
+          result.type = 'vite';
+        } else if (deps.express || deps.fastify || deps.koa) {
+          result.type = 'single-node-server';
+        } else if (deps.next) {
+          result.type = 'nextjs';
+        }
+
+        // Suggest start commands from scripts
+        const scripts = pkg.scripts || {};
+        if (scripts.dev) result.startCommands.push('npm run dev');
+        if (scripts.start) result.startCommands.push('npm start');
+        if (scripts.serve) result.startCommands.push('npm run serve');
       }
-
-      // Suggest start commands from scripts
-      const scripts = pkg.scripts || {};
-      if (scripts.dev) result.startCommands.push('npm run dev');
-      if (scripts.start) result.startCommands.push('npm start');
-      if (scripts.serve) result.startCommands.push('npm run serve');
     }
   }
 
@@ -162,7 +167,7 @@ router.post('/pm2', asyncHandler(async (req, res) => {
   }
 
   const { stdout } = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
-  const processes = JSON.parse(stdout);
+  const processes = safeJSONParse(stdout, []);
   const found = processes.find(p => p.name === name);
 
   res.json({

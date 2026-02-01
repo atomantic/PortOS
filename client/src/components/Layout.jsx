@@ -20,7 +20,14 @@ import {
   ExternalLink,
   Crown,
   Play,
-  Camera
+  Camera,
+  Brain,
+  Heart,
+  Fingerprint,
+  Clock,
+  Calendar,
+  GraduationCap,
+  Settings
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -30,6 +37,7 @@ import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
+  { separator: true },
   {
     label: 'AI Config',
     icon: Bot,
@@ -39,9 +47,31 @@ const navItems = [
     ]
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
-  { to: '/media', label: 'Media', icon: Camera, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
-  { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true, showBadge: true },
+  {
+    label: 'Chief of Staff',
+    icon: Crown,
+    showBadge: true,
+    children: [
+      { to: '/cos/tasks', label: 'Tasks', icon: FileText },
+      { to: '/cos/agents', label: 'Agents', icon: Cpu },
+      { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
+      { to: '/cos/schedule', label: 'Schedule', icon: Clock },
+      { to: '/cos/digest', label: 'Digest', icon: Calendar },
+      { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
+      { to: '/cos/memory', label: 'Memory', icon: Brain },
+      { to: '/cos/health', label: 'Health', icon: Activity },
+      { to: '/cos/config', label: 'Config', icon: Settings }
+    ]
+  },
+  {
+    label: 'Identity',
+    icon: Fingerprint,
+    children: [
+      { to: '/brain', label: 'Brain', icon: Brain },
+      { to: '/digital-twin', label: 'Digital Twin', icon: Heart }
+    ]
+  },
   {
     label: 'Dev Tools',
     icon: Terminal,
@@ -54,7 +84,8 @@ const navItems = [
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
-  }
+  },
+  { to: '/media', label: 'Media', icon: Camera, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -126,7 +157,14 @@ export default function Layout() {
     return false;
   };
 
-  const renderNavItem = (item) => {
+  const renderNavItem = (item, index) => {
+    // Separator
+    if (item.separator) {
+      return (
+        <div key={`separator-${index}`} className="mx-4 my-2 border-t border-port-border" />
+      );
+    }
+
     const Icon = item.icon;
 
     // External link
@@ -222,16 +260,32 @@ export default function Layout() {
           title={collapsed ? item.label : undefined}
         >
           <div className="flex items-center gap-3">
-            <Icon size={20} className="flex-shrink-0" />
+            <div className="relative">
+              <Icon size={20} className="flex-shrink-0" />
+              {/* Badge for collapsed state on collapsible sections */}
+              {item.showBadge && unreadCount > 0 && collapsed && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </div>
             <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
               {item.label}
             </span>
           </div>
-          {!collapsed && (
-            expandedSections[item.label]
-              ? <ChevronDown size={16} />
-              : <ChevronRight size={16} />
-          )}
+          <div className="flex items-center gap-2">
+            {/* Badge for expanded state on collapsible sections */}
+            {item.showBadge && unreadCount > 0 && !collapsed && (
+              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+            {!collapsed && (
+              expandedSections[item.label]
+                ? <ChevronDown size={16} />
+                : <ChevronRight size={16} />
+            )}
+          </div>
         </button>
 
         {/* Children items */}
@@ -385,8 +439,8 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') ? (
+        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') ? (
             <Outlet />
           ) : (
             <div className="max-w-7xl mx-auto">

@@ -310,6 +310,7 @@ export function RunsHistoryPage() {
   const [expandedId, setExpandedId] = useState(null);
   const [expandedDetails, setExpandedDetails] = useState({});
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
     loadRuns();
@@ -321,6 +322,20 @@ export function RunsHistoryPage() {
     setRuns(data.runs || []);
     setLoading(false);
   };
+
+  // Filter runs by source and status
+  const filteredRuns = runs.filter(run => {
+    // Source filter (already applied via API, but kept for client-side consistency)
+    const matchesSource = sourceFilter === 'all' || run.source === sourceFilter;
+
+    // Status filter
+    let matchesStatus = true;
+    if (statusFilter === 'success') matchesStatus = run.success === true;
+    else if (statusFilter === 'running') matchesStatus = run.success === null;
+    else if (statusFilter === 'failed') matchesStatus = run.success === false;
+
+    return matchesSource && matchesStatus;
+  });
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
@@ -461,13 +476,37 @@ export function RunsHistoryPage() {
         ))}
       </div>
 
+      {/* Status Filter */}
+      <div className="flex flex-wrap gap-1.5 sm:gap-2">
+        {[
+          { value: 'all', label: 'All Status' },
+          { value: 'success', label: 'Success' },
+          { value: 'running', label: 'Running' },
+          { value: 'failed', label: 'Failed' }
+        ].map(filter => (
+          <button
+            key={filter.value}
+            onClick={() => setStatusFilter(filter.value)}
+            className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+              statusFilter === filter.value
+                ? 'bg-port-accent text-white'
+                : 'bg-port-card text-gray-400 hover:text-white border border-port-border'
+            }`}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+
       {/* Runs List */}
       <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl overflow-hidden">
-        {runs.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">No AI runs yet</div>
+        {filteredRuns.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            {runs.length === 0 ? 'No AI runs yet' : 'No runs match the selected filters'}
+          </div>
         ) : (
           <div className="divide-y divide-port-border">
-            {runs.map(run => (
+            {filteredRuns.map(run => (
               <div key={run.id}>
                 <div
                   className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
@@ -545,6 +584,26 @@ export function RunsHistoryPage() {
                 {expandedId === run.id && (
                   <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
                     <div className="pt-4 space-y-4">
+                      {/* Execution ID */}
+                      <div className="mb-4">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Execution ID</div>
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs text-gray-400 font-mono select-all">{run.id}</code>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(run.id);
+                            }}
+                            className="p-1 text-gray-500 hover:text-white transition-colors"
+                            title="Copy execution ID"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+
                       {/* Metadata Grid */}
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-sm">
                         <div>
@@ -589,13 +648,15 @@ export function RunsHistoryPage() {
                         </div>
                       </div>
 
-                      {/* Output - show for successful runs with output OR for failed runs */}
-                      {(expandedDetails[run.id]?.output || run.success === false) && (
+                      {/* Output - show for all completed runs */}
+                      {run.success !== null && (
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
                           <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
                             <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
-                              {expandedDetails[run.id]?.output || (run.success === false ? 'Loading output...' : '')}
+                              {expandedDetails[run.id]?.output !== undefined
+                                ? (expandedDetails[run.id].output || '(no output)')
+                                : 'Loading output...'}
                             </pre>
                           </div>
                         </div>
@@ -851,7 +912,8 @@ ${prompt.trim()}`;
       prompt: finalPrompt,
       workspacePath: workspacePath || undefined,
       workspaceName: apps.find(a => a.repoPath === workspacePath)?.name,
-      timeout: timeout * 60 * 1000 // Convert minutes to milliseconds
+      timeout: timeout * 60 * 1000, // Convert minutes to milliseconds
+      screenshots: screenshots.map(s => s.path) // Include screenshot paths
     }).catch(err => ({ error: err.message }));
 
     if (result.error) {

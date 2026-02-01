@@ -265,6 +265,23 @@ describe('Task Parser', () => {
       expect(markdown).toContain('- App: my-app');
     });
 
+    it('should escape newlines in metadata values for round-trip preservation', () => {
+      const multiLineContext = '## Additional Instructions\nFix the bug\n\n## Previous Context\nAgent ID: agent-123';
+      const tasks = [
+        { id: 'task-001', status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Resume task', metadata: { context: multiLineContext } }
+      ];
+
+      const markdown = generateTasksMarkdown(tasks);
+
+      // Should contain escaped newlines
+      expect(markdown).toContain('\\n');
+      expect(markdown).not.toContain('\n## Additional');
+
+      // Round-trip test: parse it back and verify context is preserved
+      const parsed = parseTasksMarkdown(markdown);
+      expect(parsed[0].metadata.context).toBe(multiLineContext);
+    });
+
     it('should sort tasks by priority within sections', () => {
       const tasks = [
         { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1, description: 'Low', metadata: {} },

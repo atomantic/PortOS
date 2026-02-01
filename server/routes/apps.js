@@ -129,17 +129,32 @@ router.post('/:id/start', asyncHandler(async (req, res, next) => {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const results = {};
-  const commands = app.startCommands || ['npm run dev'];
   const processNames = app.pm2ProcessNames || [app.name.toLowerCase().replace(/\s+/g, '-')];
 
-  for (let i = 0; i < processNames.length; i++) {
-    const name = processNames[i];
-    const command = commands[i] || commands[0];
+  // Check if ecosystem config exists - prefer using it for proper env var handling
+  const hasEcosystem = ['ecosystem.config.cjs', 'ecosystem.config.js']
+    .some(f => existsSync(`${app.repoPath}/${f}`));
 
-    const result = await pm2Service.startWithCommand(name, app.repoPath, command)
+  let results = {};
+
+  if (hasEcosystem) {
+    // Use ecosystem config for proper env/port configuration
+    const result = await pm2Service.startFromEcosystem(app.repoPath, processNames)
       .catch(err => ({ success: false, error: err.message }));
-    results[name] = result;
+    // Map result to each process name for consistent response format
+    for (const name of processNames) {
+      results[name] = result;
+    }
+  } else {
+    // Fallback to command-based start for apps without ecosystem config
+    const commands = app.startCommands || ['npm run dev'];
+    for (let i = 0; i < processNames.length; i++) {
+      const name = processNames[i];
+      const command = commands[i] || commands[0];
+      const result = await pm2Service.startWithCommand(name, app.repoPath, command)
+        .catch(err => ({ success: false, error: err.message }));
+      results[name] = result;
+    }
   }
 
   const allSuccess = Object.values(results).every(r => r.success !== false);

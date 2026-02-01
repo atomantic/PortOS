@@ -110,6 +110,10 @@ export async function spawnAgentViaRunner(options) {
     workspacePath,
     model,
     envVars,
+    // New: CLI-agnostic parameters
+    cliCommand,
+    cliArgs,
+    // Legacy (deprecated)
     claudePath
   } = options;
 
@@ -127,6 +131,8 @@ export async function spawnAgentViaRunner(options) {
       workspacePath,
       model,
       envVars,
+      cliCommand,
+      cliArgs,
       claudePath
     }),
     signal: controller.signal

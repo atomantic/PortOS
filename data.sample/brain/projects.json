@@ -1,0 +1,49 @@
+{
+  "records": {
+    "p1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c": {
+      "name": "PortOS Brain Feature",
+      "status": "active",
+      "nextAction": "Implement the AI classifier prompt template",
+      "notes": "Building a second-brain capture system for PortOS. Core workflow: capture -> classify -> store -> surface.",
+      "tags": ["portos", "feature", "ai"],
+      "createdAt": "2024-01-08T09:00:00.000Z",
+      "updatedAt": "2024-01-09T14:00:00.000Z"
+    },
+    "p2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d": {
+      "name": "Home Office Setup",
+      "status": "waiting",
+      "nextAction": "Wait for standing desk delivery (ETA Jan 15)",
+      "notes": "Upgrading home office. Ordered standing desk, need to get monitor arm next.",
+      "tags": ["home", "setup"],
+      "createdAt": "2024-01-02T10:00:00.000Z",
+      "updatedAt": "2024-01-06T11:00:00.000Z"
+    },
+    "p3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e": {
+      "name": "Learn Rust",
+      "status": "someday",
+      "nextAction": "Buy the Rust Programming Language book",
+      "notes": "Want to learn Rust for systems programming. Low priority for now.",
+      "tags": ["learning", "programming"],
+      "createdAt": "2023-11-15T09:00:00.000Z",
+      "updatedAt": "2023-11-15T09:00:00.000Z"
+    },
+    "p4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f": {
+      "name": "Q1 Planning Document",
+      "status": "done",
+      "nextAction": "N/A - Completed",
+      "notes": "Created and shared Q1 planning doc with team. Got approval from leadership.",
+      "tags": ["work", "planning"],
+      "createdAt": "2023-12-01T09:00:00.000Z",
+      "updatedAt": "2024-01-05T16:00:00.000Z"
+    },
+    "p5e6f7a8-b9c0-4d1e-2f3a-4b5c6d7e8f9a": {
+      "name": "Blog Post Series",
+      "status": "blocked",
+      "nextAction": "Wait for design team to provide header images",
+      "notes": "Writing a 3-part series on AI tooling. Part 1 drafted, need images before publishing.",
+      "tags": ["writing", "blog"],
+      "createdAt": "2024-01-03T09:00:00.000Z",
+      "updatedAt": "2024-01-07T10:00:00.000Z"
+    }
+  }
+}

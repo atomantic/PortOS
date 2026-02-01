@@ -126,7 +126,8 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleDelete = async () => {
-    await api.deleteCosTask(task.id).catch(err => toast.error(err.message));
+    const taskType = isSystem ? 'internal' : 'user';
+    await api.deleteCosTask(task.id, taskType).catch(err => toast.error(err.message));
     toast.success('Task deleted');
     onRefresh();
   };
