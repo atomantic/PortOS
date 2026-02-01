@@ -9,7 +9,6 @@ import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { EventEmitter } from 'events';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
@@ -17,7 +16,12 @@ import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps } from './apps.js';
-import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary } from './taskLearning.js';
+import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
+import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
+// Import and re-export cosEvents from separate module to avoid circular dependencies
+import { cosEvents as _cosEvents } from './cosEvents.js';
+export const cosEvents = _cosEvents;
 
 const execAsync = promisify(exec);
 
@@ -31,16 +35,13 @@ const REPORTS_DIR = join(COS_DIR, 'reports');
 const SCRIPTS_DIR = join(COS_DIR, 'scripts');
 const ROOT_DIR = join(__dirname, '../../');
 
-// Event emitter for CoS events
-export const cosEvents = new EventEmitter();
-
 /**
  * Emit a log event for UI display
  * Exported for use by other CoS-related services
  * @param {string} level - Log level: 'info', 'warn', 'error', 'success', 'debug'
  * @param {string} message - Log message
  * @param {Object} data - Additional data to include in log entry
- * @param {string} prefix - Optional prefix for console output (e.g., '[SelfImprovement]')
+ * @param {string} prefix - Optional prefix for console output (e.g., 'SelfImprovement')
  */
 export function emitLog(level, message, data = {}, prefix = '') {
   const logEntry = {
@@ -49,7 +50,7 @@ export function emitLog(level, message, data = {}, prefix = '') {
     message,
     ...data
   };
-  const emoji = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : 'ℹ️';
+  const emoji = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : level === 'debug' ? '🔍' : 'ℹ️';
   const prefixStr = prefix ? ` ${prefix}` : '';
   console.log(`${emoji}${prefixStr} ${message}`);
   cosEvents.emit('log', logEntry);
@@ -57,8 +58,6 @@ export function emitLog(level, message, data = {}, prefix = '') {
 
 // In-memory daemon state
 let daemonRunning = false;
-let evaluationInterval = null;
-let healthCheckInterval = null;
 
 // Mutex lock for state operations to prevent race conditions
 let stateLock = Promise.resolve();
@@ -101,6 +100,7 @@ const DEFAULT_CONFIG = {
   comprehensiveAppImprovement: true,       // Use comprehensive analysis for managed apps (same as PortOS self-improvement)
   immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
   proactiveMode: true,                     // Be proactive about finding work
+  rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   autoFixThresholds: {
     maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed
     allowedCategories: [                   // Categories that can auto-execute
@@ -269,15 +269,27 @@ export async function start() {
   // Then reset any orphaned in_progress tasks (no running agent)
   await resetOrphanedTasks();
 
-  // Start evaluation loop
-  evaluationInterval = setInterval(async () => {
-    await evaluateTasks();
-  }, state.config.evaluationIntervalMs);
+  // Start evaluation loop using event scheduler
+  scheduleEvent({
+    id: 'cos-evaluation',
+    type: 'interval',
+    intervalMs: state.config.evaluationIntervalMs,
+    handler: async () => {
+      await evaluateTasks();
+    },
+    metadata: { description: 'CoS task evaluation loop' }
+  });
 
-  // Start health check loop
-  healthCheckInterval = setInterval(async () => {
-    await runHealthCheck();
-  }, state.config.healthCheckIntervalMs);
+  // Start health check loop using event scheduler
+  scheduleEvent({
+    id: 'cos-health-check',
+    type: 'interval',
+    intervalMs: state.config.healthCheckIntervalMs,
+    handler: async () => {
+      await runHealthCheck();
+    },
+    metadata: { description: 'CoS health check loop' }
+  });
 
   // Run initial evaluation and health check
   emitLog('info', 'Running initial task evaluation...');
@@ -297,15 +309,9 @@ export async function stop() {
     return { success: false, error: 'Not running' };
   }
 
-  // Clear intervals
-  if (evaluationInterval) {
-    clearInterval(evaluationInterval);
-    evaluationInterval = null;
-  }
-  if (healthCheckInterval) {
-    clearInterval(healthCheckInterval);
-    healthCheckInterval = null;
-  }
+  // Cancel scheduled events
+  cancelEvent('cos-evaluation');
+  cancelEvent('cos-health-check');
 
   const state = await loadState();
   state.running = false;
@@ -551,7 +557,33 @@ export async function evaluateTasks() {
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
 
-  // Priority 3: Only generate direct idle task if:
+  // Priority 3: Mission-driven proactive tasks (if no user tasks)
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.proactiveMode) {
+    const missionTasks = await generateMissionTasks({ maxTasks: availableSlots - tasksToSpawn.length }).catch(err => {
+      emitLog('debug', `Mission task generation failed: ${err.message}`);
+      return [];
+    });
+
+    for (const missionTask of missionTasks) {
+      if (tasksToSpawn.length >= availableSlots) break;
+      // Convert mission task to COS task format
+      tasksToSpawn.push({
+        id: missionTask.id,
+        description: missionTask.description,
+        priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
+        status: 'pending',
+        metadata: missionTask.metadata,
+        taskType: 'internal',
+        approvalRequired: !missionTask.autoApprove
+      });
+      emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
+        missionId: missionTask.metadata?.missionId,
+        appId: missionTask.metadata?.appId
+      });
+    }
+  }
+
+  // Priority 4: Only generate direct idle task if:
   // 1. Nothing to spawn
   // 2. No pending user tasks (even on cooldown)
   // 3. No system tasks queued
@@ -589,6 +621,18 @@ export async function evaluateTasks() {
         totalCompleted: perfSummary.totalCompleted,
         topPerformers: perfSummary.topPerformers.length,
         needsAttention: perfSummary.needsAttention.length
+      });
+    }
+  }
+
+  // Periodically check for task types eligible for auto-rehabilitation (every 100 evaluations, ~2 hours)
+  // This gives previously-failing task types a fresh chance after their grace period expires
+  if (evalCount % 100 === 0 && evalCount > 0) {
+    const gracePeriodMs = (state.config.rehabilitationGracePeriodDays || 7) * 24 * 60 * 60 * 1000;
+    const rehabilitationResult = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(() => ({ count: 0 }));
+    if (rehabilitationResult.count > 0) {
+      emitLog('success', `Auto-rehabilitated ${rehabilitationResult.count} skipped task type(s) for retry`, {
+        rehabilitated: rehabilitationResult.rehabilitated?.map(r => r.taskType) || []
       });
     }
   }
@@ -919,7 +963,7 @@ async function generateSelfImprovementTask(state) {
       await saveState(s);
     });
 
-    return generateSelfImprovementTaskForType(request.taskType, state);
+    return await generateSelfImprovementTaskForType(request.taskType, state);
   }
 
   // Use the schedule service to determine the next task type
@@ -991,17 +1035,35 @@ async function generateSelfImprovementTask(state) {
   // Get task descriptions from the centralized helper function
   const taskDescriptions = getSelfImprovementTaskDescriptions();
 
-  return generateSelfImprovementTaskForType(nextType, state, taskDescriptions);
+  return await generateSelfImprovementTaskForType(nextType, state, taskDescriptions);
 }
 
 /**
  * Helper function to generate a self-improvement task for a specific type
  * Used by both normal rotation and on-demand task requests
  */
-function generateSelfImprovementTaskForType(taskType, state, taskDescriptions = null) {
-  // Use provided descriptions or generate default ones
-  const descriptions = taskDescriptions || getSelfImprovementTaskDescriptions();
-  const description = descriptions[taskType] || `[Self-Improvement] ${taskType} analysis`;
+async function generateSelfImprovementTaskForType(taskType, state, taskDescriptions = null) {
+  const taskSchedule = await import('./taskSchedule.js');
+  const interval = await taskSchedule.getSelfImprovementInterval(taskType);
+
+  // Get the effective prompt (custom or default)
+  const description = await taskSchedule.getSelfImprovementPrompt(taskType);
+
+  const metadata = {
+    analysisType: taskType,
+    autoGenerated: true,
+    selfImprovement: true
+  };
+
+  // Use configured model/provider if specified, otherwise use default
+  if (interval.providerId) {
+    metadata.providerId = interval.providerId;
+  }
+  if (interval.model) {
+    metadata.model = interval.model;
+  } else {
+    metadata.model = 'claude-opus-4-5-20251101';
+  }
 
   const task = {
     id: `self-improve-${taskType}-${Date.now().toString(36)}`,
@@ -1009,12 +1071,7 @@ function generateSelfImprovementTaskForType(taskType, state, taskDescriptions = 
     priority: 'MEDIUM',
     priorityValue: PRIORITY_VALUES['MEDIUM'],
     description,
-    metadata: {
-      analysisType: taskType,
-      autoGenerated: true,
-      selfImprovement: true,
-      model: 'claude-opus-4-5-20251101'
-    },
+    metadata,
     taskType: 'internal',
     autoApproved: true
   };
@@ -1377,7 +1434,15 @@ async function generateManagedAppImprovementTask(app, state) {
 
   emitLog('info', `Generating comprehensive improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
 
-  // Task descriptions for each analysis type
+  // Get the effective prompt (custom or default template)
+  const promptTemplate = await taskSchedule.getAppImprovementPrompt(nextType);
+
+  // Replace template variables in the prompt
+  const description = promptTemplate
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath);
+
+  // Legacy task descriptions - keeping for fallback but they won't be used
   const taskDescriptions = {
     'security-audit': `[App Improvement: ${app.name}] Security Audit
 
@@ -1635,15 +1700,27 @@ Repository: ${app.repoPath}
 Use model: claude-opus-4-5-20251101 for thorough typing`
   };
 
-  const description = taskDescriptions[nextType] || `[App Improvement: ${app.name}] ${nextType}
+  // Get interval settings to determine provider/model
+  const interval = await taskSchedule.getAppImprovementInterval(nextType);
 
-Perform ${nextType} analysis on ${app.name}.
+  const metadata = {
+    app: app.id,
+    appName: app.name,
+    repoPath: app.repoPath,
+    analysisType: nextType,
+    autoGenerated: true,
+    comprehensiveImprovement: true
+  };
 
-Repository: ${app.repoPath}
-
-Analyze the codebase and make improvements. Commit changes with clear descriptions.
-
-Use model: claude-opus-4-5-20251101`;
+  // Use configured model/provider if specified, otherwise use default
+  if (interval.providerId) {
+    metadata.providerId = interval.providerId;
+  }
+  if (interval.model) {
+    metadata.model = interval.model;
+  } else {
+    metadata.model = 'claude-opus-4-5-20251101';
+  }
 
   const task = {
     id: `app-improve-${app.id}-${nextType}-${Date.now().toString(36)}`,
@@ -1651,15 +1728,7 @@ Use model: claude-opus-4-5-20251101`;
     priority: state.config.idleReviewPriority || 'MEDIUM',
     priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
     description,
-    metadata: {
-      app: app.id,
-      appName: app.name,
-      repoPath: app.repoPath,
-      analysisType: nextType,
-      autoGenerated: true,
-      comprehensiveImprovement: true,
-      model: 'claude-opus-4-5-20251101'
-    },
+    metadata,
     taskType: 'internal',
     autoApproved: true
   };
@@ -2307,7 +2376,12 @@ export async function addTask(taskData, taskType = 'user') {
     section: 'pending'
   };
 
-  tasks.push(newTask);
+  // Add task to top or bottom based on position parameter
+  if (taskData.position === 'top') {
+    tasks.unshift(newTask);
+  } else {
+    tasks.push(newTask);
+  }
 
   // Write back to file
   const includeApprovalFlags = taskType === 'internal';

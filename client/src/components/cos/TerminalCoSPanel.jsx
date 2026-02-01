@@ -75,11 +75,11 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
   };
 
   const levelPrefixes = {
-    info: '[INFO]',
-    warn: '[WARN]',
-    error: '[ERR!]',
-    success: '[DONE]',
-    debug: '[DBG.]'
+    info: 'ℹ️',
+    warn: '⚠️',
+    error: '❌',
+    success: '✅',
+    debug: '🔍'
   };
 
   return (

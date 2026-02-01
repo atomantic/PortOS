@@ -1,25 +1,27 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, Mic, MicOff, Video, VideoOff, RefreshCw, Settings, Volume2 } from 'lucide-react';
+import api from '../services/api';
 
 const MEDIA_CONSTRAINTS_KEY = 'portos-media-constraints';
 
 export default function Media() {
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  const [stream, setStream] = useState(null);
+  const [streaming, setStreaming] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [devices, setDevices] = useState({ video: [], audio: [] });
-  const [selectedVideo, setSelectedVideo] = useState('');
-  const [selectedAudio, setSelectedAudio] = useState('');
+  const [selectedVideo, setSelectedVideo] = useState('0');
+  const [selectedAudio, setSelectedAudio] = useState('0');
   const [error, setError] = useState(null);
-  const [permissionState, setPermissionState] = useState('prompt'); // 'prompt', 'granted', 'denied'
   const [audioLevel, setAudioLevel] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [audioNeedsInteraction, setAudioNeedsInteraction] = useState(false);
 
   // Load saved device preferences
   useEffect(() => {
@@ -41,25 +43,22 @@ export default function Media() {
     }
   }, [selectedVideo, selectedAudio]);
 
-  // Enumerate available devices
-  const enumerateDevices = useCallback(async () => {
-    const deviceList = await navigator.mediaDevices.enumerateDevices();
-    const videoInputs = deviceList.filter(d => d.kind === 'videoinput');
-    const audioInputs = deviceList.filter(d => d.kind === 'audioinput');
-
-    setDevices({ video: videoInputs, audio: audioInputs });
+  // Fetch available devices from server
+  const fetchDevices = useCallback(async () => {
+    const response = await api.get('/media/devices');
+    setDevices(response.data);
 
     // Set default selections if not already set
-    if (!selectedVideo && videoInputs.length > 0) {
-      setSelectedVideo(videoInputs[0].deviceId);
+    if (!selectedVideo && response.data.video.length > 0) {
+      setSelectedVideo(response.data.video[0].id);
     }
-    if (!selectedAudio && audioInputs.length > 0) {
-      setSelectedAudio(audioInputs[0].deviceId);
+    if (!selectedAudio && response.data.audio.length > 0) {
+      setSelectedAudio(response.data.audio[0].id);
     }
   }, [selectedVideo, selectedAudio]);
 
-  // Set up audio level monitoring
-  const setupAudioAnalyser = useCallback(async (audioStream) => {
+  // Set up audio level monitoring from audio element
+  const setupAudioAnalyser = useCallback(async (audioElement) => {
     // Clean up existing audio context
     if (audioContextRef.current) {
       audioContextRef.current.close();
@@ -72,14 +71,17 @@ export default function Media() {
 
     // Resume AudioContext if suspended (browser autoplay policy)
     if (audioContext.state === 'suspended') {
-      await audioContext.resume();
+      await audioContext.resume().catch(() => {
+        setAudioNeedsInteraction(true);
+      });
     }
 
     const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(audioStream);
+    const source = audioContext.createMediaElementSource(audioElement);
 
     analyser.fftSize = 256;
     source.connect(analyser);
+    source.connect(audioContext.destination); // Connect to speakers
 
     audioContextRef.current = audioContext;
     analyserRef.current = analyser;
@@ -103,57 +105,77 @@ export default function Media() {
     updateLevel();
   }, []);
 
-  // Start media stream
+  // Enable audio with user interaction (for mobile browsers)
+  const enableAudio = useCallback(async () => {
+    if (audioRef.current && audioContextRef.current) {
+      // Resume AudioContext
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
+      // Play audio element
+      await audioRef.current.play();
+
+      setAudioNeedsInteraction(false);
+      setError(null);
+    }
+  }, []);
+
+  // Start media stream from server
   const startMedia = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setAudioNeedsInteraction(false);
 
-    // Stop any existing stream
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-    }
+    // Start streaming on server
+    await api.post('/media/start', {
+      videoDeviceId: selectedVideo,
+      audioDeviceId: selectedAudio,
+      video: videoEnabled,
+      audio: audioEnabled
+    });
 
-    const constraints = {
-      video: videoEnabled ? {
-        deviceId: selectedVideo ? { exact: selectedVideo } : undefined,
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      } : false,
-      audio: audioEnabled ? {
-        deviceId: selectedAudio ? { exact: selectedAudio } : undefined,
-        echoCancellation: true,
-        noiseSuppression: true
-      } : false
-    };
-
-    // If neither video nor audio is enabled, don't request
-    if (!constraints.video && !constraints.audio) {
-      setIsLoading(false);
-      return;
-    }
-
-    const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-    setStream(mediaStream);
-    setPermissionState('granted');
-
-    if (audioEnabled) {
-      setupAudioAnalyser(mediaStream);
-    }
-
-    // Re-enumerate to get device labels (only available after permission granted)
-    await enumerateDevices();
+    setStreaming(true);
     setIsLoading(false);
-  }, [videoEnabled, audioEnabled, selectedVideo, selectedAudio, stream, enumerateDevices, setupAudioAnalyser]);
+  }, [videoEnabled, audioEnabled, selectedVideo, selectedAudio]);
+
+  // Set up media sources when streaming starts
+  useEffect(() => {
+    if (!streaming) return;
+
+    const timestamp = Date.now();
+    const protocol = window.location.protocol;
+
+    // Set video source to server stream
+    if (videoRef.current && videoEnabled) {
+      videoRef.current.src = `${protocol}//${window.location.hostname}:5554/api/media/video?t=${timestamp}`;
+    }
+
+    // Set audio source to server stream and set up analyzer
+    if (audioRef.current && audioEnabled) {
+      audioRef.current.src = `${protocol}//${window.location.hostname}:5554/api/media/audio?t=${timestamp}`;
+
+      audioRef.current.play().then(() => {
+        setupAudioAnalyser(audioRef.current);
+      }).catch(() => {
+        // On mobile browsers, autoplay is often blocked - show interaction prompt
+        setAudioNeedsInteraction(true);
+        setupAudioAnalyser(audioRef.current); // Set up analyser anyway for when user enables
+      });
+    }
+  }, [streaming, videoEnabled, audioEnabled, setupAudioAnalyser]);
 
   // Stop media stream
-  const stopMedia = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
-    }
+  const stopMedia = useCallback(async () => {
+    // Stop streaming on server
+    await api.post('/media/stop');
+
     if (videoRef.current) {
-      videoRef.current.srcObject = null;
+      videoRef.current.src = '';
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
     }
     if (audioContextRef.current) {
       audioContextRef.current.close();
@@ -162,73 +184,47 @@ export default function Media() {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
+    setStreaming(false);
     setAudioLevel(0);
-  }, [stream]);
+  }, []);
 
-  // Toggle video track
+  // Toggle video
   const toggleVideo = useCallback(() => {
-    if (stream) {
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
-        setVideoEnabled(videoTrack.enabled);
-      }
-    } else {
-      setVideoEnabled(v => !v);
-    }
-  }, [stream]);
+    const newValue = !videoEnabled;
+    setVideoEnabled(newValue);
 
-  // Toggle audio track
+    if (streaming) {
+      // Restart stream with new video setting
+      startMedia();
+    }
+  }, [videoEnabled, streaming, startMedia]);
+
+  // Toggle audio
   const toggleAudio = useCallback(() => {
-    if (stream) {
-      const audioTrack = stream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setAudioEnabled(audioTrack.enabled);
-        if (!audioTrack.enabled) {
-          setAudioLevel(0);
-        }
-      }
-    } else {
-      setAudioEnabled(a => !a);
+    const newValue = !audioEnabled;
+    setAudioEnabled(newValue);
+
+    if (streaming) {
+      // Restart stream with new audio setting
+      startMedia();
     }
-  }, [stream]);
+  }, [audioEnabled, streaming, startMedia]);
 
-  // Check permission status on mount
+  // Fetch devices on mount
   useEffect(() => {
-    const checkPermissions = async () => {
-      if (navigator.permissions) {
-        const cameraStatus = await navigator.permissions.query({ name: 'camera' });
-        const micStatus = await navigator.permissions.query({ name: 'microphone' });
-
-        if (cameraStatus.state === 'granted' && micStatus.state === 'granted') {
-          setPermissionState('granted');
-        } else if (cameraStatus.state === 'denied' || micStatus.state === 'denied') {
-          setPermissionState('denied');
-          setError('Camera or microphone access was denied. Please enable permissions in your browser settings.');
-        }
-      }
-
-      // Enumerate devices (labels may be empty until permission granted)
-      await enumerateDevices();
-    };
-
-    checkPermissions();
-  }, [enumerateDevices]);
+    fetchDevices().catch(err => {
+      setError(`Failed to fetch devices: ${err.message}`);
+    });
+  }, [fetchDevices]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      stopMedia();
+      if (streaming) {
+        stopMedia();
+      }
     };
-  }, [stopMedia]);
-
-  // Set video srcObject when stream changes (handles async state update)
-  useEffect(() => {
-    if (videoRef.current && stream && videoEnabled) {
-      videoRef.current.srcObject = stream;
-    }
-  }, [stream, videoEnabled]);
+  }, [streaming, stopMedia]);
 
   // Handle device change
   const handleDeviceChange = useCallback(async (type, deviceId) => {
@@ -239,19 +235,19 @@ export default function Media() {
     }
 
     // Restart stream with new device if currently streaming
-    if (stream) {
+    if (streaming) {
       // Small delay to let state update
       setTimeout(() => startMedia(), 100);
     }
-  }, [stream, startMedia]);
+  }, [streaming, startMedia]);
 
   return (
     <div>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-white">Media Devices</h2>
-          <p className="text-gray-500">Access your camera and microphone</p>
+          <h2 className="text-2xl font-bold text-white">Server Media Devices</h2>
+          <p className="text-gray-500">Access camera and microphone from the PortOS server</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -275,6 +271,29 @@ export default function Media() {
         </div>
       )}
 
+      {/* Audio interaction prompt for mobile browsers */}
+      {audioNeedsInteraction && streaming && audioEnabled && (
+        <div className="mb-6 p-4 bg-port-warning/10 border border-port-warning/30 rounded-lg">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <Volume2 size={20} className="text-port-warning" />
+              <div>
+                <p className="text-port-warning font-medium">Audio requires interaction</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  Your browser requires user interaction to enable audio playback
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={enableAudio}
+              className="px-4 py-2 bg-port-warning text-white rounded-lg font-medium hover:bg-port-warning/80 transition-colors whitespace-nowrap"
+            >
+              Enable Audio
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Settings panel */}
       {showSettings && (
         <div className="mb-6 p-4 bg-port-card border border-port-border rounded-xl">
@@ -294,9 +313,9 @@ export default function Media() {
                 {devices.video.length === 0 ? (
                   <option value="">No cameras found</option>
                 ) : (
-                  devices.video.map((device, i) => (
-                    <option key={device.deviceId} value={device.deviceId}>
-                      {device.label || `Camera ${i + 1}`}
+                  devices.video.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
                     </option>
                   ))
                 )}
@@ -317,9 +336,9 @@ export default function Media() {
                 {devices.audio.length === 0 ? (
                   <option value="">No microphones found</option>
                 ) : (
-                  devices.audio.map((device, i) => (
-                    <option key={device.deviceId} value={device.deviceId}>
-                      {device.label || `Microphone ${i + 1}`}
+                  devices.audio.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
                     </option>
                   ))
                 )}
@@ -335,22 +354,22 @@ export default function Media() {
         <div className="lg:col-span-2">
           <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
             <div className="aspect-video bg-black relative">
-              {stream && videoEnabled ? (
-                <video
+              {streaming && videoEnabled ? (
+                <img
                   ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
+                  alt="Server camera stream"
                   className="w-full h-full object-cover"
                 />
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
                   <VideoOff size={48} className="mb-4" />
                   <p className="text-sm">
-                    {!stream ? 'Camera not started' : 'Camera disabled'}
+                    {!streaming ? 'Camera not started' : 'Camera disabled'}
                   </p>
                 </div>
               )}
+              {/* Hidden audio element for playback */}
+              <audio ref={audioRef} crossOrigin="anonymous" style={{ display: 'none' }} />
 
               {/* Loading overlay */}
               {isLoading && (
@@ -364,7 +383,7 @@ export default function Media() {
             <div className="p-4 flex items-center justify-center gap-4">
               <button
                 onClick={toggleVideo}
-                disabled={!stream && permissionState !== 'granted'}
+                disabled={!streaming}
                 className={`p-3 rounded-full transition-colors ${
                   videoEnabled
                     ? 'bg-port-card border border-port-border text-white hover:bg-port-border'
@@ -377,7 +396,7 @@ export default function Media() {
 
               <button
                 onClick={toggleAudio}
-                disabled={!stream && permissionState !== 'granted'}
+                disabled={!streaming}
                 className={`p-3 rounded-full transition-colors ${
                   audioEnabled
                     ? 'bg-port-card border border-port-border text-white hover:bg-port-border'
@@ -388,10 +407,10 @@ export default function Media() {
                 {audioEnabled ? <Mic size={20} /> : <MicOff size={20} />}
               </button>
 
-              {!stream ? (
+              {!streaming ? (
                 <button
                   onClick={startMedia}
-                  disabled={isLoading || permissionState === 'denied'}
+                  disabled={isLoading}
                   className="px-6 py-3 bg-port-accent text-white rounded-full font-medium hover:bg-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isLoading ? 'Starting...' : 'Start Media'}
@@ -406,8 +425,8 @@ export default function Media() {
               )}
 
               <button
-                onClick={startMedia}
-                disabled={!stream || isLoading}
+                onClick={fetchDevices}
+                disabled={isLoading}
                 className="p-3 rounded-full bg-port-card border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Refresh devices"
               >
@@ -461,10 +480,10 @@ export default function Media() {
               </div>
 
               <p className="text-sm text-gray-500 text-center">
-                {!stream
+                {!streaming
                   ? 'Start media to see audio levels'
                   : !audioEnabled
-                    ? 'Microphone muted'
+                    ? 'Microphone disabled'
                     : audioLevel > 0.1
                       ? 'Receiving audio'
                       : 'No audio detected'}
@@ -477,40 +496,27 @@ export default function Media() {
             <h3 className="font-semibold text-white mb-4">Status</h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-gray-400">Permission</span>
-                <span className={`text-sm font-medium ${
-                  permissionState === 'granted'
-                    ? 'text-port-success'
-                    : permissionState === 'denied'
-                      ? 'text-port-error'
-                      : 'text-port-warning'
-                }`}>
-                  {permissionState === 'granted' ? 'Granted' : permissionState === 'denied' ? 'Denied' : 'Not requested'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
                 <span className="text-gray-400">Stream</span>
-                <span className={`text-sm font-medium ${stream ? 'text-port-success' : 'text-gray-500'}`}>
-                  {stream ? 'Active' : 'Inactive'}
+                <span className={`text-sm font-medium ${streaming ? 'text-port-success' : 'text-gray-500'}`}>
+                  {streaming ? 'Active' : 'Inactive'}
                 </span>
               </div>
 
               <div className="flex items-center justify-between">
                 <span className="text-gray-400">Camera</span>
                 <span className={`text-sm font-medium ${
-                  stream && videoEnabled ? 'text-port-success' : 'text-gray-500'
+                  streaming && videoEnabled ? 'text-port-success' : 'text-gray-500'
                 }`}>
-                  {stream ? (videoEnabled ? 'On' : 'Off') : '-'}
+                  {streaming ? (videoEnabled ? 'On' : 'Off') : '-'}
                 </span>
               </div>
 
               <div className="flex items-center justify-between">
                 <span className="text-gray-400">Microphone</span>
                 <span className={`text-sm font-medium ${
-                  stream && audioEnabled ? 'text-port-success' : 'text-gray-500'
+                  streaming && audioEnabled ? 'text-port-success' : 'text-gray-500'
                 }`}>
-                  {stream ? (audioEnabled ? 'On' : 'Off') : '-'}
+                  {streaming ? (audioEnabled ? 'On' : 'Off') : '-'}
                 </span>
               </div>
             </div>
@@ -520,8 +526,8 @@ export default function Media() {
           <div className="bg-port-card border border-port-border rounded-xl p-4">
             <h3 className="font-semibold text-white mb-3">Instructions</h3>
             <ul className="space-y-2 text-sm text-gray-400">
-              <li>1. Click &quot;Start Media&quot; to access devices</li>
-              <li>2. Grant permission when prompted</li>
+              <li>1. Click &quot;Start Media&quot; to stream from server</li>
+              <li>2. Video and audio stream from the PortOS server</li>
               <li>3. Use controls to toggle camera/mic</li>
               <li>4. Select different devices in Settings</li>
             </ul>

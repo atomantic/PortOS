@@ -136,6 +136,14 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     return percent;
   }, [duration, durationEstimate]);
 
+  // Calculate remaining time (ETA)
+  const remainingTime = useMemo(() => {
+    if (!durationEstimate || completed) return null;
+    const remaining = durationEstimate.estimatedMs - duration;
+    if (remaining <= 0) return { remaining: 0, overBy: Math.abs(remaining), isOvertime: true };
+    return { remaining, overBy: 0, isOvertime: false };
+  }, [duration, durationEstimate, completed]);
+
   // For running agents, use live output; for completed, use fetched full output or stored
   const output = completed
     ? (fullOutput || agent.output || [])
@@ -220,18 +228,28 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           </div>
         </div>
 
-        {/* Second row: Runtime and process stats - compact inline display */}
+        {/* Second row: Runtime, ETA, and process stats - compact inline display */}
         <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
-          {/* Duration with estimate for running agents */}
+          {/* Duration with ETA for running agents */}
           {!completed && durationEstimate ? (
             <span
-              className="flex items-center gap-1 text-gray-500 whitespace-nowrap"
+              className="flex items-center gap-1.5 text-gray-500 whitespace-nowrap"
               title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
             >
               <Clock size={12} aria-hidden="true" className="flex-shrink-0" />
               <span className="font-mono">{formatDuration(duration)}</span>
-              <span className="text-gray-600">/</span>
-              <span className="font-mono text-gray-600">~{formatDuration(durationEstimate.estimatedMs)}</span>
+              {remainingTime && !remainingTime.isOvertime && (
+                <>
+                  <span className="text-gray-600">→</span>
+                  <span className="font-mono text-port-accent">~{formatDuration(remainingTime.remaining)} left</span>
+                </>
+              )}
+              {remainingTime?.isOvertime && (
+                <>
+                  <span className="text-gray-600">→</span>
+                  <span className="font-mono text-yellow-500">+{formatDuration(remainingTime.overBy)}</span>
+                </>
+              )}
             </span>
           ) : (
             <span className="flex items-center gap-1 text-gray-500 whitespace-nowrap">
@@ -270,10 +288,10 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           </div>
         )}
 
-        {/* Progress bar for running agents with estimates */}
+        {/* Progress bar and ETA for running agents with estimates */}
         {!completed && durationEstimate && progress !== null && (
           <div className="mt-2">
-            <div className="h-1 bg-port-border rounded-full overflow-hidden">
+            <div className="h-1.5 bg-port-border rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all duration-1000 ease-linear ${
                   progress >= 100 ? 'bg-yellow-500' : 'bg-port-accent'
@@ -281,10 +299,19 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 style={{ width: `${Math.min(progress, 100)}%` }}
               />
             </div>
-            <div className="flex justify-between mt-1 text-xs text-gray-600">
-              <span>{progress}% of typical duration</span>
-              {progress >= 100 && (
-                <span className="text-yellow-500">Running longer than average</span>
+            <div className="flex justify-between mt-1.5 text-xs">
+              <span className="text-gray-500">
+                {progress}% complete
+              </span>
+              {remainingTime && !remainingTime.isOvertime && (
+                <span className="text-port-accent font-medium">
+                  ETA: ~{formatDuration(remainingTime.remaining)}
+                </span>
+              )}
+              {remainingTime?.isOvertime && (
+                <span className="text-yellow-500 font-medium animate-pulse">
+                  +{formatDuration(remainingTime.overBy)} over estimate
+                </span>
               )}
             </div>
           </div>

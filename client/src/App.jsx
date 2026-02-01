@@ -7,7 +7,9 @@ import CreateApp from './pages/CreateApp';
 import Templates from './pages/Templates';
 import PromptManager from './pages/PromptManager';
 import ChiefOfStaff from './pages/ChiefOfStaff';
+import Brain from './pages/Brain';
 import Media from './pages/Media';
+import DigitalTwin from './pages/DigitalTwin';
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
@@ -46,6 +48,10 @@ export default function App() {
           <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
           <Route path="cos/:tab" element={<ChiefOfStaff />} />
+          <Route path="brain" element={<Navigate to="/brain/inbox" replace />} />
+          <Route path="brain/:tab" element={<Brain />} />
+          <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
+          <Route path="digital-twin/:tab" element={<DigitalTwin />} />
           <Route path="apps/create" element={<CreateApp />} />
           <Route path="templates" element={<Templates />} />
           <Route path="media" element={<Media />} />

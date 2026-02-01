@@ -5,9 +5,12 @@
  * Combines semantic search with importance scoring.
  */
 
-import { getMemories, searchMemories, getMemory } from './memory.js';
+import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memory.js';
 import { generateQueryEmbedding, estimateTokens, truncateToTokens } from './memoryEmbeddings.js';
 import { DEFAULT_MEMORY_CONFIG } from './memory.js';
+
+// Search mode preference
+const SEARCH_MODE = 'hybrid'; // 'hybrid' | 'vector' | 'bm25'
 
 /**
  * Get relevant memories for a task
@@ -20,28 +23,38 @@ export async function getRelevantMemories(task, options = {}) {
   const memories = [];
   let tokenCount = 0;
 
-  // 1. Semantic search based on task description
+  // 1. Search based on task description (hybrid BM25 + vector or vector-only)
   if (task.description) {
     const queryEmbedding = await generateQueryEmbedding(task.description);
+    let searchResults = { memories: [] };
 
-    if (queryEmbedding) {
-      const searchResults = await searchMemories(queryEmbedding, {
+    if (SEARCH_MODE === 'hybrid' && queryEmbedding) {
+      // Use hybrid BM25 + vector search with reciprocal rank fusion
+      searchResults = await hybridSearchMemories(task.description, queryEmbedding, {
+        limit: 20,
+        minRelevance,
+        bm25Weight: 0.4,
+        vectorWeight: 0.6
+      });
+    } else if (queryEmbedding) {
+      // Fallback to vector-only search
+      searchResults = await searchMemories(queryEmbedding, {
         minRelevance,
         limit: 20
       });
+    }
 
-      for (const result of searchResults.memories) {
-        const mem = await getMemory(result.id);
-        if (mem) {
-          const tokens = estimateTokens(mem.content);
-          if (tokenCount + tokens <= maxTokens) {
-            memories.push({
-              ...mem,
-              relevance: result.similarity,
-              source: 'semantic'
-            });
-            tokenCount += tokens;
-          }
+    for (const result of searchResults.memories) {
+      const mem = await getMemory(result.id);
+      if (mem) {
+        const tokens = estimateTokens(mem.content);
+        if (tokenCount + tokens <= maxTokens) {
+          memories.push({
+            ...mem,
+            relevance: result.rrfScore || result.similarity || 0.5,
+            source: result.searchMethod || 'semantic'
+          });
+          tokenCount += tokens;
         }
       }
     }

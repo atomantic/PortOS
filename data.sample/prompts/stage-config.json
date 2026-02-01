@@ -7,20 +7,6 @@
       "returnsJson": true,
       "variables": ["jsonOutputFormat", "appDetectionSchema", "portDetectionRules", "pm2NamingConvention"]
     },
-    "code-analysis": {
-      "name": "Code Analysis",
-      "description": "Analyze code structure and suggest improvements",
-      "model": "default",
-      "returnsJson": false,
-      "variables": []
-    },
-    "command-suggestion": {
-      "name": "Command Suggestion",
-      "description": "Suggest CLI commands based on context",
-      "model": "quick",
-      "returnsJson": false,
-      "variables": []
-    },
     "cos-agent-briefing": {
       "name": "CoS Agent Briefing",
       "description": "Brief a sub-agent on their assigned task",
@@ -52,6 +38,30 @@
     "memory-evaluate": {
       "name": "Memory Evaluation",
       "description": "Evaluate agent output to extract useful memories",
+      "model": "lmstudio:gptoss-20b",
+      "provider": "lmstudio",
+      "returnsJson": true,
+      "variables": []
+    },
+    "brain-classifier": {
+      "name": "Brain Classifier",
+      "description": "Classify captured thoughts into People/Projects/Ideas/Admin",
+      "model": "lmstudio:gptoss-20b",
+      "provider": "lmstudio",
+      "returnsJson": true,
+      "variables": []
+    },
+    "brain-daily-digest": {
+      "name": "Brain Daily Digest",
+      "description": "Generate daily actionable digest",
+      "model": "lmstudio:gptoss-20b",
+      "provider": "lmstudio",
+      "returnsJson": true,
+      "variables": []
+    },
+    "brain-weekly-review": {
+      "name": "Brain Weekly Review",
+      "description": "Generate weekly review and open loops analysis",
       "model": "lmstudio:gptoss-20b",
       "provider": "lmstudio",
       "returnsJson": true,

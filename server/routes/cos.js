@@ -9,6 +9,7 @@ import * as appActivity from '../services/appActivity.js';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import * as taskSchedule from '../services/taskSchedule.js';
+import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -94,15 +95,27 @@ router.post('/tasks/reorder', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/cos/tasks - Add a new task
-router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots } = req.body;
+// POST /api/cos/tasks/enhance - Enhance a task prompt with AI
+router.post('/tasks/enhance', asyncHandler(async (req, res) => {
+  const { description, context } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots };
+  const result = await enhanceTaskPrompt(description, context);
+  res.json(result);
+}));
+
+// POST /api/cos/tasks - Add a new task
+router.post('/tasks', asyncHandler(async (req, res) => {
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, position = 'bottom' } = req.body;
+
+  if (!description) {
+    throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, position };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));
@@ -329,6 +342,19 @@ router.get('/learning/skipped', asyncHandler(async (req, res) => {
   });
 }));
 
+// POST /api/cos/learning/reset/:taskType - Reset learning data for a specific task type
+router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  if (!taskType) {
+    throw new ServerError('Task type is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const result = await taskLearning.resetTaskTypeLearning(taskType);
+  if (!result.reset) {
+    throw new ServerError(`Task type "${taskType}" not found in learning data`, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
 // GET /api/cos/learning/cooldown/:taskType - Get adaptive cooldown for specific task type
 router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
@@ -457,12 +483,15 @@ router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res)
 // PUT /api/cos/schedule/self-improvement/:taskType - Update interval for self-improvement task
 router.put('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const { type, enabled, intervalMs } = req.body;
+  const { type, enabled, intervalMs, providerId, model, prompt } = req.body;
 
   const settings = {};
   if (type !== undefined) settings.type = type;
   if (enabled !== undefined) settings.enabled = enabled;
   if (intervalMs !== undefined) settings.intervalMs = intervalMs;
+  if (providerId !== undefined) settings.providerId = providerId;
+  if (model !== undefined) settings.model = model;
+  if (prompt !== undefined) settings.prompt = prompt;
 
   const result = await taskSchedule.updateSelfImprovementInterval(taskType, settings);
   res.json({ success: true, taskType, interval: result });
@@ -478,12 +507,15 @@ router.get('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) 
 // PUT /api/cos/schedule/app-improvement/:taskType - Update interval for app improvement task
 router.put('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const { type, enabled, intervalMs } = req.body;
+  const { type, enabled, intervalMs, providerId, model, prompt } = req.body;
 
   const settings = {};
   if (type !== undefined) settings.type = type;
   if (enabled !== undefined) settings.enabled = enabled;
   if (intervalMs !== undefined) settings.intervalMs = intervalMs;
+  if (providerId !== undefined) settings.providerId = providerId;
+  if (model !== undefined) settings.model = model;
+  if (prompt !== undefined) settings.prompt = prompt;
 
   const result = await taskSchedule.updateAppImprovementInterval(taskType, settings);
   res.json({ success: true, taskType, interval: result });

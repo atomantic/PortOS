@@ -66,7 +66,7 @@ function emitLog(level, message, data = {}) {
     message,
     ...data
   };
-  console.log(`${level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : 'ℹ️'} [SelfImprovement] ${message}`);
+  console.log(`${level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : level === 'debug' ? '🔍' : 'ℹ️'} 🔧 SelfImprovement: ${message}`);
   cosEvents.emit('log', logEntry);
 }
 

@@ -7,6 +7,13 @@ export default function PromptManager() {
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);
 
+  // System stages that are protected
+  const systemStages = [
+    'cos-agent-briefing', 'cos-evaluate', 'cos-report-summary', 'cos-self-improvement',
+    'cos-task-enhance', 'brain-classifier', 'brain-daily-digest', 'brain-weekly-review',
+    'memory-evaluate', 'app-detection'
+  ];
+
   // Stage editing
   const [selectedStage, setSelectedStage] = useState(null);
   const [stageTemplate, setStageTemplate] = useState('');
@@ -17,6 +24,18 @@ export default function PromptManager() {
   // Variable editing
   const [selectedVar, setSelectedVar] = useState(null);
   const [varForm, setVarForm] = useState({ key: '', name: '', category: '', content: '' });
+
+  // Stage creation
+  const [creatingStage, setCreatingStage] = useState(false);
+  const [newStageForm, setNewStageForm] = useState({
+    stageName: '',
+    name: '',
+    description: '',
+    model: 'default',
+    returnsJson: false,
+    variables: [],
+    template: ''
+  });
 
   const [saving, setSaving] = useState(false);
 
@@ -101,6 +120,85 @@ export default function PromptManager() {
     setVarForm({ key: '', name: '', category: '', content: '' });
   };
 
+  const createStage = async () => {
+    setSaving(true);
+    const res = await fetch('/api/prompts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newStageForm)
+    });
+
+    if (!res.ok) {
+      let message = 'Failed to create stage';
+      const errorBody = await res.json().catch(() => null);
+      if (errorBody?.error || errorBody?.message) {
+        message = errorBody.error || errorBody.message;
+      }
+      setSaving(false);
+      alert(message);
+      return;
+    }
+
+    setSaving(false);
+    setCreatingStage(false);
+    setNewStageForm({
+      stageName: '',
+      name: '',
+      description: '',
+      model: 'default',
+      returnsJson: false,
+      variables: [],
+      template: ''
+    });
+    await loadData();
+  };
+
+  const deleteStage = async (stageName) => {
+    // Check if stage is in use
+    let usageRes;
+    const usageResponse = await fetch(`/api/prompts/${stageName}/usage`).catch(() => null);
+    if (!usageResponse || !usageResponse.ok) {
+      usageRes = { isSystemStage: false, usedBy: [] };
+    } else {
+      usageRes = await usageResponse.json().catch(() => ({ isSystemStage: false, usedBy: [] }));
+    }
+
+    let confirmMessage = `Delete stage "${stageName}"?`;
+
+    if (usageRes.isSystemStage) {
+      confirmMessage = `⚠️ WARNING: "${stageName}" is a SYSTEM stage!\n\n` +
+        `Used by: ${usageRes.usedBy.join(', ')}\n\n` +
+        `Deleting this will break PortOS functionality.\n\n` +
+        `Are you SURE you want to delete it?`;
+    } else {
+      confirmMessage += `\n\nThis cannot be undone.`;
+    }
+
+    if (!confirm(confirmMessage)) return;
+
+    try {
+      // System stages require force flag
+      const url = usageRes.isSystemStage
+        ? `/api/prompts/${stageName}?force=true`
+        : `/api/prompts/${stageName}`;
+
+      const res = await fetch(url, { method: 'DELETE' });
+
+      if (!res.ok) {
+        const error = await res.json();
+        alert(`Failed to delete: ${error.error || 'Unknown error'}`);
+        return;
+      }
+
+      if (selectedStage === stageName) {
+        setSelectedStage(null);
+      }
+      await loadData();
+    } catch (err) {
+      alert(`Failed to delete: ${err.message}`);
+    }
+  };
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>;
   }
@@ -147,21 +245,48 @@ export default function PromptManager() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Stage List */}
           <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="text-sm font-medium text-gray-400 mb-3">Prompt Stages</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-gray-400">Prompt Stages</h3>
+              <button
+                onClick={() => setCreatingStage(true)}
+                className="p-1 text-port-accent hover:text-port-accent/80"
+                title="New Stage"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
             <div className="space-y-1">
-              {Object.entries(stages).map(([name, config]) => (
-                <button
+              {Object.entries(stages).sort(([a], [b]) => a.localeCompare(b)).map(([name, config]) => (
+                <div
                   key={name}
-                  onClick={() => loadStage(name)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
                     selectedStage === name
                       ? 'bg-port-accent/20 text-port-accent'
                       : 'text-gray-300 hover:bg-port-border'
                   }`}
                 >
-                  <div className="font-medium">{config.name || name}</div>
-                  <div className="text-xs text-gray-500 truncate">{config.description}</div>
-                </button>
+                  <button
+                    onClick={() => loadStage(name)}
+                    className="flex-1 min-w-0 text-left"
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="font-medium truncate">{config.name || name}</span>
+                      {systemStages.includes(name) && (
+                        <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded uppercase font-semibold">
+                          System
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">{config.description}</div>
+                  </button>
+                  <button
+                    onClick={() => deleteStage(name)}
+                    className="flex-shrink-0 p-1 text-gray-500 hover:text-port-error"
+                    title="Delete stage"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -269,7 +394,7 @@ export default function PromptManager() {
               </button>
             </div>
             <div className="space-y-1">
-              {Object.entries(variables).map(([key, v]) => (
+              {Object.entries(variables).sort(([a], [b]) => a.localeCompare(b)).map(([key, v]) => (
                 <div
                   key={key}
                   className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
@@ -361,6 +486,113 @@ export default function PromptManager() {
                     placeholder="Variable content..."
                   />
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Stage Modal */}
+      {creatingStage && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-port-card border border-port-border rounded-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-white">Create New Stage</h3>
+              <button
+                onClick={() => setCreatingStage(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Stage Key *</label>
+                  <input
+                    type="text"
+                    value={newStageForm.stageName}
+                    onChange={(e) => setNewStageForm({ ...newStageForm, stageName: e.target.value })}
+                    placeholder="my-stage"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Lowercase, hyphens only</p>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Display Name *</label>
+                  <input
+                    type="text"
+                    value={newStageForm.name}
+                    onChange={(e) => setNewStageForm({ ...newStageForm, name: e.target.value })}
+                    placeholder="My Stage"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Description</label>
+                <input
+                  type="text"
+                  value={newStageForm.description}
+                  onChange={(e) => setNewStageForm({ ...newStageForm, description: e.target.value })}
+                  placeholder="What this stage does"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Model</label>
+                  <select
+                    value={newStageForm.model}
+                    onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                  >
+                    <option value="default">Default</option>
+                    <option value="quick">Quick</option>
+                    <option value="coding">Coding</option>
+                    <option value="heavy">Heavy</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 text-sm text-gray-400 mt-7">
+                    <input
+                      type="checkbox"
+                      checked={newStageForm.returnsJson}
+                      onChange={(e) => setNewStageForm({ ...newStageForm, returnsJson: e.target.checked })}
+                      className="rounded"
+                    />
+                    Returns JSON
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Template</label>
+                <textarea
+                  value={newStageForm.template}
+                  onChange={(e) => setNewStageForm({ ...newStageForm, template: e.target.value })}
+                  className="w-full h-64 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-none"
+                  placeholder="Enter your prompt template here..."
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setCreatingStage(false)}
+                  className="px-4 py-2 text-gray-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={createStage}
+                  disabled={saving || !newStageForm.stageName || !newStageForm.name}
+                  className="flex items-center gap-1 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
+                >
+                  <Save size={14} /> Create Stage
+                </button>
               </div>
             </div>
           </div>

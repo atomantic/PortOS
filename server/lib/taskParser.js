@@ -87,6 +87,49 @@ function parseTaskLine(line) {
   };
 }
 
+// Sentinel prefix for JSON-encoded metadata values
+const JSON_SENTINEL = '__json__:';
+
+/**
+ * Unescape newlines in metadata values.
+ *
+ * For values prefixed with the JSON sentinel (produced by escapeNewlines),
+ * this uses JSON.parse to correctly restore backslashes, newlines, etc.
+ * For legacy or simple values, falls back to simple replacement for backwards compatibility.
+ */
+function unescapeNewlines(value) {
+  if (typeof value !== 'string') return value;
+  // Check for explicit JSON sentinel prefix
+  if (value.startsWith(JSON_SENTINEL)) {
+    const jsonPart = value.slice(JSON_SENTINEL.length);
+    try {
+      return JSON.parse(jsonPart);
+    } catch {
+      // Fall through to legacy behavior if parsing fails
+    }
+  }
+  // Legacy fallback for backwards compatibility with pre-sentinel data only.
+  // New values with special characters always use the sentinel prefix (see escapeNewlines),
+  // so this branch only runs on historical data that was escaped with the old method.
+  // Values that were never intended to be newline-escaped won't have \\n sequences.
+  return value.replace(/\\n/g, '\n');
+}
+
+/**
+ * Escape newlines in metadata values.
+ *
+ * For values containing special characters (newlines, backslashes), uses JSON
+ * string escaping with a sentinel prefix for reversibility. Simple values are stored as-is.
+ */
+function escapeNewlines(value) {
+  if (typeof value !== 'string') return String(value);
+  // Only use JSON encoding if the value contains characters that need escaping
+  if (value.includes('\n') || value.includes('\\')) {
+    return JSON_SENTINEL + JSON.stringify(value);
+  }
+  return value;
+}
+
 /**
  * Parse metadata line (indented under task)
  * Format:   - Key: Value
@@ -97,7 +140,7 @@ function parseMetadataLine(line) {
 
   return {
     key: match[1].toLowerCase(),
-    value: match[2].trim()
+    value: unescapeNewlines(match[2].trim())
   };
 }
 
@@ -205,10 +248,11 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
         : '';
       lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${task.description}`);
 
-      // Add metadata
+      // Add metadata (escape newlines in values for single-line storage)
       for (const [key, value] of Object.entries(task.metadata)) {
         const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
-        lines.push(`  - ${capitalizedKey}: ${value}`);
+        const escapedValue = escapeNewlines(String(value));
+        lines.push(`  - ${capitalizedKey}: ${escapedValue}`);
       }
     }
 

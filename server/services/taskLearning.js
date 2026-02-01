@@ -6,11 +6,12 @@
  * to provide smarter task prioritization and model selection.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
+import { readJSONFile } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,12 +52,7 @@ async function loadLearningData() {
     await mkdir(DATA_DIR, { recursive: true });
   }
 
-  if (!existsSync(LEARNING_FILE)) {
-    return { ...DEFAULT_LEARNING_DATA };
-  }
-
-  const content = await readFile(LEARNING_FILE, 'utf-8');
-  return JSON.parse(content);
+  return readJSONFile(LEARNING_FILE, { ...DEFAULT_LEARNING_DATA });
 }
 
 /**
@@ -590,6 +586,168 @@ export async function shouldSkipTaskType(taskType) {
 }
 
 /**
+ * Check if any skipped task types are eligible for automatic rehabilitation
+ * Task types that have been skipped for a grace period get a "fresh start" opportunity
+ *
+ * Auto-rehabilitation rules:
+ * - Task must have been skipped (success rate < 30% with 5+ attempts)
+ * - Must have been at least rehabilitationGracePeriodMs since last completion
+ * - Reset the task type's learning data to give it a fresh chance
+ *
+ * This allows CoS to automatically retry previously-failing task types
+ * after enough time has passed for fixes to be applied.
+ *
+ * @param {number} gracePeriodMs - Minimum time since last attempt (default: 7 days)
+ * @returns {Object} Summary of rehabilitated task types
+ */
+export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 60 * 60 * 1000) {
+  const data = await loadLearningData();
+  const rehabilitated = [];
+  const now = Date.now();
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Only consider task types that would be skipped (< 30% success with 5+ attempts)
+    if (metrics.completed < 5 || metrics.successRate >= 30) {
+      continue;
+    }
+
+    // Check if enough time has passed since last attempt
+    const lastCompletedTime = metrics.lastCompleted
+      ? new Date(metrics.lastCompleted).getTime()
+      : 0;
+    const timeSinceLastAttempt = now - lastCompletedTime;
+
+    if (timeSinceLastAttempt >= gracePeriodMs) {
+      // This task type is eligible for rehabilitation
+      emitLog('info', `Auto-rehabilitating ${taskType} (was ${metrics.successRate}% success, ${Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))} days since last attempt)`, {
+        taskType,
+        previousSuccessRate: metrics.successRate,
+        previousAttempts: metrics.completed,
+        daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))
+      }, '📚 TaskLearning');
+
+      // Reset this task type's data
+      await resetTaskTypeLearning(taskType);
+
+      rehabilitated.push({
+        taskType,
+        previousSuccessRate: metrics.successRate,
+        previousAttempts: metrics.completed,
+        daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))
+      });
+    }
+  }
+
+  if (rehabilitated.length > 0) {
+    emitLog('success', `Auto-rehabilitated ${rehabilitated.length} skipped task type(s)`, {
+      rehabilitated: rehabilitated.map(r => r.taskType)
+    }, '📚 TaskLearning');
+  }
+
+  return { rehabilitated, count: rehabilitated.length };
+}
+
+/**
+ * Get all skipped task types with their rehabilitation eligibility status
+ * Useful for UI display and debugging
+ * @param {number} gracePeriodMs - Grace period for rehabilitation eligibility
+ * @returns {Array} List of skipped task types with status info
+ */
+export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 * 60 * 1000) {
+  const data = await loadLearningData();
+  const skipped = [];
+  const now = Date.now();
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Only include task types that would be skipped
+    if (metrics.completed < 5 || metrics.successRate >= 30) {
+      continue;
+    }
+
+    const lastCompletedTime = metrics.lastCompleted
+      ? new Date(metrics.lastCompleted).getTime()
+      : 0;
+    const timeSinceLastAttempt = now - lastCompletedTime;
+    const eligibleForRehabilitation = timeSinceLastAttempt >= gracePeriodMs;
+    const timeUntilEligible = eligibleForRehabilitation
+      ? 0
+      : gracePeriodMs - timeSinceLastAttempt;
+
+    skipped.push({
+      taskType,
+      successRate: metrics.successRate,
+      completed: metrics.completed,
+      lastCompleted: metrics.lastCompleted,
+      daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000)),
+      eligibleForRehabilitation,
+      daysUntilEligible: Math.ceil(timeUntilEligible / (24 * 60 * 60 * 1000))
+    });
+  }
+
+  return skipped;
+}
+
+/**
+ * Reset learning data for a specific task type
+ * Used when a previously-failing task type has been fixed and should be retried
+ * Subtracts the task type's metrics from totals and removes the task type entry
+ * @param {string} taskType - The task type to reset (e.g., 'self-improve:ui')
+ * @returns {Object} Summary of what was reset
+ */
+export async function resetTaskTypeLearning(taskType) {
+  const data = await loadLearningData();
+
+  const metrics = data.byTaskType[taskType];
+  if (!metrics) {
+    return { reset: false, reason: 'task-type-not-found', taskType };
+  }
+
+  // Subtract this task type's contribution from totals
+  data.totals.completed -= metrics.completed;
+  data.totals.succeeded -= metrics.succeeded;
+  data.totals.failed -= metrics.failed;
+  data.totals.totalDurationMs -= metrics.totalDurationMs;
+  data.totals.avgDurationMs = data.totals.completed > 0
+    ? Math.round(data.totals.totalDurationMs / data.totals.completed)
+    : 0;
+
+  // Clean up error patterns referencing this task type
+  for (const [category, pattern] of Object.entries(data.errorPatterns)) {
+    const taskTypeCount = pattern.taskTypes[taskType] || 0;
+    if (taskTypeCount > 0) {
+      pattern.count -= taskTypeCount;
+      delete pattern.taskTypes[taskType];
+    }
+    // Remove empty error categories
+    if (pattern.count <= 0) {
+      delete data.errorPatterns[category];
+    }
+  }
+
+  // Remove the task type entry
+  delete data.byTaskType[taskType];
+
+  await saveLearningData(data);
+
+  emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {
+    taskType,
+    previousSuccessRate: metrics.successRate,
+    previousAttempts: metrics.completed
+  }, '📚 TaskLearning');
+
+  return {
+    reset: true,
+    taskType,
+    previousMetrics: {
+      completed: metrics.completed,
+      succeeded: metrics.succeeded,
+      failed: metrics.failed,
+      successRate: metrics.successRate
+    }
+  };
+}
+
+/**
  * Get estimated duration for a task based on historical averages
  * @param {string} taskDescription - The task description to analyze
  * @returns {Object} Duration estimate with confidence
@@ -684,11 +842,11 @@ export function initTaskLearning() {
     };
 
     await recordTaskCompletion(agent, task).catch(err => {
-      console.error(`❌ [TaskLearning] Failed to record completion: ${err.message}`);
+      console.error(`❌ 📚 TaskLearning: Failed to record completion: ${err.message}`);
     });
   });
 
-  emitLog('info', 'Task Learning System initialized', {}, '[TaskLearning]');
+  emitLog('info', 'Task Learning System initialized', {}, '📚 TaskLearning');
 }
 
 /**
@@ -714,6 +872,6 @@ export async function backfillFromHistory() {
     }
   }
 
-  emitLog('info', `Backfilled ${backfilled} completed tasks into learning system`, { backfilled }, '[TaskLearning]');
+  emitLog('info', `Backfilled ${backfilled} completed tasks into learning system`, { backfilled }, '📚 TaskLearning');
   return backfilled;
 }

@@ -94,6 +94,11 @@ export const detectWithAi = (path, providerId) => request('/detect/ai', {
 // Templates & Scaffold
 export const getTemplates = () => request('/templates');
 
+export const getDirectories = (path = null) => {
+  const params = path ? `?path=${encodeURIComponent(path)}` : '';
+  return request(`/directories${params}`);
+};
+
 export const scaffoldApp = (data) => request('/scaffold', {
   method: 'POST',
   body: JSON.stringify(data)
@@ -123,6 +128,11 @@ export const updateProvider = (id, data) => request(`/providers/${id}`, {
 export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id) => request(`/providers/${id}/refresh-models`, { method: 'POST' });
+
+// Provider status (usage limits, availability)
+export const getProviderStatuses = () => request('/providers/status');
+export const getProviderStatus = (id) => request(`/providers/${id}/status`);
+export const recoverProvider = (id) => request(`/providers/${id}/status/recover`, { method: 'POST' });
 
 // Runs
 export const getRuns = (limit = 50, offset = 0, source = 'all') =>
@@ -229,11 +239,15 @@ export const addCosTask = (task) => request('/cos/tasks', {
   method: 'POST',
   body: JSON.stringify(task)
 });
+export const enhanceCosTaskPrompt = (data) => request('/cos/tasks/enhance', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
 export const updateCosTask = (id, updates) => request(`/cos/tasks/${id}`, {
   method: 'PUT',
   body: JSON.stringify(updates)
 });
-export const deleteCosTask = (id) => request(`/cos/tasks/${id}`, { method: 'DELETE' });
+export const deleteCosTask = (id, taskType = 'user') => request(`/cos/tasks/${id}?type=${taskType}`, { method: 'DELETE' });
 export const reorderCosTasks = (taskIds) => request('/cos/tasks/reorder', {
   method: 'POST',
   body: JSON.stringify({ taskIds })
@@ -262,6 +276,7 @@ export const getCosLearningDurations = () => request('/cos/learning/durations');
 export const getCosLearningSkipped = () => request('/cos/learning/skipped');
 export const getCosLearningPerformance = () => request('/cos/learning/performance');
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
+export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
 // CoS Scripts
 export const getCosScripts = () => request('/cos/scripts');
@@ -414,3 +429,270 @@ export const createGitBackup = (repoPath) => request('/standardize/backup', {
   method: 'POST',
   body: JSON.stringify({ repoPath })
 });
+
+// Brain - Second Brain Feature
+export const getBrainSummary = () => request('/brain/summary');
+export const getBrainSettings = () => request('/brain/settings');
+export const updateBrainSettings = (settings) => request('/brain/settings', {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+
+// Brain - Capture & Inbox
+export const captureBrainThought = (text, providerOverride, modelOverride) => request('/brain/capture', {
+  method: 'POST',
+  body: JSON.stringify({ text, providerOverride, modelOverride })
+});
+export const getBrainInbox = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.status) params.set('status', options.status);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  return request(`/brain/inbox?${params}`);
+};
+export const getBrainInboxEntry = (id) => request(`/brain/inbox/${id}`);
+export const resolveBrainReview = (inboxLogId, destination, editedExtracted) => request('/brain/review/resolve', {
+  method: 'POST',
+  body: JSON.stringify({ inboxLogId, destination, editedExtracted })
+});
+export const fixBrainClassification = (inboxLogId, newDestination, updatedFields, note) => request('/brain/fix', {
+  method: 'POST',
+  body: JSON.stringify({ inboxLogId, newDestination, updatedFields, note })
+});
+export const retryBrainClassification = (id, providerOverride, modelOverride) => request(`/brain/inbox/${id}/retry`, {
+  method: 'POST',
+  body: JSON.stringify({ providerOverride, modelOverride })
+});
+export const updateBrainInboxEntry = (id, capturedText) => request(`/brain/inbox/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify({ capturedText })
+});
+export const deleteBrainInboxEntry = (id) => request(`/brain/inbox/${id}`, { method: 'DELETE' });
+
+// Brain - People
+export const getBrainPeople = () => request('/brain/people');
+export const getBrainPerson = (id) => request(`/brain/people/${id}`);
+export const createBrainPerson = (data) => request('/brain/people', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateBrainPerson = (id, data) => request(`/brain/people/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteBrainPerson = (id) => request(`/brain/people/${id}`, { method: 'DELETE' });
+
+// Brain - Projects
+export const getBrainProjects = (filters) => {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  return request(`/brain/projects?${params}`);
+};
+export const getBrainProject = (id) => request(`/brain/projects/${id}`);
+export const createBrainProject = (data) => request('/brain/projects', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateBrainProject = (id, data) => request(`/brain/projects/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteBrainProject = (id) => request(`/brain/projects/${id}`, { method: 'DELETE' });
+
+// Brain - Ideas
+export const getBrainIdeas = () => request('/brain/ideas');
+export const getBrainIdea = (id) => request(`/brain/ideas/${id}`);
+export const createBrainIdea = (data) => request('/brain/ideas', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateBrainIdea = (id, data) => request(`/brain/ideas/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteBrainIdea = (id) => request(`/brain/ideas/${id}`, { method: 'DELETE' });
+
+// Brain - Admin
+export const getBrainAdmin = (filters) => {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  return request(`/brain/admin?${params}`);
+};
+export const getBrainAdminItem = (id) => request(`/brain/admin/${id}`);
+export const createBrainAdminItem = (data) => request('/brain/admin', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateBrainAdminItem = (id, data) => request(`/brain/admin/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteBrainAdminItem = (id) => request(`/brain/admin/${id}`, { method: 'DELETE' });
+
+// Brain - Digests & Reviews
+export const getBrainLatestDigest = () => request('/brain/digest/latest');
+export const getBrainDigests = (limit = 10) => request(`/brain/digests?limit=${limit}`);
+export const runBrainDigest = (providerOverride, modelOverride) => request('/brain/digest/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerOverride, modelOverride })
+});
+export const getBrainLatestReview = () => request('/brain/review/latest');
+export const getBrainReviews = (limit = 10) => request(`/brain/reviews?limit=${limit}`);
+export const runBrainReview = (providerOverride, modelOverride) => request('/brain/review/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerOverride, modelOverride })
+});
+
+// Media - Server media devices
+export const getMediaDevices = () => request('/media/devices');
+export const getMediaStatus = () => request('/media/status');
+export const startMediaStream = (videoDeviceId, audioDeviceId, video = true, audio = true) => request('/media/start', {
+  method: 'POST',
+  body: JSON.stringify({ videoDeviceId, audioDeviceId, video, audio })
+});
+export const stopMediaStream = () => request('/media/stop', { method: 'POST' });
+
+// Digital Twin - Status & Summary
+export const getDigitalTwinStatus = () => request('/digital-twin');
+export const getSoulStatus = getDigitalTwinStatus; // Alias for backwards compatibility
+
+// Digital Twin - Documents
+export const getDigitalTwinDocuments = () => request('/digital-twin/documents');
+export const getSoulDocuments = getDigitalTwinDocuments;
+export const getDigitalTwinDocument = (id) => request(`/digital-twin/documents/${id}`);
+export const getSoulDocument = getDigitalTwinDocument;
+export const createDigitalTwinDocument = (data) => request('/digital-twin/documents', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const createSoulDocument = createDigitalTwinDocument;
+export const updateDigitalTwinDocument = (id, data) => request(`/digital-twin/documents/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const updateSoulDocument = updateDigitalTwinDocument;
+export const deleteDigitalTwinDocument = (id) => request(`/digital-twin/documents/${id}`, { method: 'DELETE' });
+export const deleteSoulDocument = deleteDigitalTwinDocument;
+
+// Digital Twin - Testing
+export const getDigitalTwinTests = () => request('/digital-twin/tests');
+export const getSoulTests = getDigitalTwinTests;
+export const runDigitalTwinTests = (providerId, model, testIds = null) => request('/digital-twin/tests/run', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, testIds })
+});
+export const runSoulTests = runDigitalTwinTests;
+export const runDigitalTwinMultiTests = (providers, testIds = null) => request('/digital-twin/tests/run-multi', {
+  method: 'POST',
+  body: JSON.stringify({ providers, testIds })
+});
+export const runSoulMultiTests = runDigitalTwinMultiTests;
+export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/tests/history?limit=${limit}`);
+export const getSoulTestHistory = getDigitalTwinTestHistory;
+
+// Digital Twin - Enrichment
+export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enrich/categories');
+export const getSoulEnrichCategories = getDigitalTwinEnrichCategories;
+export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');
+export const getSoulEnrichProgress = getDigitalTwinEnrichProgress;
+export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride) => request('/digital-twin/enrich/question', {
+  method: 'POST',
+  body: JSON.stringify({ category, providerOverride, modelOverride })
+});
+export const getSoulEnrichQuestion = getDigitalTwinEnrichQuestion;
+export const submitDigitalTwinEnrichAnswer = (data) => request('/digital-twin/enrich/answer', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const submitSoulEnrichAnswer = submitDigitalTwinEnrichAnswer;
+
+// Digital Twin - Export
+export const getDigitalTwinExportFormats = () => request('/digital-twin/export/formats');
+export const getSoulExportFormats = getDigitalTwinExportFormats;
+export const exportDigitalTwin = (format, documentIds = null, includeDisabled = false) => request('/digital-twin/export', {
+  method: 'POST',
+  body: JSON.stringify({ format, documentIds, includeDisabled })
+});
+export const exportSoul = exportDigitalTwin;
+
+// Digital Twin - Settings
+export const getDigitalTwinSettings = () => request('/digital-twin/settings');
+export const getSoulSettings = getDigitalTwinSettings;
+export const updateDigitalTwinSettings = (settings) => request('/digital-twin/settings', {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+export const updateSoulSettings = updateDigitalTwinSettings;
+
+// Digital Twin - Validation & Analysis
+export const getDigitalTwinCompleteness = () => request('/digital-twin/validate/completeness');
+export const getSoulCompleteness = getDigitalTwinCompleteness;
+export const detectDigitalTwinContradictions = (providerId, model) => request('/digital-twin/validate/contradictions', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const detectSoulContradictions = detectDigitalTwinContradictions;
+export const generateDigitalTwinTests = (providerId, model) => request('/digital-twin/tests/generate', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const generateSoulTests = generateDigitalTwinTests;
+export const analyzeWritingSamples = (samples, providerId, model) => request('/digital-twin/analyze-writing', {
+  method: 'POST',
+  body: JSON.stringify({ samples, providerId, model })
+});
+
+// Digital Twin - List-based Enrichment
+export const analyzeEnrichmentList = (category, items, providerId, model) => request('/digital-twin/enrich/analyze-list', {
+  method: 'POST',
+  body: JSON.stringify({ category, items, providerId, model })
+});
+export const saveEnrichmentList = (category, content, items) => request('/digital-twin/enrich/save-list', {
+  method: 'POST',
+  body: JSON.stringify({ category, content, items })
+});
+export const getEnrichmentListItems = (category) => request(`/digital-twin/enrich/list-items/${category}`);
+
+// --- Digital Twin Traits & Confidence (Phase 1 & 2) ---
+export const getDigitalTwinTraits = () => request('/digital-twin/traits');
+export const analyzeDigitalTwinTraits = (providerId, model, forceReanalyze = false) => request('/digital-twin/traits/analyze', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, forceReanalyze })
+});
+export const updateDigitalTwinTraits = (updates) => request('/digital-twin/traits', {
+  method: 'PUT',
+  body: JSON.stringify(updates)
+});
+export const getDigitalTwinConfidence = () => request('/digital-twin/confidence');
+export const calculateDigitalTwinConfidence = (providerId, model) => request('/digital-twin/confidence/calculate', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const getDigitalTwinGaps = () => request('/digital-twin/gaps');
+
+// --- Digital Twin External Import (Phase 4) ---
+export const getDigitalTwinImportSources = () => request('/digital-twin/import/sources');
+export const analyzeDigitalTwinImport = (source, data, providerId, model) => request('/digital-twin/import/analyze', {
+  method: 'POST',
+  body: JSON.stringify({ source, data, providerId, model })
+});
+export const saveDigitalTwinImport = (source, suggestedDoc) => request('/digital-twin/import/save', {
+  method: 'POST',
+  body: JSON.stringify({ source, suggestedDoc })
+});
+
+// Default export for simplified imports
+export default {
+  get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),
+  post: (endpoint, body, options) => request(endpoint, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    ...options
+  }),
+  put: (endpoint, body, options) => request(endpoint, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+    ...options
+  }),
+  delete: (endpoint, options) => request(endpoint, { method: 'DELETE', ...options })
+};
