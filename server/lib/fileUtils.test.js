@@ -107,22 +107,22 @@ describe('fileUtils', () => {
       expect(result).toEqual({});
     });
 
-    it('should log error when logError is true', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    it('should log warning when logError is true', () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       safeJSONParse('invalid', {}, { logError: true });
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();
     });
 
     it('should include context in log message', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       safeJSONParse('invalid', {}, { logError: true, context: 'test-file.json' });
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('test-file.json'));
       consoleSpy.mockRestore();
     });
 
     it('should not log for empty input even with logError true', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       safeJSONParse('', {}, { logError: true });
       expect(consoleSpy).not.toHaveBeenCalled();
       consoleSpy.mockRestore();
@@ -130,11 +130,11 @@ describe('fileUtils', () => {
 
     it('should handle syntax error in structurally valid JSON', () => {
       // Passes structural check but fails JSON.parse
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const result = safeJSONParse('{"key": undefined}', { fallback: true }, { logError: true });
       expect(result).toEqual({ fallback: true });
-      expect(consoleErrorSpy).toHaveBeenCalled();
-      consoleErrorSpy.mockRestore();
+      expect(consoleWarnSpy).toHaveBeenCalled();
+      consoleWarnSpy.mockRestore();
     });
   });
 

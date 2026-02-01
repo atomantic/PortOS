@@ -136,7 +136,7 @@ export function isValidJSON(str, { allowArray = true } = {}) {
 export function safeJSONParse(str, defaultValue = null, { allowArray = true, logError = false, context = '' } = {}) {
   if (!isValidJSON(str, { allowArray })) {
     if (logError && str) {
-      console.log(`⚠️ Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);
+      console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);
     }
     return defaultValue;
   }
@@ -147,7 +147,7 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
     return JSON.parse(str);
   } catch (err) {
     if (logError) {
-      console.error(`⚠️ Failed to parse JSON${context ? ` in ${context}` : ''}: ${err.message}`);
+      console.warn(`Failed to parse JSON${context ? ` in ${context}` : ''}: ${err.message}`);
     }
     return defaultValue;
   }
@@ -179,7 +179,7 @@ export async function readJSONFile(filePath, defaultValue = null, { allowArray =
     }
     // Log other I/O errors if requested
     if (logError) {
-      console.error(`⚠️ Failed to read file ${filePath}: ${err.message}`);
+      console.warn(`Failed to read file ${filePath}: ${err.message}`);
     }
     return defaultValue;
   }
@@ -242,7 +242,7 @@ export async function readJSONLFile(filePath, { logErrors = false } = {}) {
     }
     // Log other I/O errors if requested
     if (logErrors) {
-      console.error(`⚠️ Failed to read file ${filePath}: ${err.message}`);
+      console.warn(`Failed to read file ${filePath}: ${err.message}`);
     }
     return [];
   }

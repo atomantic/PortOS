@@ -42,6 +42,17 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
 
+  // Keep local selections in sync with external config updates
+  useEffect(() => {
+    setSelectedType(config.type);
+    setSelectedProviderId(config.providerId || '');
+    setSelectedModel(config.model || '');
+    // Only overwrite the prompt when the user is not actively editing it
+    if (!editingPrompt) {
+      setPromptValue(config.prompt || '');
+    }
+  }, [config.type, config.providerId, config.model, config.prompt, editingPrompt]);
+
   const handleTypeChange = async (newType) => {
     setUpdating(true);
     setSelectedType(newType);
