@@ -9,7 +9,10 @@ import {
   Save,
   X,
   GripVertical,
-  Timer
+  Timer,
+  Paperclip,
+  FileText,
+  ExternalLink
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
@@ -66,6 +69,14 @@ function formatDurationMin(mins) {
     return remainingMins > 0 ? `~${hours}h ${remainingMins}m` : `~${hours}h`;
   }
   return `~${mins}m`;
+}
+
+// Format file size for display
+function formatAttachmentSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps }) {
@@ -258,6 +269,26 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                       {task.metadata.provider}
                     </span>
                   )}
+                </div>
+              )}
+              {/* Attachments display */}
+              {task.metadata?.attachments?.length > 0 && (
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  <Paperclip size={12} className="text-gray-500" aria-hidden="true" />
+                  {task.metadata.attachments.map((att, idx) => (
+                    <a
+                      key={idx}
+                      href={`/api/attachments/${encodeURIComponent(att.filename)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 px-2 py-0.5 text-xs bg-port-accent/10 text-port-accent hover:bg-port-accent/20 rounded transition-colors"
+                      title={`${att.originalName || att.filename} (${formatAttachmentSize(att.size)})`}
+                    >
+                      <FileText size={10} aria-hidden="true" />
+                      <span className="truncate max-w-[100px]">{att.originalName || att.filename}</span>
+                      <ExternalLink size={10} aria-hidden="true" />
+                    </a>
+                  ))}
                 </div>
               )}
             </>
