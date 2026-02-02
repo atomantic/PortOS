@@ -1753,9 +1753,15 @@ export async function runHealthCheck() {
 
   // Check PM2 processes
   const pm2Result = await execAsync('pm2 jlist 2>/dev/null || echo "[]"').catch(() => ({ stdout: '[]' }));
-  // pm2 jlist may output warnings before JSON, extract the JSON array
+  // pm2 jlist may output ANSI codes and warnings before JSON, extract the JSON array
+  // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
   const pm2Output = pm2Result.stdout || '[]';
-  const jsonStart = pm2Output.indexOf('[');
+  let jsonStart = pm2Output.indexOf('[{');
+  if (jsonStart < 0) {
+    // Check for empty array - find '[]' that's not part of ANSI codes
+    const emptyMatch = pm2Output.match(/\[\](?![0-9])/);
+    jsonStart = emptyMatch ? pm2Output.indexOf(emptyMatch[0]) : -1;
+  }
   const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
   const pm2Processes = JSON.parse(pm2Json);
 
