@@ -235,7 +235,7 @@ app.post('/spawn', async (req, res) => {
     cliCommand,
     cliArgs,
     // Legacy: Claude-specific (deprecated)
-    claudePath = '/Users/antic/.nvm/versions/node/v25.2.1/bin/claude'
+    claudePath = process.env.CLAUDE_PATH || 'claude'
   } = req.body;
 
   if (!agentId || !taskId || !prompt) {

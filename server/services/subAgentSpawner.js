@@ -1235,7 +1235,7 @@ function buildCliSpawnConfig(provider, model) {
   }
 
   return {
-    command: process.env.CLAUDE_PATH || '/Users/antic/.nvm/versions/node/v25.2.1/bin/claude',
+    command: process.env.CLAUDE_PATH || 'claude',
     args,
     stdinMode: 'prompt'
   };
