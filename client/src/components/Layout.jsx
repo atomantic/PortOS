@@ -30,7 +30,8 @@ import {
   Settings,
   Users,
   Link2,
-  LineChart
+  LineChart,
+  Upload
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -99,7 +100,8 @@ const navItems = [
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
-  { to: '/media', label: 'Media', icon: Camera, single: true }
+  { to: '/media', label: 'Media', icon: Camera, single: true },
+  { to: '/uploads', label: 'Uploads', icon: Upload, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';

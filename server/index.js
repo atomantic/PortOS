@@ -18,6 +18,7 @@ import gitRoutes from './routes/git.js';
 import usageRoutes from './routes/usage.js';
 import screenshotsRoutes from './routes/screenshots.js';
 import attachmentsRoutes from './routes/attachments.js';
+import uploadsRoutes from './routes/uploads.js';
 import agentsRoutes from './routes/agents.js';
 import agentPersonalitiesRoutes from './routes/agentPersonalities.js';
 import platformAccountsRoutes from './routes/platformAccounts.js';
@@ -168,6 +169,7 @@ app.use('/api/git', gitRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
+app.use('/api/uploads', uploadsRoutes);
 // Agent Personalities feature routes (must be before /api/agents to avoid route conflicts)
 app.use('/api/agents/personalities', agentPersonalitiesRoutes);
 app.use('/api/agents/accounts', platformAccountsRoutes);
