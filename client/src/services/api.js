@@ -215,10 +215,110 @@ export const uploadScreenshot = (base64Data, filename, mimeType) => request('/sc
   body: JSON.stringify({ data: base64Data, filename, mimeType })
 });
 
-// Agents
-export const getAgents = () => request('/agents');
-export const getAgentInfo = (pid) => request(`/agents/${pid}`);
-export const killAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
+// Running Agents (Process Management)
+export const getRunningAgents = () => request('/agents');
+export const getRunningAgentInfo = (pid) => request(`/agents/${pid}`);
+export const killRunningAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
+// Legacy aliases
+export const getAgents = getRunningAgents;
+export const getAgentInfo = getRunningAgentInfo;
+export const killAgent = killRunningAgent;
+
+// Agent Personalities
+export const getAgentPersonalities = (userId = null) => {
+  const params = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+  return request(`/agents/personalities${params}`);
+};
+export const getAgentPersonality = (id) => request(`/agents/personalities/${id}`);
+export const createAgentPersonality = (data) => request('/agents/personalities', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateAgentPersonality = (id, data) => request(`/agents/personalities/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteAgentPersonality = (id) => request(`/agents/personalities/${id}`, { method: 'DELETE' });
+export const toggleAgentPersonality = (id, enabled) => request(`/agents/personalities/${id}/toggle`, {
+  method: 'POST',
+  body: JSON.stringify({ enabled })
+});
+export const generateAgentPersonality = (seedData, providerId, model) => request('/agents/personalities/generate', {
+  method: 'POST',
+  body: JSON.stringify({ seed: seedData, providerId, model })
+});
+
+// Platform Accounts
+export const getPlatformAccounts = (agentId = null, platform = null) => {
+  const params = new URLSearchParams();
+  if (agentId) params.set('agentId', agentId);
+  if (platform) params.set('platform', platform);
+  const query = params.toString();
+  return request(`/agents/accounts${query ? `?${query}` : ''}`);
+};
+export const getPlatformAccount = (id) => request(`/agents/accounts/${id}`);
+export const createPlatformAccount = (data) => request('/agents/accounts', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const registerPlatformAccount = (agentId, platform, name, description) => request('/agents/accounts', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, platform, name, description })
+});
+export const deletePlatformAccount = (id) => request(`/agents/accounts/${id}`, { method: 'DELETE' });
+export const testPlatformAccount = (id) => request(`/agents/accounts/${id}/test`, { method: 'POST' });
+export const claimPlatformAccount = (id) => request(`/agents/accounts/${id}/claim`, { method: 'POST' });
+
+// Automation Schedules
+export const getAutomationSchedules = (agentId = null, accountId = null) => {
+  const params = new URLSearchParams();
+  if (agentId) params.set('agentId', agentId);
+  if (accountId) params.set('accountId', accountId);
+  const query = params.toString();
+  return request(`/agents/schedules${query ? `?${query}` : ''}`);
+};
+export const getAutomationSchedule = (id) => request(`/agents/schedules/${id}`);
+export const getScheduleStats = () => request('/agents/schedules/stats');
+export const createAutomationSchedule = (data) => request('/agents/schedules', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateAutomationSchedule = (id, data) => request(`/agents/schedules/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteAutomationSchedule = (id) => request(`/agents/schedules/${id}`, { method: 'DELETE' });
+export const toggleAutomationSchedule = (id, enabled) => request(`/agents/schedules/${id}/toggle`, {
+  method: 'POST',
+  body: JSON.stringify({ enabled })
+});
+export const runAutomationScheduleNow = (id) => request(`/agents/schedules/${id}/run`, { method: 'POST' });
+
+// Agent Activity
+export const getAgentActivities = (limit = 50, agentIds = null, action = null) => {
+  const params = new URLSearchParams();
+  params.set('limit', limit);
+  if (agentIds) params.set('agentIds', agentIds.join(','));
+  if (action) params.set('action', action);
+  return request(`/agents/activity?${params}`);
+};
+export const getAgentActivityTimeline = (limit = 50, agentIds = null, before = null) => {
+  const params = new URLSearchParams();
+  params.set('limit', limit);
+  if (agentIds) params.set('agentIds', agentIds.join(','));
+  if (before) params.set('before', before);
+  return request(`/agents/activity/timeline?${params}`);
+};
+export const getAgentActivityByAgent = (agentId, options = {}) => {
+  const params = new URLSearchParams();
+  if (options.date) params.set('date', options.date);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  if (options.action) params.set('action', options.action);
+  return request(`/agents/activity/agent/${agentId}?${params}`);
+};
+export const getAgentActivityStats = (agentId, days = 7) =>
+  request(`/agents/activity/agent/${agentId}/stats?days=${days}`);
 
 // Chief of Staff
 export const getCosStatus = () => request('/cos');
@@ -542,6 +642,29 @@ export const runBrainReview = (providerOverride, modelOverride) => request('/bra
   method: 'POST',
   body: JSON.stringify({ providerOverride, modelOverride })
 });
+
+// Brain - Links
+export const getBrainLinks = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.linkType) params.set('linkType', options.linkType);
+  if (options.isGitHubRepo !== undefined) params.set('isGitHubRepo', options.isGitHubRepo);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  return request(`/brain/links?${params}`);
+};
+export const getBrainLink = (id) => request(`/brain/links/${id}`);
+export const createBrainLink = (data) => request('/brain/links', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateBrainLink = (id, data) => request(`/brain/links/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteBrainLink = (id) => request(`/brain/links/${id}`, { method: 'DELETE' });
+export const cloneBrainLink = (id) => request(`/brain/links/${id}/clone`, { method: 'POST' });
+export const pullBrainLink = (id) => request(`/brain/links/${id}/pull`, { method: 'POST' });
+export const openBrainLinkFolder = (id) => request(`/brain/links/${id}/open-folder`, { method: 'POST' });
 
 // Media - Server media devices
 export const getMediaDevices = () => request('/media/devices');

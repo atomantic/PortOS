@@ -9,6 +9,8 @@
  */
 
 import { Router } from 'express';
+import { spawn } from 'child_process';
+import { existsSync } from 'fs';
 import * as brainService from '../services/brain.js';
 import { getProviderById } from '../services/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -23,8 +25,12 @@ import {
   projectInputSchema,
   ideaInputSchema,
   adminInputSchema,
-  settingsUpdateInputSchema
+  settingsUpdateInputSchema,
+  linkInputSchema,
+  linkUpdateInputSchema,
+  linksQuerySchema
 } from '../lib/brainValidation.js';
+import * as githubCloner from '../services/githubCloner.js';
 
 const router = Router();
 
@@ -519,6 +525,267 @@ router.put('/settings', asyncHandler(async (req, res) => {
 router.get('/summary', asyncHandler(async (req, res) => {
   const summary = await brainService.getSummary();
   res.json(summary);
+}));
+
+// =============================================================================
+// LINKS CRUD
+// =============================================================================
+
+/**
+ * GET /api/brain/links
+ * Get all links with optional filters
+ */
+router.get('/links', asyncHandler(async (req, res) => {
+  const validation = validate(linksQuerySchema, req.query);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const { linkType, isGitHubRepo, limit, offset } = validation.data;
+  let links = await brainService.getLinks();
+
+  // Apply filters
+  if (linkType) {
+    links = links.filter(l => l.linkType === linkType);
+  }
+  if (isGitHubRepo !== undefined) {
+    links = links.filter(l => l.isGitHubRepo === isGitHubRepo);
+  }
+
+  // Sort by createdAt descending
+  links.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  // Apply pagination
+  const total = links.length;
+  links = links.slice(offset, offset + limit);
+
+  res.json({ links, total, limit, offset });
+}));
+
+/**
+ * GET /api/brain/links/:id
+ * Get a single link by ID
+ */
+router.get('/links/:id', asyncHandler(async (req, res) => {
+  const link = await brainService.getLinkById(req.params.id);
+  if (!link) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(link);
+}));
+
+/**
+ * POST /api/brain/links
+ * Create a new link (quick-add with URL)
+ */
+router.post('/links', asyncHandler(async (req, res) => {
+  const validation = validate(linkInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const { url, title, description, linkType, tags, autoClone } = validation.data;
+
+  // Check if URL already exists
+  const existing = await brainService.getLinkByUrl(url);
+  if (existing) {
+    throw new ServerError('Link with this URL already exists', {
+      status: 409,
+      code: 'DUPLICATE_URL',
+      context: { existingId: existing.id }
+    });
+  }
+
+  // Parse GitHub URL if applicable
+  const parsed = githubCloner.parseGitHubUrl(url);
+  const isGitHubRepo = !!parsed;
+
+  // Create initial link record
+  const linkData = {
+    url,
+    title: title || (parsed ? `${parsed.owner}/${parsed.repo}` : url),
+    description: description || '',
+    linkType: linkType || (isGitHubRepo ? 'github' : 'other'),
+    tags: tags || [],
+    isGitHubRepo,
+    gitHubOwner: parsed?.owner,
+    gitHubRepo: parsed?.repo,
+    localPath: null,
+    cloneStatus: isGitHubRepo && autoClone !== false ? 'pending' : 'none',
+    cloneError: null
+  };
+
+  const link = await brainService.createLink(linkData);
+  console.log(`🔗 Created link: ${link.id} (${isGitHubRepo ? 'GitHub repo' : 'regular URL'})`);
+
+  // If GitHub repo and auto-clone enabled, start clone in background
+  if (isGitHubRepo && autoClone !== false) {
+    cloneRepoInBackground(link.id, url);
+  }
+
+  res.status(201).json(link);
+}));
+
+/**
+ * Clone repo in background and update link record
+ */
+async function cloneRepoInBackground(linkId, url) {
+  // Update status to cloning
+  await brainService.updateLink(linkId, { cloneStatus: 'cloning' });
+
+  githubCloner.cloneRepo(url)
+    .then(async (result) => {
+      await brainService.updateLink(linkId, {
+        localPath: result.localPath,
+        cloneStatus: 'cloned',
+        cloneError: null
+      });
+      console.log(`✅ Background clone complete: ${linkId}`);
+    })
+    .catch(async (err) => {
+      await brainService.updateLink(linkId, {
+        cloneStatus: 'failed',
+        cloneError: err.message
+      });
+      console.error(`❌ Background clone failed: ${linkId} - ${err.message}`);
+    });
+}
+
+/**
+ * PUT /api/brain/links/:id
+ * Update a link
+ */
+router.put('/links/:id', asyncHandler(async (req, res) => {
+  const validation = validate(linkUpdateInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const link = await brainService.updateLink(req.params.id, validation.data);
+  if (!link) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(link);
+}));
+
+/**
+ * DELETE /api/brain/links/:id
+ * Delete a link
+ */
+router.delete('/links/:id', asyncHandler(async (req, res) => {
+  const deleted = await brainService.deleteLink(req.params.id);
+  if (!deleted) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.status(204).send();
+}));
+
+/**
+ * POST /api/brain/links/:id/clone
+ * Manually trigger clone for a GitHub repo link
+ */
+router.post('/links/:id/clone', asyncHandler(async (req, res) => {
+  const link = await brainService.getLinkById(req.params.id);
+  if (!link) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  if (!link.isGitHubRepo) {
+    throw new ServerError('Link is not a GitHub repository', {
+      status: 400,
+      code: 'NOT_GITHUB_REPO'
+    });
+  }
+
+  if (link.cloneStatus === 'cloning') {
+    throw new ServerError('Clone already in progress', {
+      status: 409,
+      code: 'CLONE_IN_PROGRESS'
+    });
+  }
+
+  // Start clone in background
+  cloneRepoInBackground(link.id, link.url);
+
+  res.json({ message: 'Clone started', linkId: link.id });
+}));
+
+/**
+ * POST /api/brain/links/:id/pull
+ * Pull latest changes for a cloned repo
+ */
+router.post('/links/:id/pull', asyncHandler(async (req, res) => {
+  const link = await brainService.getLinkById(req.params.id);
+  if (!link) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  if (!link.isGitHubRepo || !link.localPath) {
+    throw new ServerError('Link is not a cloned GitHub repository', {
+      status: 400,
+      code: 'NOT_CLONED'
+    });
+  }
+
+  const result = await githubCloner.pullRepo(link.localPath);
+  res.json({ message: 'Pull complete', ...result });
+}));
+
+/**
+ * POST /api/brain/links/:id/open-folder
+ * Open the cloned repo folder in the system file manager
+ */
+router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
+  const link = await brainService.getLinkById(req.params.id);
+  if (!link) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  if (!link.localPath) {
+    throw new ServerError('Link has no local folder', {
+      status: 400,
+      code: 'NO_LOCAL_PATH'
+    });
+  }
+
+  if (!existsSync(link.localPath)) {
+    throw new ServerError('Local folder does not exist', {
+      status: 400,
+      code: 'PATH_NOT_FOUND'
+    });
+  }
+
+  // Cross-platform folder open command
+  const platform = process.platform;
+  let cmd, args;
+
+  if (platform === 'darwin') {
+    cmd = 'open';
+    args = [link.localPath];
+  } else if (platform === 'win32') {
+    cmd = 'explorer';
+    args = [link.localPath];
+  } else {
+    cmd = 'xdg-open';
+    args = [link.localPath];
+  }
+
+  spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+  console.log(`📂 Opened folder: ${link.localPath}`);
+
+  res.json({ message: 'Folder opened', path: link.localPath });
 }));
 
 export default router;
