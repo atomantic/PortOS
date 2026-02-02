@@ -23,9 +23,11 @@ export const PATHS = {
   digitalTwin: join(__lib_dirname, '../../data/digital-twin'),
   runs: join(__lib_dirname, '../../data/runs'),
   memory: join(__lib_dirname, '../../data/cos/memory'),
-  agents: join(__lib_dirname, '../../data/cos/agents'),
+  cosAgents: join(__lib_dirname, '../../data/cos/agents'),  // CoS sub-agents
   scripts: join(__lib_dirname, '../../data/cos/scripts'),
-  reports: join(__lib_dirname, '../../data/cos/reports')
+  reports: join(__lib_dirname, '../../data/cos/reports'),
+  // AI Agent Personalities data
+  agentPersonalities: join(__lib_dirname, '../../data/agents')
 };
 
 /**

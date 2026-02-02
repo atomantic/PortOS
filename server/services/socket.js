@@ -7,6 +7,10 @@ import { handleErrorRecovery } from './autoFixer.js';
 import * as pm2Standardizer from './pm2Standardizer.js';
 import { notificationEvents } from './notifications.js';
 import { providerStatusEvents } from './providerStatus.js';
+import { agentPersonalityEvents } from './agentPersonalities.js';
+import { platformAccountEvents } from './platformAccounts.js';
+import { scheduleEvents } from './automationScheduler.js';
+import { activityEvents } from './agentActivity.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -16,6 +20,8 @@ const cosSubscribers = new Set();
 const errorSubscribers = new Set();
 // Store notification subscribers
 const notificationSubscribers = new Set();
+// Store agent subscribers
+const agentSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -198,6 +204,17 @@ export function initSocket(io) {
       socket.emit('notifications:unsubscribed');
     });
 
+    // Agent subscriptions
+    socket.on('agents:subscribe', () => {
+      agentSubscribers.add(socket);
+      socket.emit('agents:subscribed');
+    });
+
+    socket.on('agents:unsubscribe', () => {
+      agentSubscribers.delete(socket);
+      socket.emit('agents:unsubscribed');
+    });
+
     // Handle error recovery requests (can trigger auto-fix agents)
     socket.on('error:recover', async ({ code, context }) => {
       console.log(`🔧 Error recovery requested: ${code}`);
@@ -221,6 +238,7 @@ export function initSocket(io) {
       cosSubscribers.delete(socket);
       errorSubscribers.delete(socket);
       notificationSubscribers.delete(socket);
+      agentSubscribers.delete(socket);
     });
   });
 
@@ -241,6 +259,9 @@ export function initSocket(io) {
 
   // Set up provider status event forwarding
   setupProviderStatusEventForwarding();
+
+  // Set up agent event forwarding
+  setupAgentEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -357,4 +378,28 @@ function setupProviderStatusEventForwarding() {
       ioInstance.emit('provider:status:changed', data);
     }
   });
+}
+
+// Broadcast to agent subscribers only
+function broadcastToAgents(event, data) {
+  for (const socket of agentSubscribers) {
+    socket.emit(event, data);
+  }
+}
+
+// Set up agent event forwarding
+function setupAgentEventForwarding() {
+  // Personality events
+  agentPersonalityEvents.on('changed', (data) => broadcastToAgents('agents:personality:changed', data));
+
+  // Account events
+  platformAccountEvents.on('changed', (data) => broadcastToAgents('agents:account:changed', data));
+
+  // Schedule events
+  scheduleEvents.on('changed', (data) => broadcastToAgents('agents:schedule:changed', data));
+  scheduleEvents.on('execute', (data) => broadcastToAgents('agents:schedule:execute', data));
+
+  // Activity events
+  activityEvents.on('activity', (data) => broadcastToAgents('agents:activity', data));
+  activityEvents.on('activity:updated', (data) => broadcastToAgents('agents:activity:updated', data));
 }

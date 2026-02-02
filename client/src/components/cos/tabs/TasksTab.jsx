@@ -164,17 +164,21 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
         description: newTask.description,
         context: newTask.context
       }).catch(err => {
-        toast.error(`Enhancement failed: ${err.message}`);
-        setIsEnhancing(false);
+        // Enhancement failed - fall back to original description
+        toast('Enhancement failed, using original description', { icon: '⚠️' });
+        console.warn('Task enhancement failed:', err.message);
         return null;
       });
 
-      if (!enhanceResult) {
-        return;
+      if (enhanceResult?.enhancedDescription?.trim()) {
+        finalDescription = enhanceResult.enhancedDescription;
+        toast.success('Prompt enhanced');
+      } else if (enhanceResult) {
+        // Enhancement returned empty result - fall back to original
+        toast('Enhancement returned empty result, using original', { icon: '⚠️' });
       }
+      // If enhanceResult is null (error), we already showed warning and fall back to original
 
-      finalDescription = enhanceResult.enhancedDescription;
-      toast.success('Prompt enhanced');
       setIsEnhancing(false);
     }
 

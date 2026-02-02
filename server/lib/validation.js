@@ -1,5 +1,128 @@
 import { z } from 'zod';
 
+// =============================================================================
+// AGENT PERSONALITY SCHEMAS
+// =============================================================================
+
+// Agent personality style
+export const personalityStyleSchema = z.enum([
+  'professional',
+  'casual',
+  'witty',
+  'academic',
+  'creative'
+]);
+
+// Agent personality object
+export const agentPersonalitySchema = z.object({
+  style: personalityStyleSchema,
+  tone: z.string().max(500).optional().default(''),
+  topics: z.array(z.string().max(100)).default([]),
+  quirks: z.array(z.string().max(200)).default([]),
+  promptPrefix: z.string().max(2000).optional().default('')
+});
+
+// Agent avatar
+export const agentAvatarSchema = z.object({
+  imageUrl: z.string().url().optional(),
+  emoji: z.string().max(10).optional(),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional()
+}).optional();
+
+// Full agent schema
+export const agentSchema = z.object({
+  userId: z.string().min(1).max(100),
+  name: z.string().min(1).max(100),
+  description: z.string().max(1000).optional().default(''),
+  personality: agentPersonalitySchema,
+  avatar: agentAvatarSchema,
+  enabled: z.boolean().default(true)
+});
+
+export const agentUpdateSchema = agentSchema.partial();
+
+// =============================================================================
+// PLATFORM ACCOUNT SCHEMAS
+// =============================================================================
+
+export const platformTypeSchema = z.enum(['moltbook']);
+
+export const accountCredentialsSchema = z.object({
+  apiKey: z.string().min(1),
+  username: z.string().min(1).max(100)
+});
+
+export const accountStatusSchema = z.enum(['active', 'pending', 'suspended', 'error']);
+
+export const platformAccountSchema = z.object({
+  agentId: z.string().min(1),
+  platform: platformTypeSchema,
+  credentials: accountCredentialsSchema,
+  status: accountStatusSchema.default('pending'),
+  platformData: z.record(z.unknown()).optional().default({})
+});
+
+export const platformAccountUpdateSchema = platformAccountSchema.partial();
+
+// Account registration (when creating new Moltbook account)
+export const accountRegistrationSchema = z.object({
+  agentId: z.string().min(1),
+  platform: platformTypeSchema,
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional().default('')
+});
+
+// =============================================================================
+// AUTOMATION SCHEDULE SCHEMAS
+// =============================================================================
+
+export const scheduleActionTypeSchema = z.enum(['post', 'comment', 'vote', 'heartbeat']);
+
+export const scheduleActionSchema = z.object({
+  type: scheduleActionTypeSchema,
+  params: z.record(z.unknown()).optional().default({})
+});
+
+export const scheduleTypeSchema = z.enum(['cron', 'interval', 'random']);
+
+export const scheduleTimingSchema = z.object({
+  type: scheduleTypeSchema,
+  cron: z.string().optional(),
+  intervalMs: z.number().int().min(1000).optional(),
+  randomWindow: z.object({
+    minMs: z.number().int().min(1000),
+    maxMs: z.number().int().min(1000)
+  }).optional()
+}).refine(
+  (data) => {
+    if (data.type === 'cron') return !!data.cron;
+    if (data.type === 'interval') return !!data.intervalMs;
+    if (data.type === 'random') return !!data.randomWindow;
+    return false;
+  },
+  { message: 'Schedule timing must match its type' }
+);
+
+export const scheduleRateLimitSchema = z.object({
+  maxPerDay: z.number().int().min(1).optional(),
+  cooldownMs: z.number().int().min(0).optional()
+}).optional();
+
+export const automationScheduleSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  action: scheduleActionSchema,
+  schedule: scheduleTimingSchema,
+  rateLimit: scheduleRateLimitSchema,
+  enabled: z.boolean().default(true)
+});
+
+export const automationScheduleUpdateSchema = automationScheduleSchema.partial();
+
+// =============================================================================
+// EXISTING SCHEMAS
+// =============================================================================
+
 // Process definition schema (for PM2 processes with ports)
 export const processSchema = z.object({
   name: z.string().min(1),

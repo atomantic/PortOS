@@ -27,7 +27,10 @@ import {
   Clock,
   Calendar,
   GraduationCap,
-  Settings
+  Settings,
+  Users,
+  Link2,
+  LineChart
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -70,6 +73,17 @@ const navItems = [
     children: [
       { to: '/brain', label: 'Brain', icon: Brain },
       { to: '/digital-twin', label: 'Digital Twin', icon: Heart }
+    ]
+  },
+  {
+    label: 'Agents',
+    icon: Users,
+    children: [
+      { to: '/agents/personalities', label: 'Personalities', icon: Bot },
+      { to: '/agents/accounts', label: 'Accounts', icon: Link2 },
+      { to: '/agents/schedules', label: 'Schedules', icon: Calendar },
+      { to: '/agents/activity', label: 'Activity', icon: LineChart },
+      { to: '/agents/config', label: 'Config', icon: Settings }
     ]
   },
   {
@@ -439,8 +453,8 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') ? (
+        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') ? (
             <Outlet />
           ) : (
             <div className="max-w-7xl mx-auto">

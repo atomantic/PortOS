@@ -283,3 +283,56 @@ export const reviewOutputSchema = z.object({
   suggestedActionsNextWeek: z.array(z.string()).max(3),
   recurringTheme: z.string()
 });
+
+// =============================================================================
+// LINKS SCHEMAS
+// =============================================================================
+
+// Link type enum
+export const linkTypeEnum = z.enum(['github', 'article', 'documentation', 'tool', 'reference', 'other']);
+
+// Link Record schema
+export const linkRecordSchema = z.object({
+  id: z.string().uuid(),
+  url: z.string().url(),
+  title: z.string().min(1).max(500),
+  description: z.string().max(2000).optional().default(''),
+  linkType: linkTypeEnum.default('other'),
+  tags: z.array(z.string().max(50)).optional().default([]),
+  // GitHub-specific fields
+  isGitHubRepo: z.boolean().default(false),
+  gitHubOwner: z.string().max(100).optional(),
+  gitHubRepo: z.string().max(100).optional(),
+  localPath: z.string().max(500).optional(),
+  cloneStatus: z.enum(['pending', 'cloning', 'cloned', 'failed', 'none']).default('none'),
+  cloneError: z.string().max(500).optional(),
+  // Metadata
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+// Create/Update Link input schema
+export const linkInputSchema = z.object({
+  url: z.string().url(),
+  title: z.string().min(1).max(500).optional(),
+  description: z.string().max(2000).optional(),
+  linkType: linkTypeEnum.optional(),
+  tags: z.array(z.string().max(50)).optional(),
+  autoClone: z.boolean().optional().default(true)
+});
+
+// Update Link input schema (partial)
+export const linkUpdateInputSchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  description: z.string().max(2000).optional(),
+  linkType: linkTypeEnum.optional(),
+  tags: z.array(z.string().max(50)).optional()
+});
+
+// Links query schema
+export const linksQuerySchema = z.object({
+  linkType: linkTypeEnum.optional(),
+  isGitHubRepo: z.coerce.boolean().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  offset: z.coerce.number().int().min(0).optional().default(0)
+});
