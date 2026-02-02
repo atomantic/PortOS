@@ -224,6 +224,16 @@ export const getAttachment = (filename) => request(`/attachments/${encodeURIComp
 export const deleteAttachment = (filename) => request(`/attachments/${encodeURIComponent(filename)}`, { method: 'DELETE' });
 export const listAttachments = () => request('/attachments');
 
+// Uploads (general file storage)
+export const uploadFile = (base64Data, filename) => request('/uploads', {
+  method: 'POST',
+  body: JSON.stringify({ data: base64Data, filename })
+});
+export const listUploads = () => request('/uploads');
+export const getUploadUrl = (filename) => `/api/uploads/${encodeURIComponent(filename)}`;
+export const deleteUpload = (filename) => request(`/uploads/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+export const deleteAllUploads = () => request('/uploads?confirm=true', { method: 'DELETE' });
+
 // Running Agents (Process Management)
 export const getRunningAgents = () => request('/agents');
 export const getRunningAgentInfo = (pid) => request(`/agents/${pid}`);
