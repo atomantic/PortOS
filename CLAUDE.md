@@ -16,8 +16,9 @@ cd server && npm test
 cd server && npm run test:watch  # Watch mode
 
 # Production
-pm2 start ecosystem.config.cjs
-pm2 logs
+npm run pm2:start
+npm run pm2:stop
+npm run pm2:logs
 ```
 
 ## Architecture
