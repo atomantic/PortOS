@@ -85,7 +85,7 @@ export default function MemoryTab({ apps = [] }) {
           <p className="text-sm text-gray-500">
             {stats?.active || 0} active memories
             {stats?.pendingApproval > 0 && <span className="text-yellow-400"> * {stats.pendingApproval} pending</span>}
-            {embeddingStatus?.available ? ' * LM Studio connected' : ' * LM Studio offline'}
+            {embeddingStatus?.available ? ' * Embeddings online' : ' * Embeddings offline'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -243,15 +243,18 @@ export default function MemoryTab({ apps = [] }) {
                   <p>No memories yet.</p>
                   {!embeddingStatus?.available && (
                     <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4 text-left max-w-md mx-auto">
-                      <p className="text-port-warning font-medium mb-2">LM Studio Required</p>
+                      <p className="text-port-warning font-medium mb-2">Embedding Service Unavailable</p>
                       <p className="text-sm text-gray-400">
-                        For the memory system to work, LM Studio must be running with an embedding model:
+                        Cannot connect to embedding service{embeddingStatus?.endpoint && (
+                          <span>: <code className="text-port-accent">{embeddingStatus.endpoint}</code></span>
+                        )}
                       </p>
-                      <ol className="text-sm text-gray-400 mt-2 list-decimal list-inside space-y-1">
-                        <li>Open LM Studio</li>
-                        <li>Load <code className="text-port-accent">text-embedding-nomic-embed-text-v2-moe</code></li>
-                        <li>Start the local server (port 1234)</li>
-                      </ol>
+                      {embeddingStatus?.error && (
+                        <p className="text-sm text-gray-500 mt-1">Error: {embeddingStatus.error}</p>
+                      )}
+                      <p className="text-sm text-gray-400 mt-2">
+                        Ensure LM Studio or a compatible embedding service is running with an embedding model loaded.
+                      </p>
                     </div>
                   )}
                   {embeddingStatus?.available && (
