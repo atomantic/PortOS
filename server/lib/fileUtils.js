@@ -118,8 +118,28 @@ export function isValidJSON(str, { allowArray = true } = {}) {
 }
 
 /**
+ * Extract JSON array from string that may contain ANSI codes or other noise.
+ * Useful for parsing pm2 jlist output which may include warnings before the JSON.
+ *
+ * @param {string} str - String potentially containing JSON array
+ * @returns {string} Extracted JSON or '[]' if not found
+ */
+export function extractJSONArray(str) {
+  if (!str) return '[]';
+  // Look for '[{' (array with objects) first
+  let jsonStart = str.indexOf('[{');
+  if (jsonStart < 0) {
+    // Check for empty array - find '[]' that's not part of ANSI codes like [31m
+    const emptyMatch = str.match(/\[\](?![0-9])/);
+    jsonStart = emptyMatch ? str.indexOf(emptyMatch[0]) : -1;
+  }
+  return jsonStart >= 0 ? str.slice(jsonStart) : '[]';
+}
+
+/**
  * Safely parse JSON with validation and fallback.
  * Avoids "Unexpected end of JSON input" errors from empty/corrupted files.
+ * For arrays, automatically extracts JSON from strings with ANSI codes/noise (e.g., pm2 output).
  *
  * @param {string} str - JSON string to parse
  * @param {*} defaultValue - Default value if parsing fails (default: null)
@@ -136,6 +156,11 @@ export function isValidJSON(str, { allowArray = true } = {}) {
  * safeJSONParse(null, { default: true }) // { default: true }
  */
 export function safeJSONParse(str, defaultValue = null, { allowArray = true, logError = false, context = '' } = {}) {
+  // For arrays, try to extract JSON from noisy output (e.g., pm2 with ANSI codes)
+  if (allowArray && Array.isArray(defaultValue) && str && !str.trim().startsWith('[')) {
+    str = extractJSONArray(str);
+  }
+
   if (!isValidJSON(str, { allowArray })) {
     if (logError && str) {
       console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);

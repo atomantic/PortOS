@@ -152,7 +152,15 @@ export async function listProcesses() {
     });
 
     child.on('close', () => {
-      const list = JSON.parse(stdout || '[]');
+      // pm2 jlist may output ANSI codes and warnings before JSON
+      // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
+      let jsonStart = stdout.indexOf('[{');
+      if (jsonStart < 0) {
+        const emptyMatch = stdout.match(/\[\](?![0-9])/);
+        jsonStart = emptyMatch ? stdout.indexOf(emptyMatch[0]) : -1;
+      }
+      const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
+      const list = JSON.parse(pm2Json);
       const processes = list.map(proc => ({
         name: proc.name,
         status: proc.pm2_env?.status || 'unknown',
