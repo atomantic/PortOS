@@ -120,8 +120,13 @@ function unescapeNewlines(value) {
  *
  * For values containing special characters (newlines, backslashes), uses JSON
  * string escaping with a sentinel prefix for reversibility. Simple values are stored as-is.
+ * Arrays and objects are always JSON-encoded with the sentinel prefix.
  */
 function escapeNewlines(value) {
+  // Handle arrays and objects - always JSON encode
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {
+    return JSON_SENTINEL + JSON.stringify(value);
+  }
   if (typeof value !== 'string') return String(value);
   // Only use JSON encoding if the value contains characters that need escaping
   if (value.includes('\n') || value.includes('\\')) {

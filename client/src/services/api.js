@@ -215,6 +215,15 @@ export const uploadScreenshot = (base64Data, filename, mimeType) => request('/sc
   body: JSON.stringify({ data: base64Data, filename, mimeType })
 });
 
+// Attachments (generic file uploads for tasks)
+export const uploadAttachment = (base64Data, filename) => request('/attachments', {
+  method: 'POST',
+  body: JSON.stringify({ data: base64Data, filename })
+});
+export const getAttachment = (filename) => request(`/attachments/${encodeURIComponent(filename)}`);
+export const deleteAttachment = (filename) => request(`/attachments/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+export const listAttachments = () => request('/attachments');
+
 // Running Agents (Process Management)
 export const getRunningAgents = () => request('/agents');
 export const getRunningAgentInfo = (pid) => request(`/agents/${pid}`);
