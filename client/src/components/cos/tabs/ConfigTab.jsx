@@ -11,7 +11,9 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     healthCheckIntervalMs: config?.healthCheckIntervalMs || 900000,
     maxConcurrentAgents: config?.maxConcurrentAgents || 3,
     maxProcessMemoryMb: config?.maxProcessMemoryMb || 2048,
-    autoStart: config?.autoStart || false
+    autoStart: config?.autoStart || false,
+    selfImprovementEnabled: config?.selfImprovementEnabled ?? true,
+    appImprovementEnabled: config?.appImprovementEnabled ?? true
   });
 
   const handleSave = async () => {
@@ -108,6 +110,24 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           inputValue={formData.autoStart}
           onChange={v => setFormData(f => ({ ...f, autoStart: v }))}
           tooltip="Automatically start the CoS daemon when the server starts"
+        />
+        <ConfigRow
+          label="Self-Improvement"
+          value={formData.selfImprovementEnabled ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.selfImprovementEnabled}
+          onChange={v => setFormData(f => ({ ...f, selfImprovementEnabled: v }))}
+          tooltip="Allow CoS to improve the PortOS codebase (security audits, code quality, etc.)"
+        />
+        <ConfigRow
+          label="App Improvement"
+          value={formData.appImprovementEnabled ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.appImprovementEnabled}
+          onChange={v => setFormData(f => ({ ...f, appImprovementEnabled: v }))}
+          tooltip="Allow CoS to improve managed apps (code review, testing, documentation, etc.)"
         />
       </div>
 

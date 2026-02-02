@@ -90,7 +90,8 @@ const DEFAULT_CONFIG = {
     { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
   ],
   autoStart: false,                        // Legacy: use alwaysOn instead
-  selfImprovementEnabled: true,            // Allow CoS to suggest improvements to its own prompts
+  selfImprovementEnabled: true,            // Allow CoS to improve itself (PortOS codebase)
+  appImprovementEnabled: true,             // Allow CoS to improve managed apps
   avatarStyle: 'svg',                      // UI preference: 'svg' or 'ascii'
   // Always-on mode settings
   alwaysOn: true,                          // CoS starts automatically and stays active
@@ -697,11 +698,12 @@ async function generateIdleReviewTask(state) {
     }
   }
 
-  // Try app reviews
-  // Get all managed apps
-  const apps = await getAllApps().catch(() => []);
+  // Try app reviews (if enabled)
+  if (state.config.appImprovementEnabled) {
+    // Get all managed apps
+    const apps = await getAllApps().catch(() => []);
 
-  if (apps.length > 0) {
+    if (apps.length > 0) {
     // Find next app eligible for review (not on cooldown, oldest review first)
     const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
 
@@ -743,6 +745,7 @@ async function generateIdleReviewTask(state) {
         };
       }
     }
+  }
   }
 
   // All apps on cooldown or no apps - fall back to self-improvement
@@ -822,9 +825,10 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     }
   }
 
-  // Queue eligible app improvement tasks for managed apps
-  const apps = await getAllApps().catch(() => []);
-  for (const app of apps) {
+  // Queue eligible app improvement tasks for managed apps (if enabled)
+  if (state.config.appImprovementEnabled) {
+    const apps = await getAllApps().catch(() => []);
+    for (const app of apps) {
     // Check if app is on cooldown
     const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
     if (onCooldown) continue;
@@ -859,6 +863,7 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
     // Only queue one task per app per evaluation to avoid flooding
     break;
+  }
   }
 
   if (queued > 0) {
