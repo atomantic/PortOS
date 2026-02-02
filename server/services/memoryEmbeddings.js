@@ -6,9 +6,31 @@
  */
 
 import { DEFAULT_MEMORY_CONFIG } from './memory.js';
+import { getProviderById } from './providers.js';
 
 // Cache for embedding config (loaded from CoS config)
 let embeddingConfig = null;
+let initialized = false;
+
+/**
+ * Initialize embedding config from provider settings
+ */
+async function initConfig() {
+  if (initialized) return;
+  initialized = true;
+
+  const provider = await getProviderById('lmstudio').catch(() => null);
+  if (provider?.endpoint) {
+    const endpoint = provider.endpoint.endsWith('/v1')
+      ? `${provider.endpoint}/embeddings`
+      : `${provider.endpoint}/v1/embeddings`;
+    embeddingConfig = {
+      ...DEFAULT_MEMORY_CONFIG,
+      embeddingEndpoint: endpoint
+    };
+    console.log(`📚 Memory embeddings using provider endpoint: ${endpoint}`);
+  }
+}
 
 /**
  * Get embedding configuration
@@ -28,32 +50,40 @@ export function setEmbeddingConfig(config) {
  * Check if LM Studio is available
  */
 export async function checkAvailability() {
+  await initConfig();
   const config = getConfig();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
-  const response = await fetch(`${config.embeddingEndpoint.replace('/v1/embeddings', '/v1/models')}`, {
-    method: 'GET',
-    signal: controller.signal
-  });
+  try {
+    const response = await fetch(`${config.embeddingEndpoint.replace('/v1/embeddings', '/v1/models')}`, {
+      method: 'GET',
+      signal: controller.signal
+    });
 
-  clearTimeout(timeout);
+    clearTimeout(timeout);
 
-  if (!response.ok) {
-    return { available: false, error: `LM Studio returned ${response.status}` };
+    if (!response.ok) {
+      return { available: false, error: `LM Studio returned ${response.status}`, endpoint: config.embeddingEndpoint };
+    }
+
+    const data = await response.json();
+    return {
+      available: true,
+      models: data.data?.map(m => m.id) || [],
+      endpoint: config.embeddingEndpoint
+    };
+  } catch (err) {
+    clearTimeout(timeout);
+    return { available: false, error: err.message, endpoint: config.embeddingEndpoint };
   }
-
-  const data = await response.json();
-  return {
-    available: true,
-    models: data.data?.map(m => m.id) || []
-  };
 }
 
 /**
  * Generate embedding for a single text
  */
 export async function generateEmbedding(text) {
+  await initConfig();
   const config = getConfig();
 
   if (!text || text.trim().length === 0) {
@@ -87,6 +117,7 @@ export async function generateEmbedding(text) {
  * Generate embeddings for multiple texts (batch)
  */
 export async function generateBatchEmbeddings(texts) {
+  await initConfig();
   const config = getConfig();
 
   if (!texts || texts.length === 0) {

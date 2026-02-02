@@ -221,18 +221,18 @@ router.get('/agents/:id/stats', asyncHandler(async (req, res) => {
   res.json(stats || { active: false, pid: null });
 }));
 
+// DELETE /api/cos/agents/completed - Clear completed agents (must be before :id route)
+router.delete('/agents/completed', asyncHandler(async (req, res) => {
+  const result = await cos.clearCompletedAgents();
+  res.json(result);
+}));
+
 // DELETE /api/cos/agents/:id - Delete a single agent
 router.delete('/agents/:id', asyncHandler(async (req, res) => {
   const result = await cos.deleteAgent(req.params.id);
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
-  res.json(result);
-}));
-
-// DELETE /api/cos/agents/completed - Clear completed agents
-router.delete('/agents/completed', asyncHandler(async (req, res) => {
-  const result = await cos.clearCompletedAgents();
   res.json(result);
 }));
 
