@@ -1753,7 +1753,11 @@ export async function runHealthCheck() {
 
   // Check PM2 processes
   const pm2Result = await execAsync('pm2 jlist 2>/dev/null || echo "[]"').catch(() => ({ stdout: '[]' }));
-  const pm2Processes = JSON.parse(pm2Result.stdout || '[]');
+  // pm2 jlist may output warnings before JSON, extract the JSON array
+  const pm2Output = pm2Result.stdout || '[]';
+  const jsonStart = pm2Output.indexOf('[');
+  const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
+  const pm2Processes = JSON.parse(pm2Json);
 
   metrics.pm2 = {
     total: pm2Processes.length,

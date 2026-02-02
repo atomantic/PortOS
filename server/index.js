@@ -127,10 +127,7 @@ setProvidersToolkit(aiToolkit);
 setRunnerToolkit(aiToolkit);
 setPromptsToolkit(aiToolkit);
 
-// Initialize prompts service to load stage configurations
-aiToolkit.services.prompts.init().catch(err => {
-  console.error(`❌ Failed to initialize prompts: ${err.message}`);
-});
+// Note: prompts service is initialized automatically by createAIToolkit()
 
 // Initialize auto-fixer for error recovery
 initAutoFixer();
