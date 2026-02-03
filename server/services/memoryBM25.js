@@ -49,6 +49,19 @@ async function loadIndex() {
   }
 
   const data = await fs.readFile(INDEX_FILE, 'utf-8')
+  // Handle empty or malformed index file
+  if (!data || !data.trim()) {
+    console.log('⚠️ BM25 index file empty, creating fresh index')
+    indexCache = createEmptyIndex()
+    return indexCache
+  }
+  // Validate JSON structure before parsing
+  const trimmed = data.trim()
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    console.log('⚠️ BM25 index file malformed, creating fresh index')
+    indexCache = createEmptyIndex()
+    return indexCache
+  }
   indexCache = deserializeIndex(JSON.parse(data))
   return indexCache
 }
