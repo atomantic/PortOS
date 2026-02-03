@@ -123,7 +123,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
 // PUT /api/cos/tasks/:id - Update a task
 router.put('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { description, priority, status, context, model, provider, app, type = 'user' } = req.body;
+  const { description, priority, status, context, model, provider, app, blockedReason, type = 'user' } = req.body;
 
   const updates = {};
   if (description !== undefined) updates.description = description;
@@ -133,6 +133,14 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (model !== undefined) updates.model = model;
   if (provider !== undefined) updates.provider = provider;
   if (app !== undefined) updates.app = app;
+
+  // Handle blocker metadata - set when marking as blocked, clear when unblocking
+  if (status === 'blocked' && blockedReason) {
+    updates.metadata = { blocker: blockedReason };
+  } else if (status && status !== 'blocked') {
+    // Clear blocker when moving out of blocked status
+    updates.metadata = { blocker: undefined };
+  }
 
   const result = await cos.updateTask(id, updates, type);
   if (result?.error) {
