@@ -67,6 +67,21 @@
       "timeout": 300000,
       "enabled": false,
       "envVars": {}
+    },
+    "nvidia-kimi": {
+      "id": "nvidia-kimi",
+      "name": "NVIDIA Kimi K2.5",
+      "type": "api",
+      "endpoint": "https://integrate.api.nvidia.com/v1",
+      "apiKey": "",
+      "models": ["moonshotai/kimi-k2-5", "moonshotai/kimi-k2-instruct", "moonshotai/kimi-k2-thinking"],
+      "defaultModel": "moonshotai/kimi-k2-5",
+      "lightModel": "moonshotai/kimi-k2-instruct",
+      "mediumModel": "moonshotai/kimi-k2-5",
+      "heavyModel": "moonshotai/kimi-k2-thinking",
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {}
     }
   }
 }
