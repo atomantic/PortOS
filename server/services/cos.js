@@ -521,6 +521,72 @@ export async function evaluateTasks() {
 
   const tasksToSpawn = [];
 
+  // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
+  const taskSchedule = await import('./taskSchedule.js');
+  const onDemandRequests = await taskSchedule.getOnDemandRequests();
+
+  if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
+    for (const request of onDemandRequests) {
+      if (tasksToSpawn.length >= availableSlots) break;
+
+      let task = null;
+      if (request.category === 'selfImprovement' && state.config.selfImprovementEnabled) {
+        // Generate self-improvement task for the requested type
+        await taskSchedule.clearOnDemandRequest(request.id);
+        emitLog('info', `Processing on-demand self-improvement: ${request.taskType}`, { requestId: request.id });
+
+        await taskSchedule.recordExecution(`self-improve:${request.taskType}`);
+        await withStateLock(async () => {
+          const s = await loadState();
+          s.stats.lastSelfImprovement = new Date().toISOString();
+          s.stats.lastSelfImprovementType = request.taskType;
+          await saveState(s);
+        });
+
+        task = await generateSelfImprovementTaskForType(request.taskType, state);
+      } else if (request.category === 'appImprovement' && state.config.appImprovementEnabled) {
+        // Generate app improvement task for the specific app requested (or next eligible if no appId)
+        const apps = await getAllApps().catch(() => []);
+        let targetApp = null;
+
+        if (request.appId) {
+          // Specific app requested
+          targetApp = apps.find(a => a.id === request.appId);
+          if (!targetApp) {
+            emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
+            await taskSchedule.clearOnDemandRequest(request.id);
+            continue;
+          }
+        } else {
+          // No specific app - use next eligible app (bypass cooldown for on-demand)
+          targetApp = await getNextAppForReview(apps, 0); // 0 cooldown = no cooldown check
+          if (!targetApp && apps.length > 0) {
+            // All apps might be on cooldown - pick the first app anyway for on-demand
+            targetApp = apps[0];
+          }
+          if (!targetApp) {
+            emitLog('warn', 'On-demand app improvement requested but no apps available', { requestId: request.id });
+            await taskSchedule.clearOnDemandRequest(request.id);
+            continue;
+          }
+        }
+
+        await taskSchedule.clearOnDemandRequest(request.id);
+        emitLog('info', `Processing on-demand app improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+
+        // Mark app review started and record execution
+        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        await taskSchedule.recordExecution(`app-improve:${request.taskType}`, targetApp.id);
+
+        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
+      }
+
+      if (task) {
+        tasksToSpawn.push(task);
+      }
+    }
+  }
+
   // Priority 1: User tasks (always run - cooldown only applies to system tasks)
   const pendingUserTasks = userTaskData.grouped?.pending || [];
   for (const task of pendingUserTasks) {
@@ -1729,6 +1795,70 @@ Use model: claude-opus-4-5-20251101 for thorough typing`
 
   const task = {
     id: `app-improve-${app.id}-${nextType}-${Date.now().toString(36)}`,
+    status: 'pending',
+    priority: state.config.idleReviewPriority || 'MEDIUM',
+    priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
+    description,
+    metadata,
+    taskType: 'internal',
+    autoApproved: true
+  };
+
+  return task;
+}
+
+/**
+ * Generate a managed app improvement task for a specific type
+ * Used by on-demand task processing and can be called directly
+ *
+ * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
+ * @param {Object} app - The managed app object
+ * @param {Object} state - Current CoS state
+ * @returns {Object} Generated task
+ */
+async function generateManagedAppImprovementTaskForType(taskType, app, state) {
+  const { updateAppActivity } = await import('./appActivity.js');
+  const taskSchedule = await import('./taskSchedule.js');
+
+  // Update app activity with new type
+  await updateAppActivity(app.id, {
+    lastImprovementType: taskType
+  });
+
+  emitLog('info', `Generating app improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
+
+  // Get the effective prompt (custom or default template)
+  const promptTemplate = await taskSchedule.getAppImprovementPrompt(taskType);
+
+  // Replace template variables in the prompt
+  const description = promptTemplate
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath);
+
+  // Get interval settings to determine provider/model
+  const interval = await taskSchedule.getAppImprovementInterval(taskType);
+
+  const metadata = {
+    app: app.id,
+    appName: app.name,
+    repoPath: app.repoPath,
+    analysisType: taskType,
+    autoGenerated: true,
+    comprehensiveImprovement: true
+  };
+
+  // Use configured model/provider if specified, otherwise use default
+  if (interval.providerId) {
+    metadata.providerId = interval.providerId;
+  }
+  if (interval.model) {
+    metadata.model = interval.model;
+  } else {
+    metadata.model = 'claude-opus-4-5-20251101';
+  }
+
+  const task = {
+    id: `app-improve-${app.id}-${taskType}-${Date.now().toString(36)}`,
     status: 'pending',
     priority: state.config.idleReviewPriority || 'MEDIUM',
     priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
