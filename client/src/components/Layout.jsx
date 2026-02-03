@@ -31,7 +31,8 @@ import {
   Users,
   Link2,
   LineChart,
-  Upload
+  Upload,
+  SquareTerminal
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -101,7 +102,8 @@ const navItems = [
     ]
   },
   { to: '/media', label: 'Media', icon: Camera, single: true },
-  { to: '/uploads', label: 'Uploads', icon: Upload, single: true }
+  { to: '/uploads', label: 'Uploads', icon: Upload, single: true },
+  { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -455,8 +457,8 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') ? (
+        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' ? (
             <Outlet />
           ) : (
             <div className="max-w-7xl mx-auto">

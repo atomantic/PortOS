@@ -11,6 +11,7 @@ import { agentPersonalityEvents } from './agentPersonalities.js';
 import { platformAccountEvents } from './platformAccounts.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
+import * as shellService from './shell.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -231,6 +232,26 @@ export function initSocket(io) {
       });
     });
 
+    // Shell session handlers
+    socket.on('shell:start', () => {
+      const sessionId = shellService.createShellSession(socket);
+      socket.emit('shell:started', { sessionId });
+    });
+
+    socket.on('shell:input', ({ sessionId, data }) => {
+      if (!shellService.writeToSession(sessionId, data)) {
+        socket.emit('shell:error', { sessionId, error: 'Session not found' });
+      }
+    });
+
+    socket.on('shell:resize', ({ sessionId, cols, rows }) => {
+      shellService.resizeSession(sessionId, cols, rows);
+    });
+
+    socket.on('shell:stop', ({ sessionId }) => {
+      shellService.killSession(sessionId);
+    });
+
     // Cleanup on disconnect
     socket.on('disconnect', () => {
       console.log(`🔌 Client disconnected: ${socket.id}`);
@@ -239,6 +260,11 @@ export function initSocket(io) {
       errorSubscribers.delete(socket);
       notificationSubscribers.delete(socket);
       agentSubscribers.delete(socket);
+      // Clean up any shell sessions for this socket
+      const shellsClosed = shellService.cleanupSocketSessions(socket);
+      if (shellsClosed > 0) {
+        console.log(`🐚 Cleaned up ${shellsClosed} shell session(s)`);
+      }
     });
   });
 
