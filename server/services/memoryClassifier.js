@@ -38,7 +38,13 @@ async function loadConfig() {
 
   if (existsSync(MEMORY_CONFIG_FILE)) {
     const content = await readFile(MEMORY_CONFIG_FILE, 'utf-8');
-    configCache = { ...DEFAULT_CONFIG, ...JSON.parse(content) };
+    // Handle empty or malformed config file
+    if (content && content.trim() && content.trim().startsWith('{') && content.trim().endsWith('}')) {
+      configCache = { ...DEFAULT_CONFIG, ...JSON.parse(content) };
+    } else {
+      console.log('⚠️ Memory classifier config file empty/malformed, using defaults');
+      configCache = DEFAULT_CONFIG;
+    }
   } else {
     configCache = DEFAULT_CONFIG;
   }
@@ -180,7 +186,14 @@ function parseLLMResponse(response) {
     return { memories: [], rejected: [], parseError: true };
   }
 
-  const parsed = JSON.parse(jsonMatch[1]);
+  let parsed;
+  const jsonStr = jsonMatch[1].trim();
+  // Validate JSON structure before parsing
+  if (!jsonStr || !(jsonStr.startsWith('{') && jsonStr.endsWith('}'))) {
+    console.log('⚠️ Extracted JSON appears malformed');
+    return { memories: [], rejected: [], parseError: true };
+  }
+  parsed = JSON.parse(jsonStr);
 
   // Validate structure
   if (!Array.isArray(parsed.memories)) {
