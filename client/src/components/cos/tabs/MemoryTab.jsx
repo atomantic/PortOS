@@ -3,6 +3,7 @@ import { RefreshCw, Trash2, X, Check, XCircle, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
+import { getAppName } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
 import MemoryGraph from './MemoryGraph';
 import MemoryEditModal from './MemoryEditModal';
@@ -69,17 +70,10 @@ export default function MemoryTab({ apps = [] }) {
 
   const displayMemories = searchResults || memories;
 
-  // Get app name for display
-  const getAppName = (appId) => {
-    if (!appId) return null;
-    const app = apps?.find(a => a.id === appId);
-    return app?.name || null;
-  };
-
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">Memory System</h3>
           <p className="text-sm text-gray-500">
@@ -93,7 +87,7 @@ export default function MemoryTab({ apps = [] }) {
             <button
               key={v}
               onClick={() => setView(v)}
-              className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+              className={`px-4 py-2 min-h-[40px] text-sm rounded-lg transition-colors ${
                 view === v ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'
               }`}
             >
@@ -111,20 +105,20 @@ export default function MemoryTab({ apps = [] }) {
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           placeholder="Search memories semantically..."
-          className="flex-1 bg-port-card border border-port-border rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:border-port-accent outline-none"
+          className="flex-1 bg-port-card border border-port-border rounded-lg px-4 py-2 min-h-[40px] text-white placeholder-gray-500 focus:border-port-accent outline-none"
         />
         <button
           onClick={handleSearch}
-          className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+          className="px-4 py-2 min-h-[40px] bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
         >
           Search
         </button>
         {searchResults && (
           <button
             onClick={() => { setSearchResults(null); setSearchQuery(''); }}
-            className="px-3 py-2 bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+            className="px-3 py-2 min-h-[40px] min-w-[40px] flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         )}
       </div>
@@ -140,7 +134,7 @@ export default function MemoryTab({ apps = [] }) {
                 : [...filters.types, type];
               setFilters({ ...filters, types: newTypes });
             }}
-            className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+            className={`px-3 py-2 min-h-[36px] text-xs rounded-full border transition-colors ${
               filters.types.includes(type) ? MEMORY_TYPE_COLORS[type] : 'border-port-border text-gray-500 hover:text-gray-300'
             }`}
           >
@@ -167,10 +161,10 @@ export default function MemoryTab({ apps = [] }) {
           <h3 className="text-lg font-semibold text-yellow-500">Pending Approval ({pendingMemories.length})</h3>
           {pendingMemories.map(memory => (
             <div key={memory.id} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
-              <div className="flex items-start justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`px-2 py-0.5 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <span className={`px-2 py-1 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
                       {memory.type}
                     </span>
                     <span className="text-xs text-gray-500">{memory.category}</span>
@@ -180,9 +174,9 @@ export default function MemoryTab({ apps = [] }) {
                   </div>
                   <p className="text-white text-sm">{memory.summary || memory.content?.substring(0, 200)}</p>
                   {memory.tags?.length > 0 && (
-                    <div className="flex gap-1 mt-2">
+                    <div className="flex flex-wrap gap-1 mt-2">
                       {memory.tags.map(tag => (
-                        <span key={tag} className="px-2 py-0.5 text-xs bg-port-border rounded text-gray-400">
+                        <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">
                           {tag}
                         </span>
                       ))}
@@ -190,35 +184,35 @@ export default function MemoryTab({ apps = [] }) {
                   )}
                   <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
                     <span>{new Date(memory.createdAt).toLocaleDateString()}</span>
-                    {getAppName(memory.sourceAppId) && (
+                    {getAppName(memory.sourceAppId, apps) && (
                       <>
                         <span>*</span>
-                        <span className="text-port-accent">{getAppName(memory.sourceAppId)}</span>
+                        <span className="text-port-accent">{getAppName(memory.sourceAppId, apps)}</span>
                       </>
                     )}
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 sm:flex-col md:flex-row">
                   <button
                     onClick={() => setEditingMemory(memory)}
-                    className="p-2 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg transition-colors"
+                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg transition-colors"
                     title="Edit before approving"
                   >
-                    <Pencil size={16} />
+                    <Pencil size={20} />
                   </button>
                   <button
                     onClick={() => handleApprove(memory.id)}
-                    className="p-2 bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors"
+                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors"
                     title="Approve"
                   >
-                    <Check size={16} />
+                    <Check size={20} />
                   </button>
                   <button
                     onClick={() => handleReject(memory.id)}
-                    className="p-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors"
+                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors"
                     title="Reject"
                   >
-                    <XCircle size={16} />
+                    <XCircle size={20} />
                   </button>
                 </div>
               </div>
@@ -268,10 +262,10 @@ export default function MemoryTab({ apps = [] }) {
           ) : (
             displayMemories.map(memory => (
               <div key={memory.id} className="bg-port-card border border-port-border rounded-lg p-4">
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`px-2 py-0.5 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className={`px-2 py-1 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
                         {memory.type}
                       </span>
                       <span className="text-xs text-gray-500">{memory.category}</span>
@@ -281,9 +275,9 @@ export default function MemoryTab({ apps = [] }) {
                     </div>
                     <p className="text-white text-sm">{memory.summary || memory.content?.substring(0, 200)}</p>
                     {memory.tags?.length > 0 && (
-                      <div className="flex gap-1 mt-2">
+                      <div className="flex flex-wrap gap-1 mt-2">
                         {memory.tags.map(tag => (
-                          <span key={tag} className="px-2 py-0.5 text-xs bg-port-border rounded text-gray-400">
+                          <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">
                             {tag}
                           </span>
                         ))}
@@ -293,28 +287,28 @@ export default function MemoryTab({ apps = [] }) {
                       <span>{new Date(memory.createdAt).toLocaleDateString()}</span>
                       <span>*</span>
                       <span>importance: {((memory.importance || 0.5) * 100).toFixed(0)}%</span>
-                      {getAppName(memory.sourceAppId) && (
+                      {getAppName(memory.sourceAppId, apps) && (
                         <>
                           <span>*</span>
-                          <span className="text-port-accent">{getAppName(memory.sourceAppId)}</span>
+                          <span className="text-port-accent">{getAppName(memory.sourceAppId, apps)}</span>
                         </>
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex gap-2 sm:gap-1">
                     <button
                       onClick={() => setEditingMemory(memory)}
-                      className="p-2 text-gray-500 hover:text-port-accent transition-colors"
+                      className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-accent transition-colors"
                       title="Edit memory"
                     >
-                      <Pencil size={14} />
+                      <Pencil size={18} />
                     </button>
                     <button
                       onClick={() => handleDelete(memory.id)}
-                      className="p-2 text-gray-500 hover:text-port-error transition-colors"
+                      className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                       title="Archive memory"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={18} />
                     </button>
                   </div>
                 </div>

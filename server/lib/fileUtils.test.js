@@ -7,7 +7,8 @@ import {
   safeJSONParse,
   safeJSONLParse,
   readJSONFile,
-  readJSONLFile
+  readJSONLFile,
+  formatDuration
 } from './fileUtils.js';
 
 describe('fileUtils', () => {
@@ -301,6 +302,33 @@ describe('fileUtils', () => {
 
       const result = await readJSONLFile(filePath);
       expect(result).toEqual([{ valid: 1 }, { also: 'valid' }]);
+    });
+  });
+
+  describe('formatDuration', () => {
+    it('should return "0m" for zero or falsy values', () => {
+      expect(formatDuration(0)).toBe('0m');
+      expect(formatDuration(null)).toBe('0m');
+      expect(formatDuration(undefined)).toBe('0m');
+    });
+
+    it('should format minutes correctly', () => {
+      expect(formatDuration(60000)).toBe('1m');
+      expect(formatDuration(300000)).toBe('5m');
+      expect(formatDuration(59 * 60000)).toBe('59m');
+    });
+
+    it('should format hours and minutes correctly', () => {
+      expect(formatDuration(60 * 60000)).toBe('1h 0m');
+      expect(formatDuration(90 * 60000)).toBe('1h 30m');
+      expect(formatDuration(150 * 60000)).toBe('2h 30m');
+    });
+
+    it('should format days and hours correctly', () => {
+      expect(formatDuration(24 * 60 * 60000)).toBe('1d 0h');
+      expect(formatDuration(25 * 60 * 60000)).toBe('1d 1h');
+      expect(formatDuration(48 * 60 * 60000)).toBe('2d 0h');
+      expect(formatDuration(50 * 60 * 60000)).toBe('2d 2h');
     });
   });
 });

@@ -46,3 +46,16 @@ export function formatBytes(bytes, decimals = 1) {
 
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
 }
+
+/**
+ * Get app name from app ID by looking up in apps array
+ * @param {string|null} appId - The app ID to look up
+ * @param {Array<{id: string, name: string}>} apps - Array of app objects
+ * @param {string} fallback - Fallback value if app not found
+ * @returns {string|null} App name or fallback
+ */
+export function getAppName(appId, apps, fallback = null) {
+  if (!appId) return fallback;
+  const app = apps?.find(a => a.id === appId);
+  return app?.name || fallback;
+}

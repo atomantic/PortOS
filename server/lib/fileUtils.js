@@ -275,3 +275,33 @@ export async function readJSONLFile(filePath, { logErrors = false } = {}) {
   }
   return safeJSONLParse(content, { logErrors, context: filePath });
 }
+
+/**
+ * Format a duration in milliseconds to a human-readable string.
+ * Outputs the most appropriate unit (minutes, hours, days) based on size.
+ *
+ * @param {number} ms - Duration in milliseconds
+ * @returns {string} Formatted duration (e.g., "5m", "2h 30m", "3d 5h")
+ *
+ * @example
+ * formatDuration(30000)    // "0m"
+ * formatDuration(300000)   // "5m"
+ * formatDuration(7200000)  // "2h 0m"
+ * formatDuration(90000000) // "1d 1h"
+ */
+export function formatDuration(ms) {
+  if (!ms) return '0m';
+  const mins = Math.floor(ms / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) {
+    const remainingHours = hours % 24;
+    return `${days}d ${remainingHours}h`;
+  }
+  if (hours > 0) {
+    const remainingMins = mins % 60;
+    return `${hours}h ${remainingMins}m`;
+  }
+  return `${mins}m`;
+}

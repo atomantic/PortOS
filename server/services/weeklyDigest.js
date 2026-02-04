@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cosEvents, emitLog, getAgents } from './cos.js';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, formatDuration } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -80,26 +80,6 @@ async function saveDigest(digest) {
   const path = getDigestPath(digest.weekId);
   await writeFile(path, JSON.stringify(digest, null, 2));
   return path;
-}
-
-/**
- * Format duration in human-readable format
- */
-function formatDuration(ms) {
-  if (!ms) return '0m';
-  const mins = Math.floor(ms / 60000);
-  const hours = Math.floor(mins / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) {
-    const remainingHours = hours % 24;
-    return `${days}d ${remainingHours}h`;
-  }
-  if (hours > 0) {
-    const remainingMins = mins % 60;
-    return `${hours}h ${remainingMins}m`;
-  }
-  return `${mins}m`;
 }
 
 /**
