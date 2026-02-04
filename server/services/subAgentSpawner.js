@@ -588,6 +588,19 @@ export async function initSpawner() {
       await handleAgentCompletion(agentId, exitCode, success, duration);
     });
 
+    // Batch handler for orphaned agents (runner startup cleanup)
+    onCosRunnerEvent('agents:orphaned', async (data) => {
+      const { agents, count } = data;
+      console.log(`🧹 Processing ${count} orphaned agents from runner`);
+      for (const orphan of agents) {
+        const agent = runnerAgents.get(orphan.agentId);
+        if (agent) {
+          clearTimeout(agent.initializationTimeout);
+        }
+        await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0);
+      }
+    });
+
     onCosRunnerEvent('agent:error', async (data) => {
       const { agentId, error } = data;
       console.error(`❌ Agent ${agentId} error from runner: ${error}`);
