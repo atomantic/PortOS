@@ -22,7 +22,7 @@ export default function Shell() {
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: '#0f0f0f',
         foreground: '#e5e5e5',
