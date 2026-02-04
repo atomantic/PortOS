@@ -21,7 +21,7 @@ import TaskItem from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 
 export default function TasksTab({ tasks, onRefresh, providers, apps }) {
-  const [showAddTask, setShowAddTask] = useState(false);
+  const [showAddTask] = useState(true);
   const [newTask, setNewTask] = useState({ description: '', context: '', model: '', provider: '', app: '' });
   const [addToTop, setAddToTop] = useState(false);
   const [userTasksLocal, setUserTasksLocal] = useState([]);
@@ -223,7 +223,6 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     setAttachments([]);
     setAddToTop(false);
     setEnhancePrompt(false);
-    setShowAddTask(false);
     onRefresh();
   };
 
@@ -233,27 +232,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={async () => {
-                await api.forceCosEvaluate().catch(err => toast.error(err.message));
-                toast.success('Evaluation triggered');
-              }}
-              className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
-              aria-label="Run tasks now"
-            >
-              <Play size={16} aria-hidden="true" />
-              Run Now
-            </button>
-            <button
-              onClick={() => setShowAddTask(!showAddTask)}
-              className="flex items-center gap-1 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent px-3 py-1.5 rounded-lg transition-colors"
-              aria-expanded={showAddTask}
-            >
-              <Plus size={16} aria-hidden="true" />
-              Add Task
-            </button>
-          </div>
+          <button
+            onClick={async () => {
+              await api.forceCosEvaluate().catch(err => toast.error(err.message));
+              toast.success('Evaluation triggered');
+            }}
+            className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
+            aria-label="Run tasks now"
+          >
+            <Play size={16} aria-hidden="true" />
+            Run Now
+          </button>
         </div>
 
         {/* Add Task Form */}
@@ -458,19 +447,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   ))}
                 </div>
               )}
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => {
-                    setShowAddTask(false);
-                    setScreenshots([]);
-                    setAttachments([]);
-                    setEnhancePrompt(false);
-                  }}
-                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-                  disabled={isEnhancing}
-                >
-                  Cancel
-                </button>
+              <div className="flex justify-end">
                 <button
                   onClick={handleAddTask}
                   disabled={isEnhancing}
@@ -496,7 +473,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
         {/* User Tasks Sections */}
         {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
-            No user tasks. Click "Add Task" or edit TASKS.md directly.
+            No user tasks. Add one above or edit TASKS.md directly.
           </div>
         ) : (
           <div className="space-y-3">
