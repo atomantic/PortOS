@@ -15,7 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
-import { getAllApps } from './apps.js';
+import { getAllApps, getActiveApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
@@ -548,7 +548,8 @@ export async function evaluateTasks() {
         task = await generateSelfImprovementTaskForType(request.taskType, state);
       } else if (request.category === 'appImprovement' && state.config.appImprovementEnabled) {
         // Generate app improvement task for the specific app requested (or next eligible if no appId)
-        const apps = await getAllApps().catch(() => []);
+        // Only consider active (non-archived) apps for COS tasks
+        const apps = await getActiveApps().catch(() => []);
         let targetApp = null;
 
         if (request.appId) {
@@ -768,8 +769,8 @@ async function generateIdleReviewTask(state) {
 
   // Try app reviews (if enabled)
   if (state.config.appImprovementEnabled) {
-    // Get all managed apps
-    const apps = await getAllApps().catch(() => []);
+    // Get all active (non-archived) managed apps
+    const apps = await getActiveApps().catch(() => []);
 
     if (apps.length > 0) {
     // Find next app eligible for review (not on cooldown, oldest review first)
@@ -895,7 +896,8 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
   // Queue eligible app improvement tasks for managed apps (if enabled)
   if (state.config.appImprovementEnabled) {
-    const apps = await getAllApps().catch(() => []);
+    // Only queue tasks for active (non-archived) apps
+    const apps = await getActiveApps().catch(() => []);
     for (const app of apps) {
     // Check if app is on cooldown
     const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);

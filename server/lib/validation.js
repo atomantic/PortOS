@@ -144,7 +144,8 @@ export const appSchema = z.object({
   envFile: z.string().optional(),
   icon: z.string().nullable().optional(),
   editorCommand: z.string().optional(),
-  description: z.string().optional()
+  description: z.string().optional(),
+  archived: z.boolean().optional().default(false)
 });
 
 // Partial schema for updates
