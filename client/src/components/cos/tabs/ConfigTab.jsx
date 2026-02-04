@@ -3,6 +3,135 @@ import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
+import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval } from '../constants';
+
+// Color classes for autonomy level buttons
+const LEVEL_COLORS = {
+  green: {
+    base: 'border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20',
+    active: 'ring-2 ring-green-500 border-green-500 bg-green-500/20'
+  },
+  blue: {
+    base: 'border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20',
+    active: 'ring-2 ring-blue-500 border-blue-500 bg-blue-500/20'
+  },
+  yellow: {
+    base: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20',
+    active: 'ring-2 ring-yellow-500 border-yellow-500 bg-yellow-500/20'
+  },
+  red: {
+    base: 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20',
+    active: 'ring-2 ring-red-500 border-red-500 bg-red-500/20'
+  }
+};
+
+// Parameter labels for display
+const PARAM_LABELS = {
+  evaluationIntervalMs: 'Eval',
+  maxConcurrentAgents: 'Agents',
+  selfImprovementEnabled: 'Self',
+  appImprovementEnabled: 'App',
+  proactiveMode: 'Proactive',
+  idleReviewEnabled: 'Idle',
+  immediateExecution: 'Immediate',
+  comprehensiveAppImprovement: 'Comprehensive'
+};
+
+// Format param value for display
+const formatParamValue = (key, value) => {
+  if (key === 'evaluationIntervalMs') return formatInterval(value);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+};
+
+// AutonomyControl component
+function AutonomyControl({ config, onLevelChange }) {
+  const [hoveredLevel, setHoveredLevel] = useState(null);
+  const currentLevel = detectAutonomyLevel(config);
+  const isCustom = currentLevel === null;
+
+  const handleLevelClick = async (level) => {
+    await onLevelChange(level.params);
+    toast.success(`Autonomy level set to ${level.label}`);
+  };
+
+  // Get the level to show in preview (hovered or current)
+  const previewLevel = hoveredLevel
+    ? AUTONOMY_LEVELS.find(l => l.id === hoveredLevel)
+    : currentLevel
+      ? AUTONOMY_LEVELS.find(l => l.id === currentLevel)
+      : null;
+
+  // Get current params for comparison
+  const currentParams = previewLevel?.params || {};
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-medium text-gray-400">Autonomy Level</h4>
+        {isCustom && (
+          <span className="px-2 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded border border-gray-500/30">
+            Custom
+          </span>
+        )}
+      </div>
+
+      {/* Level buttons */}
+      <div className="grid grid-cols-4 gap-2 mb-3">
+        {AUTONOMY_LEVELS.map((level) => {
+          const isActive = currentLevel === level.id;
+          const colorClasses = LEVEL_COLORS[level.color];
+
+          return (
+            <button
+              key={level.id}
+              onClick={() => handleLevelClick(level)}
+              onMouseEnter={() => setHoveredLevel(level.id)}
+              onMouseLeave={() => setHoveredLevel(null)}
+              className={`
+                px-3 py-2 text-sm font-medium rounded-lg border transition-all
+                ${isActive ? colorClasses.active : colorClasses.base}
+              `}
+            >
+              {level.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Description */}
+      {previewLevel && (
+        <p className="text-sm text-gray-500 mb-3">
+          {previewLevel.description}
+        </p>
+      )}
+
+      {/* Parameters preview - always visible */}
+      {previewLevel && (
+        <div className="grid grid-cols-4 gap-2 text-xs">
+          {Object.entries(previewLevel.params).map(([key, value]) => {
+            const isDifferent = hoveredLevel && config && config[key] !== value;
+            return (
+              <div
+                key={key}
+                className={`
+                  px-2 py-1 rounded
+                  ${isDifferent
+                    ? 'bg-yellow-500/20 text-yellow-400'
+                    : 'bg-port-bg text-gray-400'
+                  }
+                `}
+              >
+                <span className="font-medium">{PARAM_LABELS[key]}:</span>{' '}
+                {formatParamValue(key, value)}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle, evalCountdown }) {
   const [editing, setEditing] = useState(false);
@@ -13,8 +142,19 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     maxProcessMemoryMb: config?.maxProcessMemoryMb || 2048,
     autoStart: config?.autoStart || false,
     selfImprovementEnabled: config?.selfImprovementEnabled ?? true,
-    appImprovementEnabled: config?.appImprovementEnabled ?? true
+    appImprovementEnabled: config?.appImprovementEnabled ?? true,
+    proactiveMode: config?.proactiveMode ?? true,
+    idleReviewEnabled: config?.idleReviewEnabled ?? true,
+    immediateExecution: config?.immediateExecution ?? true,
+    comprehensiveAppImprovement: config?.comprehensiveAppImprovement ?? true
   });
+
+  const handleLevelChange = async (params) => {
+    const updatedData = { ...formData, ...params };
+    setFormData(updatedData);
+    await api.updateCosConfig(params).catch(err => toast.error(err.message));
+    onUpdate();
+  };
 
   const handleSave = async () => {
     await api.updateCosConfig(formData).catch(err => toast.error(err.message));
@@ -55,6 +195,9 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           )}
         </div>
       </div>
+
+      {/* Autonomy Level Control */}
+      <AutonomyControl config={config} onLevelChange={handleLevelChange} />
 
       <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
         <ConfigRow
@@ -128,6 +271,42 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           inputValue={formData.appImprovementEnabled}
           onChange={v => setFormData(f => ({ ...f, appImprovementEnabled: v }))}
           tooltip="Allow CoS to improve managed apps (code review, testing, documentation, etc.)"
+        />
+        <ConfigRow
+          label="Proactive Mode"
+          value={formData.proactiveMode ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.proactiveMode}
+          onChange={v => setFormData(f => ({ ...f, proactiveMode: v }))}
+          tooltip="Proactively find and create tasks based on mission goals"
+        />
+        <ConfigRow
+          label="Idle Review"
+          value={formData.idleReviewEnabled ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.idleReviewEnabled}
+          onChange={v => setFormData(f => ({ ...f, idleReviewEnabled: v }))}
+          tooltip="Review apps for improvements when no user tasks are pending"
+        />
+        <ConfigRow
+          label="Immediate Execution"
+          value={formData.immediateExecution ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.immediateExecution}
+          onChange={v => setFormData(f => ({ ...f, immediateExecution: v }))}
+          tooltip="Execute new tasks immediately instead of waiting for evaluation interval"
+        />
+        <ConfigRow
+          label="Comprehensive App Analysis"
+          value={formData.comprehensiveAppImprovement ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.comprehensiveAppImprovement}
+          onChange={v => setFormData(f => ({ ...f, comprehensiveAppImprovement: v }))}
+          tooltip="Use comprehensive analysis for managed apps (same as PortOS self-improvement)"
         />
       </div>
 
