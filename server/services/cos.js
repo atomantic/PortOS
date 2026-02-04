@@ -19,6 +19,7 @@ import { getAllApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
+import { formatDuration } from '../lib/fileUtils.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
@@ -2400,17 +2401,6 @@ export async function getTodayActivity() {
     if (!a.startedAt) return sum;
     return sum + (Date.now() - new Date(a.startedAt).getTime());
   }, 0);
-
-  // Format duration as human-readable
-  const formatDuration = (ms) => {
-    const mins = Math.floor(ms / 60000);
-    const hours = Math.floor(mins / 60);
-    const remainingMins = mins % 60;
-    if (hours > 0) {
-      return `${hours}h ${remainingMins}m`;
-    }
-    return `${mins}m`;
-  };
 
   // Get top accomplishments (successful tasks with description snippets)
   const accomplishments = succeeded
