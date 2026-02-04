@@ -13,7 +13,8 @@ import {
   Paperclip,
   FileText,
   ExternalLink,
-  AlertCircle
+  AlertCircle,
+  TrendingUp
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
@@ -78,6 +79,13 @@ function formatAttachmentSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Get success rate styling based on percentage
+function getSuccessRateStyle(rate) {
+  if (rate >= 70) return { bg: 'bg-port-success/15', text: 'text-port-success', label: 'high' };
+  if (rate >= 40) return { bg: 'bg-port-warning/15', text: 'text-port-warning', label: 'moderate' };
+  return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
 export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps }) {
@@ -214,11 +222,26 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
             {durationEstimate && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-accent/10 text-port-accent/80 rounded"
-                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (${durationEstimate.successRate}% success rate)`}
+                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
               >
                 <Timer size={10} aria-hidden="true" />
                 {formatDurationMin(durationEstimate.estimatedMin)}
               </span>
+            )}
+            {/* Success rate indicator for pending tasks */}
+            {durationEstimate && durationEstimate.successRate !== undefined && durationEstimate.isTypeSpecific && (
+              (() => {
+                const style = getSuccessRateStyle(durationEstimate.successRate);
+                return (
+                  <span
+                    className={`flex items-center gap-1 px-1.5 py-0.5 text-xs rounded ${style.bg} ${style.text}`}
+                    title={`${style.label} success rate: ${durationEstimate.successRate}% of ${durationEstimate.basedOn} similar tasks succeeded`}
+                  >
+                    <TrendingUp size={10} aria-hidden="true" />
+                    {durationEstimate.successRate}%
+                  </span>
+                );
+              })()
             )}
             {isSystem && task.autoApproved && (
               <span className="px-2 py-0.5 rounded text-xs bg-port-success/20 text-port-success">AUTO</span>
