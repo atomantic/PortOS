@@ -13,7 +13,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "node-pty": "^1.1.0",
+    "node-pty": "^1.2.0-beta.10",
     "pm2": "^5.4.3",
     "portos-ai-toolkit": "github:atomantic/portos-ai-toolkit#v0.2.0",
     "socket.io": "^4.8.3",

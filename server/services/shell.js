@@ -27,17 +27,24 @@ export function createShellSession(socket, options = {}) {
 
   console.log(`🐚 Creating shell session ${sessionId.slice(0, 8)} (${shell})`);
 
-  const ptyProcess = pty.spawn(shell, [], {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd,
-    env: {
-      ...process.env,
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor'
-    }
-  });
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor'
+      }
+    });
+  } catch (err) {
+    console.error(`❌ Failed to spawn PTY: ${err.message}`);
+    socket.emit('shell:error', { error: `Failed to spawn shell: ${err.message}` });
+    return null;
+  }
 
   // Store session info
   shellSessions.set(sessionId, {

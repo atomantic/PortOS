@@ -235,7 +235,11 @@ export function initSocket(io) {
     // Shell session handlers
     socket.on('shell:start', () => {
       const sessionId = shellService.createShellSession(socket);
-      socket.emit('shell:started', { sessionId });
+      if (sessionId) {
+        socket.emit('shell:started', { sessionId });
+      } else {
+        socket.emit('shell:error', { error: 'Failed to create shell session' });
+      }
     });
 
     socket.on('shell:input', ({ sessionId, data }) => {
