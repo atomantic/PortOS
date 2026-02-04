@@ -249,6 +249,132 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | POST | `/brain/review/run` | Trigger weekly review |
 | GET | `/brain/settings` | Get Brain settings |
 | PUT | `/brain/settings` | Update Brain settings |
+| GET | `/brain/summary` | Get brain statistics summary |
+
+### Brain Links
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/brain/links` | List saved links |
+| GET | `/brain/links/:id` | Get link details |
+| POST | `/brain/links` | Save a new link |
+| PUT | `/brain/links/:id` | Update link |
+| DELETE | `/brain/links/:id` | Delete link |
+| POST | `/brain/links/:id/clone` | Clone GitHub repo |
+| POST | `/brain/links/:id/pull` | Pull updates for cloned repo |
+| POST | `/brain/links/:id/open-folder` | Open cloned repo in file manager |
+
+### File Uploads
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/uploads` | List all uploaded files |
+| POST | `/uploads` | Upload file (base64) |
+| GET | `/uploads/:filename` | Download/serve file |
+| DELETE | `/uploads/:filename` | Delete file |
+| DELETE | `/uploads?confirm=true` | Delete all files |
+
+### Task Attachments
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/attachments` | List all attachments |
+| POST | `/attachments` | Upload task attachment |
+| GET | `/attachments/:filename` | Download attachment |
+| DELETE | `/attachments/:filename` | Delete attachment |
+
+### Digital Twin
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/digital-twin/documents` | List all documents |
+| GET | `/digital-twin/documents/:id` | Get document content |
+| POST | `/digital-twin/documents` | Create document |
+| PUT | `/digital-twin/documents/:id` | Update document |
+| DELETE | `/digital-twin/documents/:id` | Delete document |
+| GET | `/digital-twin/categories` | List document categories |
+| GET | `/digital-twin/export` | Export twin in various formats |
+| POST | `/digital-twin/tests/run` | Run behavioral tests |
+| GET | `/digital-twin/tests/results` | Get test results |
+| GET | `/digital-twin/enrichment/categories` | List enrichment categories |
+| POST | `/digital-twin/enrichment/generate` | Generate content from answers |
+| GET | `/digital-twin/traits` | Get extracted personality traits |
+| POST | `/digital-twin/traits/analyze` | Analyze traits from documents |
+| GET | `/digital-twin/confidence` | Get confidence scores |
+| POST | `/digital-twin/confidence/calculate` | Calculate confidence |
+| GET | `/digital-twin/gaps` | Get enrichment recommendations |
+| GET | `/digital-twin/completeness` | Get completeness validation |
+| POST | `/digital-twin/contradictions` | Detect contradictions |
+| POST | `/digital-twin/import/analyze` | Analyze external data import |
+| POST | `/digital-twin/import/save` | Save analyzed import as document |
+
+### Agent Personalities
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/agent-personalities` | List all agent personalities |
+| GET | `/agent-personalities/:id` | Get personality details |
+| POST | `/agent-personalities` | Create personality |
+| PUT | `/agent-personalities/:id` | Update personality |
+| DELETE | `/agent-personalities/:id` | Delete personality |
+| POST | `/agent-personalities/generate` | AI-generate personality |
+| POST | `/agent-personalities/:id/toggle` | Toggle personality active state |
+
+### Platform Accounts
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/platform-accounts` | List linked platform accounts |
+| POST | `/platform-accounts` | Link new account |
+| PUT | `/platform-accounts/:id` | Update account |
+| DELETE | `/platform-accounts/:id` | Unlink account |
+| POST | `/platform-accounts/:id/test` | Test account connection |
+
+### Automation Schedules
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/automation-schedules` | List all schedules |
+| GET | `/automation-schedules/stats` | Get schedule statistics |
+| GET | `/automation-schedules/:id` | Get schedule details |
+| POST | `/automation-schedules` | Create schedule |
+| PUT | `/automation-schedules/:id` | Update schedule |
+| DELETE | `/automation-schedules/:id` | Delete schedule |
+| POST | `/automation-schedules/:id/toggle` | Toggle schedule on/off |
+| POST | `/automation-schedules/:id/run` | Run schedule immediately |
+
+### Agent Activity
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/agent-activity` | List activity logs |
+| GET | `/agent-activity/timeline` | Get activity timeline |
+| GET | `/agent-activity/agent/:agentId` | Get agent's activity |
+| GET | `/agent-activity/agent/:agentId/stats` | Get agent statistics |
+| POST | `/agent-activity/cleanup` | Clean up old activity logs |
+
+### Notifications
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/notifications` | List notifications |
+| GET | `/notifications/count` | Get unread count |
+| GET | `/notifications/counts` | Get counts by type |
+| POST | `/notifications/:id/read` | Mark as read |
+| POST | `/notifications/read-all` | Mark all as read |
+| DELETE | `/notifications/:id` | Delete notification |
+| DELETE | `/notifications` | Clear all notifications |
+
+### Media (Audio/Video Capture)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/media/devices` | List available media devices |
+| GET | `/media/status` | Get capture status |
+| POST | `/media/start` | Start capture |
+| POST | `/media/stop` | Stop capture |
+| GET | `/media/video` | Get video stream |
+| GET | `/media/audio` | Get audio stream |
 
 ## WebSocket Events
 
@@ -358,6 +484,36 @@ socket.on('detect:step', (step) => {
 // Detection complete
 socket.on('detect:complete', (appData) => {
   console.log('Detection complete:', appData);
+});
+```
+
+### Shell Terminal
+
+```javascript
+// Start a shell session
+socket.emit('shell:start', { id: 'my-session' });
+
+// Send input to shell
+socket.emit('shell:input', { id: 'my-session', data: 'ls -la\n' });
+
+// Receive shell output
+socket.on('shell:output', ({ id, data }) => {
+  console.log(data); // Terminal output
+});
+
+// Resize terminal
+socket.emit('shell:resize', { id: 'my-session', cols: 120, rows: 40 });
+
+// Stop shell session
+socket.emit('shell:stop', { id: 'my-session' });
+```
+
+### Provider Status
+
+```javascript
+// Provider availability changed
+socket.on('provider:status:changed', ({ providerId, status, reason }) => {
+  console.log(`Provider ${providerId}: ${status}`, reason);
 });
 ```
 
