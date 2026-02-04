@@ -404,6 +404,31 @@ router.post('/learning/insights', asyncHandler(async (req, res) => {
   res.json({ success: true, insight });
 }));
 
+// GET /api/cos/learning/recommendations - Get all prompt improvement recommendations
+router.get('/learning/recommendations', asyncHandler(async (req, res) => {
+  const recommendations = await taskLearning.getAllPromptRecommendations();
+  res.json({
+    count: recommendations.length,
+    recommendations,
+    summary: {
+      critical: recommendations.filter(r => r.status === 'critical').length,
+      needsImprovement: recommendations.filter(r => r.status === 'needs-improvement').length,
+      moderate: recommendations.filter(r => r.status === 'moderate').length,
+      good: recommendations.filter(r => r.status === 'good').length
+    }
+  });
+}));
+
+// GET /api/cos/learning/recommendations/:taskType - Get detailed recommendations for specific task type
+router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  if (!taskType) {
+    throw new ServerError('Task type is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const recommendations = await taskLearning.getPromptImprovementRecommendations(taskType);
+  res.json(recommendations);
+}));
+
 // ============================================================
 // Weekly Digest Routes
 // ============================================================
