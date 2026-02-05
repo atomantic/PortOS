@@ -177,6 +177,29 @@ export const runSchema = z.object({
   timeout: z.number().int().min(1000).max(600000).optional()
 });
 
+// =============================================================================
+// SOCIAL ACCOUNT SCHEMAS (Digital Twin)
+// =============================================================================
+
+export const socialPlatformSchema = z.enum([
+  'github', 'instagram', 'facebook', 'linkedin', 'x',
+  'substack', 'medium', 'youtube', 'tiktok', 'reddit',
+  'bluesky', 'mastodon', 'threads', 'other'
+]);
+
+export const socialAccountSchema = z.object({
+  platform: socialPlatformSchema,
+  username: z.string().min(1).max(200),
+  displayName: z.string().max(200).optional(),
+  url: z.string().url().optional(),
+  bio: z.string().max(2000).optional().default(''),
+  contentTypes: z.array(z.string().max(50)).optional().default([]),
+  ingestionEnabled: z.boolean().optional().default(false),
+  notes: z.string().max(2000).optional().default('')
+});
+
+export const socialAccountUpdateSchema = socialAccountSchema.partial();
+
 /**
  * Validate data against a schema
  * Returns { success: true, data } or { success: false, errors }

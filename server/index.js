@@ -31,7 +31,9 @@ import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
 import mediaRoutes from './routes/media.js';
 import digitalTwinRoutes from './routes/digital-twin.js';
+import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
+import browserRoutes from './routes/browser.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
@@ -180,8 +182,10 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/digital-twin/social-accounts', socialAccountsRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
+app.use('/api/browser', browserRoutes);
 
 // Initialize script runner
 initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));
