@@ -29,6 +29,8 @@ import { readJSONFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, updateExecution, completeExecution, errorExecution, getExecution, getStats as getToolStats } from './toolStateMachine.js';
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
 import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
+import { detectConflicts } from './taskConflict.js';
+import { createWorktree, removeWorktree, cleanupOrphanedWorktrees } from './worktreeManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -815,12 +817,45 @@ export async function spawnAgentForTask(task) {
   });
 
   // Determine workspace path
-  const workspacePath = task.metadata?.app
+  let workspacePath = task.metadata?.app
     ? await getAppWorkspace(task.metadata.app)
     : ROOT_DIR;
 
-  // Build the agent prompt
-  const prompt = await buildAgentPrompt(task, config, workspacePath);
+  // Check for conflicts with active agents and decide on worktree usage
+  let worktreeInfo = null;
+  const { getAgents } = await import('./cos.js');
+  const allAgents = await getAgents();
+  const runningAgents = allAgents.filter(a => a.status === 'running');
+
+  const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
+    emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
+    return { hasConflict: false, recommendation: 'proceed' };
+  });
+
+  if (conflictResult.recommendation === 'worktree') {
+    emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
+      taskId: task.id,
+      conflictingAgents: conflictResult.conflictingAgents,
+      reason: conflictResult.reason
+    });
+
+    worktreeInfo = await createWorktree(agentId, workspacePath, task.id).catch(err => {
+      emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
+      return null;
+    });
+
+    if (worktreeInfo) {
+      workspacePath = worktreeInfo.worktreePath;
+      emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
+        agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
+      });
+    }
+  } else if (conflictResult.recommendation === 'proceed') {
+    emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
+  }
+
+  // Build the agent prompt (includes worktree context if applicable)
+  const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo);
 
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -834,9 +869,12 @@ export async function spawnAgentForTask(task) {
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath);
 
-  // Register the agent with model info
+  // Register the agent with model info (include worktree metadata)
   await registerAgent(agentId, task.id, {
     workspacePath,
+    sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
+    worktreeBranch: worktreeInfo?.branchName || null,
+    isWorktree: !!worktreeInfo,
     taskDescription: task.description,
     taskType: task.taskType,
     priority: task.priority,
@@ -848,7 +886,7 @@ export async function spawnAgentForTask(task) {
     useRunner
   });
 
-  emitLog('info', `Agent ${agentId} initializing...`, { agentId, taskId: task.id });
+  emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}`, { agentId, taskId: task.id });
 
   // Mark the task as in_progress to prevent re-spawning
   await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user');
@@ -856,7 +894,7 @@ export async function spawnAgentForTask(task) {
   // Build CLI-specific spawn configuration
   const cliConfig = buildCliSpawnConfig(provider, selectedModel);
 
-  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName });
+  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName, worktree: !!worktreeInfo });
 
   // Use CoS Runner if available, otherwise spawn directly
   if (useRunner) {
@@ -1049,7 +1087,32 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
   // Process memory extraction and app cooldown
   await processAgentCompletion(agentId, task, success, outputBuffer);
 
+  // Clean up worktree if agent was using one
+  await cleanupAgentWorktree(agentId, success);
+
   runnerAgents.delete(agentId);
+}
+
+/**
+ * Clean up a worktree for a completed agent.
+ * Reads worktree metadata from the agent's registered state and removes the worktree.
+ * On success, merges the worktree branch back to the source branch.
+ */
+async function cleanupAgentWorktree(agentId, success) {
+  const { getAgent: getAgentState } = await import('./cos.js');
+  const agentState = await getAgentState(agentId).catch(() => null);
+  if (!agentState?.metadata?.isWorktree) return;
+
+  const { sourceWorkspace, worktreeBranch } = agentState.metadata;
+  if (!sourceWorkspace || !worktreeBranch) return;
+
+  emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${success})`, {
+    agentId, branchName: worktreeBranch, merge: success
+  });
+
+  await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: success }).catch(err => {
+    emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
+  });
 }
 
 /**
@@ -1238,6 +1301,9 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     // Process memory extraction and app cooldown
     await processAgentCompletion(agentId, task, success, outputBuffer);
 
+    // Clean up worktree if agent was using one
+    await cleanupAgentWorktree(agentId, success);
+
     unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
     activeAgents.delete(agentId);
   });
@@ -1362,8 +1428,12 @@ async function getClaudeMdContext(workspaceDir) {
 
 /**
  * Build the prompt for an agent
+ * @param {Object} task - Task object
+ * @param {Object} config - CoS configuration
+ * @param {string} workspaceDir - Working directory (may be a worktree)
+ * @param {Object|null} worktreeInfo - Worktree details if using a worktree ({ worktreePath, branchName })
  */
-async function buildAgentPrompt(task, config, workspaceDir) {
+async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null) {
   // Get relevant memories for context injection
   const memorySection = await getMemorySection(task, {
     maxTokens: config.memory?.maxContextTokens || 2000
@@ -1386,6 +1456,16 @@ async function buildAgentPrompt(task, config, workspaceDir) {
     return null;
   });
 
+  // Build worktree context section if applicable
+  const worktreeSection = worktreeInfo ? `
+## Git Worktree Context
+You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
+- **Branch**: \`${worktreeInfo.branchName}\`
+- **Worktree Path**: \`${worktreeInfo.worktreePath}\`
+
+**Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
+` : '';
+
   // Try to use the prompt template system
   const promptData = await buildPrompt('cos-agent-briefing', {
     task,
@@ -1393,6 +1473,7 @@ async function buildAgentPrompt(task, config, workspaceDir) {
     memorySection,
     claudeMdSection,
     digitalTwinSection,
+    worktreeSection,
     soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
     timestamp: new Date().toISOString()
   }).catch(() => null);
@@ -1418,7 +1499,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
-
+${worktreeSection}
 ## Instructions
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
@@ -1737,6 +1818,17 @@ export async function cleanupOrphanedAgents() {
       }
     }
   }
+
+  // Clean up worktrees for orphaned agents
+  for (const { agentId } of orphanedTaskIds) {
+    await cleanupAgentWorktree(agentId, false);
+  }
+
+  // Also clean up any orphaned worktrees not tracked by any agent
+  const activeIds = new Set(getActiveAgentIds());
+  await cleanupOrphanedWorktrees(ROOT_DIR, activeIds).catch(err => {
+    console.log(`⚠️ Orphaned worktree cleanup failed: ${err.message}`);
+  });
 
   // Handle orphaned tasks - reset for retry or create investigation task
   for (const { taskId, agentId } of orphanedTaskIds) {
