@@ -1380,9 +1380,12 @@ function buildCliSpawnConfig(provider, model) {
     };
   }
 
-  // Gemini CLI — no --model flag, no Claude-specific flags
+  // Gemini CLI — uses --yolo for auto-approval, -p for non-interactive stdin mode
   if (providerId === 'gemini-cli') {
-    const args = [...(provider?.args || [])];
+    const args = ['--yolo', ...(provider?.args || [])];
+    if (model) {
+      args.push('--model', model);
+    }
     return {
       command: provider?.command || 'gemini',
       args,
