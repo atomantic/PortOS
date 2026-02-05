@@ -16,7 +16,7 @@ import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getAllApps, getActiveApps } from './apps.js';
-import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
+import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { formatDuration } from '../lib/fileUtils.js';
@@ -681,7 +681,7 @@ export async function evaluateTasks() {
     availableSlots
   });
 
-  // Periodically log performance summary (every 10 evaluations)
+  // Periodically log performance summary with learning insights (every 10 evaluations)
   const evalCount = state.stats.evaluationCount || 0;
   if (evalCount % 10 === 0 && evalCount > 0) {
     const perfSummary = await getPerformanceSummary().catch(() => null);
@@ -692,6 +692,28 @@ export async function evaluateTasks() {
         topPerformers: perfSummary.topPerformers.length,
         needsAttention: perfSummary.needsAttention.length
       });
+
+      // Surface learning recommendations every 20 evaluations (less frequent to avoid noise)
+      if (evalCount % 20 === 0) {
+        const learningInsights = await getLearningInsights().catch(() => null);
+        if (learningInsights?.recommendations?.length > 0) {
+          const recommendations = learningInsights.recommendations.slice(0, 3);
+          for (const rec of recommendations) {
+            const level = rec.type === 'warning' ? 'warn' : rec.type === 'action' ? 'info' : 'debug';
+            emitLog(level, `🧠 Learning: ${rec.message}`, { recommendationType: rec.type });
+          }
+          // Emit event for UI consumption
+          cosEvents.emit('learning:recommendations', {
+            recommendations,
+            insights: {
+              bestPerforming: learningInsights.insights?.bestPerforming?.slice(0, 2) || [],
+              worstPerforming: learningInsights.insights?.worstPerforming?.slice(0, 2) || [],
+              commonErrors: learningInsights.insights?.commonErrors?.slice(0, 2) || []
+            },
+            totals: learningInsights.totals
+          });
+        }
+      }
     }
   }
 
