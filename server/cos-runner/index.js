@@ -33,7 +33,8 @@ const ALLOWED_COMMANDS = new Set([
   'claude',
   'aider',
   'codex',
-  'copilot'
+  'copilot',
+  'gemini'
 ]);
 
 /**

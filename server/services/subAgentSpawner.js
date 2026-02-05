@@ -384,6 +384,9 @@ const activeAgents = new Map();
 // Track runner-spawned agents (CoS Runner mode)
 const runnerAgents = new Map();
 
+// Track agents terminated by user (to prevent re-queuing)
+const userTerminatedAgents = new Set();
+
 /**
  * Get list of active agent IDs (for zombie detection)
  * Includes both direct mode and runner mode agents
@@ -1305,7 +1308,19 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
 
     // Update task status with retry tracking
-    if (success) {
+    // Skip if user-terminated — task already blocked by terminateAgent/killAgent
+    if (userTerminatedAgents.has(agentId)) {
+      userTerminatedAgents.delete(agentId);
+      await updateTask(task.id, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: 'Terminated by user',
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
+        }
+      }, task.taskType || 'user');
+    } else if (success) {
       await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
     } else {
       const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
@@ -1362,6 +1377,16 @@ function buildCliSpawnConfig(provider, model) {
       command: provider?.command || 'codex',
       args,
       stdinMode: 'prompt' // codex exec reads prompt from stdin
+    };
+  }
+
+  // Gemini CLI — no --model flag, no Claude-specific flags
+  if (providerId === 'gemini-cli') {
+    const args = [...(provider?.args || [])];
+    return {
+      command: provider?.command || 'gemini',
+      args,
+      stdinMode: 'prompt'
     };
   }
 
@@ -1594,10 +1619,18 @@ export async function terminateAgent(agentId) {
     if (result.success) {
       // Mark agent as completed with termination status
       await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
-      // Update task status back to pending
+      // Block task instead of re-queuing — user intentionally stopped this
       const task = agentInfo?.task;
       if (task) {
-        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user');
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: 'Terminated by user',
+            blockedCategory: 'user-terminated',
+            blockedAt: new Date().toISOString()
+          }
+        }, task.taskType || 'user');
       }
       runnerAgents.delete(agentId);
     }
@@ -1610,6 +1643,9 @@ export async function terminateAgent(agentId) {
   if (!agent) {
     return { success: false, error: 'Agent not found or not running' };
   }
+
+  // Track as user-terminated so the close handler doesn't re-queue
+  userTerminatedAgents.add(agentId);
 
   // Mark agent as completed immediately with termination status
   await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
@@ -1677,10 +1713,18 @@ export async function killAgent(agentId) {
     if (result.success) {
       // Mark agent as completed with kill status
       await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
-      // Update task status back to pending
+      // Block task instead of re-queuing — user intentionally killed this
       const task = agentInfo?.task;
       if (task) {
-        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user');
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: 'Force killed by user',
+            blockedCategory: 'user-terminated',
+            blockedAt: new Date().toISOString()
+          }
+        }, task.taskType || 'user');
       }
       runnerAgents.delete(agentId);
     }
@@ -1693,6 +1737,9 @@ export async function killAgent(agentId) {
   if (!agent) {
     return { success: false, error: 'Agent not found or not running' };
   }
+
+  // Track as user-terminated so the close handler doesn't re-queue
+  userTerminatedAgents.add(agentId);
 
   // Mark agent as completed immediately with kill status
   await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
