@@ -13,6 +13,7 @@ import DigitalTwin from './pages/DigitalTwin';
 import Agents from './pages/Agents';
 import Uploads from './pages/Uploads';
 import Shell from './pages/Shell';
+import BrowserPage from './pages/Browser';
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="media" element={<Media />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
+          <Route path="browser" element={<BrowserPage />} />
           <Route path="agents" element={<Navigate to="/agents/personalities" replace />} />
           <Route path="agents/:tab" element={<Agents />} />
           <Route path="*" element={<Navigate to="/" replace />} />

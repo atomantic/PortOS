@@ -1,0 +1,8 @@
+{
+  "cdpPort": 5556,
+  "cdpHost": "127.0.0.1",
+  "healthPort": 5557,
+  "autoConnect": true,
+  "headless": true,
+  "userDataDir": ""
+}

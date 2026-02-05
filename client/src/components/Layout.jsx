@@ -32,7 +32,8 @@ import {
   Link2,
   LineChart,
   Upload,
-  SquareTerminal
+  SquareTerminal,
+  Globe
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -101,6 +102,7 @@ const navItems = [
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
+  { to: '/browser', label: 'Browser', icon: Globe, single: true },
   { to: '/media', label: 'Media', icon: Camera, single: true },
   { to: '/uploads', label: 'Uploads', icon: Upload, single: true },
   { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true }
