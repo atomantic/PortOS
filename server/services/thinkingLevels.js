@@ -229,9 +229,9 @@ function getModelForLevel(level, provider = {}) {
     case 'local-medium':
       return 'lmstudio'
     case 'provider-default':
-      return provider.defaultModel || 'claude-3-5-sonnet-20241022'
+      return provider.defaultModel || null
     case 'provider-heavy':
-      return provider.heavyModel || 'claude-3-5-sonnet-20241022'
+      return provider.heavyModel || null
     case 'opus':
       return 'claude-opus-4-20250514'
     default:
