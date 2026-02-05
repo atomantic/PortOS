@@ -418,8 +418,8 @@ export default function ChiefOfStaff() {
               </div>
             </div>
 
-            {/* Mobile Stats Column - only visible on mobile */}
-            <div className="flex-1 flex flex-col justify-center gap-1.5 p-2 lg:hidden relative z-10">
+            {/* Mobile Stats Grid - 2x2 layout for compact display */}
+            <div className="flex-1 grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10 content-center">
               <StatCard
                 label="Active"
                 value={activeAgentCount}
