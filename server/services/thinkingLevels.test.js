@@ -212,6 +212,14 @@ describe('Thinking Levels Service', () => {
       const provider = { defaultModel: 'default' };
       expect(getModelForLevel('off', provider)).toBe('default');
     });
+
+    it('should return null when provider has no model configured', () => {
+      const provider = { defaultModel: null };
+      expect(getModelForLevel('medium', provider)).toBeNull();
+      expect(getModelForLevel('high', provider)).toBeNull();
+      expect(getModelForLevel('medium', {})).toBeNull();
+      expect(getModelForLevel('high', {})).toBeNull();
+    });
   });
 
   describe('isLocalPreferred', () => {
