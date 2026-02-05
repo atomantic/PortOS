@@ -537,6 +537,78 @@ Review the error, fix the configuration or code issue, and retry the original ta
   return investigationTask;
 }
 
+/**
+ * Handle task status update after agent failure.
+ * Tracks retry count and blocks the task after MAX_TASK_RETRIES,
+ * creating an investigation task instead of retrying endlessly.
+ *
+ * Returns { status, metadata } to apply to the task.
+ */
+async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
+  // Actionable errors get blocked immediately with investigation
+  if (errorAnalysis?.actionable) {
+    emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
+      taskId: task.id, category: errorAnalysis.category
+    });
+    await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
+      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+    });
+    return {
+      status: 'blocked',
+      metadata: {
+        ...task.metadata,
+        blockedReason: errorAnalysis.message,
+        blockedCategory: errorAnalysis.category,
+        blockedAt: new Date().toISOString()
+      }
+    };
+  }
+
+  // Non-actionable errors: track retry count and block after max retries
+  const failureCount = (task.metadata?.failureCount || 0) + 1;
+  const lastErrorCategory = errorAnalysis?.category || 'unknown';
+
+  if (failureCount >= MAX_TASK_RETRIES) {
+    emitLog('warn', `🚫 Task ${task.id} blocked after ${failureCount} failures (${lastErrorCategory})`, {
+      taskId: task.id, failureCount, category: lastErrorCategory
+    });
+    const blockedAnalysis = {
+      ...(errorAnalysis || {}),
+      message: `Task failed ${failureCount} times: ${errorAnalysis?.message || 'unknown error'}`,
+      suggestedFix: `Task has failed ${failureCount} consecutive times with ${lastErrorCategory} errors. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
+      category: lastErrorCategory
+    };
+    await createInvestigationTask(agentId, task, blockedAnalysis).catch(err => {
+      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+    });
+    return {
+      status: 'blocked',
+      metadata: {
+        ...task.metadata,
+        failureCount,
+        lastFailureAt: new Date().toISOString(),
+        lastErrorCategory,
+        blockedReason: `Max retries exceeded (${failureCount}/${MAX_TASK_RETRIES}): ${lastErrorCategory}`,
+        blockedCategory: lastErrorCategory,
+        blockedAt: new Date().toISOString()
+      }
+    };
+  }
+
+  emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} (${lastErrorCategory})`, {
+    taskId: task.id, failureCount, maxRetries: MAX_TASK_RETRIES, category: lastErrorCategory
+  });
+  return {
+    status: 'pending',
+    metadata: {
+      ...task.metadata,
+      failureCount,
+      lastFailureAt: new Date().toISOString(),
+      lastErrorCategory
+    }
+  };
+}
+
 // Track if using runner mode
 let useRunner = false;
 
@@ -1037,50 +1109,31 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
   }
 
-  // Update task status - block actionable errors instead of retrying endlessly
-  const newStatus = success ? 'completed'
-    : (errorAnalysis?.actionable ? 'blocked' : 'pending');
-  const statusUpdate = { status: newStatus };
-  if (newStatus === 'blocked' && errorAnalysis) {
-    statusUpdate.metadata = {
-      ...task.metadata,
-      blockedReason: errorAnalysis.message,
-      blockedCategory: errorAnalysis.category,
-      blockedAt: new Date().toISOString()
-    };
-    emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
-      taskId: task.id, category: errorAnalysis.category
-    });
-  }
-  await updateTask(task.id, statusUpdate, task.taskType || 'user');
+  // Update task status with retry tracking
+  if (success) {
+    await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
+  } else {
+    const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
+    await updateTask(task.id, failedUpdate, task.taskType || 'user');
 
-  // On failure, handle provider status updates and create investigation task if actionable
-  if (!success && errorAnalysis) {
-    // Mark provider unavailable if usage limit hit
-    if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-      const providerId = agent.providerId || (await getActiveProvider())?.id;
-      if (providerId) {
-        await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
-          emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
-        });
+    // Handle provider status updates on failure
+    if (errorAnalysis) {
+      if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+        const providerId = agent.providerId || (await getActiveProvider())?.id;
+        if (providerId) {
+          await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
+            emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
+          });
+        }
       }
-    }
-
-    // Mark provider rate limited (temporary)
-    if (errorAnalysis.category === 'rate-limit') {
-      const providerId = agent.providerId || (await getActiveProvider())?.id;
-      if (providerId) {
-        await markProviderRateLimited(providerId).catch(err => {
-          emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
-        });
+      if (errorAnalysis.category === 'rate-limit') {
+        const providerId = agent.providerId || (await getActiveProvider())?.id;
+        if (providerId) {
+          await markProviderRateLimited(providerId).catch(err => {
+            emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
+          });
+        }
       }
-    }
-
-    // Create investigation task if actionable
-    if (errorAnalysis.actionable) {
-      await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-        emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-      });
     }
   }
 
@@ -1251,50 +1304,31 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
     await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
 
-    // Block actionable errors instead of retrying endlessly
-    const newStatus = success ? 'completed'
-      : (errorAnalysis?.actionable ? 'blocked' : 'pending');
-    const statusUpdate = { status: newStatus };
-    if (newStatus === 'blocked' && errorAnalysis) {
-      statusUpdate.metadata = {
-        ...task.metadata,
-        blockedReason: errorAnalysis.message,
-        blockedCategory: errorAnalysis.category,
-        blockedAt: new Date().toISOString()
-      };
-      emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
-        taskId: task.id, category: errorAnalysis.category
-      });
-    }
-    await updateTask(task.id, statusUpdate, task.taskType || 'user');
+    // Update task status with retry tracking
+    if (success) {
+      await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
+    } else {
+      const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
+      await updateTask(task.id, failedUpdate, task.taskType || 'user');
 
-    // On failure, handle provider status updates and create investigation task if actionable
-    if (!success && errorAnalysis) {
-      // Mark provider unavailable if usage limit hit
-      if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-        const providerId = agentData?.providerId || provider.id;
-        if (providerId) {
-          await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
-            emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
-          });
+      // Handle provider status updates on failure
+      if (errorAnalysis) {
+        if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+          const providerId = agentData?.providerId || provider.id;
+          if (providerId) {
+            await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
+              emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
+            });
+          }
         }
-      }
-
-      // Mark provider rate limited (temporary)
-      if (errorAnalysis.category === 'rate-limit') {
-        const providerId = agentData?.providerId || provider.id;
-        if (providerId) {
-          await markProviderRateLimited(providerId).catch(err => {
-            emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
-          });
+        if (errorAnalysis.category === 'rate-limit') {
+          const providerId = agentData?.providerId || provider.id;
+          if (providerId) {
+            await markProviderRateLimited(providerId).catch(err => {
+              emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
+            });
+          }
         }
-      }
-
-      // Create investigation task if actionable
-      if (errorAnalysis.actionable) {
-        await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-          emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-        });
       }
     }
 
@@ -1736,6 +1770,7 @@ export async function killAllAgents() {
 
 // Max retries before creating investigation task
 const MAX_ORPHAN_RETRIES = 3;
+const MAX_TASK_RETRIES = 3;
 
 /**
  * Check if a process is running by PID
