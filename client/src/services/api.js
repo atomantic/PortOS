@@ -825,6 +825,46 @@ export const saveDigitalTwinImport = (source, suggestedDoc) => request('/digital
   body: JSON.stringify({ source, suggestedDoc })
 });
 
+// Digital Twin - Social Accounts
+export const getSocialAccounts = (params = {}) => {
+  const qs = new URLSearchParams(params).toString();
+  return request(`/digital-twin/social-accounts${qs ? `?${qs}` : ''}`);
+};
+export const getSocialAccountPlatforms = () => request('/digital-twin/social-accounts/platforms');
+export const getSocialAccountStats = () => request('/digital-twin/social-accounts/stats');
+export const getSocialAccount = (id) => request(`/digital-twin/social-accounts/${id}`);
+export const createSocialAccount = (data) => request('/digital-twin/social-accounts', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const createSocialAccountsBulk = (accounts) => request('/digital-twin/social-accounts/bulk', {
+  method: 'POST',
+  body: JSON.stringify({ accounts })
+});
+export const updateSocialAccount = (id, data) => request(`/digital-twin/social-accounts/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteSocialAccount = (id) => request(`/digital-twin/social-accounts/${id}`, {
+  method: 'DELETE'
+});
+
+// Browser - CDP browser management
+export const getBrowserStatus = () => request('/browser');
+export const getBrowserConfig = () => request('/browser/config');
+export const updateBrowserConfig = (config) => request('/browser/config', {
+  method: 'PUT',
+  body: JSON.stringify(config)
+});
+export const launchBrowser = () => request('/browser/launch', { method: 'POST' });
+export const stopBrowser = () => request('/browser/stop', { method: 'POST' });
+export const restartBrowser = () => request('/browser/restart', { method: 'POST' });
+export const getBrowserHealth = () => request('/browser/health');
+export const getBrowserProcess = () => request('/browser/process');
+export const getBrowserPages = () => request('/browser/pages');
+export const getBrowserVersion = () => request('/browser/version');
+export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
+
 // Default export for simplified imports
 export default {
   get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),
