@@ -324,13 +324,14 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
               onChange={async (e) => {
                 const style = e.target.value;
                 await setAvatarStyle(style);
-                const labels = { svg: 'Digital', ascii: 'Minimalist', cyber: 'Cyberpunk 3D' };
+                const labels = { svg: 'Digital', ascii: 'Minimalist', cyber: 'Cyberpunk 3D', sigil: 'Arcane Sigil 3D' };
                 toast.success(`Avatar style changed to ${labels[style] || style}`);
               }}
               className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-white text-sm"
             >
               <option value="svg">Digital (SVG)</option>
               <option value="cyber">Cyberpunk (3D)</option>
+              <option value="sigil">Arcane Sigil (3D)</option>
               <option value="ascii">Minimalist (ASCII)</option>
             </select>
           </div>

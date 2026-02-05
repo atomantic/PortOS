@@ -12,6 +12,7 @@ import {
   useNextEvalCountdown,
   CoSCharacter,
   CyberCoSAvatar,
+  SigilCoSAvatar,
   StateLabel,
   TerminalCoSPanel,
   StatusIndicator,
@@ -388,6 +389,8 @@ export default function ChiefOfStaff() {
 
               {avatarStyle === 'cyber'
                 ? <CyberCoSAvatar state={agentState} speaking={speaking} />
+                : avatarStyle === 'sigil'
+                  ? <SigilCoSAvatar state={agentState} speaking={speaking} />
                 : <CoSCharacter state={agentState} speaking={speaking} />
               }
               <StateLabel state={agentState} />
