@@ -328,13 +328,13 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-            className="lg:hidden flex items-center justify-between w-full px-4 py-3 bg-slate-900/60 border-b border-indigo-500/20 min-h-[44px]"
+            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-indigo-500/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <h1
-                className="text-lg font-bold"
+                className="text-base font-bold"
                 style={{
                   background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
                   WebkitBackgroundClip: 'text',
@@ -342,13 +342,13 @@ export default function ChiefOfStaff() {
                   backgroundClip: 'text'
                 }}
               >
-                Chief of Staff
+                CoS
               </h1>
               <StatusIndicator running={status?.running} />
             </div>
-            <div className="flex items-center gap-2 text-gray-400">
+            <div className="flex items-center gap-1.5 text-gray-400">
               <StateLabel state={agentState} compact />
-              {agentPanelCollapsed ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+              {agentPanelCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
             </div>
           </button>
 
@@ -369,7 +369,7 @@ export default function ChiefOfStaff() {
             />
 
             {/* Avatar Column - half width on mobile, full on desktop */}
-            <div className="flex-1 lg:flex-none flex flex-col items-center p-4 lg:p-8 relative z-10">
+            <div className="flex-1 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
                 Digital Assistant
               </div>
@@ -395,32 +395,31 @@ export default function ChiefOfStaff() {
               </div>
 
               {/* Control Buttons */}
-              <div className="flex items-center gap-2 sm:gap-3 mt-3 lg:mt-6">
+              <div className="flex items-center gap-1.5 sm:gap-3 mt-2 lg:mt-6">
                 {status?.running ? (
                   <button
                     onClick={handleStop}
-                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors min-h-[40px]"
+                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors min-h-[40px]"
                     aria-label="Stop Chief of Staff agent"
                   >
-                    <Square size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
+                    <Square size={12} className="sm:w-4 sm:h-4" aria-hidden="true" />
                     Stop
                   </button>
                 ) : (
                   <button
                     onClick={handleStart}
-                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors min-h-[40px]"
+                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors min-h-[40px]"
                     aria-label="Start Chief of Staff agent"
                   >
-                    <Play size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
+                    <Play size={12} className="sm:w-4 sm:h-4" aria-hidden="true" />
                     Start
                   </button>
                 )}
-                <StatusIndicator running={status?.running} />
               </div>
             </div>
 
             {/* Mobile Stats Column - only visible on mobile */}
-            <div className="flex-1 flex flex-col justify-center gap-2 p-3 lg:hidden relative z-10">
+            <div className="flex-1 flex flex-col justify-center gap-1.5 p-2 lg:hidden relative z-10">
               <StatCard
                 label="Active"
                 value={activeAgentCount}
