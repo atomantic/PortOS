@@ -1182,7 +1182,7 @@ export async function spawnAgentForTask(task) {
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath);
 
-  // Register the agent with model info (include worktree metadata)
+  // Register the agent with model info (include worktree metadata + task metadata for learning)
   await registerAgent(agentId, task.id, {
     workspacePath,
     sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
@@ -1196,7 +1196,14 @@ export async function spawnAgentForTask(task) {
     modelReason: modelSelection.reason,
     runId,
     phase: 'initializing',
-    useRunner
+    useRunner,
+    // Forward task metadata fields for learning classification
+    taskAnalysisType: task.metadata?.analysisType || null,
+    taskReviewType: task.metadata?.reviewType || null,
+    taskApp: task.metadata?.app || null,
+    selfImprovementType: task.metadata?.selfImprovementType || null,
+    missionName: task.metadata?.missionName || null,
+    missionId: task.metadata?.missionId || null
   });
 
   emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}`, { agentId, taskId: task.id });

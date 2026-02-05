@@ -67,35 +67,57 @@ async function saveLearningData(data) {
  * Extract task type from task description or metadata
  */
 function extractTaskType(task) {
-  // Check for self-improvement type in metadata
-  if (task?.metadata?.analysisType) {
-    return `self-improve:${task.metadata.analysisType}`;
+  // Check for self-improvement type in metadata (direct or forwarded from task)
+  const analysisType = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType;
+  if (analysisType) {
+    return `self-improve:${analysisType}`;
   }
 
   // Check for idle review
-  if (task?.metadata?.reviewType === 'idle') {
+  const reviewType = task?.metadata?.reviewType || task?.metadata?.taskReviewType;
+  if (reviewType === 'idle') {
     return 'idle-review';
+  }
+
+  // Check for mission tasks
+  if (task?.metadata?.missionName) {
+    return `mission:${task.metadata.missionName}`;
+  }
+
+  // Check for app improvement tasks
+  if (task?.metadata?.taskApp && task?.metadata?.selfImprovementType) {
+    return `app-improve:${task.metadata.selfImprovementType}`;
   }
 
   // Check description patterns
   const desc = (task?.description || '').toLowerCase();
 
   if (desc.includes('[self-improvement]')) {
-    const typeMatch = desc.match(/\[self-improvement\]\s*(\w+)/i);
+    const typeMatch = desc.match(/\[self-improvement\]\s*([\w-]+)/i);
     if (typeMatch) return `self-improve:${typeMatch[1]}`;
+    return 'self-improve:general';
   }
 
   if (desc.includes('[idle review]')) {
     return 'idle-review';
   }
 
-  if (desc.includes('[auto-fix]') || desc.includes('[auto]')) {
+  if (desc.includes('[auto-fix]') || desc.includes('[auto] investigate')) {
     return 'auto-fix';
+  }
+
+  if (desc.includes('[app-improvement]') || desc.includes('[app improvement]')) {
+    return 'app-improvement';
   }
 
   // User task classification
   if (task?.taskType === 'user') {
     return 'user-task';
+  }
+
+  // Internal/system tasks that don't match a specific pattern
+  if (task?.taskType === 'internal') {
+    return 'internal-task';
   }
 
   return 'unknown';
