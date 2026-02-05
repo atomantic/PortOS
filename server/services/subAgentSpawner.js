@@ -999,9 +999,22 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
   }
 
-  // Update task status
-  const newStatus = success ? 'completed' : 'pending';
-  await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
+  // Update task status - block actionable errors instead of retrying endlessly
+  const newStatus = success ? 'completed'
+    : (errorAnalysis?.actionable ? 'blocked' : 'pending');
+  const statusUpdate = { status: newStatus };
+  if (newStatus === 'blocked' && errorAnalysis) {
+    statusUpdate.metadata = {
+      ...task.metadata,
+      blockedReason: errorAnalysis.message,
+      blockedCategory: errorAnalysis.category,
+      blockedAt: new Date().toISOString()
+    };
+    emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
+      taskId: task.id, category: errorAnalysis.category
+    });
+  }
+  await updateTask(task.id, statusUpdate, task.taskType || 'user');
 
   // On failure, handle provider status updates and create investigation task if actionable
   if (!success && errorAnalysis) {
@@ -1175,8 +1188,22 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
     await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
 
-    const newStatus = success ? 'completed' : 'pending';
-    await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
+    // Block actionable errors instead of retrying endlessly
+    const newStatus = success ? 'completed'
+      : (errorAnalysis?.actionable ? 'blocked' : 'pending');
+    const statusUpdate = { status: newStatus };
+    if (newStatus === 'blocked' && errorAnalysis) {
+      statusUpdate.metadata = {
+        ...task.metadata,
+        blockedReason: errorAnalysis.message,
+        blockedCategory: errorAnalysis.category,
+        blockedAt: new Date().toISOString()
+      };
+      emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
+        taskId: task.id, category: errorAnalysis.category
+      });
+    }
+    await updateTask(task.id, statusUpdate, task.taskType || 'user');
 
     // On failure, handle provider status updates and create investigation task if actionable
     if (!success && errorAnalysis) {
