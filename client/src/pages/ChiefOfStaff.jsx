@@ -13,6 +13,7 @@ import {
   CoSCharacter,
   CyberCoSAvatar,
   SigilCoSAvatar,
+  EsotericCoSAvatar,
   StateLabel,
   TerminalCoSPanel,
   StatusIndicator,
@@ -391,6 +392,8 @@ export default function ChiefOfStaff() {
                 ? <CyberCoSAvatar state={agentState} speaking={speaking} />
                 : avatarStyle === 'sigil'
                   ? <SigilCoSAvatar state={agentState} speaking={speaking} />
+                : avatarStyle === 'esoteric'
+                  ? <EsotericCoSAvatar state={agentState} speaking={speaking} />
                 : <CoSCharacter state={agentState} speaking={speaking} />
               }
               <StateLabel state={agentState} />
