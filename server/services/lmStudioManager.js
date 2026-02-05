@@ -99,25 +99,40 @@ async function getLoadedModels(forceRefresh = false) {
     return []
   }
 
-  try {
-    const response = await lmStudioRequest('/v1/models')
-    loadedModels = (response.data || []).map(model => ({
+  // Use native REST API for richer model info (type, state, architecture)
+  const nativeModels = await lmStudioRequest('/api/v0/models').catch(() => null)
+  if (nativeModels?.data) {
+    loadedModels = nativeModels.data
+      .filter(model => model.state === 'loaded')
+      .map(model => ({
+        id: model.id,
+        object: model.object || 'model',
+        type: model.type,
+        arch: model.arch,
+        quantization: model.quantization,
+        state: model.state,
+        maxContextLength: model.max_context_length,
+        ownedBy: model.publisher
+      }))
+    return loadedModels
+  }
+
+  // Fallback to OpenAI-compat endpoint
+  const response = await lmStudioRequest('/v1/models').catch(() => null)
+  if (response?.data) {
+    loadedModels = response.data.map(model => ({
       id: model.id,
       object: model.object,
       created: model.created,
       ownedBy: model.owned_by
     }))
-    return loadedModels
-  } catch (err) {
-    console.error(`⚠️ Failed to get LM Studio models: ${err.message}`)
-    return []
   }
+  return loadedModels
 }
 
 /**
- * Get available models in LM Studio catalog
- * Note: This requires LM Studio's /lmstudio.* endpoints if available
- * @returns {Promise<Array>} - Available models
+ * Get all downloaded models (loaded and not-loaded)
+ * @returns {Promise<Array>} - All downloaded models with state info
  */
 async function getAvailableModels() {
   const available = await checkLMStudioAvailable()
@@ -125,43 +140,55 @@ async function getAvailableModels() {
     return []
   }
 
-  // LM Studio doesn't have a public catalog API by default
-  // Return loaded models as available for now
+  const response = await lmStudioRequest('/api/v0/models').catch(() => null)
+  if (response?.data) {
+    availableModels = response.data.map(model => ({
+      id: model.id,
+      type: model.type,
+      arch: model.arch,
+      publisher: model.publisher,
+      quantization: model.quantization,
+      state: model.state,
+      maxContextLength: model.max_context_length
+    }))
+    return availableModels
+  }
+
+  // Fallback to loaded models only
   return getLoadedModels(true)
 }
 
 /**
  * Download a model from LM Studio catalog
- * Note: Requires LM Studio API support for downloads
- *
  * @param {string} modelId - Model identifier to download
  * @returns {Promise<Object>} - Download result
  */
 async function downloadModel(modelId) {
   const available = await checkLMStudioAvailable()
   if (!available) {
-    return {
-      success: false,
-      error: 'LM Studio not available'
-    }
+    return { success: false, error: 'LM Studio not available' }
   }
 
-  // LM Studio doesn't have a public download API
-  // This would need to be implemented via LM Studio's developer API
-  console.log(`📥 Model download requested: ${modelId}`)
+  console.log(`📥 Downloading model: ${modelId}`)
   cosEvents.emit('lmstudio:downloadRequested', { modelId })
 
-  return {
-    success: false,
-    error: 'Model downloading not yet supported via API',
-    modelId,
-    instruction: 'Please download the model manually via LM Studio UI'
+  const response = await lmStudioRequest('/api/v1/models/download', {
+    method: 'POST',
+    body: JSON.stringify({ model: modelId }),
+    timeout: 10000
+  }).catch(err => ({ _err: err.message }))
+
+  if (response._err) {
+    console.error(`⚠️ Failed to start download for ${modelId}: ${response._err}`)
+    return { success: false, error: response._err, modelId }
   }
+
+  return { success: true, modelId, ...response }
 }
 
 /**
  * Load a model into LM Studio memory
- * @param {string} modelId - Model identifier to load
+ * @param {string} modelId - Model identifier (publisher/model-name format)
  * @returns {Promise<Object>} - Load result
  */
 async function loadModel(modelId) {
@@ -170,35 +197,29 @@ async function loadModel(modelId) {
     return { success: false, error: 'LM Studio not available' }
   }
 
-  try {
-    // Try to make a test completion to trigger model loading
-    await lmStudioRequest('/v1/chat/completions', {
-      method: 'POST',
-      body: JSON.stringify({
-        model: modelId,
-        messages: [{ role: 'user', content: 'test' }],
-        max_tokens: 1
-      }),
-      timeout: 60000 // Loading can take a while
-    })
+  // Use the native REST API load endpoint
+  const response = await lmStudioRequest('/api/v1/models/load', {
+    method: 'POST',
+    body: JSON.stringify({ model: modelId }),
+    timeout: 60000 // Loading can take a while
+  }).catch(err => ({ _err: err.message }))
 
-    // Refresh loaded models
-    await getLoadedModels(true)
-
-    console.log(`📦 Model loaded: ${modelId}`)
-    cosEvents.emit('lmstudio:modelLoaded', { modelId })
-
-    return { success: true, modelId }
-  } catch (err) {
-    console.error(`⚠️ Failed to load model ${modelId}: ${err.message}`)
-    return { success: false, error: err.message, modelId }
+  if (response._err) {
+    console.error(`⚠️ Failed to load model ${modelId}: ${response._err}`)
+    return { success: false, error: response._err, modelId }
   }
+
+  // Refresh loaded models
+  await getLoadedModels(true)
+
+  console.log(`📦 Model loaded: ${modelId}`)
+  cosEvents.emit('lmstudio:modelLoaded', { modelId })
+
+  return { success: true, modelId, ...response }
 }
 
 /**
  * Unload a model from LM Studio memory
- * Note: Requires LM Studio API support for unloading
- *
  * @param {string} modelId - Model identifier to unload
  * @returns {Promise<Object>} - Unload result
  */
@@ -208,16 +229,24 @@ async function unloadModel(modelId) {
     return { success: false, error: 'LM Studio not available' }
   }
 
-  // LM Studio doesn't have a public unload API
-  console.log(`📤 Model unload requested: ${modelId}`)
-  cosEvents.emit('lmstudio:unloadRequested', { modelId })
+  const response = await lmStudioRequest('/api/v1/models/unload', {
+    method: 'POST',
+    body: JSON.stringify({ model: modelId }),
+    timeout: 15000
+  }).catch(err => ({ _err: err.message }))
 
-  return {
-    success: false,
-    error: 'Model unloading not yet supported via API',
-    modelId,
-    instruction: 'Please unload the model manually via LM Studio UI'
+  if (response._err) {
+    console.error(`⚠️ Failed to unload model ${modelId}: ${response._err}`)
+    return { success: false, error: response._err, modelId }
   }
+
+  // Refresh loaded models
+  await getLoadedModels(true)
+
+  console.log(`📤 Model unloaded: ${modelId}`)
+  cosEvents.emit('lmstudio:modelUnloaded', { modelId })
+
+  return { success: true, modelId }
 }
 
 /**
@@ -310,28 +339,40 @@ async function getEmbeddings(text, options = {}) {
     return { success: false, error: 'LM Studio not available' }
   }
 
-  const model = options.model || 'text-embedding-nomic-embed-text-v2-moe'
-
-  try {
-    const response = await lmStudioRequest('/v1/embeddings', {
-      method: 'POST',
-      body: JSON.stringify({
-        model,
-        input: text
-      }),
-      timeout: options.timeout || 10000
-    })
-
-    const embedding = response.data?.[0]?.embedding || []
-
-    return {
-      success: true,
-      embedding,
-      model,
-      dimensions: embedding.length
+  // Auto-discover an embedding model if none specified
+  let model = options.model
+  if (!model) {
+    const models = await getAvailableModels()
+    const embeddingModel = models.find(m => m.type === 'embeddings' && m.state === 'loaded')
+      || models.find(m => m.type === 'embeddings')
+    if (embeddingModel) {
+      // Load it if not already loaded
+      if (embeddingModel.state !== 'loaded') {
+        await loadModel(embeddingModel.id)
+      }
+      model = embeddingModel.id
+    } else {
+      return { success: false, error: 'No embedding model available in LM Studio' }
     }
-  } catch (err) {
-    return { success: false, error: err.message, model }
+  }
+
+  const response = await lmStudioRequest('/v1/embeddings', {
+    method: 'POST',
+    body: JSON.stringify({ model, input: text }),
+    timeout: options.timeout || 10000
+  }).catch(err => ({ _err: err.message }))
+
+  if (response._err) {
+    return { success: false, error: response._err, model }
+  }
+
+  const embedding = response.data?.[0]?.embedding || []
+
+  return {
+    success: true,
+    embedding,
+    model,
+    dimensions: embedding.length
   }
 }
 
