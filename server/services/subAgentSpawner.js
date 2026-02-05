@@ -398,9 +398,12 @@ export function getActiveAgentIds() {
 }
 
 /**
- * Error patterns that warrant investigation tasks
+ * Error patterns that warrant investigation tasks.
+ * Patterns are checked in order - first match wins.
+ * Categories help the learning system identify failure trends.
  */
 const ERROR_PATTERNS = [
+  // ===== API & Authentication Errors =====
   {
     pattern: /API Error: 404.*model:\s*(\S+)/i,
     category: 'model-not-found',
@@ -457,15 +460,6 @@ const ERROR_PATTERNS = [
     })
   },
   {
-    pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
-    category: 'network-error',
-    actionable: false, // Transient
-    extract: () => ({
-      message: 'Network connection failed',
-      suggestedFix: 'Check network connectivity'
-    })
-  },
-  {
     pattern: /not_found_error.*model/i,
     category: 'model-not-found',
     actionable: true,
@@ -473,6 +467,250 @@ const ERROR_PATTERNS = [
       message: `Model not found in API response`,
       suggestedFix: `The model "${model}" specified for this task doesn't exist. Update provider or task configuration.`,
       configuredModel: model
+    })
+  },
+
+  // ===== Context & Token Errors =====
+  {
+    pattern: /context.?length|max.?tokens|token.?limit|context.?window/i,
+    category: 'context-length',
+    actionable: true,
+    extract: () => ({
+      message: 'Context length exceeded',
+      suggestedFix: 'Task is too large for the context window. Break into smaller subtasks or use a model with larger context.'
+    })
+  },
+  {
+    pattern: /output.?length|max.?output|response.?too.?long/i,
+    category: 'output-length',
+    actionable: false,
+    extract: () => ({
+      message: 'Output length exceeded',
+      suggestedFix: 'Agent response exceeded output limit. Task may need to be scoped down.'
+    })
+  },
+
+  // ===== Tool & MCP Errors =====
+  {
+    pattern: /tool.?(?:call|use|execution).?(?:failed|error)|failed to (?:call|execute|invoke) tool/i,
+    category: 'tool-error',
+    actionable: false,
+    extract: (match, output) => {
+      const toolMatch = output.match(/tool[:\s]+["']?(\w+)["']?/i);
+      return {
+        message: `Tool execution failed${toolMatch ? `: ${toolMatch[1]}` : ''}`,
+        suggestedFix: 'Tool call failed. Check if required dependencies/services are running.'
+      };
+    }
+  },
+  {
+    pattern: /MCP.?(?:server|connection|error)|mcp.?(?:failed|timeout)/i,
+    category: 'mcp-error',
+    actionable: false,
+    extract: () => ({
+      message: 'MCP server error',
+      suggestedFix: 'MCP server connection failed. Verify MCP servers are configured and accessible.'
+    })
+  },
+  {
+    pattern: /permission.?denied|access.?denied|not.?allowed|insufficient.?permissions/i,
+    category: 'permission-denied',
+    actionable: true,
+    extract: () => ({
+      message: 'Permission denied',
+      suggestedFix: 'Agent lacks permissions for the requested operation. Check file/directory permissions.'
+    })
+  },
+
+  // ===== Git & Repository Errors =====
+  {
+    pattern: /git.?(?:conflict|merge.?conflict)|CONFLICT.*both modified|merge.?failed/i,
+    category: 'git-conflict',
+    actionable: true,
+    extract: () => ({
+      message: 'Git merge conflict',
+      suggestedFix: 'Merge conflict detected. Resolve conflicts manually before retrying.'
+    })
+  },
+  {
+    pattern: /fatal:\s*(?:not a git repository|could not|failed to|unable to)/i,
+    category: 'git-error',
+    actionable: false,
+    extract: (match, output) => {
+      const detailMatch = output.match(/fatal:\s*(.+?)(?:\n|$)/i);
+      return {
+        message: `Git error${detailMatch ? `: ${detailMatch[1].substring(0, 60)}` : ''}`,
+        suggestedFix: 'Git operation failed. Verify the repository state and try again.'
+      };
+    }
+  },
+  {
+    pattern: /nothing.?to.?commit|no.?changes|working.?tree.?clean/i,
+    category: 'no-changes',
+    actionable: false,
+    extract: () => ({
+      message: 'No changes to commit',
+      suggestedFix: 'Agent completed but made no code changes. Task may already be done or description needs clarification.'
+    })
+  },
+
+  // ===== Build & Test Errors =====
+  {
+    pattern: /npm.?ERR!|yarn.?error|pnpm.?(?:ERR|error)/i,
+    category: 'npm-error',
+    actionable: false,
+    extract: (match, output) => {
+      const errMatch = output.match(/(?:npm|yarn|pnpm).?(?:ERR!|error)[:\s]*(.+?)(?:\n|$)/i);
+      return {
+        message: `Package manager error${errMatch ? `: ${errMatch[1].substring(0, 50)}` : ''}`,
+        suggestedFix: 'Package installation or script failed. Check package.json and dependencies.'
+      };
+    }
+  },
+  {
+    pattern: /test.?(?:failed|failure)|(?:failed|failing).?tests?|FAIL\s+\w+\.test/i,
+    category: 'test-failure',
+    actionable: false,
+    extract: () => ({
+      message: 'Tests failed',
+      suggestedFix: 'One or more tests failed. Review test output and fix failing assertions.'
+    })
+  },
+  {
+    pattern: /lint.?(?:error|failed)|eslint.?error|prettier.?error/i,
+    category: 'lint-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Linting failed',
+      suggestedFix: 'Code style/lint errors detected. Fix formatting issues and retry.'
+    })
+  },
+  {
+    pattern: /build.?failed|compilation.?(?:failed|error)|typescript.?error|tsc.+error/i,
+    category: 'build-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Build failed',
+      suggestedFix: 'Build/compilation failed. Fix syntax or type errors and retry.'
+    })
+  },
+
+  // ===== Process & System Errors =====
+  {
+    pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
+    category: 'network-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Network connection failed',
+      suggestedFix: 'Check network connectivity and service availability.'
+    })
+  },
+  {
+    pattern: /ENOENT|file.?not.?found|no.?such.?file/i,
+    category: 'file-not-found',
+    actionable: false,
+    extract: (match, output) => {
+      const pathMatch = output.match(/(?:ENOENT|not.?found)[:\s]*['"]?([^'"}\s]+)['"]?/i);
+      return {
+        message: `File not found${pathMatch ? `: ${pathMatch[1].substring(0, 40)}` : ''}`,
+        suggestedFix: 'Expected file/directory does not exist. Verify paths in the task description.'
+      };
+    }
+  },
+  {
+    pattern: /ENOMEM|out.?of.?memory|heap.?(?:out|limit)|memory.?(?:limit|exceeded)/i,
+    category: 'memory-error',
+    actionable: true,
+    extract: () => ({
+      message: 'Out of memory',
+      suggestedFix: 'Process ran out of memory. Task may be too large or there is a memory leak.'
+    })
+  },
+  {
+    pattern: /timeout|timed.?out|deadline.?exceeded/i,
+    category: 'timeout',
+    actionable: false,
+    extract: () => ({
+      message: 'Operation timed out',
+      suggestedFix: 'Task took too long to complete. Consider breaking into smaller subtasks.'
+    })
+  },
+  {
+    pattern: /(?:killed|terminated).?(?:by.?signal|SIGTERM|SIGKILL)/i,
+    category: 'process-killed',
+    actionable: false,
+    extract: () => ({
+      message: 'Process killed',
+      suggestedFix: 'Agent process was terminated. May have exceeded resource limits or was killed externally.'
+    })
+  },
+  {
+    pattern: /spawn.?(?:error|failed)|EACCES|command.?not.?found/i,
+    category: 'spawn-error',
+    actionable: true,
+    extract: () => ({
+      message: 'Command spawn failed',
+      suggestedFix: 'Failed to start subprocess. Check that required CLI tools are installed and accessible.'
+    })
+  },
+
+  // ===== Playwright & Browser Errors =====
+  {
+    pattern: /playwright|browser.?(?:crashed|closed|disconnected)/i,
+    category: 'browser-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Browser automation failed',
+      suggestedFix: 'Playwright browser crashed or disconnected. Check if the dev server is running.'
+    })
+  },
+  {
+    pattern: /locator.?(?:timeout|not.?found)|element.?not.?(?:found|visible)/i,
+    category: 'locator-error',
+    actionable: false,
+    extract: () => ({
+      message: 'UI element not found',
+      suggestedFix: 'Could not find expected element on page. UI may have changed or selector is wrong.'
+    })
+  },
+
+  // ===== Agent-Specific Errors =====
+  {
+    pattern: /(?:claude|anthropic).?(?:error|failed)|overloaded_error/i,
+    category: 'claude-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Claude API error',
+      suggestedFix: 'Claude API returned an error. This is usually transient - retry recommended.'
+    })
+  },
+  {
+    pattern: /invalid.?(?:json|syntax)|JSON\.parse|SyntaxError/i,
+    category: 'parse-error',
+    actionable: false,
+    extract: () => ({
+      message: 'JSON/Syntax parse error',
+      suggestedFix: 'Failed to parse response or file. Check for malformed JSON or syntax errors.'
+    })
+  },
+  {
+    pattern: /task.?(?:rejected|declined|refused)|cannot.?(?:complete|perform)/i,
+    category: 'task-rejected',
+    actionable: true,
+    extract: () => ({
+      message: 'Agent rejected task',
+      suggestedFix: 'Agent could not or would not complete the task. Rephrase or simplify the request.'
+    })
+  },
+
+  // ===== Safety & Content Errors =====
+  {
+    pattern: /content.?(?:filter|policy)|safety.?(?:filter|block)|harmful.?content/i,
+    category: 'content-filtered',
+    actionable: true,
+    extract: () => ({
+      message: 'Content filtered',
+      suggestedFix: 'Request was blocked by content safety filter. Rephrase the task description.'
     })
   }
 ];
