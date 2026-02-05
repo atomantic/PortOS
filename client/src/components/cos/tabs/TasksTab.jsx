@@ -333,22 +333,22 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     ))}
                   </select>
                 </div>
-                <div className="flex-1">
-                  <label htmlFor="task-model" className="sr-only">AI model</label>
-                  <select
-                    id="task-model"
-                    value={newTask.model}
-                    onChange={e => setNewTask(t => ({ ...t, model: e.target.value }))}
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                    disabled={!newTask.provider}
-                    aria-disabled={!newTask.provider}
-                  >
-                    <option value="">{newTask.provider ? 'Select model...' : 'Select provider first'}</option>
-                    {availableModels.map(m => (
-                      <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
-                    ))}
-                  </select>
-                </div>
+                {availableModels.length > 0 && (
+                  <div className="flex-1">
+                    <label htmlFor="task-model" className="sr-only">AI model</label>
+                    <select
+                      id="task-model"
+                      value={newTask.model}
+                      onChange={e => setNewTask(t => ({ ...t, model: e.target.value }))}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                    >
+                      <option value="">Select model...</option>
+                      {availableModels.map(m => (
+                        <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
               {/* Screenshot and Attachment Upload */}
               <div className="flex items-center gap-3 flex-wrap">
