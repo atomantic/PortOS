@@ -1,4 +1,3 @@
-import './lib/logger.js'; // Add timestamps to all console output
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
