@@ -93,7 +93,7 @@ const DEFAULT_CONFIG = {
   autoStart: false,                        // Legacy: use alwaysOn instead
   selfImprovementEnabled: true,            // Allow CoS to improve itself (PortOS codebase)
   appImprovementEnabled: true,             // Allow CoS to improve managed apps
-  avatarStyle: 'svg',                      // UI preference: 'svg' or 'ascii'
+  avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil'
   // Always-on mode settings
   alwaysOn: true,                          // CoS starts automatically and stays active
   appReviewCooldownMs: 1800000,            // 30 min between working on same app (was 1 hour)
@@ -290,8 +290,13 @@ export async function start() {
     intervalMs: state.config.healthCheckIntervalMs,
     handler: async () => {
       await runHealthCheck();
+      // Periodic zombie detection — catches agents whose process died mid-run
+      const cleaned = await cleanupOrphanedAgents();
+      if (cleaned > 0) {
+        emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
+      }
     },
-    metadata: { description: 'CoS health check loop' }
+    metadata: { description: 'CoS health check + orphan cleanup loop' }
   });
 
   // Run initial evaluation and health check
