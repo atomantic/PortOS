@@ -11,6 +11,7 @@ import {
   STATE_MESSAGES,
   useNextEvalCountdown,
   CoSCharacter,
+  CyberCoSAvatar,
   StateLabel,
   TerminalCoSPanel,
   StatusIndicator,
@@ -385,7 +386,10 @@ export default function ChiefOfStaff() {
                 Chief of Staff
               </h1>
 
-              <CoSCharacter state={agentState} speaking={speaking} />
+              {avatarStyle === 'cyber'
+                ? <CyberCoSAvatar state={agentState} speaking={speaking} />
+                : <CoSCharacter state={agentState} speaking={speaking} />
+              }
               <StateLabel state={agentState} />
               <div className="hidden sm:block">
                 <StatusBubble message={statusMessage} countdown={evalCountdown} />
