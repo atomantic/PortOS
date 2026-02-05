@@ -11,6 +11,80 @@ import { getProviderById } from './providers.js';
 // Cache for embedding config (loaded from CoS config)
 let embeddingConfig = null;
 let initialized = false;
+let modelEnsured = false;
+
+/**
+ * Get the LM Studio base URL from config
+ */
+function getBaseUrl(config) {
+  return config.embeddingEndpoint.replace(/\/v1\/embeddings$/, '');
+}
+
+/**
+ * Discover and auto-load an embedding model in LM Studio.
+ * Uses the REST API to find downloaded embedding models and load one if needed.
+ */
+async function ensureEmbeddingModelLoaded(config) {
+  if (modelEnsured) return;
+
+  const baseUrl = getBaseUrl(config);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  // Query LM Studio's native API for all downloaded models
+  const response = await fetch(`${baseUrl}/api/v0/models`, {
+    signal: controller.signal
+  });
+  clearTimeout(timeout);
+
+  if (!response.ok) return;
+
+  const models = await response.json();
+  const allModels = models.data || [];
+  const embeddingModels = allModels.filter(m => m.type === 'embeddings');
+
+  // Check if an embedding model is already loaded
+  const loaded = embeddingModels.find(m => m.state === 'loaded');
+  if (loaded) {
+    config.embeddingModel = loaded.id;
+    modelEnsured = true;
+    console.log(`📚 Embedding model already loaded: ${loaded.id}`);
+    return;
+  }
+
+  // No embedding model loaded — try to load the configured one first, then any available
+  const candidates = [
+    embeddingModels.find(m => m.id.includes(config.embeddingModel)),
+    ...embeddingModels
+  ].filter(Boolean);
+
+  if (candidates.length === 0) {
+    console.warn(`⚠️ No embedding models found in LM Studio — download one in the Discover tab`);
+    return;
+  }
+
+  const modelToLoad = candidates[0];
+  console.log(`📦 Auto-loading embedding model: ${modelToLoad.id}`);
+
+  const loadController = new AbortController();
+  const loadTimeout = setTimeout(() => loadController.abort(), 60000);
+  const loadResponse = await fetch(`${baseUrl}/api/v1/models/load`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelToLoad.id }),
+    signal: loadController.signal
+  });
+  clearTimeout(loadTimeout);
+
+  if (loadResponse.ok) {
+    config.embeddingModel = modelToLoad.id;
+    modelEnsured = true;
+    console.log(`✅ Embedding model loaded: ${modelToLoad.id}`);
+  } else {
+    const err = await loadResponse.text();
+    console.error(`❌ Failed to auto-load embedding model ${modelToLoad.id}: ${err}`);
+  }
+}
 
 /**
  * Initialize embedding config from provider settings
@@ -47,7 +121,7 @@ export function setEmbeddingConfig(config) {
 }
 
 /**
- * Check if LM Studio is available
+ * Check if LM Studio is available and ensure embedding model is loaded
  */
 export async function checkAvailability() {
   await initConfig();
@@ -55,28 +129,44 @@ export async function checkAvailability() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
-  try {
-    const response = await fetch(`${config.embeddingEndpoint.replace('/v1/embeddings', '/v1/models')}`, {
-      method: 'GET',
-      signal: controller.signal
-    });
-
+  const response = await fetch(`${config.embeddingEndpoint.replace('/v1/embeddings', '/v1/models')}`, {
+    method: 'GET',
+    signal: controller.signal
+  }).catch(err => {
     clearTimeout(timeout);
+    return { ok: false, _err: err.message };
+  });
 
-    if (!response.ok) {
-      return { available: false, error: `LM Studio returned ${response.status}`, endpoint: config.embeddingEndpoint };
-    }
+  clearTimeout(timeout);
 
-    const data = await response.json();
-    return {
-      available: true,
-      models: data.data?.map(m => m.id) || [],
-      endpoint: config.embeddingEndpoint
-    };
-  } catch (err) {
-    clearTimeout(timeout);
-    return { available: false, error: err.message, endpoint: config.embeddingEndpoint };
+  if (!response.ok) {
+    return { available: false, error: response._err || `LM Studio returned ${response.status}`, endpoint: config.embeddingEndpoint };
   }
+
+  const data = await response.json();
+  const models = data.data?.map(m => m.id) || [];
+
+  // If no embedding models are loaded, try to auto-load one
+  const hasEmbeddingModel = models.some(id => id.includes('embed'));
+  if (!hasEmbeddingModel) {
+    await ensureEmbeddingModelLoaded(config).catch(err =>
+      console.warn(`⚠️ Could not auto-load embedding model: ${err.message}`)
+    );
+  } else {
+    // Use the loaded embedding model's actual ID
+    const embeddingModelId = models.find(id => id.includes('embed'));
+    if (embeddingModelId) {
+      config.embeddingModel = embeddingModelId;
+      modelEnsured = true;
+    }
+  }
+
+  return {
+    available: true,
+    models,
+    embeddingModel: config.embeddingModel,
+    endpoint: config.embeddingEndpoint
+  };
 }
 
 /**
@@ -88,6 +178,13 @@ export async function generateEmbedding(text) {
 
   if (!text || text.trim().length === 0) {
     return null;
+  }
+
+  // Ensure embedding model is loaded before requesting
+  if (!modelEnsured) {
+    await ensureEmbeddingModelLoaded(config).catch(err =>
+      console.warn(`⚠️ Could not ensure embedding model: ${err.message}`)
+    );
   }
 
   // Truncate very long texts to prevent issues
@@ -122,6 +219,13 @@ export async function generateBatchEmbeddings(texts) {
 
   if (!texts || texts.length === 0) {
     return [];
+  }
+
+  // Ensure embedding model is loaded before requesting
+  if (!modelEnsured) {
+    await ensureEmbeddingModelLoaded(config).catch(err =>
+      console.warn(`⚠️ Could not ensure embedding model: ${err.message}`)
+    );
   }
 
   // LM Studio supports batch embeddings via array input
