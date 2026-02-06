@@ -11,6 +11,9 @@ import {
   STATE_MESSAGES,
   useNextEvalCountdown,
   CoSCharacter,
+  CyberCoSAvatar,
+  SigilCoSAvatar,
+  EsotericCoSAvatar,
   StateLabel,
   TerminalCoSPanel,
   StatusIndicator,
@@ -27,6 +30,7 @@ import {
   HealthTab,
   ConfigTab
 } from '../components/cos';
+import { resolveDynamicAvatar } from '../components/cos/constants';
 
 export default function ChiefOfStaff() {
   const { tab } = useParams();
@@ -47,10 +51,14 @@ export default function ChiefOfStaff() {
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
+  const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const socket = useSocket();
 
-  // Derive avatar style from server config
-  const avatarStyle = status?.config?.avatarStyle || 'svg';
+  // Derive avatar style from server config, with optional dynamic override
+  const configAvatarStyle = status?.config?.avatarStyle || 'svg';
+  const dynamicAvatarEnabled = status?.config?.dynamicAvatar || false;
+  const dynamicStyle = dynamicAvatarEnabled ? resolveDynamicAvatar(activeAgentMeta) : null;
+  const avatarStyle = dynamicStyle || configAvatarStyle;
 
   // Update avatar style via server config
   const setAvatarStyle = async (style) => {
@@ -102,6 +110,10 @@ export default function ChiefOfStaff() {
     setAgentState(newState);
     // Use default state message - real messages come from socket events
     setStatusMessage(STATE_MESSAGES[newState]);
+
+    // Set active agent metadata for dynamic avatar (use first running agent)
+    const runningAgent = agentsData.find(a => a.status === 'running');
+    setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
 
   useEffect(() => {
@@ -130,6 +142,7 @@ export default function ChiefOfStaff() {
       if (!data.running) {
         setAgentState('sleeping');
         setStatusMessage("Stopped - daemon not running");
+        setActiveAgentMeta(null);
       }
     });
 
@@ -145,6 +158,8 @@ export default function ChiefOfStaff() {
       setStatusMessage(`Running: ${shortDesc}`);
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
+      // Track active agent metadata for dynamic avatar resolution
+      if (data?.metadata) setActiveAgentMeta(data.metadata);
       // Initialize empty output buffer for new agent
       if (data?.agentId || data?.id) {
         setLiveOutputs(prev => ({ ...prev, [data.agentId || data.id]: [] }));
@@ -177,6 +192,8 @@ export default function ChiefOfStaff() {
       setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
+      // Clear active agent metadata so avatar reverts to default
+      setActiveAgentMeta(null);
       fetchData();
     });
 
@@ -328,13 +345,13 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-            className="lg:hidden flex items-center justify-between w-full px-4 py-3 bg-slate-900/60 border-b border-indigo-500/20 min-h-[44px]"
+            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-indigo-500/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <h1
-                className="text-lg font-bold"
+                className="text-base font-bold"
                 style={{
                   background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
                   WebkitBackgroundClip: 'text',
@@ -342,13 +359,13 @@ export default function ChiefOfStaff() {
                   backgroundClip: 'text'
                 }}
               >
-                Chief of Staff
+                CoS
               </h1>
               <StatusIndicator running={status?.running} />
             </div>
-            <div className="flex items-center gap-2 text-gray-400">
+            <div className="flex items-center gap-1.5 text-gray-400">
               <StateLabel state={agentState} compact />
-              {agentPanelCollapsed ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+              {agentPanelCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
             </div>
           </button>
 
@@ -369,7 +386,7 @@ export default function ChiefOfStaff() {
             />
 
             {/* Avatar Column - half width on mobile, full on desktop */}
-            <div className="flex-1 lg:flex-none flex flex-col items-center p-4 lg:p-8 relative z-10">
+            <div className="flex-1 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
                 Digital Assistant
               </div>
@@ -385,7 +402,14 @@ export default function ChiefOfStaff() {
                 Chief of Staff
               </h1>
 
-              <CoSCharacter state={agentState} speaking={speaking} />
+              {avatarStyle === 'cyber'
+                ? <CyberCoSAvatar state={agentState} speaking={speaking} />
+                : avatarStyle === 'sigil'
+                  ? <SigilCoSAvatar state={agentState} speaking={speaking} />
+                : avatarStyle === 'esoteric'
+                  ? <EsotericCoSAvatar state={agentState} speaking={speaking} />
+                : <CoSCharacter state={agentState} speaking={speaking} />
+              }
               <StateLabel state={agentState} />
               <div className="hidden sm:block">
                 <StatusBubble message={statusMessage} countdown={evalCountdown} />
@@ -395,32 +419,31 @@ export default function ChiefOfStaff() {
               </div>
 
               {/* Control Buttons */}
-              <div className="flex items-center gap-2 sm:gap-3 mt-3 lg:mt-6">
+              <div className="flex items-center gap-1.5 sm:gap-3 mt-2 lg:mt-6">
                 {status?.running ? (
                   <button
                     onClick={handleStop}
-                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors min-h-[40px]"
+                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors min-h-[40px]"
                     aria-label="Stop Chief of Staff agent"
                   >
-                    <Square size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
+                    <Square size={12} className="sm:w-4 sm:h-4" aria-hidden="true" />
                     Stop
                   </button>
                 ) : (
                   <button
                     onClick={handleStart}
-                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors min-h-[40px]"
+                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors min-h-[40px]"
                     aria-label="Start Chief of Staff agent"
                   >
-                    <Play size={14} className="sm:w-4 sm:h-4" aria-hidden="true" />
+                    <Play size={12} className="sm:w-4 sm:h-4" aria-hidden="true" />
                     Start
                   </button>
                 )}
-                <StatusIndicator running={status?.running} />
               </div>
             </div>
 
-            {/* Mobile Stats Column - only visible on mobile */}
-            <div className="flex-1 flex flex-col justify-center gap-2 p-3 lg:hidden relative z-10">
+            {/* Mobile Stats Grid - 2x2 layout for compact display */}
+            <div className="flex-1 grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10 content-center">
               <StatCard
                 label="Active"
                 value={activeAgentCount}
@@ -553,7 +576,7 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'config' && (
           <div role="tabpanel" id="tabpanel-config" aria-labelledby="tab-config">
-            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={avatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
+            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
           </div>
         )}
         </div>

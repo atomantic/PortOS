@@ -6,7 +6,7 @@ export default function StatCard({ label, value, icon, active, activeLabel, comp
       <div
         role="group"
         aria-label={ariaLabel}
-        className={`bg-port-card/80 border rounded-lg px-3 py-2 flex items-center gap-3 ${
+        className={`bg-port-card/80 border rounded px-2 py-1.5 flex items-center gap-2 ${
           active ? 'border-port-accent shadow-md shadow-port-accent/20' : 'border-port-border'
         }`}
       >
@@ -14,8 +14,8 @@ export default function StatCard({ label, value, icon, active, activeLabel, comp
           {icon}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-gray-500 truncate">{label}</div>
-          <div className="text-base font-bold text-white">{value}</div>
+          <div className="text-[10px] text-gray-500 truncate">{label}</div>
+          <div className="text-sm font-bold text-white">{value}</div>
         </div>
       </div>
     );

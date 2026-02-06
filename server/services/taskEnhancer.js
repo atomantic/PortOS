@@ -7,7 +7,7 @@
  * Uses the 'cos-task-enhance' prompt stage for provider/model configuration.
  */
 
-import { executeApiRun, createRun } from './runner.js';
+import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getStage, buildPrompt } from './promptService.js';
 
@@ -94,27 +94,52 @@ export async function enhanceTaskPrompt(description, context = '') {
   // Collect the response
   let enhancedDescription = '';
 
+  // Use appropriate execution method based on provider type
+  const isCliProvider = provider.type === 'cli';
+
   await new Promise((resolve, reject) => {
-    executeApiRun(
-      runId,
-      provider,
-      model,
-      fullPrompt,
-      process.cwd(),
-      [], // No screenshots needed
-      (data) => {
-        if (data?.text) {
-          enhancedDescription += data.text;
+    if (isCliProvider) {
+      // CLI providers use executeCliRun
+      executeCliRun(
+        runId,
+        provider,
+        fullPrompt,
+        process.cwd(),
+        (text) => {
+          enhancedDescription += text;
+        },
+        (result) => {
+          if (result?.error || result?.success === false) {
+            reject(new Error(result?.error || 'CLI execution failed'));
+          } else {
+            resolve(result);
+          }
+        },
+        provider.timeout || 300000
+      );
+    } else {
+      // API providers use executeApiRun
+      executeApiRun(
+        runId,
+        provider,
+        model,
+        fullPrompt,
+        process.cwd(),
+        [], // No screenshots needed
+        (data) => {
+          if (data?.text) {
+            enhancedDescription += data.text;
+          }
+        },
+        (result) => {
+          if (result?.error) {
+            reject(new Error(result.error));
+          } else {
+            resolve(result);
+          }
         }
-      },
-      (result) => {
-        if (result?.error) {
-          reject(new Error(result.error));
-        } else {
-          resolve(result);
-        }
-      }
-    );
+      );
+    }
   });
 
   // Clean up the response - remove any leading/trailing whitespace and common prefixes
@@ -134,6 +159,12 @@ export async function enhanceTaskPrompt(description, context = '') {
   }
 
   enhancedDescription = enhancedDescription.trim();
+
+  // Ensure we have a valid enhanced description
+  if (!enhancedDescription) {
+    console.warn(`⚠️ Task enhancement returned empty result from ${provider.name}/${model}`);
+    throw new Error('AI enhancement returned empty result');
+  }
 
   console.log(`✅ Enhanced task prompt (${enhancedDescription.length} chars) using ${provider.name}/${model}`);
 

@@ -121,6 +121,32 @@ router.delete('/:id', asyncHandler(async (req, res, next) => {
   res.status(204).send();
 }));
 
+// POST /api/apps/:id/archive - Archive app (exclude from COS tasks)
+router.post('/:id/archive', asyncHandler(async (req, res) => {
+  const app = await appsService.archiveApp(req.params.id);
+
+  if (!app) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  console.log(`📦 Archived app: ${app.name}`);
+  notifyAppsChanged('archive');
+  res.json(app);
+}));
+
+// POST /api/apps/:id/unarchive - Unarchive app (include in COS tasks)
+router.post('/:id/unarchive', asyncHandler(async (req, res) => {
+  const app = await appsService.unarchiveApp(req.params.id);
+
+  if (!app) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  console.log(`📤 Unarchived app: ${app.name}`);
+  notifyAppsChanged('unarchive');
+  res.json(app);
+}));
+
 // POST /api/apps/:id/start - Start app via PM2
 router.post('/:id/start', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);

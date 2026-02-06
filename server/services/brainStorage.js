@@ -27,6 +27,7 @@ const FILES = {
   projects: join(DATA_DIR, 'projects.json'),
   ideas: join(DATA_DIR, 'ideas.json'),
   admin: join(DATA_DIR, 'admin.json'),
+  links: join(DATA_DIR, 'links.json'),
   digests: join(DATA_DIR, 'digests.jsonl'),
   reviews: join(DATA_DIR, 'reviews.jsonl')
 };
@@ -41,6 +42,7 @@ const caches = {
   projects: { data: null, timestamp: 0 },
   ideas: { data: null, timestamp: 0 },
   admin: { data: null, timestamp: 0 },
+  links: { data: null, timestamp: 0 },
   inboxLog: { data: null, timestamp: 0 },
   digests: { data: null, timestamp: 0 },
   reviews: { data: null, timestamp: 0 }
@@ -527,6 +529,21 @@ export const createAdminItem = (data) => create('admin', data);
 export const updateAdminItem = (id, data) => update('admin', id, data);
 export const deleteAdminItem = (id) => remove('admin', id);
 
+// Links
+export const getLinks = (filters) => filters ? query('links', filters) : getAll('links');
+export const getLinkById = (id) => getById('links', id);
+export const createLink = (data) => create('links', data);
+export const updateLink = (id, data) => update('links', id, data);
+export const deleteLink = (id) => remove('links', id);
+
+/**
+ * Find link by URL
+ */
+export async function getLinkByUrl(url) {
+  const links = await getAll('links');
+  return links.find(link => link.url === url) || null;
+}
+
 // =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
@@ -545,11 +562,12 @@ export function invalidateAllCaches() {
  * Get brain data summary (for dashboard)
  */
 export async function getSummary() {
-  const [people, projects, ideas, adminItems, inboxCounts, meta] = await Promise.all([
+  const [people, projects, ideas, adminItems, links, inboxCounts, meta] = await Promise.all([
     getAll('people'),
     getAll('projects'),
     getAll('ideas'),
     getAll('admin'),
+    getAll('links'),
     getInboxLogCounts(),
     loadMeta()
   ]);
@@ -560,10 +578,12 @@ export async function getSummary() {
       projects: projects.length,
       ideas: ideas.length,
       admin: adminItems.length,
+      links: links.length,
       inbox: inboxCounts
     },
     activeProjects: projects.filter(p => p.status === 'active').length,
     openAdmin: adminItems.filter(a => a.status === 'open').length,
+    gitHubRepos: links.filter(l => l.isGitHubRepo).length,
     needsReview: inboxCounts.needs_review,
     lastDailyDigest: meta.lastDailyDigest,
     lastWeeklyReview: meta.lastWeeklyReview

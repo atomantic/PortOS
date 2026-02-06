@@ -1,4 +1,3 @@
-import './lib/logger.js'; // Add timestamps to all console output
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
@@ -17,7 +16,13 @@ import commandsRoutes from './routes/commands.js';
 import gitRoutes from './routes/git.js';
 import usageRoutes from './routes/usage.js';
 import screenshotsRoutes from './routes/screenshots.js';
+import attachmentsRoutes from './routes/attachments.js';
+import uploadsRoutes from './routes/uploads.js';
 import agentsRoutes from './routes/agents.js';
+import agentPersonalitiesRoutes from './routes/agentPersonalities.js';
+import platformAccountsRoutes from './routes/platformAccounts.js';
+import automationSchedulesRoutes from './routes/automationSchedules.js';
+import agentActivityRoutes from './routes/agentActivity.js';
 import cosRoutes from './routes/cos.js';
 import scriptsRoutes from './routes/scripts.js';
 import memoryRoutes from './routes/memory.js';
@@ -26,7 +31,9 @@ import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
 import mediaRoutes from './routes/media.js';
 import digitalTwinRoutes from './routes/digital-twin.js';
+import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
+import browserRoutes from './routes/browser.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
@@ -35,6 +42,8 @@ import { initTaskLearning } from './services/taskLearning.js';
 import { recordSession, recordMessages } from './services/usage.js';
 import { errorEvents } from './lib/errorHandler.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
+import * as automationScheduler from './services/automationScheduler.js';
+import * as agentActionExecutor from './services/agentActionExecutor.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -119,10 +128,7 @@ setProvidersToolkit(aiToolkit);
 setRunnerToolkit(aiToolkit);
 setPromptsToolkit(aiToolkit);
 
-// Initialize prompts service to load stage configurations
-aiToolkit.services.prompts.init().catch(err => {
-  console.error(`❌ Failed to initialize prompts: ${err.message}`);
-});
+// Note: prompts service is initialized automatically by createAIToolkit()
 
 // Initialize auto-fixer for error recovery
 initAutoFixer();
@@ -160,6 +166,14 @@ app.use('/api/commands', commandsRoutes);
 app.use('/api/git', gitRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/screenshots', screenshotsRoutes);
+app.use('/api/attachments', attachmentsRoutes);
+app.use('/api/uploads', uploadsRoutes);
+// Agent Personalities feature routes (must be before /api/agents to avoid route conflicts)
+app.use('/api/agents/personalities', agentPersonalitiesRoutes);
+app.use('/api/agents/accounts', platformAccountsRoutes);
+app.use('/api/agents/schedules', automationSchedulesRoutes);
+app.use('/api/agents/activity', agentActivityRoutes);
+// Existing running agents routes (process management)
 app.use('/api/agents', agentsRoutes);
 app.use('/api/cos/scripts', scriptsRoutes); // Mount before /api/cos to avoid route conflicts
 app.use('/api/cos', cosRoutes);
@@ -168,11 +182,17 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/digital-twin/social-accounts', socialAccountsRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
+app.use('/api/browser', browserRoutes);
 
 // Initialize script runner
 initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));
+
+// Initialize agent automation scheduler and action executor
+automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
+agentActionExecutor.init();
 
 // 404 handler
 app.use((req, res) => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -16,22 +16,24 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import * as api from '../../../services/api';
-import { processScreenshotUploads } from '../../../utils/fileUpload';
+import { processScreenshotUploads, processAttachmentUploads, formatFileSize } from '../../../utils/fileUpload';
 import TaskItem from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 
 export default function TasksTab({ tasks, onRefresh, providers, apps }) {
-  const [showAddTask, setShowAddTask] = useState(false);
+  const [showAddTask] = useState(true);
   const [newTask, setNewTask] = useState({ description: '', context: '', model: '', provider: '', app: '' });
   const [addToTop, setAddToTop] = useState(false);
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
+  const [attachments, setAttachments] = useState([]);
   const [durations, setDurations] = useState(null);
   const [showCompletedUserTasks, setShowCompletedUserTasks] = useState(false);
   const [showCompletedSystemTasks, setShowCompletedSystemTasks] = useState(false);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const fileInputRef = useRef(null);
+  const attachmentInputRef = useRef(null);
 
   // Fetch task duration estimates from learning data
   useEffect(() => {
@@ -145,6 +147,19 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     setScreenshots(prev => prev.filter(s => s.id !== id));
   };
 
+  // Attachment handling using shared utility
+  const handleAttachmentSelect = async (e) => {
+    await processAttachmentUploads(e.target.files, {
+      onSuccess: (fileInfo) => setAttachments(prev => [...prev, fileInfo]),
+      onError: (msg) => toast.error(msg)
+    });
+    e.target.value = '';
+  };
+
+  const removeAttachment = (id) => {
+    setAttachments(prev => prev.filter(a => a.id !== id));
+  };
+
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
   const availableModels = selectedProvider?.models || [];
@@ -164,17 +179,21 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
         description: newTask.description,
         context: newTask.context
       }).catch(err => {
-        toast.error(`Enhancement failed: ${err.message}`);
-        setIsEnhancing(false);
+        // Enhancement failed - fall back to original description
+        toast('Enhancement failed, using original description', { icon: '⚠️' });
+        console.warn('Task enhancement failed:', err.message);
         return null;
       });
 
-      if (!enhanceResult) {
-        return;
+      if (enhanceResult?.enhancedDescription?.trim()) {
+        finalDescription = enhanceResult.enhancedDescription;
+        toast.success('Prompt enhanced');
+      } else if (enhanceResult) {
+        // Enhancement returned empty result - fall back to original
+        toast('Enhancement returned empty result, using original', { icon: '⚠️' });
       }
+      // If enhanceResult is null (error), we already showed warning and fall back to original
 
-      finalDescription = enhanceResult.enhancedDescription;
-      toast.success('Prompt enhanced');
       setIsEnhancing(false);
     }
 
@@ -185,6 +204,13 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       provider: newTask.provider || undefined,
       app: newTask.app || undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
+      attachments: attachments.length > 0 ? attachments.map(a => ({
+        filename: a.filename,
+        originalName: a.originalName,
+        path: a.path,
+        size: a.size,
+        mimeType: a.mimeType
+      })) : undefined,
       position: addToTop ? 'top' : 'bottom'
     }).catch(err => {
       toast.error(err.message);
@@ -194,9 +220,9 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     toast.success('Task added');
     setNewTask({ description: '', context: '', model: '', provider: '', app: '' });
     setScreenshots([]);
+    setAttachments([]);
     setAddToTop(false);
     setEnhancePrompt(false);
-    setShowAddTask(false);
     onRefresh();
   };
 
@@ -206,27 +232,17 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={async () => {
-                await api.forceCosEvaluate().catch(err => toast.error(err.message));
-                toast.success('Evaluation triggered');
-              }}
-              className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
-              aria-label="Run tasks now"
-            >
-              <Play size={16} aria-hidden="true" />
-              Run Now
-            </button>
-            <button
-              onClick={() => setShowAddTask(!showAddTask)}
-              className="flex items-center gap-1 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent px-3 py-1.5 rounded-lg transition-colors"
-              aria-expanded={showAddTask}
-            >
-              <Plus size={16} aria-hidden="true" />
-              Add Task
-            </button>
-          </div>
+          <button
+            onClick={async () => {
+              await api.forceCosEvaluate().catch(err => toast.error(err.message));
+              toast.success('Evaluation triggered');
+            }}
+            className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
+            aria-label="Run tasks now"
+          >
+            <Play size={16} aria-hidden="true" />
+            Run Now
+          </button>
         </div>
 
         {/* Add Task Form */}
@@ -317,25 +333,25 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     ))}
                   </select>
                 </div>
-                <div className="flex-1">
-                  <label htmlFor="task-model" className="sr-only">AI model</label>
-                  <select
-                    id="task-model"
-                    value={newTask.model}
-                    onChange={e => setNewTask(t => ({ ...t, model: e.target.value }))}
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                    disabled={!newTask.provider}
-                    aria-disabled={!newTask.provider}
-                  >
-                    <option value="">{newTask.provider ? 'Select model...' : 'Select provider first'}</option>
-                    {availableModels.map(m => (
-                      <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
-                    ))}
-                  </select>
-                </div>
+                {availableModels.length > 0 && (
+                  <div className="flex-1">
+                    <label htmlFor="task-model" className="sr-only">AI model</label>
+                    <select
+                      id="task-model"
+                      value={newTask.model}
+                      onChange={e => setNewTask(t => ({ ...t, model: e.target.value }))}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                    >
+                      <option value="">Select model...</option>
+                      {availableModels.map(m => (
+                        <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
-              {/* Screenshot Upload */}
-              <div className="flex items-center gap-3">
+              {/* Screenshot and Attachment Upload */}
+              <div className="flex items-center gap-3 flex-wrap">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -353,8 +369,28 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   className="hidden"
                   aria-label="Upload screenshot files"
                 />
+                <button
+                  type="button"
+                  onClick={() => attachmentInputRef.current?.click()}
+                  className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors"
+                >
+                  <Paperclip size={16} aria-hidden="true" />
+                  Attach File
+                </button>
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  accept=".txt,.md,.json,.csv,.xml,.yaml,.yml,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.js,.ts,.jsx,.tsx,.py,.sh,.sql,.html,.css,.zip,.tar,.gz"
+                  multiple
+                  onChange={handleAttachmentSelect}
+                  className="hidden"
+                  aria-label="Upload attachment files"
+                />
                 {screenshots.length > 0 && (
-                  <span className="text-xs text-gray-500">{screenshots.length} screenshot{screenshots.length > 1 ? 's' : ''} attached</span>
+                  <span className="text-xs text-gray-500">{screenshots.length} screenshot{screenshots.length > 1 ? 's' : ''}</span>
+                )}
+                {attachments.length > 0 && (
+                  <span className="text-xs text-gray-500">{attachments.length} file{attachments.length > 1 ? 's' : ''}</span>
                 )}
               </div>
               {/* Screenshot Previews */}
@@ -379,18 +415,39 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   ))}
                 </div>
               )}
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => {
-                    setShowAddTask(false);
-                    setScreenshots([]);
-                    setEnhancePrompt(false);
-                  }}
-                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-                  disabled={isEnhancing}
-                >
-                  Cancel
-                </button>
+              {/* Attachment Previews */}
+              {attachments.length > 0 && (
+                <div className="flex gap-2 flex-wrap">
+                  {attachments.map(a => (
+                    <div key={a.id} className="relative group flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg">
+                      {a.isImage && a.preview ? (
+                        <img
+                          src={a.preview}
+                          alt={a.originalName}
+                          className="w-8 h-8 object-cover rounded"
+                        />
+                      ) : (
+                        <FileText size={20} className="text-gray-400" aria-hidden="true" />
+                      )}
+                      <div className="flex flex-col">
+                        <span className="text-xs text-white truncate max-w-[120px]" title={a.originalName}>
+                          {a.originalName}
+                        </span>
+                        <span className="text-xs text-gray-500">{formatFileSize(a.size)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(a.id)}
+                        className="ml-1 p-0.5 text-gray-500 hover:text-port-error transition-colors"
+                        aria-label={`Remove attachment ${a.originalName}`}
+                      >
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex justify-end">
                 <button
                   onClick={handleAddTask}
                   disabled={isEnhancing}
@@ -416,7 +473,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
         {/* User Tasks Sections */}
         {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
-            No user tasks. Click "Add Task" or edit TASKS.md directly.
+            No user tasks. Add one above or edit TASKS.md directly.
           </div>
         ) : (
           <div className="space-y-3">

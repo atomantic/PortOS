@@ -9,6 +9,7 @@ import {
 } from '../components/brain/constants';
 
 import InboxTab from '../components/brain/tabs/InboxTab';
+import LinksTab from '../components/brain/tabs/LinksTab';
 import MemoryTab from '../components/brain/tabs/MemoryTab';
 import DigestTab from '../components/brain/tabs/DigestTab';
 import TrustTab from '../components/brain/tabs/TrustTab';
@@ -47,6 +48,8 @@ export default function Brain() {
     switch (activeTab) {
       case 'inbox':
         return <InboxTab onRefresh={fetchData} settings={settings} />;
+      case 'links':
+        return <LinksTab onRefresh={fetchData} />;
       case 'memory':
         return <MemoryTab onRefresh={fetchData} />;
       case 'digest':
@@ -88,6 +91,9 @@ export default function Brain() {
                 {summary.needsReview} needs review
               </span>
             )}
+            <span className="text-gray-500">
+              {summary.counts?.links || 0} links
+            </span>
             <span className="text-gray-500">
               {summary.counts?.projects || 0} projects
             </span>

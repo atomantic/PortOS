@@ -28,7 +28,8 @@
       }
     ],
     "autoStart": false,
-    "selfImprovementEnabled": true
+    "selfImprovementEnabled": true,
+    "dynamicAvatar": false
   },
   "stats": {
     "tasksCompleted": 0,

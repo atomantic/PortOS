@@ -17,8 +17,11 @@ Think Umbrel, but for your active git repos and dev environments. Access your de
 - **Task Learning** — Tracks task success rates and duration to improve model selection
 - **Scheduled Scripts** — Cron-based automation with optional agent triggering
 - **Brain** — Second-brain system for capturing thoughts and auto-classifying to People/Projects/Ideas/Admin
+- **Digital Twin** — Identity scaffold documents for AI persona modeling with personality trait extraction
+- **Web Shell** — Full terminal emulator in the browser using xterm.js and node-pty
 - **Dev Tools** — Process monitor, AI agent tracker, action history, git status, and shell runner
 - **AI Runner** — Execute prompts via Claude Code, Codex, Gemini CLI, Ollama, or LM Studio
+- **File Uploads** — Generic file storage with drag-and-drop upload interface
 - **Mobile Ready** — Responsive design with collapsible sidebar for on-the-go access
 
 ## Screenshots

@@ -33,7 +33,8 @@ const ALLOWED_COMMANDS = new Set([
   'claude',
   'aider',
   'codex',
-  'copilot'
+  'copilot',
+  'gemini'
 ]);
 
 /**
@@ -235,7 +236,7 @@ app.post('/spawn', async (req, res) => {
     cliCommand,
     cliArgs,
     // Legacy: Claude-specific (deprecated)
-    claudePath = '/Users/antic/.nvm/versions/node/v25.2.1/bin/claude'
+    claudePath = process.env.CLAUDE_PATH || 'claude'
   } = req.body;
 
   if (!agentId || !taskId || !prompt) {
@@ -703,7 +704,7 @@ io.on('connection', (socket) => {
 /**
  * Cleanup orphaned agents on startup
  * Checks if PIDs from state are still running
- * Emits completion events for dead agents so main server can retry tasks
+ * Emits a batch completion event for dead agents so main server can retry tasks
  */
 async function cleanupOrphanedAgents() {
   const state = await loadState();
@@ -715,22 +716,27 @@ async function cleanupOrphanedAgents() {
     if (!isRunning) {
       orphaned.push({ agentId, taskId: agentInfo.taskId });
       delete state.agents[agentId];
-
-      // Emit completion event so main server knows the agent died
-      emitToServer('agent:completed', {
-        agentId,
-        taskId: agentInfo.taskId,
-        exitCode: -1,
-        success: false,
-        orphaned: true,
-        error: 'Agent process died (runner restart detected dead PID)'
-      });
     }
   }
 
   if (orphaned.length > 0) {
     console.log(`🧹 Cleaned up ${orphaned.length} orphaned agents from state`);
     await saveState(state);
+
+    // Emit a single batch event with all orphaned agents
+    // This avoids log spam when many agents were orphaned
+    io.emit('agents:orphaned', {
+      agents: orphaned.map(o => ({
+        agentId: o.agentId,
+        taskId: o.taskId,
+        exitCode: -1,
+        success: false,
+        orphaned: true,
+        error: 'Agent process died (runner restart detected dead PID)'
+      })),
+      count: orphaned.length
+    });
+    console.log(`📡 Emitted agents:orphaned (${orphaned.length} agents)`);
   }
 
   return orphaned;

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 
@@ -33,7 +33,7 @@ function formatTimeRemaining(ms) {
   return `${minutes}m`;
 }
 
-function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category, providers }) {
+function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category, providers, apps }) {
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [selectedType, setSelectedType] = useState(config.type);
@@ -41,6 +41,8 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
   const [selectedModel, setSelectedModel] = useState(config.model || '');
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
+  const [showAppSelector, setShowAppSelector] = useState(false);
+  const appSelectorRef = useRef(null);
 
   // Keep local selections in sync with external config updates
   useEffect(() => {
@@ -52,6 +54,27 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
       setPromptValue(config.prompt || '');
     }
   }, [config.type, config.providerId, config.model, config.prompt, editingPrompt]);
+
+  // Close app selector when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (appSelectorRef.current && !appSelectorRef.current.contains(event.target)) {
+        setShowAppSelector(false);
+      }
+    };
+    if (showAppSelector) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showAppSelector]);
+
+  const handleSelectApp = (appId) => {
+    onTrigger(taskType, appId);
+    setShowAppSelector(false);
+  };
+
+  // Get active apps (non-archived) for app improvement tasks
+  const activeApps = apps?.filter(app => !app.archived) || [];
 
   const handleTypeChange = async (newType) => {
     setUpdating(true);
@@ -318,14 +341,52 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
           </div>
 
           <div className="flex gap-2">
-            <button
-              onClick={() => onTrigger(taskType)}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors"
-              title="Run this task immediately (bypasses schedule)"
-            >
-              <Play size={14} />
-              Run Now
-            </button>
+            {category === 'appImprovement' && activeApps.length > 0 ? (
+              <div className="relative" ref={appSelectorRef}>
+                <button
+                  onClick={() => setShowAppSelector(!showAppSelector)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors"
+                  title="Run this task on a specific app"
+                >
+                  <Play size={14} />
+                  Run on App
+                  <ChevronDown size={12} className={`transition-transform ${showAppSelector ? 'rotate-180' : ''}`} />
+                </button>
+                {showAppSelector && (
+                  <div className="absolute top-full left-0 mt-1 z-50 w-64 max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
+                    <div className="p-2 border-b border-port-border">
+                      <span className="text-xs text-gray-400">Select an app to run {taskType} on:</span>
+                    </div>
+                    <div className="py-1">
+                      {activeApps.map(app => (
+                        <button
+                          key={app.id}
+                          onClick={() => handleSelectApp(app.id)}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-port-border/50 flex items-center gap-2 min-h-[40px]"
+                        >
+                          <Package size={14} className="text-gray-400 flex-shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-white truncate">{app.name}</div>
+                            {app.repoPath && (
+                              <div className="text-xs text-gray-500 truncate">{app.repoPath}</div>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => onTrigger(taskType)}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors"
+                title="Run this task immediately (bypasses schedule)"
+              >
+                <Play size={14} />
+                Run Now
+              </button>
+            )}
             {(config.type === 'once' && status.reason === 'once-completed') && (
               <button
                 onClick={() => onReset(taskType)}
@@ -349,7 +410,7 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
   );
 }
 
-function TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onReset, category, providers }) {
+function TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onReset, category, providers, apps }) {
   const [collapsed, setCollapsed] = useState(false);
   const taskEntries = Object.entries(tasks || {});
 
@@ -385,6 +446,7 @@ function TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onRes
               onReset={onReset}
               category={category}
               providers={providers}
+              apps={apps}
             />
           ))}
         </div>
@@ -545,14 +607,11 @@ export default function ScheduleTab({ apps }) {
         description="Tasks that analyze and improve managed applications"
         tasks={schedule.appImprovement}
         onUpdate={handleUpdateAppImprovement}
-        onTrigger={(taskType) => {
-          // For app improvement, we need to select an app first
-          // For now, just trigger without app (will apply to next eligible app)
-          handleTriggerAppImprovement(taskType, null);
-        }}
+        onTrigger={(taskType, appId) => handleTriggerAppImprovement(taskType, appId)}
         onReset={(taskType) => handleResetAppImprovement(taskType, null)}
         category="appImprovement"
         providers={providers}
+        apps={apps}
       />
 
       {schedule.lastUpdated && (

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore } from 'lucide-react';
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
 import IconPicker from '../components/IconPicker';
@@ -16,6 +16,8 @@ export default function Apps() {
   const [actionLoading, setActionLoading] = useState({});
   const [refreshingConfig, setRefreshingConfig] = useState({});
   const [standardizing, setStandardizing] = useState({});
+  const [archiving, setArchiving] = useState({});
+  const [showArchived, setShowArchived] = useState(false);
 
   const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
@@ -103,6 +105,25 @@ export default function Apps() {
     setExpandedId(prev => prev === id ? null : id);
   };
 
+  const handleArchive = async (app) => {
+    setArchiving(prev => ({ ...prev, [app.id]: true }));
+    await api.archiveApp(app.id).catch(() => null);
+    setArchiving(prev => ({ ...prev, [app.id]: false }));
+    toast.success(`${app.name} archived - excluded from COS tasks`);
+  };
+
+  const handleUnarchive = async (app) => {
+    setArchiving(prev => ({ ...prev, [app.id]: true }));
+    await api.unarchiveApp(app.id).catch(() => null);
+    setArchiving(prev => ({ ...prev, [app.id]: false }));
+    toast.success(`${app.name} unarchived - included in COS tasks`);
+  };
+
+  // Filter apps based on archive status
+  const activeApps = apps.filter(app => !app.archived);
+  const archivedApps = apps.filter(app => app.archived);
+  const displayedApps = showArchived ? archivedApps : activeApps;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -119,30 +140,52 @@ export default function Apps() {
           <h2 className="text-2xl font-bold text-white">Apps</h2>
           <p className="text-gray-500 text-sm sm:text-base">Manage registered applications</p>
         </div>
-        <Link
-          to="/apps/create"
-          className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-center"
-        >
-          + Add App
-        </Link>
+        <div className="flex items-center gap-3">
+          {/* Archive Toggle */}
+          {archivedApps.length > 0 && (
+            <button
+              onClick={() => setShowArchived(prev => !prev)}
+              className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${
+                showArchived
+                  ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
+                  : 'bg-port-border text-gray-400 hover:text-white'
+              }`}
+            >
+              <Archive size={16} />
+              {showArchived ? `Active (${activeApps.length})` : `Archived (${archivedApps.length})`}
+            </button>
+          )}
+          <Link
+            to="/apps/create"
+            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-center"
+          >
+            + Add App
+          </Link>
+        </div>
       </div>
 
       {/* App List */}
-      {apps.length === 0 ? (
+      {displayedApps.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-12 text-center">
-          <div className="text-4xl mb-4">📦</div>
-          <h3 className="text-xl font-semibold text-white mb-2">No apps registered</h3>
-          <p className="text-gray-500 mb-6">Add your first app to get started</p>
-          <Link
-            to="/apps/create"
-            className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
-          >
-            Add App
-          </Link>
+          <div className="text-4xl mb-4">{showArchived ? '📦' : '🗂️'}</div>
+          <h3 className="text-xl font-semibold text-white mb-2">
+            {showArchived ? 'No archived apps' : 'No apps registered'}
+          </h3>
+          <p className="text-gray-500 mb-6">
+            {showArchived ? 'Archived apps will appear here' : 'Add your first app to get started'}
+          </p>
+          {!showArchived && (
+            <Link
+              to="/apps/create"
+              className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+            >
+              Add App
+            </Link>
+          )}
         </div>
       ) : (
         <div className="space-y-4">
-          {apps.map(app => (
+          {displayedApps.map(app => (
             <div
               key={app.id}
               className="bg-port-card border border-port-border rounded-xl overflow-hidden"
@@ -162,7 +205,12 @@ export default function Apps() {
                     </button>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-white">{app.name}</span>
+                        <span className={`font-medium ${app.archived ? 'text-gray-400' : 'text-white'}`}>{app.name}</span>
+                        {app.archived && (
+                          <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">
+                            Archived
+                          </span>
+                        )}
                         <StatusBadge status={app.overallStatus} size="sm" />
                       </div>
                       <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
@@ -261,21 +309,37 @@ export default function Apps() {
                         </div>
                       </div>
                     ) : (
-                      <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                      <div className="flex items-center gap-2">
+                        {/* Archive/Unarchive button */}
                         <button
-                          onClick={() => setEditingApp(app)}
-                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs focus:outline-none focus:ring-2 focus:ring-port-accent"
-                          aria-label={`Edit ${app.name}`}
+                          onClick={() => app.archived ? handleUnarchive(app) : handleArchive(app)}
+                          disabled={archiving[app.id]}
+                          className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors disabled:opacity-50 border ${
+                            app.archived
+                              ? 'bg-port-success/20 text-port-success border-port-success/30 hover:bg-port-success/30'
+                              : 'bg-port-border text-gray-400 border-port-border hover:text-white hover:bg-port-border/80'
+                          }`}
+                          aria-label={app.archived ? `Unarchive ${app.name}` : `Archive ${app.name}`}
                         >
-                          Edit
+                          {app.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                          {archiving[app.id] ? '...' : app.archived ? 'Unarchive' : 'Archive'}
                         </button>
-                        <button
-                          onClick={() => setConfirmingDelete(app.id)}
-                          className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-none focus:ring-2 focus:ring-port-error"
-                          aria-label={`Delete ${app.name}`}
-                        >
-                          Delete
-                        </button>
+                        <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+                          <button
+                            onClick={() => setEditingApp(app)}
+                            className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs focus:outline-none focus:ring-2 focus:ring-port-accent"
+                            aria-label={`Edit ${app.name}`}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => setConfirmingDelete(app.id)}
+                            className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-none focus:ring-2 focus:ring-port-error"
+                            aria-label={`Delete ${app.name}`}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

@@ -15,10 +15,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
-import { getAllApps } from './apps.js';
-import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks } from './taskLearning.js';
+import { getActiveApps } from './apps.js';
+import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
+import { formatDuration } from '../lib/fileUtils.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
@@ -90,8 +91,9 @@ const DEFAULT_CONFIG = {
     { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
   ],
   autoStart: false,                        // Legacy: use alwaysOn instead
-  selfImprovementEnabled: true,            // Allow CoS to suggest improvements to its own prompts
-  avatarStyle: 'svg',                      // UI preference: 'svg' or 'ascii'
+  selfImprovementEnabled: true,            // Allow CoS to improve itself (PortOS codebase)
+  appImprovementEnabled: true,             // Allow CoS to improve managed apps
+  avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil'
   // Always-on mode settings
   alwaysOn: true,                          // CoS starts automatically and stays active
   appReviewCooldownMs: 1800000,            // 30 min between working on same app (was 1 hour)
@@ -100,6 +102,7 @@ const DEFAULT_CONFIG = {
   comprehensiveAppImprovement: true,       // Use comprehensive analysis for managed apps (same as PortOS self-improvement)
   immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
   proactiveMode: true,                     // Be proactive about finding work
+  autonomyLevel: 'manager',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   autoFixThresholds: {
     maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed
@@ -287,8 +290,13 @@ export async function start() {
     intervalMs: state.config.healthCheckIntervalMs,
     handler: async () => {
       await runHealthCheck();
+      // Periodic zombie detection — catches agents whose process died mid-run
+      const cleaned = await cleanupOrphanedAgents();
+      if (cleaned > 0) {
+        emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
+      }
     },
-    metadata: { description: 'CoS health check loop' }
+    metadata: { description: 'CoS health check + orphan cleanup loop' }
   });
 
   // Run initial evaluation and health check
@@ -520,6 +528,73 @@ export async function evaluateTasks() {
 
   const tasksToSpawn = [];
 
+  // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
+  const taskSchedule = await import('./taskSchedule.js');
+  const onDemandRequests = await taskSchedule.getOnDemandRequests();
+
+  if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
+    for (const request of onDemandRequests) {
+      if (tasksToSpawn.length >= availableSlots) break;
+
+      let task = null;
+      if (request.category === 'selfImprovement' && state.config.selfImprovementEnabled) {
+        // Generate self-improvement task for the requested type
+        await taskSchedule.clearOnDemandRequest(request.id);
+        emitLog('info', `Processing on-demand self-improvement: ${request.taskType}`, { requestId: request.id });
+
+        await taskSchedule.recordExecution(`self-improve:${request.taskType}`);
+        await withStateLock(async () => {
+          const s = await loadState();
+          s.stats.lastSelfImprovement = new Date().toISOString();
+          s.stats.lastSelfImprovementType = request.taskType;
+          await saveState(s);
+        });
+
+        task = await generateSelfImprovementTaskForType(request.taskType, state);
+      } else if (request.category === 'appImprovement' && state.config.appImprovementEnabled) {
+        // Generate app improvement task for the specific app requested (or next eligible if no appId)
+        // Only consider active (non-archived) apps for COS tasks
+        const apps = await getActiveApps().catch(() => []);
+        let targetApp = null;
+
+        if (request.appId) {
+          // Specific app requested
+          targetApp = apps.find(a => a.id === request.appId);
+          if (!targetApp) {
+            emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
+            await taskSchedule.clearOnDemandRequest(request.id);
+            continue;
+          }
+        } else {
+          // No specific app - use next eligible app (bypass cooldown for on-demand)
+          targetApp = await getNextAppForReview(apps, 0); // 0 cooldown = no cooldown check
+          if (!targetApp && apps.length > 0) {
+            // All apps might be on cooldown - pick the first app anyway for on-demand
+            targetApp = apps[0];
+          }
+          if (!targetApp) {
+            emitLog('warn', 'On-demand app improvement requested but no apps available', { requestId: request.id });
+            await taskSchedule.clearOnDemandRequest(request.id);
+            continue;
+          }
+        }
+
+        await taskSchedule.clearOnDemandRequest(request.id);
+        emitLog('info', `Processing on-demand app improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+
+        // Mark app review started and record execution
+        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        await taskSchedule.recordExecution(`app-improve:${request.taskType}`, targetApp.id);
+
+        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
+      }
+
+      if (task) {
+        tasksToSpawn.push(task);
+      }
+    }
+  }
+
   // Priority 1: User tasks (always run - cooldown only applies to system tasks)
   const pendingUserTasks = userTaskData.grouped?.pending || [];
   for (const task of pendingUserTasks) {
@@ -611,7 +686,7 @@ export async function evaluateTasks() {
     availableSlots
   });
 
-  // Periodically log performance summary (every 10 evaluations)
+  // Periodically log performance summary with learning insights (every 10 evaluations)
   const evalCount = state.stats.evaluationCount || 0;
   if (evalCount % 10 === 0 && evalCount > 0) {
     const perfSummary = await getPerformanceSummary().catch(() => null);
@@ -622,6 +697,28 @@ export async function evaluateTasks() {
         topPerformers: perfSummary.topPerformers.length,
         needsAttention: perfSummary.needsAttention.length
       });
+
+      // Surface learning recommendations every 20 evaluations (less frequent to avoid noise)
+      if (evalCount % 20 === 0) {
+        const learningInsights = await getLearningInsights().catch(() => null);
+        if (learningInsights?.recommendations?.length > 0) {
+          const recommendations = learningInsights.recommendations.slice(0, 3);
+          for (const rec of recommendations) {
+            const level = rec.type === 'warning' ? 'warn' : rec.type === 'action' ? 'info' : 'debug';
+            emitLog(level, `🧠 Learning: ${rec.message}`, { recommendationType: rec.type });
+          }
+          // Emit event for UI consumption
+          cosEvents.emit('learning:recommendations', {
+            recommendations,
+            insights: {
+              bestPerforming: learningInsights.insights?.bestPerforming?.slice(0, 2) || [],
+              worstPerforming: learningInsights.insights?.worstPerforming?.slice(0, 2) || [],
+              commonErrors: learningInsights.insights?.commonErrors?.slice(0, 2) || []
+            },
+            totals: learningInsights.totals
+          });
+        }
+      }
     }
   }
 
@@ -697,11 +794,12 @@ async function generateIdleReviewTask(state) {
     }
   }
 
-  // Try app reviews
-  // Get all managed apps
-  const apps = await getAllApps().catch(() => []);
+  // Try app reviews (if enabled)
+  if (state.config.appImprovementEnabled) {
+    // Get all active (non-archived) managed apps
+    const apps = await getActiveApps().catch(() => []);
 
-  if (apps.length > 0) {
+    if (apps.length > 0) {
     // Find next app eligible for review (not on cooldown, oldest review first)
     const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
 
@@ -743,6 +841,7 @@ async function generateIdleReviewTask(state) {
         };
       }
     }
+  }
   }
 
   // All apps on cooldown or no apps - fall back to self-improvement
@@ -822,9 +921,11 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     }
   }
 
-  // Queue eligible app improvement tasks for managed apps
-  const apps = await getAllApps().catch(() => []);
-  for (const app of apps) {
+  // Queue eligible app improvement tasks for managed apps (if enabled)
+  if (state.config.appImprovementEnabled) {
+    // Only queue tasks for active (non-archived) apps
+    const apps = await getActiveApps().catch(() => []);
+    for (const app of apps) {
     // Check if app is on cooldown
     const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
     if (onCooldown) continue;
@@ -859,6 +960,7 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
     // Only queue one task per app per evaluation to avoid flooding
     break;
+  }
   }
 
   if (queued > 0) {
@@ -1737,6 +1839,70 @@ Use model: claude-opus-4-5-20251101 for thorough typing`
 }
 
 /**
+ * Generate a managed app improvement task for a specific type
+ * Used by on-demand task processing and can be called directly
+ *
+ * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
+ * @param {Object} app - The managed app object
+ * @param {Object} state - Current CoS state
+ * @returns {Object} Generated task
+ */
+async function generateManagedAppImprovementTaskForType(taskType, app, state) {
+  const { updateAppActivity } = await import('./appActivity.js');
+  const taskSchedule = await import('./taskSchedule.js');
+
+  // Update app activity with new type
+  await updateAppActivity(app.id, {
+    lastImprovementType: taskType
+  });
+
+  emitLog('info', `Generating app improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
+
+  // Get the effective prompt (custom or default template)
+  const promptTemplate = await taskSchedule.getAppImprovementPrompt(taskType);
+
+  // Replace template variables in the prompt
+  const description = promptTemplate
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath);
+
+  // Get interval settings to determine provider/model
+  const interval = await taskSchedule.getAppImprovementInterval(taskType);
+
+  const metadata = {
+    app: app.id,
+    appName: app.name,
+    repoPath: app.repoPath,
+    analysisType: taskType,
+    autoGenerated: true,
+    comprehensiveImprovement: true
+  };
+
+  // Use configured model/provider if specified, otherwise use default
+  if (interval.providerId) {
+    metadata.providerId = interval.providerId;
+  }
+  if (interval.model) {
+    metadata.model = interval.model;
+  } else {
+    metadata.model = 'claude-opus-4-5-20251101';
+  }
+
+  const task = {
+    id: `app-improve-${app.id}-${taskType}-${Date.now().toString(36)}`,
+    status: 'pending',
+    priority: state.config.idleReviewPriority || 'MEDIUM',
+    priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
+    description,
+    metadata,
+    taskType: 'internal',
+    autoApproved: true
+  };
+
+  return task;
+}
+
+/**
  * Run system health check
  */
 export async function runHealthCheck() {
@@ -1753,7 +1919,17 @@ export async function runHealthCheck() {
 
   // Check PM2 processes
   const pm2Result = await execAsync('pm2 jlist 2>/dev/null || echo "[]"').catch(() => ({ stdout: '[]' }));
-  const pm2Processes = JSON.parse(pm2Result.stdout || '[]');
+  // pm2 jlist may output ANSI codes and warnings before JSON, extract the JSON array
+  // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
+  const pm2Output = pm2Result.stdout || '[]';
+  let jsonStart = pm2Output.indexOf('[{');
+  if (jsonStart < 0) {
+    // Check for empty array - find '[]' that's not part of ANSI codes
+    const emptyMatch = pm2Output.match(/\[\](?![0-9])/);
+    jsonStart = emptyMatch ? pm2Output.indexOf(emptyMatch[0]) : -1;
+  }
+  const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
+  const pm2Processes = JSON.parse(pm2Json);
 
   metrics.pm2 = {
     total: pm2Processes.length,
@@ -2256,17 +2432,6 @@ export async function getTodayActivity() {
     return sum + (Date.now() - new Date(a.startedAt).getTime());
   }, 0);
 
-  // Format duration as human-readable
-  const formatDuration = (ms) => {
-    const mins = Math.floor(ms / 60000);
-    const hours = Math.floor(mins / 60);
-    const remainingMins = mins % 60;
-    if (hours > 0) {
-      return `${hours}h ${remainingMins}m`;
-    }
-    return `${mins}m`;
-  };
-
   // Get top accomplishments (successful tasks with description snippets)
   const accomplishments = succeeded
     .map(a => ({
@@ -2362,6 +2527,7 @@ export async function addTask(taskData, taskType = 'user') {
   if (taskData.provider) metadata.provider = taskData.provider;
   if (taskData.app) metadata.app = taskData.app;
   if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
+  if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
 
   // Create the new task
   const newTask = {

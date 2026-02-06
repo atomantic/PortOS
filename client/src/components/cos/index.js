@@ -6,6 +6,9 @@ export { default as useNextEvalCountdown } from './useNextEvalCountdown';
 
 // Avatar/Character Components
 export { default as CoSCharacter } from './CoSCharacter';
+export { default as CyberCoSAvatar } from './CyberCoSAvatar';
+export { default as SigilCoSAvatar } from './SigilCoSAvatar';
+export { default as EsotericCoSAvatar } from './EsotericCoSAvatar';
 export { default as StateLabel } from './StateLabel';
 export { default as TerminalCoSPanel } from './TerminalCoSPanel';
 

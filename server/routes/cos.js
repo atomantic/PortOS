@@ -109,13 +109,13 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, position = 'bottom' } = req.body;
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, attachments, position = 'bottom' } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, position };
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));
@@ -123,7 +123,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
 // PUT /api/cos/tasks/:id - Update a task
 router.put('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { description, priority, status, context, model, provider, app, type = 'user' } = req.body;
+  const { description, priority, status, context, model, provider, app, blockedReason, type = 'user' } = req.body;
 
   const updates = {};
   if (description !== undefined) updates.description = description;
@@ -133,6 +133,14 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (model !== undefined) updates.model = model;
   if (provider !== undefined) updates.provider = provider;
   if (app !== undefined) updates.app = app;
+
+  // Handle blocker metadata - set when marking as blocked, clear when unblocking
+  if (status === 'blocked' && blockedReason) {
+    updates.metadata = { blocker: blockedReason };
+  } else if (status && status !== 'blocked') {
+    // Clear blocker when moving out of blocked status
+    updates.metadata = { blocker: undefined };
+  }
 
   const result = await cos.updateTask(id, updates, type);
   if (result?.error) {
@@ -221,18 +229,18 @@ router.get('/agents/:id/stats', asyncHandler(async (req, res) => {
   res.json(stats || { active: false, pid: null });
 }));
 
+// DELETE /api/cos/agents/completed - Clear completed agents (must be before :id route)
+router.delete('/agents/completed', asyncHandler(async (req, res) => {
+  const result = await cos.clearCompletedAgents();
+  res.json(result);
+}));
+
 // DELETE /api/cos/agents/:id - Delete a single agent
 router.delete('/agents/:id', asyncHandler(async (req, res) => {
   const result = await cos.deleteAgent(req.params.id);
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
-  res.json(result);
-}));
-
-// DELETE /api/cos/agents/completed - Clear completed agents
-router.delete('/agents/completed', asyncHandler(async (req, res) => {
-  const result = await cos.clearCompletedAgents();
   res.json(result);
 }));
 
@@ -394,6 +402,31 @@ router.post('/learning/insights', asyncHandler(async (req, res) => {
     context
   });
   res.json({ success: true, insight });
+}));
+
+// GET /api/cos/learning/recommendations - Get all prompt improvement recommendations
+router.get('/learning/recommendations', asyncHandler(async (req, res) => {
+  const recommendations = await taskLearning.getAllPromptRecommendations();
+  res.json({
+    count: recommendations.length,
+    recommendations,
+    summary: {
+      critical: recommendations.filter(r => r.status === 'critical').length,
+      needsImprovement: recommendations.filter(r => r.status === 'needs-improvement').length,
+      moderate: recommendations.filter(r => r.status === 'moderate').length,
+      good: recommendations.filter(r => r.status === 'good').length
+    }
+  });
+}));
+
+// GET /api/cos/learning/recommendations/:taskType - Get detailed recommendations for specific task type
+router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  if (!taskType) {
+    throw new ServerError('Task type is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const recommendations = await taskLearning.getPromptImprovementRecommendations(taskType);
+  res.json(recommendations);
 }));
 
 // ============================================================
