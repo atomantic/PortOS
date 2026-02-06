@@ -265,13 +265,26 @@ function formatRuntime(ms) {
 }
 
 /**
- * Kill a process by PID
+ * Kill a process by PID.
+ * If the process is a CoS-spawned agent, delegates to the CoS killAgent
+ * to ensure the task is properly blocked instead of requeued.
  */
 export async function killProcess(pid) {
   // Security: Ensure PID is a valid integer to prevent command injection
   const safePid = parseInt(pid, 10);
   if (isNaN(safePid) || safePid <= 0) {
     throw new Error('Invalid PID provided');
+  }
+
+  // Check if this PID belongs to a CoS-spawned agent
+  const spawnedData = spawnedAgentCommands.get(safePid);
+  if (spawnedData?.agentId) {
+    console.log(`🔪 PID ${safePid} is CoS agent ${spawnedData.agentId}, delegating to CoS killAgent`);
+    const { killAgent } = await import('./subAgentSpawner.js');
+    const result = await killAgent(spawnedData.agentId);
+    if (result.success) return true;
+    // Fall through to raw kill if CoS kill failed (agent may have already exited)
+    console.log(`⚠️ CoS killAgent failed for ${spawnedData.agentId}: ${result.error}, falling back to raw kill`);
   }
 
   const platform = process.platform;

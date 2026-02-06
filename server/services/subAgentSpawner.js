@@ -13,7 +13,7 @@ import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
+import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog, getTaskById } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
@@ -2033,6 +2033,22 @@ export async function terminateAgent(agentId) {
   // Mark agent as completed immediately with termination status
   await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
 
+  // Block task immediately (don't defer to close handler — prevents requeue on server restart)
+  if (agent.taskId) {
+    const task = await getTaskById(agent.taskId).catch(() => null);
+    if (task) {
+      await updateTask(agent.taskId, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: 'Terminated by user',
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
+        }
+      }, task.taskType || 'user');
+    }
+  }
+
   // Kill the process
   agent.process.kill('SIGTERM');
 
@@ -2126,6 +2142,22 @@ export async function killAgent(agentId) {
 
   // Mark agent as completed immediately with kill status
   await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
+
+  // Block task immediately (don't defer to close handler — prevents requeue on server restart)
+  if (agent.taskId) {
+    const task = await getTaskById(agent.taskId).catch(() => null);
+    if (task) {
+      await updateTask(agent.taskId, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: 'Force killed by user',
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
+        }
+      }, task.taskType || 'user');
+    }
+  }
 
   // Kill the process immediately with SIGKILL
   agent.process.kill('SIGKILL');
@@ -2321,6 +2353,12 @@ async function handleOrphanedTask(taskId, agentId, getTaskById) {
   const task = await getTaskById(taskId).catch(() => null);
   if (!task) {
     emitLog('warn', `Could not find task ${taskId} for orphaned agent ${agentId}`, { taskId, agentId });
+    return;
+  }
+
+  // Never requeue tasks that were explicitly terminated by the user
+  if (task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') {
+    emitLog('info', `⏭️ Skipping orphaned task ${taskId} — user-terminated`, { taskId, agentId });
     return;
   }
 
