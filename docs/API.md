@@ -489,6 +489,8 @@ socket.on('detect:complete', (appData) => {
 
 ### Shell Terminal
 
+> **Security**: The shell WebSocket API provides full terminal access as the PortOS process user. It relies on PortOS's network-level access control (see [Security Model](#security-model)) — do not expose the PortOS server to untrusted networks.
+
 ```javascript
 // Start a shell session
 socket.emit('shell:start', { id: 'my-session' });

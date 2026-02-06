@@ -43,6 +43,10 @@ portos-browser (PM2 process)
 | GET | `/api/browser/version` | CDP version info |
 | GET | `/api/browser/logs` | Recent PM2 logs |
 
+## Security
+
+Browser management relies on PortOS's network-level access control (see [Security Model](../API.md#security-model)). The `cdpHost` config is restricted to localhost values (`127.0.0.1`, `localhost`, `::1`) to prevent SSRF via CDP endpoint redirection. Do not expose the PortOS server to untrusted networks.
+
 ## Configuration
 
 Stored in `data/browser-config.json`:
