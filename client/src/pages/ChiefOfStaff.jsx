@@ -30,6 +30,7 @@ import {
   HealthTab,
   ConfigTab
 } from '../components/cos';
+import { resolveDynamicAvatar } from '../components/cos/constants';
 
 export default function ChiefOfStaff() {
   const { tab } = useParams();
@@ -50,10 +51,14 @@ export default function ChiefOfStaff() {
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
+  const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const socket = useSocket();
 
-  // Derive avatar style from server config
-  const avatarStyle = status?.config?.avatarStyle || 'svg';
+  // Derive avatar style from server config, with optional dynamic override
+  const configAvatarStyle = status?.config?.avatarStyle || 'svg';
+  const dynamicAvatarEnabled = status?.config?.dynamicAvatar || false;
+  const dynamicStyle = dynamicAvatarEnabled ? resolveDynamicAvatar(activeAgentMeta) : null;
+  const avatarStyle = dynamicStyle || configAvatarStyle;
 
   // Update avatar style via server config
   const setAvatarStyle = async (style) => {
@@ -105,6 +110,10 @@ export default function ChiefOfStaff() {
     setAgentState(newState);
     // Use default state message - real messages come from socket events
     setStatusMessage(STATE_MESSAGES[newState]);
+
+    // Set active agent metadata for dynamic avatar (use first running agent)
+    const runningAgent = agentsData.find(a => a.status === 'running');
+    setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
 
   useEffect(() => {
@@ -133,6 +142,7 @@ export default function ChiefOfStaff() {
       if (!data.running) {
         setAgentState('sleeping');
         setStatusMessage("Stopped - daemon not running");
+        setActiveAgentMeta(null);
       }
     });
 
@@ -148,6 +158,8 @@ export default function ChiefOfStaff() {
       setStatusMessage(`Running: ${shortDesc}`);
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
+      // Track active agent metadata for dynamic avatar resolution
+      if (data?.metadata) setActiveAgentMeta(data.metadata);
       // Initialize empty output buffer for new agent
       if (data?.agentId || data?.id) {
         setLiveOutputs(prev => ({ ...prev, [data.agentId || data.id]: [] }));
@@ -180,6 +192,8 @@ export default function ChiefOfStaff() {
       setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), 2000);
+      // Clear active agent metadata so avatar reverts to default
+      setActiveAgentMeta(null);
       fetchData();
     });
 
@@ -562,7 +576,7 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'config' && (
           <div role="tabpanel" id="tabpanel-config" aria-labelledby="tab-config">
-            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={avatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
+            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
           </div>
         )}
         </div>

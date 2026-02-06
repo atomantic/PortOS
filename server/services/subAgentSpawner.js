@@ -1191,6 +1191,7 @@ export async function spawnAgentForTask(task) {
     taskDescription: task.description,
     taskType: task.taskType,
     priority: task.priority,
+    providerId: provider.id,
     model: selectedModel,
     modelTier: modelSelection.tier,
     modelReason: modelSelection.reason,

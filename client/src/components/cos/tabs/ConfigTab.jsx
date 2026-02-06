@@ -3,7 +3,7 @@ import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
-import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval } from '../constants';
+import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS } from '../constants';
 
 // Color classes for autonomy level buttons
 const LEVEL_COLORS = {
@@ -313,28 +313,51 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
       {/* Avatar Style */}
       <div>
         <h4 className="text-sm font-medium text-gray-400 mb-2">Appearance</h4>
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
           <div
             className="flex items-center justify-between"
-            title="Choose the visual style for the CoS avatar in the sidebar panel"
+            title="Choose the default visual style for the CoS avatar in the sidebar panel"
           >
-            <span className="text-gray-400 cursor-help">CoS Avatar Style</span>
+            <span className="text-gray-400 cursor-help">Default Avatar Style</span>
             <select
               value={avatarStyle}
               onChange={async (e) => {
                 const style = e.target.value;
                 await setAvatarStyle(style);
-                const labels = { svg: 'Digital', ascii: 'Minimalist', cyber: 'Cyberpunk 3D', sigil: 'Arcane Sigil 3D', esoteric: 'Esoteric (3D)' };
-                toast.success(`Avatar style changed to ${labels[style] || style}`);
+                toast.success(`Avatar style changed to ${AVATAR_STYLE_LABELS[style] || style}`);
               }}
               className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-white text-sm"
             >
-              <option value="svg">Digital (SVG)</option>
-              <option value="cyber">Cyberpunk (3D)</option>
-              <option value="sigil">Arcane Sigil (3D)</option>
-              <option value="esoteric">Esoteric (3D)</option>
-              <option value="ascii">Minimalist (ASCII)</option>
+              {Object.entries(AVATAR_STYLE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
             </select>
+          </div>
+          <div
+            className="flex items-center justify-between"
+            title="When enabled, the avatar style changes automatically based on the active task type, provider, or priority"
+          >
+            <div>
+              <span className="text-gray-400 cursor-help">Dynamic Avatar</span>
+              <p className="text-xs text-gray-600 mt-0.5">Auto-switch style based on task type, provider, or priority</p>
+            </div>
+            <button
+              onClick={async () => {
+                const newVal = !config?.dynamicAvatar;
+                await api.updateCosConfig({ dynamicAvatar: newVal });
+                toast.success(`Dynamic avatar ${newVal ? 'enabled' : 'disabled'}`);
+                onUpdate();
+              }}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                config?.dynamicAvatar ? 'bg-port-accent' : 'bg-port-border'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  config?.dynamicAvatar ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
           </div>
         </div>
       </div>

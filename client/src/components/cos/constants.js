@@ -147,3 +147,72 @@ export const formatInterval = (ms) => {
   if (ms < 3600000) return `${ms / 60000}min`;
   return `${ms / 3600000}hr`;
 };
+
+// Avatar style labels for display
+export const AVATAR_STYLE_LABELS = {
+  svg: 'Digital (SVG)',
+  cyber: 'Cyberpunk (3D)',
+  sigil: 'Arcane Sigil (3D)',
+  esoteric: 'Esoteric (3D)',
+  ascii: 'Minimalist (ASCII)'
+};
+
+// Dynamic avatar rules - maps task context to avatar styles
+// Priority order: provider > selfImprovementType > taskType > priority > fallback
+const DYNAMIC_AVATAR_RULES = {
+  // Provider-based: different providers get distinct visual identities
+  provider: {
+    codex: 'esoteric',        // OpenAI Codex → mystical/ancient aesthetic
+    'lm-studio': 'sigil',    // Local LM Studio → arcane/occult aesthetic
+    'gemini-cli': 'sigil',   // Gemini → arcane aesthetic
+  },
+  // Self-improvement task types → cyberpunk (system working on itself)
+  selfImprovementType: {
+    security: 'cyber',
+    'code-quality': 'cyber',
+    'test-coverage': 'cyber',
+    performance: 'cyber',
+    'console-errors': 'cyber',
+  },
+  // Task analysis types
+  taskType: {
+    'self-improve': 'cyber',  // System self-improvement → cyberpunk
+    internal: 'sigil',        // Internal CoS tasks → arcane
+  },
+  // Priority-based: critical tasks get a distinctive look
+  priority: {
+    CRITICAL: 'esoteric',
+  }
+};
+
+/**
+ * Resolve which avatar style to display based on active agent metadata.
+ * Returns null if no rule matches (caller should use configured default).
+ */
+export const resolveDynamicAvatar = (agentMetadata) => {
+  if (!agentMetadata) return null;
+
+  // Check provider rules first
+  const providerId = agentMetadata.providerId || agentMetadata.provider;
+  if (providerId && DYNAMIC_AVATAR_RULES.provider[providerId]) {
+    return DYNAMIC_AVATAR_RULES.provider[providerId];
+  }
+
+  // Check self-improvement type
+  if (agentMetadata.selfImprovementType &&
+      DYNAMIC_AVATAR_RULES.selfImprovementType[agentMetadata.selfImprovementType]) {
+    return DYNAMIC_AVATAR_RULES.selfImprovementType[agentMetadata.selfImprovementType];
+  }
+
+  // Check task type
+  if (agentMetadata.taskType && DYNAMIC_AVATAR_RULES.taskType[agentMetadata.taskType]) {
+    return DYNAMIC_AVATAR_RULES.taskType[agentMetadata.taskType];
+  }
+
+  // Check priority
+  if (agentMetadata.priority && DYNAMIC_AVATAR_RULES.priority[agentMetadata.priority]) {
+    return DYNAMIC_AVATAR_RULES.priority[agentMetadata.priority];
+  }
+
+  return null;
+};
