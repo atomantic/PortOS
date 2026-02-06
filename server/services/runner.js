@@ -1,7 +1,10 @@
 /**
  * Compatibility shim for PortOS services that import from runner.js
- * Re-exports toolkit runner service functions
+ * Re-exports toolkit runner service functions with local overrides
  */
+import { spawn } from 'child_process';
+import { writeFile, readFile } from 'fs/promises';
+import { join } from 'path';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
@@ -15,9 +18,95 @@ export async function createRun(options) {
   return aiToolkitInstance.services.runner.createRun(options);
 }
 
+/**
+ * Override executeCliRun to fix shell security issue
+ * This removes 'shell: true' which causes DEP0190 warning and potential security issues
+ */
 export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout);
+
+  const runsPath = join(aiToolkitInstance.config.dataDir || './data', 'runs');
+  const runDir = join(runsPath, runId);
+  const outputPath = join(runDir, 'output.txt');
+  const metadataPath = join(runDir, 'metadata.json');
+
+  const startTime = Date.now();
+  let output = '';
+
+  // Build command with args - NO shell: true
+  const args = [...(provider.args || []), prompt];
+  console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')}`);
+  console.log(`📝 Prompt length: ${prompt.length} chars, first 100: ${prompt.substring(0, 100)}`);
+
+  const childProcess = spawn(provider.command, args, {
+    cwd: workspacePath,
+    env: { ...process.env, ...provider.envVars }
+    // Removed shell: true - this fixes the security warning and ensures proper argument handling
+  });
+
+  // Track active run (store on the runner service itself for stopRun to access)
+  if (!aiToolkitInstance.services.runner._portosActiveRuns) {
+    aiToolkitInstance.services.runner._portosActiveRuns = new Map();
+  }
+  aiToolkitInstance.services.runner._portosActiveRuns.set(runId, childProcess);
+
+  // Call hooks
+  aiToolkitInstance.config.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
+
+  // Set timeout
+  const timeoutHandle = setTimeout(() => {
+    if (childProcess && !childProcess.killed) {
+      console.log(`⏱️ Run ${runId} timed out after ${timeout}ms`);
+      childProcess.kill('SIGTERM');
+    }
+  }, timeout);
+
+  childProcess.stdout?.on('data', (data) => {
+    const text = data.toString();
+    output += text;
+    onData?.(text);
+  });
+
+  childProcess.stderr?.on('data', (data) => {
+    const text = data.toString();
+    output += text;
+    onData?.(text);
+  });
+
+  childProcess.on('close', async (code) => {
+    clearTimeout(timeoutHandle);
+    aiToolkitInstance.services.runner._portosActiveRuns?.delete(runId);
+
+    await writeFile(outputPath, output);
+
+    const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+    const metadata = metadataStr ? JSON.parse(metadataStr) : {};
+    metadata.endTime = new Date().toISOString();
+    metadata.duration = Date.now() - startTime;
+    metadata.exitCode = code;
+    metadata.success = code === 0;
+    metadata.outputSize = Buffer.byteLength(output);
+
+    // Analyze errors if the run failed (delegate to toolkit's error detection)
+    if (!metadata.success && aiToolkitInstance.services.errorDetection) {
+      const errorAnalysis = aiToolkitInstance.services.errorDetection.analyzeError(output, code);
+      metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
+      metadata.errorCategory = errorAnalysis.category;
+      metadata.errorAnalysis = errorAnalysis;
+    }
+
+    await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+
+    if (metadata.success) {
+      aiToolkitInstance.config.hooks?.onRunCompleted?.(metadata, output);
+    } else {
+      aiToolkitInstance.config.hooks?.onRunFailed?.(metadata, metadata.error, output);
+    }
+
+    onComplete?.(metadata);
+  });
+
+  return runId;
 }
 
 export async function executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete) {
