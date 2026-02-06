@@ -27,6 +27,7 @@ import SoulWizard from '../SoulWizard';
 import PersonalityMap from '../PersonalityMap';
 import ConfidenceGauge from '../ConfidenceGauge';
 import GapRecommendations from '../GapRecommendations';
+import NextActionBanner from '../NextActionBanner';
 
 export default function OverviewTab({ status, settings, onRefresh }) {
   const navigate = useNavigate();
@@ -170,8 +171,21 @@ export default function OverviewTab({ status, settings, onRefresh }) {
     );
   }
 
+  const handleBannerRefresh = () => {
+    loadTraitsAndConfidence();
+    onRefresh();
+  };
+
   return (
     <div className="space-y-6">
+      {/* Next Action Banner */}
+      <NextActionBanner
+        gaps={gaps}
+        status={status}
+        traits={traits}
+        onRefresh={handleBannerRefresh}
+      />
+
       {/* Health Score Card */}
       <div className="bg-port-card rounded-lg border border-port-border p-6">
         <div className="flex items-center justify-between mb-4">
@@ -356,7 +370,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
                       </div>
                       {section.enrichmentCategory && (
                         <button
-                          onClick={() => navigate('/digital-twin/enrich')}
+                          onClick={() => navigate(`/digital-twin/enrich?category=${section.enrichmentCategory}`)}
                           className="flex items-center gap-1 text-sm text-port-accent hover:text-white"
                         >
                           Add via Enrich
@@ -503,7 +517,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
         </button>
 
         <button
-          onClick={() => navigate('/digital-twin/enrich')}
+          onClick={() => navigate(gaps[0]?.suggestedCategory ? `/digital-twin/enrich?category=${gaps[0].suggestedCategory}` : '/digital-twin/enrich')}
           className="flex items-center gap-3 sm:gap-4 p-4 min-h-[72px] bg-port-card rounded-lg border border-port-border hover:border-port-accent transition-colors"
         >
           <div className="p-2.5 sm:p-3 rounded-lg bg-yellow-500/20 flex-shrink-0">
