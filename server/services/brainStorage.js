@@ -402,6 +402,7 @@ export async function getInboxLogCounts() {
 
   const counts = {
     total: records.length,
+    classifying: 0,
     filed: 0,
     needs_review: 0,
     corrected: 0,

@@ -49,6 +49,7 @@ export const DESTINATIONS = {
 
 // Inbox status colors
 export const STATUS_COLORS = {
+  classifying: 'bg-port-accent/20 text-port-accent border-port-accent/30',
   filed: 'bg-port-success/20 text-port-success border-port-success/30',
   needs_review: 'bg-port-warning/20 text-port-warning border-port-warning/30',
   corrected: 'bg-blue-500/20 text-blue-400 border-blue-500/30',

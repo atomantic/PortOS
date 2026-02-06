@@ -10,9 +10,11 @@
 
 import { spawn } from 'child_process';
 import * as storage from './brainStorage.js';
+import { brainEvents } from './brainStorage.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 import {
   classifierOutputSchema,
   digestOutputSchema,
@@ -136,7 +138,31 @@ function parseJsonResponse(content) {
 }
 
 /**
+ * Safe version of parseJsonResponse that returns null instead of throwing.
+ * Used in background classification where errors can't bubble to middleware.
+ */
+function safeParseJsonResponse(content) {
+  if (!content || typeof content !== 'string') return null;
+
+  let jsonStr = content.trim();
+
+  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[1].trim();
+  }
+
+  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
+  if (objectMatch) {
+    jsonStr = objectMatch[0];
+  }
+
+  return safeJSONParse(jsonStr, null, { logError: true, context: 'brain-classifier' });
+}
+
+/**
  * Capture a thought and classify it
+ * Returns immediately after creating the inbox entry.
+ * AI classification runs in the background and emits a socket event on completion.
  */
 export async function captureThought(text, providerOverride, modelOverride) {
   const meta = await storage.loadMeta();
@@ -152,10 +178,25 @@ export async function captureThought(text, providerOverride, modelOverride) {
       modelId: model,
       promptTemplateId: 'brain-classifier'
     },
-    status: 'needs_review'
+    status: 'classifying'
   });
 
-  // Attempt AI classification
+  console.log(`🧠 Thought captured, classifying in background: ${inboxEntry.id}`);
+
+  // Run AI classification in background (don't await)
+  classifyInBackground(inboxEntry.id, text, meta, providerOverride, modelOverride);
+
+  return {
+    inboxLog: inboxEntry,
+    message: 'Thought captured! AI is classifying...'
+  };
+}
+
+/**
+ * Background AI classification for a captured thought.
+ * Updates the inbox entry and emits a brain:classified event when done.
+ */
+async function classifyInBackground(entryId, text, meta, providerOverride, modelOverride) {
   let classification = null;
   let aiError = null;
 
@@ -170,21 +211,24 @@ export async function captureThought(text, providerOverride, modelOverride) {
   });
 
   if (aiResponse) {
-    const parsed = parseJsonResponse(aiResponse);
-    const validationResult = classifierOutputSchema.safeParse(parsed);
-
-    if (validationResult.success) {
-      classification = validationResult.data;
+    const parsed = safeParseJsonResponse(aiResponse);
+    if (parsed) {
+      const validationResult = classifierOutputSchema.safeParse(parsed);
+      if (validationResult.success) {
+        classification = validationResult.data;
+      } else {
+        console.error(`🧠 Classification validation failed: ${JSON.stringify(validationResult.error.errors)}`);
+        aiError = new Error('Invalid classification output from AI');
+      }
     } else {
-      console.error(`🧠 Classification validation failed: ${JSON.stringify(validationResult.error.errors)}`);
-      aiError = new Error('Invalid classification output from AI');
+      aiError = new Error('Could not parse AI response as JSON');
     }
   }
 
-  // If AI failed, return entry as needs_review
+  // If AI failed, mark as needs_review
   if (!classification) {
     const errorMessage = aiError?.message || 'AI classification failed';
-    await storage.updateInboxLog(inboxEntry.id, {
+    await storage.updateInboxLog(entryId, {
       classification: {
         destination: 'unknown',
         confidence: 0,
@@ -196,31 +240,27 @@ export async function captureThought(text, providerOverride, modelOverride) {
       error: { message: errorMessage }
     });
 
-    console.log(`🧠 Capture queued for review (AI unavailable): ${inboxEntry.id}`);
-    return {
-      inboxLog: await storage.getInboxLogById(inboxEntry.id),
-      message: `Thought captured but AI unavailable. Queued for manual review.`
-    };
+    console.log(`🧠 Classification failed for ${entryId}: ${errorMessage}`);
+    brainEvents.emit('classified', { entryId, status: 'needs_review', error: errorMessage });
+    return;
   }
 
   // Check confidence threshold
   if (classification.confidence < meta.confidenceThreshold || classification.destination === 'unknown') {
-    await storage.updateInboxLog(inboxEntry.id, {
+    await storage.updateInboxLog(entryId, {
       classification,
       status: 'needs_review'
     });
 
-    console.log(`🧠 Capture needs review (low confidence ${classification.confidence}): ${inboxEntry.id}`);
-    return {
-      inboxLog: await storage.getInboxLogById(inboxEntry.id),
-      message: `Thought captured but needs review. Confidence: ${Math.round(classification.confidence * 100)}%`
-    };
+    console.log(`🧠 Low confidence (${classification.confidence}) for ${entryId}`);
+    brainEvents.emit('classified', { entryId, status: 'needs_review', confidence: classification.confidence });
+    return;
   }
 
   // File to appropriate destination
   const filedRecord = await fileToDestination(classification.destination, classification.extracted, classification.title);
 
-  await storage.updateInboxLog(inboxEntry.id, {
+  await storage.updateInboxLog(entryId, {
     classification,
     status: 'filed',
     filed: {
@@ -229,12 +269,13 @@ export async function captureThought(text, providerOverride, modelOverride) {
     }
   });
 
-  console.log(`🧠 Captured and filed to ${classification.destination}: ${filedRecord.id}`);
-  return {
-    inboxLog: await storage.getInboxLogById(inboxEntry.id),
-    filedRecord,
-    message: `Filed to ${classification.destination}: ${classification.title}`
-  };
+  console.log(`🧠 Classified and filed to ${classification.destination}: ${filedRecord.id}`);
+  brainEvents.emit('classified', {
+    entryId,
+    status: 'filed',
+    destination: classification.destination,
+    title: classification.title
+  });
 }
 
 /**

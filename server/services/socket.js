@@ -11,6 +11,7 @@ import { agentPersonalityEvents } from './agentPersonalities.js';
 import { platformAccountEvents } from './platformAccounts.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
+import { brainEvents } from './brainStorage.js';
 import * as shellService from './shell.js';
 
 // Store active log streams per socket
@@ -292,6 +293,9 @@ export function initSocket(io) {
 
   // Set up agent event forwarding
   setupAgentEventForwarding();
+
+  // Set up brain event forwarding
+  setupBrainEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -432,4 +436,13 @@ function setupAgentEventForwarding() {
   // Activity events
   activityEvents.on('activity', (data) => broadcastToAgents('agents:activity', data));
   activityEvents.on('activity:updated', (data) => broadcastToAgents('agents:activity:updated', data));
+}
+
+// Set up brain event forwarding - broadcast to all clients
+function setupBrainEventForwarding() {
+  brainEvents.on('classified', (data) => {
+    if (ioInstance) {
+      ioInstance.emit('brain:classified', data);
+    }
+  });
 }
