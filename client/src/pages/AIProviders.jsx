@@ -84,6 +84,15 @@ export default function AIProviders() {
     loadData();
   };
 
+  const supportsModelRefresh = (provider) => {
+    // Gemini CLI doesn't require model specification
+    if (provider.type === 'cli' && provider.command === 'gemini') {
+      return false;
+    }
+    // All other providers support refresh (API and CLI)
+    return true;
+  };
+
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
     try {
@@ -296,14 +305,16 @@ export default function AIProviders() {
                   {testResults[provider.id]?.testing ? 'Testing...' : 'Test'}
                 </button>
 
-                <button
-                  onClick={() => handleRefreshModels(provider.id)}
-                  disabled={refreshing[provider.id]}
-                  className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Refresh available models"
-                >
-                  {refreshing[provider.id] ? 'Refreshing...' : 'Refresh Models'}
-                </button>
+                {supportsModelRefresh(provider) && (
+                  <button
+                    onClick={() => handleRefreshModels(provider.id)}
+                    disabled={refreshing[provider.id]}
+                    className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Refresh available models"
+                  >
+                    {refreshing[provider.id] ? 'Refreshing...' : 'Refresh Models'}
+                  </button>
+                )}
 
                 <button
                   onClick={() => handleToggleEnabled(provider)}
