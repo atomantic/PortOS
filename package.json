@@ -40,6 +40,6 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "portos-ai-toolkit": "github:atomantic/portos-ai-toolkit#v0.2.0"
+    "portos-ai-toolkit": "github:atomantic/portos-ai-toolkit#ac13168156f81c90dab57702c0de3f97de7970a9"
   }
 }

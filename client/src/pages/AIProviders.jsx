@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -9,6 +10,7 @@ export default function AIProviders() {
   const [showForm, setShowForm] = useState(false);
   const [editingProvider, setEditingProvider] = useState(null);
   const [testResults, setTestResults] = useState({});
+  const [refreshing, setRefreshing] = useState({});
   const [runs, setRuns] = useState([]);
   const [showRunPanel, setShowRunPanel] = useState(false);
   const [runPrompt, setRunPrompt] = useState('');
@@ -83,8 +85,20 @@ export default function AIProviders() {
   };
 
   const handleRefreshModels = async (id) => {
-    await api.refreshProviderModels(id);
-    loadData();
+    setRefreshing(prev => ({ ...prev, [id]: true }));
+    try {
+      const result = await api.refreshProviderModels(id);
+      if (result) {
+        toast.success(`Models refreshed for ${result.name}`);
+        loadData();
+      } else {
+        toast.error('Failed to refresh models - provider may not support this feature');
+      }
+    } catch (error) {
+      toast.error(`Error refreshing models: ${error.message}`);
+    } finally {
+      setRefreshing(prev => ({ ...prev, [id]: false }));
+    }
   };
 
   const handleExecuteRun = async () => {
@@ -282,15 +296,14 @@ export default function AIProviders() {
                   {testResults[provider.id]?.testing ? 'Testing...' : 'Test'}
                 </button>
 
-                {provider.type === 'api' && (
-                  <button
-                    onClick={() => handleRefreshModels(provider.id)}
-                    className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
-                    title="Refresh models from API"
-                  >
-                    Refresh
-                  </button>
-                )}
+                <button
+                  onClick={() => handleRefreshModels(provider.id)}
+                  disabled={refreshing[provider.id]}
+                  className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Refresh available models"
+                >
+                  {refreshing[provider.id] ? 'Refreshing...' : 'Refresh Models'}
+                </button>
 
                 <button
                   onClick={() => handleToggleEnabled(provider)}
