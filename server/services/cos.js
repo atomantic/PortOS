@@ -2555,7 +2555,85 @@ export async function addTask(taskData, taskType = 'user') {
   await writeFile(filePath, markdown);
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'added', task: newTask });
+
+  // Immediately attempt to spawn user tasks if slots are available
+  // This avoids waiting for the next evaluation interval (which is meant for system task generation)
+  if (taskType === 'user') {
+    setImmediate(() => tryImmediateSpawn(newTask));
+  }
+
   return newTask;
+}
+
+/**
+ * Attempt to immediately spawn a newly added user task if there are available agent slots.
+ * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
+ */
+async function tryImmediateSpawn(task) {
+  if (!daemonRunning) return;
+
+  const paused = await isPaused();
+  if (paused) return;
+
+  const state = await loadState();
+  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  if (availableSlots <= 0) {
+    emitLog('debug', `⏳ Queued task ${task.id} - no available slots (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    return;
+  }
+
+  emitLog('info', `⚡ Immediate spawn: ${task.id} (${task.priority || 'MEDIUM'})`, {
+    taskId: task.id,
+    availableSlots
+  });
+  cosEvents.emit('task:ready', { ...task, taskType: 'user' });
+}
+
+/**
+ * When an agent completes (freeing a slot), immediately try to dequeue and spawn the next pending task.
+ * Checks user tasks first, then auto-approved system tasks.
+ */
+async function dequeueNextTask() {
+  if (!daemonRunning) return;
+
+  const paused = await isPaused();
+  if (paused) return;
+
+  const state = await loadState();
+  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  if (availableSlots <= 0) return;
+
+  // Check user tasks first (highest priority)
+  const userTaskData = await getUserTasks();
+  const pendingUserTasks = userTaskData.grouped?.pending || [];
+
+  for (const task of pendingUserTasks) {
+    emitLog('info', `⚡ Dequeue on slot free: ${task.id} (${task.priority || 'MEDIUM'})`, {
+      taskId: task.id,
+      availableSlots
+    });
+    cosEvents.emit('task:ready', { ...task, taskType: 'user' });
+    return; // One at a time — let the next completion trigger more
+  }
+
+  // No user tasks — check auto-approved system tasks
+  const cosTaskData = await getCosTasks();
+  const autoApproved = cosTaskData.autoApproved || [];
+
+  for (const task of autoApproved) {
+    const appId = task.metadata?.app;
+    if (appId) {
+      const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
+      if (onCooldown) continue;
+    }
+    emitLog('info', `⚡ Dequeue system task on slot free: ${task.id}`, { taskId: task.id, availableSlots });
+    cosEvents.emit('task:ready', { ...task, taskType: 'internal' });
+    return;
+  }
 }
 
 const PRIORITY_VALUES = {
@@ -2740,6 +2818,11 @@ export async function approveTask(taskId) {
  */
 async function init() {
   await ensureDirectories();
+
+  // When an agent completes, immediately try to dequeue the next pending task
+  cosEvents.on('agent:completed', () => {
+    setImmediate(() => dequeueNextTask());
+  });
 
   const state = await loadState();
 
