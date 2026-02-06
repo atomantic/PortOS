@@ -4,7 +4,7 @@
  */
 
 import { Router } from 'express';
-import { writeFile, mkdir, readFile, unlink } from 'fs/promises';
+import { writeFile, mkdir, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, resolve, basename, extname } from 'path';
 import { fileURLToPath } from 'url';

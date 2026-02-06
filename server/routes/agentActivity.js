@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 import * as agentActivity from '../services/agentActivity.js';
 
 const router = Router();

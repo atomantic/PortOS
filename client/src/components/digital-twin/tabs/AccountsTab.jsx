@@ -21,7 +21,6 @@ import {
   Edit3,
   Check,
   X,
-  BarChart3
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from 'react-hot-toast';
