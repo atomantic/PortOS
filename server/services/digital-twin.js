@@ -880,7 +880,7 @@ export function getEnrichmentCategories() {
   }));
 }
 
-export async function generateEnrichmentQuestion(category, providerOverride, modelOverride) {
+export async function generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices = []) {
   const config = ENRICHMENT_CATEGORIES[category];
   if (!config) {
     throw new Error(`Unknown enrichment category: ${category}`);
@@ -888,25 +888,36 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
 
   const meta = await loadMeta();
   const questionsAnswered = meta.enrichment.questionsAnswered?.[category] || 0;
+  const skipped = new Set(skipIndices);
 
   // Use predefined questions first
   if (questionsAnswered < config.questions.length) {
-    return {
-      questionId: generateId(),
-      category,
-      question: config.questions[questionsAnswered],
-      isGenerated: false,
-      questionNumber: questionsAnswered + 1,
-      totalQuestions: config.questions.length
-    };
+    // Find the next non-skipped predefined question
+    let idx = questionsAnswered;
+    while (idx < config.questions.length && skipped.has(idx)) idx++;
+    if (idx < config.questions.length) {
+      return {
+        questionId: generateId(),
+        category,
+        question: config.questions[idx],
+        questionIndex: idx,
+        isGenerated: false,
+        questionNumber: questionsAnswered + 1,
+        totalQuestions: config.questions.length
+      };
+    }
+    // All remaining predefined questions were skipped — fall through to scale/AI
   }
 
   // Serve unanswered scale questions for this category
   const answered = meta.enrichment.scaleQuestionsAnswered || {};
   const categoryScaleQuestions = SCALE_QUESTIONS.filter(q => q.category === category);
   const unanswered = categoryScaleQuestions.filter(q => !(q.id in answered));
-  if (unanswered.length > 0) {
-    const sq = unanswered[0];
+  // Filter out skipped scale questions (stored as negative indices: -(scaleIndex+1))
+  const available = unanswered.filter((_, i) => !skipped.has(-(i + 1)));
+  if (available.length > 0) {
+    const sq = available[0];
+    const scaleIndex = unanswered.indexOf(sq);
     return {
       questionId: generateId(),
       category,
@@ -915,6 +926,7 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
       labels: sq.labels,
       dimension: sq.dimension,
       scaleQuestionId: sq.id,
+      scaleIndex,
       isGenerated: false,
       questionNumber: questionsAnswered + 1,
       totalQuestions: config.questions.length + categoryScaleQuestions.length

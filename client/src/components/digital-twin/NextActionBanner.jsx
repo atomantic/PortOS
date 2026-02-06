@@ -40,6 +40,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const [scaleValue, setScaleValue] = useState(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [skippedIndices, setSkippedIndices] = useState([]);
 
   const hasTraits = traits && Object.keys(traits).length > 0;
   const hasEnrichment = (status?.enrichmentProgress?.completedCategories || 0) > 0;
@@ -52,13 +53,14 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // Load a question for the top gap's category (only for Q&A categories)
   useEffect(() => {
     if (topCategory && !isListBased) {
+      setSkippedIndices([]);
       loadQuestion(topCategory);
     }
   }, [topCategory, isListBased]);
 
-  const loadQuestion = async (category) => {
+  const loadQuestion = async (category, skipList = []) => {
     setLoading(true);
-    const q = await api.getSoulEnrichQuestion(category).catch(() => null);
+    const q = await api.getSoulEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
     setQuestion(q);
     setAnswer('');
     setScaleValue(null);
@@ -93,13 +95,18 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     toast.success(isScale ? 'Rating saved' : 'Answer saved');
     setAnswer('');
     setScaleValue(null);
+    setSkippedIndices([]);
     onRefresh?.();
     await loadQuestion(topCategory);
     setSubmitting(false);
   };
 
   const handleSkip = () => {
-    if (topCategory) loadQuestion(topCategory);
+    if (!topCategory || !question) return;
+    const idx = question.questionType === 'scale' ? -(question.scaleIndex + 1) : question.questionIndex;
+    const nextSkipped = idx != null ? [...skippedIndices, idx] : skippedIndices;
+    setSkippedIndices(nextSkipped);
+    loadQuestion(topCategory, nextSkipped);
   };
 
   const handleKeyDown = (e) => {

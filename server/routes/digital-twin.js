@@ -32,7 +32,8 @@ import {
   analyzeTraitsInputSchema,
   updateTraitsInputSchema,
   calculateConfidenceInputSchema,
-  importDataInputSchema
+  importDataInputSchema,
+  analyzeAssessmentInputSchema
 } from '../lib/digitalTwinValidation.js';
 
 const router = Router();
@@ -250,8 +251,8 @@ router.post('/enrich/question', asyncHandler(async (req, res) => {
     });
   }
 
-  const { category, providerOverride, modelOverride } = validation.data;
-  const question = await digitalTwinService.generateEnrichmentQuestion(category, providerOverride, modelOverride);
+  const { category, providerOverride, modelOverride, skipIndices } = validation.data;
+  const question = await digitalTwinService.generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices);
   res.json(question);
 }));
 
@@ -547,6 +548,37 @@ router.post('/confidence/calculate', asyncHandler(async (req, res) => {
 router.get('/gaps', asyncHandler(async (req, res) => {
   const gaps = await digitalTwinService.getGapRecommendations();
   res.json({ gaps });
+}));
+
+// =============================================================================
+// ASSESSMENT ANALYZER
+// =============================================================================
+
+/**
+ * POST /api/digital-twin/interview/analyze
+ * Analyze a pasted personality assessment and update twin profile
+ */
+router.post('/interview/analyze', asyncHandler(async (req, res) => {
+  const validation = validate(analyzeAssessmentInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const { content, providerId, model } = validation.data;
+  const result = await digitalTwinService.analyzeAssessment(content, providerId, model);
+
+  if (result.error) {
+    throw new ServerError(result.error, {
+      status: 400,
+      code: 'ANALYSIS_ERROR'
+    });
+  }
+
+  res.json(result);
 }));
 
 // =============================================================================

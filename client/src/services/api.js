@@ -739,9 +739,9 @@ export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enric
 export const getSoulEnrichCategories = getDigitalTwinEnrichCategories;
 export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');
 export const getSoulEnrichProgress = getDigitalTwinEnrichProgress;
-export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride) => request('/digital-twin/enrich/question', {
+export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride, skipIndices) => request('/digital-twin/enrich/question', {
   method: 'POST',
-  body: JSON.stringify({ category, providerOverride, modelOverride })
+  body: JSON.stringify({ category, providerOverride, modelOverride, ...(skipIndices?.length ? { skipIndices } : {}) })
 });
 export const getSoulEnrichQuestion = getDigitalTwinEnrichQuestion;
 export const submitDigitalTwinEnrichAnswer = (data) => request('/digital-twin/enrich/answer', {
@@ -824,6 +824,13 @@ export const saveDigitalTwinImport = (source, suggestedDoc) => request('/digital
   method: 'POST',
   body: JSON.stringify({ source, suggestedDoc })
 });
+
+// Digital Twin - Assessment Analyzer
+export const analyzeAssessment = (content, providerId, model) =>
+  request('/digital-twin/interview/analyze', {
+    method: 'POST',
+    body: JSON.stringify({ content, providerId, model })
+  });
 
 // Digital Twin - Social Accounts
 export const getSocialAccounts = (params = {}) => {

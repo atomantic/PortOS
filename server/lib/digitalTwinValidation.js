@@ -206,7 +206,8 @@ export const runMultiTestsInputSchema = z.object({
 export const enrichmentQuestionInputSchema = z.object({
   category: enrichmentCategoryEnum,
   providerOverride: z.string().optional(),
-  modelOverride: z.string().optional()
+  modelOverride: z.string().optional(),
+  skipIndices: z.array(z.number().int().min(0)).optional()
 });
 
 // Enrichment answer input

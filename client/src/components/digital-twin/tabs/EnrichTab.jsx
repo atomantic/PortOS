@@ -33,6 +33,7 @@ export default function EnrichTab({ onRefresh }) {
   const [scaleValue, setScaleValue] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
+  const [skippedIndices, setSkippedIndices] = useState([]);
 
   // Writing sample analysis
   const [showWritingAnalysis, setShowWritingAnalysis] = useState(false);
@@ -157,9 +158,9 @@ export default function EnrichTab({ onRefresh }) {
     }
   };
 
-  const loadQuestion = async (categoryId) => {
+  const loadQuestion = async (categoryId, skipList = []) => {
     setLoadingQuestion(true);
-    const question = await api.getSoulEnrichQuestion(categoryId);
+    const question = await api.getSoulEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined);
     setCurrentQuestion(question);
     setAnswer('');
     setScaleValue(null);
@@ -198,6 +199,7 @@ export default function EnrichTab({ onRefresh }) {
     await api.submitSoulEnrichAnswer(payload);
 
     toast.success(isScale ? 'Rating saved' : 'Answer saved');
+    setSkippedIndices([]);
     await loadData();
 
     // Load next question
@@ -207,7 +209,10 @@ export default function EnrichTab({ onRefresh }) {
   };
 
   const skipQuestion = async () => {
-    await loadQuestion(activeCategory);
+    const idx = currentQuestion?.questionType === 'scale' ? -(currentQuestion.scaleIndex + 1) : currentQuestion?.questionIndex;
+    const nextSkipped = idx != null ? [...skippedIndices, idx] : skippedIndices;
+    setSkippedIndices(nextSkipped);
+    await loadQuestion(activeCategory, nextSkipped);
   };
 
   const exitCategory = () => {
@@ -215,6 +220,7 @@ export default function EnrichTab({ onRefresh }) {
     setCurrentQuestion(null);
     setAnswer('');
     setScaleValue(null);
+    setSkippedIndices([]);
   };
 
   if (loading) {
