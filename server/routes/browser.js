@@ -7,7 +7,7 @@ const router = express.Router();
 // Validation schemas
 const updateConfigSchema = z.object({
   cdpPort: z.number().int().min(1024).max(65535).optional(),
-  cdpHost: z.string().optional(),
+  cdpHost: z.enum(['127.0.0.1', 'localhost', '::1']).optional(),
   healthPort: z.number().int().min(1024).max(65535).optional(),
   autoConnect: z.boolean().optional(),
   headless: z.boolean().optional(),
