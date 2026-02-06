@@ -9,6 +9,7 @@ import * as appActivity from '../services/appActivity.js';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import * as taskSchedule from '../services/taskSchedule.js';
+import * as autonomousJobs from '../services/autonomousJobs.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
@@ -659,5 +660,98 @@ router.get('/schedule/interval-types', (req, res) => {
     }
   });
 });
+
+// ============================================================
+// Autonomous Jobs Routes
+// ============================================================
+
+// GET /api/cos/jobs - Get all autonomous jobs
+router.get('/jobs', asyncHandler(async (req, res) => {
+  const jobs = await autonomousJobs.getAllJobs();
+  const stats = await autonomousJobs.getJobStats();
+  res.json({ jobs, stats });
+}));
+
+// GET /api/cos/jobs/due - Get jobs that are due to run
+router.get('/jobs/due', asyncHandler(async (req, res) => {
+  const due = await autonomousJobs.getDueJobs();
+  res.json({ due });
+}));
+
+// GET /api/cos/jobs/intervals - Get available interval options
+router.get('/jobs/intervals', (req, res) => {
+  res.json({ intervals: autonomousJobs.INTERVAL_OPTIONS });
+});
+
+// GET /api/cos/jobs/:id - Get a single job
+router.get('/jobs/:id', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.getJob(req.params.id);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(job);
+}));
+
+// POST /api/cos/jobs - Create a new autonomous job
+router.post('/jobs', asyncHandler(async (req, res) => {
+  const { name, description, category, interval, intervalMs, enabled, priority, autonomyLevel, promptTemplate } = req.body;
+
+  if (!name || !promptTemplate) {
+    throw new ServerError('name and promptTemplate are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const job = await autonomousJobs.createJob({
+    name, description, category, interval, intervalMs,
+    enabled, priority, autonomyLevel, promptTemplate
+  });
+  res.json({ success: true, job });
+}));
+
+// PUT /api/cos/jobs/:id - Update a job
+router.put('/jobs/:id', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.updateJob(req.params.id, req.body);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true, job });
+}));
+
+// POST /api/cos/jobs/:id/toggle - Toggle job enabled/disabled
+router.post('/jobs/:id/toggle', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.toggleJob(req.params.id);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true, job });
+}));
+
+// POST /api/cos/jobs/:id/trigger - Manually trigger a job now
+router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.getJob(req.params.id);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  // Generate task and add to CoS task queue
+  const task = autonomousJobs.generateTaskFromJob(job);
+  const result = await cos.addTask({
+    description: task.description,
+    priority: task.priority,
+    context: `Manually triggered autonomous job: ${job.name}`,
+    ...task.metadata
+  }, 'cos');
+  await autonomousJobs.recordJobExecution(job.id);
+
+  res.json({ success: true, task: result });
+}));
+
+// DELETE /api/cos/jobs/:id - Delete a job
+router.delete('/jobs/:id', asyncHandler(async (req, res) => {
+  const deleted = await autonomousJobs.deleteJob(req.params.id);
+  if (!deleted) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true });
+}));
 
 export default router;

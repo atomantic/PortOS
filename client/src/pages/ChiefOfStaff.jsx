@@ -22,6 +22,7 @@ import {
   EventLog,
   TasksTab,
   AgentsTab,
+  JobsTab,
   ScriptsTab,
   ScheduleTab,
   DigestTab,
@@ -542,6 +543,11 @@ export default function ChiefOfStaff() {
         {activeTab === 'agents' && (
           <div role="tabpanel" id="tabpanel-agents" aria-labelledby="tab-agents">
             <AgentsTab agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} apps={apps} />
+          </div>
+        )}
+        {activeTab === 'jobs' && (
+          <div role="tabpanel" id="tabpanel-jobs" aria-labelledby="tab-jobs">
+            <JobsTab />
           </div>
         )}
         {activeTab === 'scripts' && (
