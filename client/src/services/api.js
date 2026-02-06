@@ -399,6 +399,25 @@ export const getCosLearningPerformance = () => request('/cos/learning/performanc
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
+// CoS Quick Task Templates
+export const getCosTaskTemplates = () => request('/cos/templates');
+export const getCosPopularTemplates = (limit = 5) => request(`/cos/templates/popular?limit=${limit}`);
+export const getCosTemplateCategories = () => request('/cos/templates/categories');
+export const createCosTaskTemplate = (data) => request('/cos/templates', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const createCosTemplateFromTask = (task, templateName) => request('/cos/templates/from-task', {
+  method: 'POST',
+  body: JSON.stringify({ task, templateName })
+});
+export const useCosTaskTemplate = (id) => request(`/cos/templates/${id}/use`, { method: 'POST' });
+export const updateCosTaskTemplate = (id, data) => request(`/cos/templates/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteCosTaskTemplate = (id) => request(`/cos/templates/${id}`, { method: 'DELETE' });
+
 // CoS Scripts
 export const getCosScripts = () => request('/cos/scripts');
 export const getCosScript = (id) => request(`/cos/scripts/${id}`);
