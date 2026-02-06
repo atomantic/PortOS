@@ -139,7 +139,7 @@ export const ENRICHMENT_CATEGORIES = {
     targetDoc: 'VALUES.md',
     targetCategory: 'core',
     questions: [
-      'What principle would you never compromise, even at personal cost?',
+      'What are the top three values that guide your most important decisions?',
       'What value do you wish more people held?',
       'Where do you draw the line between pragmatism and principle?'
     ]
@@ -948,10 +948,10 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
     return {
       questionId: generateId(),
       category,
-      question: config.questions[0], // Fallback to first question
-      isGenerated: false,
+      question: `What else should your digital twin know about your ${config.label.toLowerCase()}?`,
+      isGenerated: true,
       questionNumber: questionsAnswered + 1,
-      totalQuestions: config.questions.length
+      totalQuestions: null
     };
   }
 
@@ -965,7 +965,7 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
 
   const model = modelOverride || provider.defaultModel;
 
-  let question = config.questions[0]; // Fallback
+  let question = `What else should your digital twin know about your ${config.label.toLowerCase()}?`; // Fallback
 
   if (provider.type === 'api') {
     const headers = { 'Content-Type': 'application/json' };
