@@ -22,7 +22,8 @@ import {
   Shield,
   GitBranch,
   AlertOctagon,
-  Fingerprint
+  Fingerprint,
+  Globe
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -31,6 +32,7 @@ export const TABS = [
   { id: 'documents', label: 'Documents', icon: FileText },
   { id: 'test', label: 'Test', icon: CheckCircle },
   { id: 'enrich', label: 'Enrich', icon: Sparkles },
+  { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'import', label: 'Import', icon: Upload },
   { id: 'export', label: 'Export', icon: Download }
 ];

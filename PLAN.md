@@ -61,6 +61,8 @@ pm2 logs
 - [x] **M33**: Soul System - Digital twin identity scaffold management. See [Soul System](./docs/features/soul-system.md)
 - [x] **M34 P1-P2,P4**: Digital Twin - Quantitative personality modeling and confidence scoring. See [Digital Twin](./docs/features/digital-twin.md)
 - [x] **M35**: Chief of Staff Enhancement - Proactive autonomous agent with hybrid memory, missions, LM Studio, thinking levels. See [CoS Enhancement](./docs/features/cos-enhancement.md)
+- [x] **M35.1**: CoS UI - Added Arcane Sigil (3D) avatar style option alongside Cyberpunk 3D
+- [x] **M36**: Browser Management - CDP/Playwright browser page with status, controls, config, and logs
 
 ### Planned
 
@@ -93,6 +95,7 @@ pm2 logs
 - [Memory System](./docs/features/memory-system.md) - Semantic memory with LLM classification
 - [Prompt Manager](./docs/features/prompt-manager.md) - Customizable AI prompts
 - [Soul System](./docs/features/soul-system.md) - Digital twin identity scaffold
+- [Browser Management](./docs/features/browser.md) - CDP/Playwright browser management
 
 ---
 
@@ -104,7 +107,6 @@ Based on recent work and incomplete milestones:
 2. **Digital Twin P3: Behavioral Feedback Loop** - Add "sounds like me" response validation and adaptive weighting
 3. **Vision API Polish** - Continue refining LM Studio vision integration based on test results
 4. **Memory Consolidation** - Implement automatic memory consolidation for similar memories
-5. **Documentation Updates** - Keep ARCHITECTURE.md and API.md current with M35 features
 
 ---
 

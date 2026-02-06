@@ -67,35 +67,57 @@ async function saveLearningData(data) {
  * Extract task type from task description or metadata
  */
 function extractTaskType(task) {
-  // Check for self-improvement type in metadata
-  if (task?.metadata?.analysisType) {
-    return `self-improve:${task.metadata.analysisType}`;
+  // Check for self-improvement type in metadata (direct or forwarded from task)
+  const analysisType = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType;
+  if (analysisType) {
+    return `self-improve:${analysisType}`;
   }
 
   // Check for idle review
-  if (task?.metadata?.reviewType === 'idle') {
+  const reviewType = task?.metadata?.reviewType || task?.metadata?.taskReviewType;
+  if (reviewType === 'idle') {
     return 'idle-review';
+  }
+
+  // Check for mission tasks
+  if (task?.metadata?.missionName) {
+    return `mission:${task.metadata.missionName}`;
+  }
+
+  // Check for app improvement tasks
+  if (task?.metadata?.taskApp && task?.metadata?.selfImprovementType) {
+    return `app-improve:${task.metadata.selfImprovementType}`;
   }
 
   // Check description patterns
   const desc = (task?.description || '').toLowerCase();
 
   if (desc.includes('[self-improvement]')) {
-    const typeMatch = desc.match(/\[self-improvement\]\s*(\w+)/i);
+    const typeMatch = desc.match(/\[self-improvement\]\s*([\w-]+)/i);
     if (typeMatch) return `self-improve:${typeMatch[1]}`;
+    return 'self-improve:general';
   }
 
   if (desc.includes('[idle review]')) {
     return 'idle-review';
   }
 
-  if (desc.includes('[auto-fix]') || desc.includes('[auto]')) {
+  if (desc.includes('[auto-fix]') || desc.includes('[auto] investigate')) {
     return 'auto-fix';
+  }
+
+  if (desc.includes('[app-improvement]') || desc.includes('[app improvement]')) {
+    return 'app-improvement';
   }
 
   // User task classification
   if (task?.taskType === 'user') {
     return 'user-task';
+  }
+
+  // Internal/system tasks that don't match a specific pattern
+  if (task?.taskType === 'internal') {
+    return 'internal-task';
   }
 
   return 'unknown';
@@ -847,6 +869,255 @@ export function initTaskLearning() {
   });
 
   emitLog('info', 'Task Learning System initialized', {}, '📚 TaskLearning');
+}
+
+/**
+ * Generate prompt improvement recommendations for a specific task type
+ * based on error patterns and failure history.
+ *
+ * This helps CoS learn from its mistakes and provides actionable suggestions
+ * for improving task prompts to increase success rates.
+ *
+ * @param {string} taskType - The task type to analyze (e.g., 'self-improve:ui-bugs')
+ * @returns {Object} Recommendations object with suggestions and insights
+ */
+export async function getPromptImprovementRecommendations(taskType) {
+  const data = await loadLearningData();
+  const metrics = data.byTaskType[taskType];
+
+  const recommendations = {
+    taskType,
+    hasData: !!metrics,
+    successRate: metrics?.successRate || null,
+    completed: metrics?.completed || 0,
+    suggestions: [],
+    errorInsights: [],
+    promptHints: []
+  };
+
+  // Not enough data to make recommendations
+  if (!metrics || metrics.completed < 3) {
+    recommendations.status = 'insufficient-data';
+    recommendations.message = `Only ${metrics?.completed || 0} completions - need at least 3 for recommendations`;
+    return recommendations;
+  }
+
+  // Analyze error patterns specific to this task type
+  const taskErrors = [];
+  for (const [category, pattern] of Object.entries(data.errorPatterns)) {
+    const taskTypeCount = pattern.taskTypes[taskType] || 0;
+    if (taskTypeCount > 0) {
+      taskErrors.push({
+        category,
+        count: taskTypeCount,
+        percentage: Math.round((taskTypeCount / metrics.failed) * 100)
+      });
+    }
+  }
+  taskErrors.sort((a, b) => b.count - a.count);
+
+  // Generate error-specific insights and prompt hints
+  for (const error of taskErrors) {
+    const insight = generateErrorInsight(error.category, error.percentage);
+    if (insight) {
+      recommendations.errorInsights.push(insight);
+    }
+
+    const hint = generatePromptHint(error.category, taskType);
+    if (hint) {
+      recommendations.promptHints.push(hint);
+    }
+  }
+
+  // Generate success rate-based suggestions
+  if (metrics.successRate < 30) {
+    recommendations.status = 'critical';
+    recommendations.suggestions.push({
+      priority: 'high',
+      type: 'major-revision',
+      message: `Task type has only ${metrics.successRate}% success rate - prompt needs major revision`,
+      action: 'Consider breaking this task into smaller, more focused subtasks'
+    });
+  } else if (metrics.successRate < 50) {
+    recommendations.status = 'needs-improvement';
+    recommendations.suggestions.push({
+      priority: 'medium',
+      type: 'clarification',
+      message: `Success rate of ${metrics.successRate}% indicates unclear instructions`,
+      action: 'Add more specific acceptance criteria and examples to the prompt'
+    });
+  } else if (metrics.successRate < 75) {
+    recommendations.status = 'moderate';
+    recommendations.suggestions.push({
+      priority: 'low',
+      type: 'optimization',
+      message: `Success rate of ${metrics.successRate}% is acceptable but could be improved`,
+      action: 'Consider adding edge case handling instructions'
+    });
+  } else {
+    recommendations.status = 'good';
+    recommendations.suggestions.push({
+      priority: 'info',
+      type: 'maintain',
+      message: `Success rate of ${metrics.successRate}% is good - prompt is working well`,
+      action: 'No changes needed, but monitor for regressions'
+    });
+  }
+
+  // Duration-based suggestions
+  const avgDurationMin = Math.round(metrics.avgDurationMs / 60000);
+  if (avgDurationMin > 30) {
+    recommendations.suggestions.push({
+      priority: 'medium',
+      type: 'scope',
+      message: `Average duration of ${avgDurationMin} minutes is high`,
+      action: 'Consider narrowing the task scope or splitting into phases'
+    });
+  }
+
+  // Add general best practices based on task type category
+  const generalHints = getGeneralPromptHints(taskType);
+  recommendations.promptHints.push(...generalHints);
+
+  return recommendations;
+}
+
+/**
+ * Generate insight message based on error category
+ */
+function generateErrorInsight(category, percentage) {
+  const insights = {
+    'model-not-available': {
+      message: `${percentage}% of failures due to model unavailability`,
+      implication: 'Consider adding fallback model specification to the prompt'
+    },
+    'usage-limit': {
+      message: `${percentage}% of failures due to API usage limits`,
+      implication: 'Task may be too token-heavy; consider breaking into smaller chunks'
+    },
+    'rate-limit': {
+      message: `${percentage}% of failures due to rate limiting`,
+      implication: 'Task triggers too many API calls; add pacing instructions'
+    },
+    'context-length': {
+      message: `${percentage}% of failures due to context length exceeded`,
+      implication: 'Prompt or codebase references are too large; be more specific about which files to analyze'
+    },
+    'tool-error': {
+      message: `${percentage}% of failures due to tool execution errors`,
+      implication: 'Add explicit error handling instructions for tool usage'
+    },
+    'unknown': {
+      message: `${percentage}% of failures have unknown causes`,
+      implication: 'Review agent output logs for patterns not yet categorized'
+    }
+  };
+
+  return insights[category] || null;
+}
+
+/**
+ * Generate prompt improvement hint based on error category and task type
+ */
+function generatePromptHint(category, taskType) {
+  const hints = {
+    'model-not-available': {
+      hint: 'Add fallback model instruction',
+      example: 'Use model: claude-opus-4-5-20251101 (fallback to claude-sonnet-4-20250514 if unavailable)'
+    },
+    'context-length': {
+      hint: 'Reduce scope of file analysis',
+      example: 'Focus analysis on files matching: server/services/*.js (not entire codebase)'
+    },
+    'tool-error': {
+      hint: 'Add explicit tool usage guidance',
+      example: 'If Playwright navigation fails, verify the dev server is running on port 5555'
+    },
+    'rate-limit': {
+      hint: 'Add pacing instructions',
+      example: 'Analyze routes one at a time, waiting for each to complete before proceeding'
+    },
+    'spawn-error': {
+      hint: 'Add environment prerequisites',
+      example: 'Prerequisites: Ensure npm install has been run and dev server is started'
+    }
+  };
+
+  return hints[category] || null;
+}
+
+/**
+ * Generate general prompt hints based on task type category
+ */
+function getGeneralPromptHints(taskType) {
+  const hints = [];
+
+  if (taskType.includes('ui-bugs') || taskType.includes('mobile') || taskType.includes('console')) {
+    hints.push({
+      hint: 'Add visual verification step',
+      example: 'After fixing, take a new browser_snapshot to verify the fix worked'
+    });
+  }
+
+  if (taskType.includes('security') || taskType.includes('audit')) {
+    hints.push({
+      hint: 'Add severity classification',
+      example: 'Classify findings as CRITICAL/HIGH/MEDIUM/LOW and prioritize fixes accordingly'
+    });
+  }
+
+  if (taskType.includes('code-quality') || taskType.includes('refactor')) {
+    hints.push({
+      hint: 'Add rollback safety',
+      example: 'Make small, atomic commits that can be individually reverted if needed'
+    });
+  }
+
+  if (taskType.includes('test')) {
+    hints.push({
+      hint: 'Add test verification',
+      example: 'Run npm test after adding each test file to ensure it passes'
+    });
+  }
+
+  if (taskType.includes('enhancement') || taskType.includes('feature')) {
+    hints.push({
+      hint: 'Add scope limitation',
+      example: 'Implement only ONE feature per task - avoid scope creep'
+    });
+  }
+
+  return hints;
+}
+
+/**
+ * Get prompt improvement recommendations for all task types
+ * Returns a summary suitable for display in the Learning tab
+ */
+export async function getAllPromptRecommendations() {
+  const data = await loadLearningData();
+  const allRecommendations = [];
+
+  for (const taskType of Object.keys(data.byTaskType)) {
+    const recommendations = await getPromptImprovementRecommendations(taskType);
+    if (recommendations.hasData && recommendations.completed >= 3) {
+      allRecommendations.push({
+        taskType,
+        status: recommendations.status,
+        successRate: recommendations.successRate,
+        completed: recommendations.completed,
+        topSuggestion: recommendations.suggestions[0] || null,
+        errorCount: recommendations.errorInsights.length,
+        hintCount: recommendations.promptHints.length
+      });
+    }
+  }
+
+  // Sort by priority (critical first, then needs-improvement, etc.)
+  const priorityOrder = { critical: 0, 'needs-improvement': 1, moderate: 2, good: 3, 'insufficient-data': 4 };
+  allRecommendations.sort((a, b) => (priorityOrder[a.status] || 5) - (priorityOrder[b.status] || 5));
+
+  return allRecommendations;
 }
 
 /**

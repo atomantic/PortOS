@@ -83,14 +83,21 @@ PortOS/
 │   │   ├── state.json         # Daemon state
 │   │   ├── agents/            # Agent outputs
 │   │   └── memory/            # Memory storage
-│   └── brain/                 # Brain second-brain data
-│       ├── meta.json          # Settings
-│       ├── inbox_log.jsonl    # Captured thoughts
-│       ├── people.jsonl       # People records
-│       ├── projects.jsonl     # Project records
-│       ├── ideas.jsonl        # Ideas
-│       ├── admin.jsonl        # Admin tasks
-│       └── digests.jsonl      # Daily/weekly digests
+│   ├── brain/                 # Brain second-brain data
+│   │   ├── meta.json          # Settings
+│   │   ├── inbox_log.jsonl    # Captured thoughts
+│   │   ├── people.jsonl       # People records
+│   │   ├── projects.jsonl     # Project records
+│   │   ├── ideas.jsonl        # Ideas
+│   │   ├── admin.jsonl        # Admin tasks
+│   │   ├── links.json         # Saved links
+│   │   └── digests.jsonl      # Daily/weekly digests
+│   ├── digital-twin/          # Digital twin identity documents
+│   │   ├── meta.json          # Settings and state
+│   │   └── documents/         # Markdown identity documents
+│   ├── uploads/               # Generic file uploads
+│   ├── repos/                 # Cloned GitHub repositories
+│   └── agent-personalities/   # Agent personality configs
 │
 ├── docs/                      # Documentation
 ├── .github/workflows/         # CI/CD
@@ -183,6 +190,23 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - CRUD for People, Projects, Ideas, Admin
 - Daily digest and weekly review generation
 - Classification correction workflow
+- Link capture with GitHub auto-clone
+
+### Digital Twin Service (`server/services/digital-twin.js`)
+- Identity scaffold document management
+- Personality trait extraction (Big Five, values hierarchy)
+- Behavioral test generation and execution
+- External data import (Goodreads, Spotify, Letterboxd, iCal)
+- Confidence scoring and gap recommendations
+
+### Agent Personalities (`server/services/agentPersonalities.js`)
+- Agent personality CRUD and AI generation
+- Custom communication styles, tones, and quirks
+
+### Shell Service (`server/services/shell.js`)
+- PTY-based web terminal via node-pty
+- Session management with WebSocket I/O
+- Terminal resize handling
 
 ## Error Handling
 

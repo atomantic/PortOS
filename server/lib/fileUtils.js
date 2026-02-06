@@ -23,9 +23,11 @@ export const PATHS = {
   digitalTwin: join(__lib_dirname, '../../data/digital-twin'),
   runs: join(__lib_dirname, '../../data/runs'),
   memory: join(__lib_dirname, '../../data/cos/memory'),
-  agents: join(__lib_dirname, '../../data/cos/agents'),
+  cosAgents: join(__lib_dirname, '../../data/cos/agents'),  // CoS sub-agents
   scripts: join(__lib_dirname, '../../data/cos/scripts'),
-  reports: join(__lib_dirname, '../../data/cos/reports')
+  reports: join(__lib_dirname, '../../data/cos/reports'),
+  // AI Agent Personalities data
+  agentPersonalities: join(__lib_dirname, '../../data/agents')
 };
 
 /**
@@ -116,8 +118,28 @@ export function isValidJSON(str, { allowArray = true } = {}) {
 }
 
 /**
+ * Extract JSON array from string that may contain ANSI codes or other noise.
+ * Useful for parsing pm2 jlist output which may include warnings before the JSON.
+ *
+ * @param {string} str - String potentially containing JSON array
+ * @returns {string} Extracted JSON or '[]' if not found
+ */
+export function extractJSONArray(str) {
+  if (!str) return '[]';
+  // Look for '[{' (array with objects) first
+  let jsonStart = str.indexOf('[{');
+  if (jsonStart < 0) {
+    // Check for empty array - find '[]' that's not part of ANSI codes like [31m
+    const emptyMatch = str.match(/\[\](?![0-9])/);
+    jsonStart = emptyMatch ? str.indexOf(emptyMatch[0]) : -1;
+  }
+  return jsonStart >= 0 ? str.slice(jsonStart) : '[]';
+}
+
+/**
  * Safely parse JSON with validation and fallback.
  * Avoids "Unexpected end of JSON input" errors from empty/corrupted files.
+ * For arrays, automatically extracts JSON from strings with ANSI codes/noise (e.g., pm2 output).
  *
  * @param {string} str - JSON string to parse
  * @param {*} defaultValue - Default value if parsing fails (default: null)
@@ -134,6 +156,11 @@ export function isValidJSON(str, { allowArray = true } = {}) {
  * safeJSONParse(null, { default: true }) // { default: true }
  */
 export function safeJSONParse(str, defaultValue = null, { allowArray = true, logError = false, context = '' } = {}) {
+  // For arrays, try to extract JSON from noisy output (e.g., pm2 with ANSI codes)
+  if (allowArray && Array.isArray(defaultValue) && str && !str.trim().startsWith('[')) {
+    str = extractJSONArray(str);
+  }
+
   if (!isValidJSON(str, { allowArray })) {
     if (logError && str) {
       console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);
@@ -247,4 +274,34 @@ export async function readJSONLFile(filePath, { logErrors = false } = {}) {
     return [];
   }
   return safeJSONLParse(content, { logErrors, context: filePath });
+}
+
+/**
+ * Format a duration in milliseconds to a human-readable string.
+ * Outputs the most appropriate unit (minutes, hours, days) based on size.
+ *
+ * @param {number} ms - Duration in milliseconds
+ * @returns {string} Formatted duration (e.g., "5m", "2h 30m", "3d 5h")
+ *
+ * @example
+ * formatDuration(30000)    // "0m"
+ * formatDuration(300000)   // "5m"
+ * formatDuration(7200000)  // "2h 0m"
+ * formatDuration(90000000) // "1d 1h"
+ */
+export function formatDuration(ms) {
+  if (!ms) return '0m';
+  const mins = Math.floor(ms / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) {
+    const remainingHours = hours % 24;
+    return `${days}d ${remainingHours}h`;
+  }
+  if (hours > 0) {
+    const remainingMins = mins % 60;
+    return `${hours}h ${remainingMins}m`;
+  }
+  return `${mins}m`;
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Clock,
   Activity,
@@ -9,7 +9,12 @@ import {
   Save,
   X,
   GripVertical,
-  Timer
+  Timer,
+  Paperclip,
+  FileText,
+  ExternalLink,
+  AlertCircle,
+  TrendingUp
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
@@ -68,6 +73,21 @@ function formatDurationMin(mins) {
   return `~${mins}m`;
 }
 
+// Format file size for display
+function formatAttachmentSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Get success rate styling based on percentage
+function getSuccessRateStyle(rate) {
+  if (rate >= 70) return { bg: 'bg-port-success/15', text: 'text-port-success', label: 'high' };
+  if (rate >= 40) return { bg: 'bg-port-warning/15', text: 'text-port-warning', label: 'moderate' };
+  return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
+}
+
 export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps }) {
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({
@@ -76,6 +96,16 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     model: task.metadata?.model || '',
     provider: task.metadata?.provider || ''
   });
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
+  const [blockedReason, setBlockedReason] = useState('');
+  const blockedInputRef = useRef(null);
+
+  // Focus input when modal opens
+  useEffect(() => {
+    if (showBlockedModal && blockedInputRef.current) {
+      blockedInputRef.current.focus();
+    }
+  }, [showBlockedModal]);
 
   // Get models for selected provider in edit mode
   const editProvider = providers?.find(p => p.id === editData.provider);
@@ -112,10 +142,25 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     return null;
   }, [durations, task.description, task.status]);
 
-  const handleStatusChange = async (newStatus) => {
-    await api.updateCosTask(task.id, { status: newStatus }).catch(err => toast.error(err.message));
+  const handleStatusChange = async (newStatus, blockedReasonText = '') => {
+    const updates = { status: newStatus };
+    if (newStatus === 'blocked' && blockedReasonText) {
+      updates.blockedReason = blockedReasonText;
+    }
+    await api.updateCosTask(task.id, updates).catch(err => toast.error(err.message));
     toast.success(`Task marked as ${newStatus}`);
     onRefresh();
+  };
+
+  const handleMarkBlocked = () => {
+    setBlockedReason(task.metadata?.blocker || '');
+    setShowBlockedModal(true);
+  };
+
+  const handleConfirmBlocked = async () => {
+    await handleStatusChange('blocked', blockedReason.trim());
+    setShowBlockedModal(false);
+    setBlockedReason('');
   };
 
   const handleSave = async () => {
@@ -155,9 +200,18 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           </button>
         )}
         <button
-          onClick={() => handleStatusChange(task.status === 'completed' ? 'pending' : 'completed')}
+          onClick={() => {
+            if (task.status === 'blocked') {
+              // Clicking blocked status clears it back to pending
+              handleStatusChange('pending');
+            } else if (task.status === 'completed') {
+              handleStatusChange('pending');
+            } else {
+              handleStatusChange('completed');
+            }
+          }}
           className="mt-0.5 hover:scale-110 transition-transform"
-          aria-label={`Status: ${task.status}. Click to mark as ${task.status === 'completed' ? 'pending' : 'completed'}`}
+          aria-label={`Status: ${task.status}. Click to mark as ${task.status === 'completed' || task.status === 'blocked' ? 'pending' : 'completed'}`}
         >
           {statusIcons[task.status]}
         </button>
@@ -168,11 +222,26 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
             {durationEstimate && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-accent/10 text-port-accent/80 rounded"
-                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (${durationEstimate.successRate}% success rate)`}
+                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
               >
                 <Timer size={10} aria-hidden="true" />
                 {formatDurationMin(durationEstimate.estimatedMin)}
               </span>
+            )}
+            {/* Success rate indicator for pending tasks */}
+            {durationEstimate && durationEstimate.successRate !== undefined && durationEstimate.isTypeSpecific && (
+              (() => {
+                const style = getSuccessRateStyle(durationEstimate.successRate);
+                return (
+                  <span
+                    className={`flex items-center gap-1 px-1.5 py-0.5 text-xs rounded ${style.bg} ${style.text}`}
+                    title={`${style.label} success rate: ${durationEstimate.successRate}% of ${durationEstimate.basedOn} similar tasks succeeded`}
+                  >
+                    <TrendingUp size={10} aria-hidden="true" />
+                    {durationEstimate.successRate}%
+                  </span>
+                );
+              })()
             )}
             {isSystem && task.autoApproved && (
               <span className="px-2 py-0.5 rounded text-xs bg-port-success/20 text-port-success">AUTO</span>
@@ -213,17 +282,18 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
-                <select
-                  value={editData.model}
-                  onChange={e => setEditData(d => ({ ...d, model: e.target.value }))}
-                  className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
-                  disabled={!editData.provider}
-                >
-                  <option value="">{editData.provider ? 'Auto' : 'Select provider'}</option>
-                  {editModels.map(m => (
-                    <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
-                  ))}
-                </select>
+                {editModels.length > 0 && (
+                  <select
+                    value={editData.model}
+                    onChange={e => setEditData(d => ({ ...d, model: e.target.value }))}
+                    className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                  >
+                    <option value="">Auto</option>
+                    {editModels.map(m => (
+                      <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="flex gap-2">
                 <button
@@ -260,6 +330,33 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                   )}
                 </div>
               )}
+              {/* Attachments display */}
+              {task.metadata?.attachments?.length > 0 && (
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  <Paperclip size={12} className="text-gray-500" aria-hidden="true" />
+                  {task.metadata.attachments.map((att, idx) => (
+                    <a
+                      key={idx}
+                      href={`/api/attachments/${encodeURIComponent(att.filename)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 px-2 py-0.5 text-xs bg-port-accent/10 text-port-accent hover:bg-port-accent/20 rounded transition-colors"
+                      title={`${att.originalName || att.filename} (${formatAttachmentSize(att.size)})`}
+                    >
+                      <FileText size={10} aria-hidden="true" />
+                      <span className="truncate max-w-[100px]">{att.originalName || att.filename}</span>
+                      <ExternalLink size={10} aria-hidden="true" />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {/* Blocker reason display */}
+              {task.status === 'blocked' && task.metadata?.blocker && (
+                <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-error/10 border border-port-error/20 rounded text-sm">
+                  <AlertCircle size={14} className="text-port-error flex-shrink-0 mt-0.5" aria-hidden="true" />
+                  <span className="text-port-error/90">{task.metadata.blocker}</span>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -268,6 +365,17 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           {!editing && (
             <>
+              {/* Mark as Blocked button - only show for non-blocked, non-completed tasks */}
+              {task.status !== 'blocked' && task.status !== 'completed' && (
+                <button
+                  onClick={handleMarkBlocked}
+                  className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                  title="Mark as blocked"
+                  aria-label="Mark task as blocked"
+                >
+                  <Ban size={14} aria-hidden="true" />
+                </button>
+              )}
               <button
                 onClick={() => setEditing(true)}
                 className="p-1 text-gray-500 hover:text-white transition-colors"
@@ -288,6 +396,52 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           )}
         </div>
       </div>
+
+      {/* Blocked Reason Modal */}
+      {showBlockedModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowBlockedModal(false)}>
+          <div
+            className="bg-port-card border border-port-border rounded-lg p-4 w-full max-w-md mx-4"
+            onClick={e => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="blocked-modal-title"
+          >
+            <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
+              <Ban size={18} className="text-port-error" aria-hidden="true" />
+              Mark Task as Blocked
+            </h3>
+            <p className="text-sm text-gray-400 mb-3">
+              What&apos;s blocking this task? This helps track dependencies and unblock work.
+            </p>
+            <input
+              ref={blockedInputRef}
+              type="text"
+              value={blockedReason}
+              onChange={e => setBlockedReason(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleConfirmBlocked();
+                if (e.key === 'Escape') setShowBlockedModal(false);
+              }}
+              placeholder="e.g., Waiting for API access, Needs design review..."
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowBlockedModal(false)}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmBlocked}
+                className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
+              >
+                Mark Blocked
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

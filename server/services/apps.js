@@ -77,10 +77,25 @@ export function notifyAppsChanged(action = 'update') {
 
 /**
  * Get all apps (injects id from key)
+ * @param {Object} options - Filter options
+ * @param {boolean} options.includeArchived - Include archived apps (default: true for backwards compatibility)
  */
-export async function getAllApps() {
+export async function getAllApps({ includeArchived = true } = {}) {
   const data = await loadApps();
-  return Object.entries(data.apps).map(([id, app]) => ({ id, ...app }));
+  const apps = Object.entries(data.apps).map(([id, app]) => ({ id, ...app }));
+
+  if (!includeArchived) {
+    return apps.filter(app => !app.archived);
+  }
+
+  return apps;
+}
+
+/**
+ * Get all active (non-archived) apps
+ */
+export async function getActiveApps() {
+  return getAllApps({ includeArchived: false });
 }
 
 /**
@@ -113,6 +128,7 @@ export async function createApp(appData) {
     envFile: appData.envFile || '.env',
     icon: appData.icon || null,
     editorCommand: appData.editorCommand || 'code .',
+    archived: false,
     createdAt: now,
     updatedAt: now
   };
@@ -165,6 +181,20 @@ export async function deleteApp(id) {
   await saveApps(data);
 
   return true;
+}
+
+/**
+ * Archive an app (soft-delete that excludes from COS tasks)
+ */
+export async function archiveApp(id) {
+  return updateApp(id, { archived: true });
+}
+
+/**
+ * Unarchive an app (restore to active status)
+ */
+export async function unarchiveApp(id) {
+  return updateApp(id, { archived: false });
 }
 
 /**

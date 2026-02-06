@@ -82,6 +82,7 @@ The `selectModelForTask` function routes tasks to appropriate model tiers:
 | selfImprovementEnabled | true | Allow self-analysis |
 | proactiveMode | true | Always find work when idle |
 | comprehensiveAppImprovement | true | Apply full analysis to managed apps |
+| avatarStyle | svg | CoS UI avatar style: `svg`, `cyber`, `sigil`, or `ascii` |
 
 ## API Endpoints
 

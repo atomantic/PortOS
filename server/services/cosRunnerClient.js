@@ -54,6 +54,12 @@ export function initCosRunnerConnection() {
     if (handler) handler(data);
   });
 
+  // Batch orphaned agents event (startup cleanup)
+  socket.on('agents:orphaned', (data) => {
+    const handler = eventHandlers.get('agents:orphaned');
+    if (handler) handler(data);
+  });
+
   // Forward devtools run events to registered handlers
   socket.on('run:data', (data) => {
     const handler = eventHandlers.get('run:data');

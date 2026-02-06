@@ -472,3 +472,186 @@ describe('Spawn Arguments Building', () => {
     expect(args).not.toContain('--model');
   });
 });
+
+// Test failure retry logic
+describe('Task Failure Retry Logic', () => {
+  const MAX_TASK_RETRIES = 3;
+
+  /**
+   * Inline copy of resolveFailedTaskUpdate decision logic (sans async I/O).
+   * Returns { status, metadata, shouldCreateInvestigation }
+   */
+  function resolveFailedTaskStatus(task, errorAnalysis) {
+    // Actionable errors get blocked immediately
+    if (errorAnalysis?.actionable) {
+      return {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: errorAnalysis.message,
+          blockedCategory: errorAnalysis.category,
+          blockedAt: 'test-timestamp'
+        },
+        shouldCreateInvestigation: true
+      };
+    }
+
+    // Non-actionable: track failure count
+    const failureCount = (task.metadata?.failureCount || 0) + 1;
+    const lastErrorCategory = errorAnalysis?.category || 'unknown';
+
+    if (failureCount >= MAX_TASK_RETRIES) {
+      return {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          failureCount,
+          lastFailureAt: 'test-timestamp',
+          lastErrorCategory,
+          blockedReason: `Max retries exceeded (${failureCount}/${MAX_TASK_RETRIES}): ${lastErrorCategory}`,
+          blockedCategory: lastErrorCategory,
+          blockedAt: 'test-timestamp'
+        },
+        shouldCreateInvestigation: true
+      };
+    }
+
+    return {
+      status: 'pending',
+      metadata: {
+        ...task.metadata,
+        failureCount,
+        lastFailureAt: 'test-timestamp',
+        lastErrorCategory
+      },
+      shouldCreateInvestigation: false
+    };
+  }
+
+  describe('Actionable errors', () => {
+    it('should block immediately on actionable error (first failure)', () => {
+      const task = { id: 'task-1', description: 'test', metadata: {} };
+      const errorAnalysis = { actionable: true, category: 'auth-error', message: 'Auth failed' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.status).toBe('blocked');
+      expect(result.metadata.blockedCategory).toBe('auth-error');
+      expect(result.shouldCreateInvestigation).toBe(true);
+    });
+
+    it('should block immediately regardless of failure count', () => {
+      const task = { id: 'task-1', description: 'test', metadata: { failureCount: 0 } };
+      const errorAnalysis = { actionable: true, category: 'model-not-found', message: 'Model not found' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.status).toBe('blocked');
+      expect(result.shouldCreateInvestigation).toBe(true);
+    });
+  });
+
+  describe('Non-actionable errors with retry tracking', () => {
+    it('should retry on first failure (failureCount goes to 1)', () => {
+      const task = { id: 'task-1', description: 'test', metadata: {} };
+      const errorAnalysis = { actionable: false, category: 'rate-limit', message: 'Rate limited' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.status).toBe('pending');
+      expect(result.metadata.failureCount).toBe(1);
+      expect(result.metadata.lastErrorCategory).toBe('rate-limit');
+      expect(result.shouldCreateInvestigation).toBe(false);
+    });
+
+    it('should retry on second failure (failureCount goes to 2)', () => {
+      const task = { id: 'task-1', description: 'test', metadata: { failureCount: 1 } };
+      const errorAnalysis = { actionable: false, category: 'server-error', message: 'Server error' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.status).toBe('pending');
+      expect(result.metadata.failureCount).toBe(2);
+      expect(result.metadata.lastErrorCategory).toBe('server-error');
+      expect(result.shouldCreateInvestigation).toBe(false);
+    });
+
+    it('should block after MAX_TASK_RETRIES failures', () => {
+      const task = { id: 'task-1', description: 'test', metadata: { failureCount: 2 } };
+      const errorAnalysis = { actionable: false, category: 'network-error', message: 'Network failed' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.status).toBe('blocked');
+      expect(result.metadata.failureCount).toBe(3);
+      expect(result.metadata.blockedReason).toContain('Max retries exceeded');
+      expect(result.metadata.blockedCategory).toBe('network-error');
+      expect(result.shouldCreateInvestigation).toBe(true);
+    });
+
+    it('should block when already past max retries', () => {
+      const task = { id: 'task-1', description: 'test', metadata: { failureCount: 5 } };
+      const errorAnalysis = { actionable: false, category: 'unknown', message: 'Unknown error' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.status).toBe('blocked');
+      expect(result.metadata.failureCount).toBe(6);
+      expect(result.shouldCreateInvestigation).toBe(true);
+    });
+  });
+
+  describe('Unknown errors (no errorAnalysis)', () => {
+    it('should treat null errorAnalysis as non-actionable unknown', () => {
+      const task = { id: 'task-1', description: 'test', metadata: {} };
+
+      const result = resolveFailedTaskStatus(task, null);
+
+      expect(result.status).toBe('pending');
+      expect(result.metadata.failureCount).toBe(1);
+      expect(result.metadata.lastErrorCategory).toBe('unknown');
+    });
+
+    it('should still block after max retries with null errorAnalysis', () => {
+      const task = { id: 'task-1', description: 'test', metadata: { failureCount: 2 } };
+
+      const result = resolveFailedTaskStatus(task, null);
+
+      expect(result.status).toBe('blocked');
+      expect(result.metadata.failureCount).toBe(3);
+      expect(result.shouldCreateInvestigation).toBe(true);
+    });
+  });
+
+  describe('Metadata preservation', () => {
+    it('should preserve existing metadata fields on retry', () => {
+      const task = {
+        id: 'task-1',
+        description: 'test',
+        metadata: { app: 'my-app', context: 'some context', failureCount: 1 }
+      };
+      const errorAnalysis = { actionable: false, category: 'rate-limit', message: 'Rate limited' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.metadata.app).toBe('my-app');
+      expect(result.metadata.context).toBe('some context');
+      expect(result.metadata.failureCount).toBe(2);
+    });
+
+    it('should preserve existing metadata fields when blocked', () => {
+      const task = {
+        id: 'task-1',
+        description: 'test',
+        metadata: { app: 'my-app', failureCount: 2 }
+      };
+      const errorAnalysis = { actionable: false, category: 'server-error', message: 'Server error' };
+
+      const result = resolveFailedTaskStatus(task, errorAnalysis);
+
+      expect(result.metadata.app).toBe('my-app');
+      expect(result.metadata.failureCount).toBe(3);
+      expect(result.status).toBe('blocked');
+    });
+  });
+});

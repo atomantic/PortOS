@@ -3,6 +3,132 @@ import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
+import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS } from '../constants';
+
+// Color classes for autonomy level buttons
+const LEVEL_COLORS = {
+  green: {
+    base: 'border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20',
+    active: 'ring-2 ring-green-500 border-green-500 bg-green-500/20'
+  },
+  blue: {
+    base: 'border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20',
+    active: 'ring-2 ring-blue-500 border-blue-500 bg-blue-500/20'
+  },
+  yellow: {
+    base: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20',
+    active: 'ring-2 ring-yellow-500 border-yellow-500 bg-yellow-500/20'
+  },
+  red: {
+    base: 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20',
+    active: 'ring-2 ring-red-500 border-red-500 bg-red-500/20'
+  }
+};
+
+// Parameter labels for display
+const PARAM_LABELS = {
+  evaluationIntervalMs: 'Eval',
+  maxConcurrentAgents: 'Agents',
+  selfImprovementEnabled: 'Self',
+  appImprovementEnabled: 'App',
+  proactiveMode: 'Proactive',
+  idleReviewEnabled: 'Idle',
+  immediateExecution: 'Immediate',
+  comprehensiveAppImprovement: 'Comprehensive'
+};
+
+// Format param value for display
+const formatParamValue = (key, value) => {
+  if (key === 'evaluationIntervalMs') return formatInterval(value);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+};
+
+// AutonomyControl component
+function AutonomyControl({ config, onLevelChange }) {
+  const [hoveredLevel, setHoveredLevel] = useState(null);
+  const currentLevel = detectAutonomyLevel(config);
+  const isCustom = currentLevel === null;
+
+  const handleLevelClick = async (level) => {
+    await onLevelChange(level.params);
+    toast.success(`Autonomy level set to ${level.label}`);
+  };
+
+  // Get the level to show in preview (hovered or current)
+  const previewLevel = hoveredLevel
+    ? AUTONOMY_LEVELS.find(l => l.id === hoveredLevel)
+    : currentLevel
+      ? AUTONOMY_LEVELS.find(l => l.id === currentLevel)
+      : null;
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-medium text-gray-400">Autonomy Level</h4>
+        {isCustom && (
+          <span className="px-2 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded border border-gray-500/30">
+            Custom
+          </span>
+        )}
+      </div>
+
+      {/* Level buttons */}
+      <div className="grid grid-cols-4 gap-2 mb-3">
+        {AUTONOMY_LEVELS.map((level) => {
+          const isActive = currentLevel === level.id;
+          const colorClasses = LEVEL_COLORS[level.color];
+
+          return (
+            <button
+              key={level.id}
+              onClick={() => handleLevelClick(level)}
+              onMouseEnter={() => setHoveredLevel(level.id)}
+              onMouseLeave={() => setHoveredLevel(null)}
+              className={`
+                px-3 py-2 text-sm font-medium rounded-lg border transition-all
+                ${isActive ? colorClasses.active : colorClasses.base}
+              `}
+            >
+              {level.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Description */}
+      {previewLevel && (
+        <p className="text-sm text-gray-500 mb-3">
+          {previewLevel.description}
+        </p>
+      )}
+
+      {/* Parameters preview - always visible */}
+      {previewLevel && (
+        <div className="grid grid-cols-4 gap-2 text-xs">
+          {Object.entries(previewLevel.params).map(([key, value]) => {
+            const isDifferent = hoveredLevel && config && config[key] !== value;
+            return (
+              <div
+                key={key}
+                className={`
+                  px-2 py-1 rounded
+                  ${isDifferent
+                    ? 'bg-yellow-500/20 text-yellow-400'
+                    : 'bg-port-bg text-gray-400'
+                  }
+                `}
+              >
+                <span className="font-medium">{PARAM_LABELS[key]}:</span>{' '}
+                {formatParamValue(key, value)}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle, evalCountdown }) {
   const [editing, setEditing] = useState(false);
@@ -11,8 +137,21 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     healthCheckIntervalMs: config?.healthCheckIntervalMs || 900000,
     maxConcurrentAgents: config?.maxConcurrentAgents || 3,
     maxProcessMemoryMb: config?.maxProcessMemoryMb || 2048,
-    autoStart: config?.autoStart || false
+    autoStart: config?.autoStart || false,
+    selfImprovementEnabled: config?.selfImprovementEnabled ?? true,
+    appImprovementEnabled: config?.appImprovementEnabled ?? true,
+    proactiveMode: config?.proactiveMode ?? true,
+    idleReviewEnabled: config?.idleReviewEnabled ?? true,
+    immediateExecution: config?.immediateExecution ?? true,
+    comprehensiveAppImprovement: config?.comprehensiveAppImprovement ?? true
   });
+
+  const handleLevelChange = async (params) => {
+    const updatedData = { ...formData, ...params };
+    setFormData(updatedData);
+    await api.updateCosConfig(params).catch(err => toast.error(err.message));
+    onUpdate();
+  };
 
   const handleSave = async () => {
     await api.updateCosConfig(formData).catch(err => toast.error(err.message));
@@ -53,6 +192,9 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           )}
         </div>
       </div>
+
+      {/* Autonomy Level Control */}
+      <AutonomyControl config={config} onLevelChange={handleLevelChange} />
 
       <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
         <ConfigRow
@@ -109,29 +251,110 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           onChange={v => setFormData(f => ({ ...f, autoStart: v }))}
           tooltip="Automatically start the CoS daemon when the server starts"
         />
+        <ConfigRow
+          label="Self-Improvement"
+          value={formData.selfImprovementEnabled ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.selfImprovementEnabled}
+          onChange={v => setFormData(f => ({ ...f, selfImprovementEnabled: v }))}
+          tooltip="Allow CoS to improve the PortOS codebase (security audits, code quality, etc.)"
+        />
+        <ConfigRow
+          label="App Improvement"
+          value={formData.appImprovementEnabled ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.appImprovementEnabled}
+          onChange={v => setFormData(f => ({ ...f, appImprovementEnabled: v }))}
+          tooltip="Allow CoS to improve managed apps (code review, testing, documentation, etc.)"
+        />
+        <ConfigRow
+          label="Proactive Mode"
+          value={formData.proactiveMode ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.proactiveMode}
+          onChange={v => setFormData(f => ({ ...f, proactiveMode: v }))}
+          tooltip="Proactively find and create tasks based on mission goals"
+        />
+        <ConfigRow
+          label="Idle Review"
+          value={formData.idleReviewEnabled ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.idleReviewEnabled}
+          onChange={v => setFormData(f => ({ ...f, idleReviewEnabled: v }))}
+          tooltip="Review apps for improvements when no user tasks are pending"
+        />
+        <ConfigRow
+          label="Immediate Execution"
+          value={formData.immediateExecution ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.immediateExecution}
+          onChange={v => setFormData(f => ({ ...f, immediateExecution: v }))}
+          tooltip="Execute new tasks immediately instead of waiting for evaluation interval"
+        />
+        <ConfigRow
+          label="Comprehensive App Analysis"
+          value={formData.comprehensiveAppImprovement ? 'Enabled' : 'Disabled'}
+          editing={editing}
+          type="checkbox"
+          inputValue={formData.comprehensiveAppImprovement}
+          onChange={v => setFormData(f => ({ ...f, comprehensiveAppImprovement: v }))}
+          tooltip="Use comprehensive analysis for managed apps (same as PortOS self-improvement)"
+        />
       </div>
 
       {/* Avatar Style */}
       <div>
         <h4 className="text-sm font-medium text-gray-400 mb-2">Appearance</h4>
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
           <div
             className="flex items-center justify-between"
-            title="Choose the visual style for the CoS avatar in the sidebar panel"
+            title="Choose the default visual style for the CoS avatar in the sidebar panel"
           >
-            <span className="text-gray-400 cursor-help">CoS Avatar Style</span>
+            <span className="text-gray-400 cursor-help">Default Avatar Style</span>
             <select
               value={avatarStyle}
               onChange={async (e) => {
                 const style = e.target.value;
                 await setAvatarStyle(style);
-                toast.success(`Avatar style changed to ${style === 'svg' ? 'Digital' : 'Minimalist'}`);
+                toast.success(`Avatar style changed to ${AVATAR_STYLE_LABELS[style] || style}`);
               }}
               className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-white text-sm"
             >
-              <option value="svg">Digital (SVG)</option>
-              <option value="ascii">Minimalist (ASCII)</option>
+              {Object.entries(AVATAR_STYLE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
             </select>
+          </div>
+          <div
+            className="flex items-center justify-between"
+            title="When enabled, the avatar style changes automatically based on the active task type, provider, or priority"
+          >
+            <div>
+              <span className="text-gray-400 cursor-help">Dynamic Avatar</span>
+              <p className="text-xs text-gray-600 mt-0.5">Auto-switch style based on task type, provider, or priority</p>
+            </div>
+            <button
+              onClick={async () => {
+                const newVal = !config?.dynamicAvatar;
+                await api.updateCosConfig({ dynamicAvatar: newVal });
+                toast.success(`Dynamic avatar ${newVal ? 'enabled' : 'disabled'}`);
+                onUpdate();
+              }}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                config?.dynamicAvatar ? 'bg-port-accent' : 'bg-port-border'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  config?.dynamicAvatar ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
           </div>
         </div>
       </div>

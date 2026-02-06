@@ -29,6 +29,8 @@ import { readJSONFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, updateExecution, completeExecution, errorExecution, getExecution, getStats as getToolStats } from './toolStateMachine.js';
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
 import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
+import { detectConflicts } from './taskConflict.js';
+import { createWorktree, removeWorktree, cleanupOrphanedWorktrees } from './worktreeManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -382,6 +384,9 @@ const activeAgents = new Map();
 // Track runner-spawned agents (CoS Runner mode)
 const runnerAgents = new Map();
 
+// Track agents terminated by user (to prevent re-queuing)
+const userTerminatedAgents = new Set();
+
 /**
  * Get list of active agent IDs (for zombie detection)
  * Includes both direct mode and runner mode agents
@@ -393,9 +398,12 @@ export function getActiveAgentIds() {
 }
 
 /**
- * Error patterns that warrant investigation tasks
+ * Error patterns that warrant investigation tasks.
+ * Patterns are checked in order - first match wins.
+ * Categories help the learning system identify failure trends.
  */
 const ERROR_PATTERNS = [
+  // ===== API & Authentication Errors =====
   {
     pattern: /API Error: 404.*model:\s*(\S+)/i,
     category: 'model-not-found',
@@ -452,15 +460,6 @@ const ERROR_PATTERNS = [
     })
   },
   {
-    pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
-    category: 'network-error',
-    actionable: false, // Transient
-    extract: () => ({
-      message: 'Network connection failed',
-      suggestedFix: 'Check network connectivity'
-    })
-  },
-  {
     pattern: /not_found_error.*model/i,
     category: 'model-not-found',
     actionable: true,
@@ -468,6 +467,250 @@ const ERROR_PATTERNS = [
       message: `Model not found in API response`,
       suggestedFix: `The model "${model}" specified for this task doesn't exist. Update provider or task configuration.`,
       configuredModel: model
+    })
+  },
+
+  // ===== Context & Token Errors =====
+  {
+    pattern: /context.?length|max.?tokens|token.?limit|context.?window/i,
+    category: 'context-length',
+    actionable: true,
+    extract: () => ({
+      message: 'Context length exceeded',
+      suggestedFix: 'Task is too large for the context window. Break into smaller subtasks or use a model with larger context.'
+    })
+  },
+  {
+    pattern: /output.?length|max.?output|response.?too.?long/i,
+    category: 'output-length',
+    actionable: false,
+    extract: () => ({
+      message: 'Output length exceeded',
+      suggestedFix: 'Agent response exceeded output limit. Task may need to be scoped down.'
+    })
+  },
+
+  // ===== Tool & MCP Errors =====
+  {
+    pattern: /tool.?(?:call|use|execution).?(?:failed|error)|failed to (?:call|execute|invoke) tool/i,
+    category: 'tool-error',
+    actionable: false,
+    extract: (match, output) => {
+      const toolMatch = output.match(/tool[:\s]+["']?(\w+)["']?/i);
+      return {
+        message: `Tool execution failed${toolMatch ? `: ${toolMatch[1]}` : ''}`,
+        suggestedFix: 'Tool call failed. Check if required dependencies/services are running.'
+      };
+    }
+  },
+  {
+    pattern: /MCP.?(?:server|connection|error)|mcp.?(?:failed|timeout)/i,
+    category: 'mcp-error',
+    actionable: false,
+    extract: () => ({
+      message: 'MCP server error',
+      suggestedFix: 'MCP server connection failed. Verify MCP servers are configured and accessible.'
+    })
+  },
+  {
+    pattern: /permission.?denied|access.?denied|not.?allowed|insufficient.?permissions/i,
+    category: 'permission-denied',
+    actionable: true,
+    extract: () => ({
+      message: 'Permission denied',
+      suggestedFix: 'Agent lacks permissions for the requested operation. Check file/directory permissions.'
+    })
+  },
+
+  // ===== Git & Repository Errors =====
+  {
+    pattern: /git.?(?:conflict|merge.?conflict)|CONFLICT.*both modified|merge.?failed/i,
+    category: 'git-conflict',
+    actionable: true,
+    extract: () => ({
+      message: 'Git merge conflict',
+      suggestedFix: 'Merge conflict detected. Resolve conflicts manually before retrying.'
+    })
+  },
+  {
+    pattern: /fatal:\s*(?:not a git repository|could not|failed to|unable to)/i,
+    category: 'git-error',
+    actionable: false,
+    extract: (match, output) => {
+      const detailMatch = output.match(/fatal:\s*(.+?)(?:\n|$)/i);
+      return {
+        message: `Git error${detailMatch ? `: ${detailMatch[1].substring(0, 60)}` : ''}`,
+        suggestedFix: 'Git operation failed. Verify the repository state and try again.'
+      };
+    }
+  },
+  {
+    pattern: /nothing.?to.?commit|no.?changes|working.?tree.?clean/i,
+    category: 'no-changes',
+    actionable: false,
+    extract: () => ({
+      message: 'No changes to commit',
+      suggestedFix: 'Agent completed but made no code changes. Task may already be done or description needs clarification.'
+    })
+  },
+
+  // ===== Build & Test Errors =====
+  {
+    pattern: /npm.?ERR!|yarn.?error|pnpm.?(?:ERR|error)/i,
+    category: 'npm-error',
+    actionable: false,
+    extract: (match, output) => {
+      const errMatch = output.match(/(?:npm|yarn|pnpm).?(?:ERR!|error)[:\s]*(.+?)(?:\n|$)/i);
+      return {
+        message: `Package manager error${errMatch ? `: ${errMatch[1].substring(0, 50)}` : ''}`,
+        suggestedFix: 'Package installation or script failed. Check package.json and dependencies.'
+      };
+    }
+  },
+  {
+    pattern: /test.?(?:failed|failure)|(?:failed|failing).?tests?|FAIL\s+\w+\.test/i,
+    category: 'test-failure',
+    actionable: false,
+    extract: () => ({
+      message: 'Tests failed',
+      suggestedFix: 'One or more tests failed. Review test output and fix failing assertions.'
+    })
+  },
+  {
+    pattern: /lint.?(?:error|failed)|eslint.?error|prettier.?error/i,
+    category: 'lint-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Linting failed',
+      suggestedFix: 'Code style/lint errors detected. Fix formatting issues and retry.'
+    })
+  },
+  {
+    pattern: /build.?failed|compilation.?(?:failed|error)|typescript.?error|tsc.+error/i,
+    category: 'build-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Build failed',
+      suggestedFix: 'Build/compilation failed. Fix syntax or type errors and retry.'
+    })
+  },
+
+  // ===== Process & System Errors =====
+  {
+    pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
+    category: 'network-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Network connection failed',
+      suggestedFix: 'Check network connectivity and service availability.'
+    })
+  },
+  {
+    pattern: /ENOENT|file.?not.?found|no.?such.?file/i,
+    category: 'file-not-found',
+    actionable: false,
+    extract: (match, output) => {
+      const pathMatch = output.match(/(?:ENOENT|not.?found)[:\s]*['"]?([^'"}\s]+)['"]?/i);
+      return {
+        message: `File not found${pathMatch ? `: ${pathMatch[1].substring(0, 40)}` : ''}`,
+        suggestedFix: 'Expected file/directory does not exist. Verify paths in the task description.'
+      };
+    }
+  },
+  {
+    pattern: /ENOMEM|out.?of.?memory|heap.?(?:out|limit)|memory.?(?:limit|exceeded)/i,
+    category: 'memory-error',
+    actionable: true,
+    extract: () => ({
+      message: 'Out of memory',
+      suggestedFix: 'Process ran out of memory. Task may be too large or there is a memory leak.'
+    })
+  },
+  {
+    pattern: /timeout|timed.?out|deadline.?exceeded/i,
+    category: 'timeout',
+    actionable: false,
+    extract: () => ({
+      message: 'Operation timed out',
+      suggestedFix: 'Task took too long to complete. Consider breaking into smaller subtasks.'
+    })
+  },
+  {
+    pattern: /(?:killed|terminated).?(?:by.?signal|SIGTERM|SIGKILL)/i,
+    category: 'process-killed',
+    actionable: false,
+    extract: () => ({
+      message: 'Process killed',
+      suggestedFix: 'Agent process was terminated. May have exceeded resource limits or was killed externally.'
+    })
+  },
+  {
+    pattern: /spawn.?(?:error|failed)|EACCES|command.?not.?found/i,
+    category: 'spawn-error',
+    actionable: true,
+    extract: () => ({
+      message: 'Command spawn failed',
+      suggestedFix: 'Failed to start subprocess. Check that required CLI tools are installed and accessible.'
+    })
+  },
+
+  // ===== Playwright & Browser Errors =====
+  {
+    pattern: /playwright|browser.?(?:crashed|closed|disconnected)/i,
+    category: 'browser-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Browser automation failed',
+      suggestedFix: 'Playwright browser crashed or disconnected. Check if the dev server is running.'
+    })
+  },
+  {
+    pattern: /locator.?(?:timeout|not.?found)|element.?not.?(?:found|visible)/i,
+    category: 'locator-error',
+    actionable: false,
+    extract: () => ({
+      message: 'UI element not found',
+      suggestedFix: 'Could not find expected element on page. UI may have changed or selector is wrong.'
+    })
+  },
+
+  // ===== Agent-Specific Errors =====
+  {
+    pattern: /(?:claude|anthropic).?(?:error|failed)|overloaded_error/i,
+    category: 'claude-error',
+    actionable: false,
+    extract: () => ({
+      message: 'Claude API error',
+      suggestedFix: 'Claude API returned an error. This is usually transient - retry recommended.'
+    })
+  },
+  {
+    pattern: /invalid.?(?:json|syntax)|JSON\.parse|SyntaxError/i,
+    category: 'parse-error',
+    actionable: false,
+    extract: () => ({
+      message: 'JSON/Syntax parse error',
+      suggestedFix: 'Failed to parse response or file. Check for malformed JSON or syntax errors.'
+    })
+  },
+  {
+    pattern: /task.?(?:rejected|declined|refused)|cannot.?(?:complete|perform)/i,
+    category: 'task-rejected',
+    actionable: true,
+    extract: () => ({
+      message: 'Agent rejected task',
+      suggestedFix: 'Agent could not or would not complete the task. Rephrase or simplify the request.'
+    })
+  },
+
+  // ===== Safety & Content Errors =====
+  {
+    pattern: /content.?(?:filter|policy)|safety.?(?:filter|block)|harmful.?content/i,
+    category: 'content-filtered',
+    actionable: true,
+    extract: () => ({
+      message: 'Content filtered',
+      suggestedFix: 'Request was blocked by content safety filter. Rephrase the task description.'
     })
   }
 ];
@@ -535,6 +778,78 @@ Review the error, fix the configuration or code issue, and retry the original ta
   return investigationTask;
 }
 
+/**
+ * Handle task status update after agent failure.
+ * Tracks retry count and blocks the task after MAX_TASK_RETRIES,
+ * creating an investigation task instead of retrying endlessly.
+ *
+ * Returns { status, metadata } to apply to the task.
+ */
+async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
+  // Actionable errors get blocked immediately with investigation
+  if (errorAnalysis?.actionable) {
+    emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
+      taskId: task.id, category: errorAnalysis.category
+    });
+    await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
+      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+    });
+    return {
+      status: 'blocked',
+      metadata: {
+        ...task.metadata,
+        blockedReason: errorAnalysis.message,
+        blockedCategory: errorAnalysis.category,
+        blockedAt: new Date().toISOString()
+      }
+    };
+  }
+
+  // Non-actionable errors: track retry count and block after max retries
+  const failureCount = (task.metadata?.failureCount || 0) + 1;
+  const lastErrorCategory = errorAnalysis?.category || 'unknown';
+
+  if (failureCount >= MAX_TASK_RETRIES) {
+    emitLog('warn', `🚫 Task ${task.id} blocked after ${failureCount} failures (${lastErrorCategory})`, {
+      taskId: task.id, failureCount, category: lastErrorCategory
+    });
+    const blockedAnalysis = {
+      ...(errorAnalysis || {}),
+      message: `Task failed ${failureCount} times: ${errorAnalysis?.message || 'unknown error'}`,
+      suggestedFix: `Task has failed ${failureCount} consecutive times with ${lastErrorCategory} errors. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
+      category: lastErrorCategory
+    };
+    await createInvestigationTask(agentId, task, blockedAnalysis).catch(err => {
+      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+    });
+    return {
+      status: 'blocked',
+      metadata: {
+        ...task.metadata,
+        failureCount,
+        lastFailureAt: new Date().toISOString(),
+        lastErrorCategory,
+        blockedReason: `Max retries exceeded (${failureCount}/${MAX_TASK_RETRIES}): ${lastErrorCategory}`,
+        blockedCategory: lastErrorCategory,
+        blockedAt: new Date().toISOString()
+      }
+    };
+  }
+
+  emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} (${lastErrorCategory})`, {
+    taskId: task.id, failureCount, maxRetries: MAX_TASK_RETRIES, category: lastErrorCategory
+  });
+  return {
+    status: 'pending',
+    metadata: {
+      ...task.metadata,
+      failureCount,
+      lastFailureAt: new Date().toISOString(),
+      lastErrorCategory
+    }
+  };
+}
+
 // Track if using runner mode
 let useRunner = false;
 
@@ -586,6 +901,19 @@ export async function initSpawner() {
         clearTimeout(agent.initializationTimeout);
       }
       await handleAgentCompletion(agentId, exitCode, success, duration);
+    });
+
+    // Batch handler for orphaned agents (runner startup cleanup)
+    onCosRunnerEvent('agents:orphaned', async (data) => {
+      const { agents, count } = data;
+      console.log(`🧹 Processing ${count} orphaned agents from runner`);
+      for (const orphan of agents) {
+        const agent = runnerAgents.get(orphan.agentId);
+        if (agent) {
+          clearTimeout(agent.initializationTimeout);
+        }
+        await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0);
+      }
     });
 
     onCosRunnerEvent('agent:error', async (data) => {
@@ -802,12 +1130,45 @@ export async function spawnAgentForTask(task) {
   });
 
   // Determine workspace path
-  const workspacePath = task.metadata?.app
+  let workspacePath = task.metadata?.app
     ? await getAppWorkspace(task.metadata.app)
     : ROOT_DIR;
 
-  // Build the agent prompt
-  const prompt = await buildAgentPrompt(task, config, workspacePath);
+  // Check for conflicts with active agents and decide on worktree usage
+  let worktreeInfo = null;
+  const { getAgents } = await import('./cos.js');
+  const allAgents = await getAgents();
+  const runningAgents = allAgents.filter(a => a.status === 'running');
+
+  const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
+    emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
+    return { hasConflict: false, recommendation: 'proceed' };
+  });
+
+  if (conflictResult.recommendation === 'worktree') {
+    emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
+      taskId: task.id,
+      conflictingAgents: conflictResult.conflictingAgents,
+      reason: conflictResult.reason
+    });
+
+    worktreeInfo = await createWorktree(agentId, workspacePath, task.id).catch(err => {
+      emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
+      return null;
+    });
+
+    if (worktreeInfo) {
+      workspacePath = worktreeInfo.worktreePath;
+      emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
+        agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
+      });
+    }
+  } else if (conflictResult.recommendation === 'proceed') {
+    emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
+  }
+
+  // Build the agent prompt (includes worktree context if applicable)
+  const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo);
 
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -821,21 +1182,32 @@ export async function spawnAgentForTask(task) {
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath);
 
-  // Register the agent with model info
+  // Register the agent with model info (include worktree metadata + task metadata for learning)
   await registerAgent(agentId, task.id, {
     workspacePath,
+    sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
+    worktreeBranch: worktreeInfo?.branchName || null,
+    isWorktree: !!worktreeInfo,
     taskDescription: task.description,
     taskType: task.taskType,
     priority: task.priority,
+    providerId: provider.id,
     model: selectedModel,
     modelTier: modelSelection.tier,
     modelReason: modelSelection.reason,
     runId,
     phase: 'initializing',
-    useRunner
+    useRunner,
+    // Forward task metadata fields for learning classification
+    taskAnalysisType: task.metadata?.analysisType || null,
+    taskReviewType: task.metadata?.reviewType || null,
+    taskApp: task.metadata?.app || null,
+    selfImprovementType: task.metadata?.selfImprovementType || null,
+    missionName: task.metadata?.missionName || null,
+    missionId: task.metadata?.missionId || null
   });
 
-  emitLog('info', `Agent ${agentId} initializing...`, { agentId, taskId: task.id });
+  emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}`, { agentId, taskId: task.id });
 
   // Mark the task as in_progress to prevent re-spawning
   await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user');
@@ -843,7 +1215,7 @@ export async function spawnAgentForTask(task) {
   // Build CLI-specific spawn configuration
   const cliConfig = buildCliSpawnConfig(provider, selectedModel);
 
-  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName });
+  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName, worktree: !!worktreeInfo });
 
   // Use CoS Runner if available, otherwise spawn directly
   if (useRunner) {
@@ -986,44 +1358,63 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
   }
 
-  // Update task status
-  const newStatus = success ? 'completed' : 'pending';
-  await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
+  // Update task status with retry tracking
+  if (success) {
+    await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
+  } else {
+    const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
+    await updateTask(task.id, failedUpdate, task.taskType || 'user');
 
-  // On failure, handle provider status updates and create investigation task if actionable
-  if (!success && errorAnalysis) {
-    // Mark provider unavailable if usage limit hit
-    if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-      const providerId = agent.providerId || (await getActiveProvider())?.id;
-      if (providerId) {
-        await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
-          emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
-        });
+    // Handle provider status updates on failure
+    if (errorAnalysis) {
+      if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+        const providerId = agent.providerId || (await getActiveProvider())?.id;
+        if (providerId) {
+          await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
+            emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
+          });
+        }
       }
-    }
-
-    // Mark provider rate limited (temporary)
-    if (errorAnalysis.category === 'rate-limit') {
-      const providerId = agent.providerId || (await getActiveProvider())?.id;
-      if (providerId) {
-        await markProviderRateLimited(providerId).catch(err => {
-          emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
-        });
+      if (errorAnalysis.category === 'rate-limit') {
+        const providerId = agent.providerId || (await getActiveProvider())?.id;
+        if (providerId) {
+          await markProviderRateLimited(providerId).catch(err => {
+            emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
+          });
+        }
       }
-    }
-
-    // Create investigation task if actionable
-    if (errorAnalysis.actionable) {
-      await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-        emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-      });
     }
   }
 
   // Process memory extraction and app cooldown
   await processAgentCompletion(agentId, task, success, outputBuffer);
 
+  // Clean up worktree if agent was using one
+  await cleanupAgentWorktree(agentId, success);
+
   runnerAgents.delete(agentId);
+}
+
+/**
+ * Clean up a worktree for a completed agent.
+ * Reads worktree metadata from the agent's registered state and removes the worktree.
+ * On success, merges the worktree branch back to the source branch.
+ */
+async function cleanupAgentWorktree(agentId, success) {
+  const { getAgent: getAgentState } = await import('./cos.js');
+  const agentState = await getAgentState(agentId).catch(() => null);
+  if (!agentState?.metadata?.isWorktree) return;
+
+  const { sourceWorkspace, worktreeBranch } = agentState.metadata;
+  if (!sourceWorkspace || !worktreeBranch) return;
+
+  emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${success})`, {
+    agentId, branchName: worktreeBranch, merge: success
+  });
+
+  await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: success }).catch(err => {
+    emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
+  });
 }
 
 /**
@@ -1162,41 +1553,51 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
     await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
 
-    const newStatus = success ? 'completed' : 'pending';
-    await updateTask(task.id, { status: newStatus }, task.taskType || 'user');
-
-    // On failure, handle provider status updates and create investigation task if actionable
-    if (!success && errorAnalysis) {
-      // Mark provider unavailable if usage limit hit
-      if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-        const providerId = agentData?.providerId || provider.id;
-        if (providerId) {
-          await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
-            emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
-          });
+    // Update task status with retry tracking
+    // Skip if user-terminated — task already blocked by terminateAgent/killAgent
+    if (userTerminatedAgents.has(agentId)) {
+      userTerminatedAgents.delete(agentId);
+      await updateTask(task.id, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: 'Terminated by user',
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
         }
-      }
+      }, task.taskType || 'user');
+    } else if (success) {
+      await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
+    } else {
+      const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
+      await updateTask(task.id, failedUpdate, task.taskType || 'user');
 
-      // Mark provider rate limited (temporary)
-      if (errorAnalysis.category === 'rate-limit') {
-        const providerId = agentData?.providerId || provider.id;
-        if (providerId) {
-          await markProviderRateLimited(providerId).catch(err => {
-            emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
-          });
+      // Handle provider status updates on failure
+      if (errorAnalysis) {
+        if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+          const providerId = agentData?.providerId || provider.id;
+          if (providerId) {
+            await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
+              emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
+            });
+          }
         }
-      }
-
-      // Create investigation task if actionable
-      if (errorAnalysis.actionable) {
-        await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-          emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-        });
+        if (errorAnalysis.category === 'rate-limit') {
+          const providerId = agentData?.providerId || provider.id;
+          if (providerId) {
+            await markProviderRateLimited(providerId).catch(err => {
+              emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
+            });
+          }
+        }
       }
     }
 
     // Process memory extraction and app cooldown
     await processAgentCompletion(agentId, task, success, outputBuffer);
+
+    // Clean up worktree if agent was using one
+    await cleanupAgentWorktree(agentId, success);
 
     unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
     activeAgents.delete(agentId);
@@ -1225,6 +1626,19 @@ function buildCliSpawnConfig(provider, model) {
     };
   }
 
+  // Gemini CLI — uses --yolo for auto-approval, -p for non-interactive stdin mode
+  if (providerId === 'gemini-cli') {
+    const args = ['--yolo', ...(provider?.args || [])];
+    if (model) {
+      args.push('--model', model);
+    }
+    return {
+      command: provider?.command || 'gemini',
+      args,
+      stdinMode: 'prompt'
+    };
+  }
+
   // Default: Claude Code CLI
   const args = [
     '--dangerously-skip-permissions', // Unrestricted mode
@@ -1235,7 +1649,7 @@ function buildCliSpawnConfig(provider, model) {
   }
 
   return {
-    command: process.env.CLAUDE_PATH || '/Users/antic/.nvm/versions/node/v25.2.1/bin/claude',
+    command: process.env.CLAUDE_PATH || 'claude',
     args,
     stdinMode: 'prompt'
   };
@@ -1322,8 +1736,12 @@ async function getClaudeMdContext(workspaceDir) {
 
 /**
  * Build the prompt for an agent
+ * @param {Object} task - Task object
+ * @param {Object} config - CoS configuration
+ * @param {string} workspaceDir - Working directory (may be a worktree)
+ * @param {Object|null} worktreeInfo - Worktree details if using a worktree ({ worktreePath, branchName })
  */
-async function buildAgentPrompt(task, config, workspaceDir) {
+async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null) {
   // Get relevant memories for context injection
   const memorySection = await getMemorySection(task, {
     maxTokens: config.memory?.maxContextTokens || 2000
@@ -1346,6 +1764,16 @@ async function buildAgentPrompt(task, config, workspaceDir) {
     return null;
   });
 
+  // Build worktree context section if applicable
+  const worktreeSection = worktreeInfo ? `
+## Git Worktree Context
+You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
+- **Branch**: \`${worktreeInfo.branchName}\`
+- **Worktree Path**: \`${worktreeInfo.worktreePath}\`
+
+**Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
+` : '';
+
   // Try to use the prompt template system
   const promptData = await buildPrompt('cos-agent-briefing', {
     task,
@@ -1353,6 +1781,7 @@ async function buildAgentPrompt(task, config, workspaceDir) {
     memorySection,
     claudeMdSection,
     digitalTwinSection,
+    worktreeSection,
     soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
     timestamp: new Date().toISOString()
   }).catch(() => null);
@@ -1378,7 +1807,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
-
+${worktreeSection}
 ## Instructions
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
@@ -1439,10 +1868,18 @@ export async function terminateAgent(agentId) {
     if (result.success) {
       // Mark agent as completed with termination status
       await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
-      // Update task status back to pending
+      // Block task instead of re-queuing — user intentionally stopped this
       const task = agentInfo?.task;
       if (task) {
-        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user');
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: 'Terminated by user',
+            blockedCategory: 'user-terminated',
+            blockedAt: new Date().toISOString()
+          }
+        }, task.taskType || 'user');
       }
       runnerAgents.delete(agentId);
     }
@@ -1455,6 +1892,9 @@ export async function terminateAgent(agentId) {
   if (!agent) {
     return { success: false, error: 'Agent not found or not running' };
   }
+
+  // Track as user-terminated so the close handler doesn't re-queue
+  userTerminatedAgents.add(agentId);
 
   // Mark agent as completed immediately with termination status
   await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
@@ -1522,10 +1962,18 @@ export async function killAgent(agentId) {
     if (result.success) {
       // Mark agent as completed with kill status
       await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
-      // Update task status back to pending
+      // Block task instead of re-queuing — user intentionally killed this
       const task = agentInfo?.task;
       if (task) {
-        await updateTask(task.id, { status: 'pending' }, task.taskType || 'user');
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: 'Force killed by user',
+            blockedCategory: 'user-terminated',
+            blockedAt: new Date().toISOString()
+          }
+        }, task.taskType || 'user');
       }
       runnerAgents.delete(agentId);
     }
@@ -1538,6 +1986,9 @@ export async function killAgent(agentId) {
   if (!agent) {
     return { success: false, error: 'Agent not found or not running' };
   }
+
+  // Track as user-terminated so the close handler doesn't re-queue
+  userTerminatedAgents.add(agentId);
 
   // Mark agent as completed immediately with kill status
   await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
@@ -1615,6 +2066,7 @@ export async function killAllAgents() {
 
 // Max retries before creating investigation task
 const MAX_ORPHAN_RETRIES = 3;
+const MAX_TASK_RETRIES = 3;
 
 /**
  * Check if a process is running by PID
@@ -1697,6 +2149,17 @@ export async function cleanupOrphanedAgents() {
       }
     }
   }
+
+  // Clean up worktrees for orphaned agents
+  for (const { agentId } of orphanedTaskIds) {
+    await cleanupAgentWorktree(agentId, false);
+  }
+
+  // Also clean up any orphaned worktrees not tracked by any agent
+  const activeIds = new Set(getActiveAgentIds());
+  await cleanupOrphanedWorktrees(ROOT_DIR, activeIds).catch(err => {
+    console.log(`⚠️ Orphaned worktree cleanup failed: ${err.message}`);
+  });
 
   // Handle orphaned tasks - reset for retry or create investigation task
   for (const { taskId, agentId } of orphanedTaskIds) {
