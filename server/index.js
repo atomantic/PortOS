@@ -128,6 +128,12 @@ setProvidersToolkit(aiToolkit);
 setRunnerToolkit(aiToolkit);
 setPromptsToolkit(aiToolkit);
 
+// Patch toolkit's runner to fix shell security issue (DEP0190)
+// Override executeCliRun to remove 'shell: true' which causes security warnings
+import { executeCliRun as executeCliRunFixed } from './services/runner.js';
+aiToolkit.services.runner.executeCliRun = executeCliRunFixed;
+console.log('🔧 Patched aiToolkit runner.executeCliRun to fix shell security issue');
+
 // Note: prompts service is initialized automatically by createAIToolkit()
 
 // Initialize auto-fixer for error recovery
