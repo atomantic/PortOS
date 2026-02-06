@@ -45,6 +45,17 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
   { separator: true },
   {
+    label: 'Agents',
+    icon: Users,
+    children: [
+      { to: '/agents/personalities', label: 'Personalities', icon: Bot },
+      { to: '/agents/accounts', label: 'Accounts', icon: Link2 },
+      { to: '/agents/schedules', label: 'Schedules', icon: Calendar },
+      { to: '/agents/activity', label: 'Activity', icon: LineChart },
+      { to: '/agents/config', label: 'Config', icon: Settings }
+    ]
+  },
+  {
     label: 'AI Config',
     icon: Bot,
     children: [
@@ -54,6 +65,7 @@ const navItems = [
   },
   { to: '/apps', label: 'Apps', icon: Package, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
+  { to: '/browser', label: 'Browser', icon: Globe, single: true },
   {
     label: 'Chief of Staff',
     icon: Crown,
@@ -71,25 +83,6 @@ const navItems = [
     ]
   },
   {
-    label: 'Identity',
-    icon: Fingerprint,
-    children: [
-      { to: '/brain', label: 'Brain', icon: Brain },
-      { to: '/digital-twin', label: 'Digital Twin', icon: Heart }
-    ]
-  },
-  {
-    label: 'Agents',
-    icon: Users,
-    children: [
-      { to: '/agents/personalities', label: 'Personalities', icon: Bot },
-      { to: '/agents/accounts', label: 'Accounts', icon: Link2 },
-      { to: '/agents/schedules', label: 'Schedules', icon: Calendar },
-      { to: '/agents/activity', label: 'Activity', icon: LineChart },
-      { to: '/agents/config', label: 'Config', icon: Settings }
-    ]
-  },
-  {
     label: 'Dev Tools',
     icon: Terminal,
     children: [
@@ -102,10 +95,17 @@ const navItems = [
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
-  { to: '/browser', label: 'Browser', icon: Globe, single: true },
+  {
+    label: 'Identity',
+    icon: Fingerprint,
+    children: [
+      { to: '/brain', label: 'Brain', icon: Brain },
+      { to: '/digital-twin', label: 'Digital Twin', icon: Heart }
+    ]
+  },
   { to: '/media', label: 'Media', icon: Camera, single: true },
-  { to: '/uploads', label: 'Uploads', icon: Upload, single: true },
-  { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true }
+  { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true },
+  { to: '/uploads', label: 'Uploads', icon: Upload, single: true }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
