@@ -7,12 +7,14 @@ import {
   Settings,
   Calendar,
   Clock,
-  GraduationCap
+  GraduationCap,
+  Bot
 } from 'lucide-react';
 
 export const TABS = [
   { id: 'tasks', label: 'Tasks', icon: FileText },
   { id: 'agents', label: 'Agents', icon: Cpu },
+  { id: 'jobs', label: 'Jobs', icon: Bot },
   { id: 'scripts', label: 'Scripts', icon: Terminal },
   { id: 'schedule', label: 'Schedule', icon: Clock },
   { id: 'digest', label: 'Digest', icon: Calendar },

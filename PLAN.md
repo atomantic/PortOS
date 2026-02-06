@@ -63,6 +63,7 @@ pm2 logs
 - [x] **M35**: Chief of Staff Enhancement - Proactive autonomous agent with hybrid memory, missions, LM Studio, thinking levels. See [CoS Enhancement](./docs/features/cos-enhancement.md)
 - [x] **M35.1**: CoS UI - Added Arcane Sigil (3D) avatar style option alongside Cyberpunk 3D
 - [x] **M36**: Browser Management - CDP/Playwright browser page with status, controls, config, and logs
+- [x] **M37**: Autonomous Jobs - Recurring scheduled jobs that the CoS executes proactively using digital twin identity
 
 ### Planned
 

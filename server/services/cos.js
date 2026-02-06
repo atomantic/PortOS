@@ -19,6 +19,7 @@ import { getActiveApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
+import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
 import { formatDuration } from '../lib/fileUtils.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
@@ -102,6 +103,7 @@ const DEFAULT_CONFIG = {
   comprehensiveAppImprovement: true,       // Use comprehensive analysis for managed apps (same as PortOS self-improvement)
   immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
   proactiveMode: true,                     // Be proactive about finding work
+  autonomousJobsEnabled: true,             // Enable recurring autonomous jobs (git maintenance, brain processing, etc.)
   autonomyLevel: 'manager',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   autoFixThresholds: {
@@ -654,6 +656,25 @@ export async function evaluateTasks() {
       emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
         missionId: missionTask.metadata?.missionId,
         appId: missionTask.metadata?.appId
+      });
+    }
+  }
+
+  // Priority 3.5: Autonomous jobs (recurring scheduled jobs)
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.autonomousJobsEnabled) {
+    const dueJobs = await getDueJobs().catch(err => {
+      emitLog('debug', `Autonomous jobs check failed: ${err.message}`);
+      return [];
+    });
+
+    for (const job of dueJobs) {
+      if (tasksToSpawn.length >= availableSlots) break;
+      const task = generateTaskFromJob(job);
+      tasksToSpawn.push(task);
+      await recordJobExecution(job.id);
+      emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
+        jobId: job.id,
+        category: job.category
       });
     }
   }

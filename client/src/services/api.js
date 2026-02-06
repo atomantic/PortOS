@@ -461,6 +461,23 @@ export const addCosScheduleTemplate = (template) => request('/cos/schedule/templ
 });
 export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/templates/${templateId}`, { method: 'DELETE' });
 
+// Autonomous Jobs
+export const getCosJobs = () => request('/cos/jobs');
+export const getCosJobsDue = () => request('/cos/jobs/due');
+export const getCosJobIntervals = () => request('/cos/jobs/intervals');
+export const getCosJob = (id) => request(`/cos/jobs/${id}`);
+export const createCosJob = (data) => request('/cos/jobs', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateCosJob = (id, data) => request(`/cos/jobs/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const toggleCosJob = (id) => request(`/cos/jobs/${id}/toggle`, { method: 'POST' });
+export const triggerCosJob = (id) => request(`/cos/jobs/${id}/trigger`, { method: 'POST' });
+export const deleteCosJob = (id) => request(`/cos/jobs/${id}`, { method: 'DELETE' });
+
 // Memory
 export const getMemories = (options = {}) => {
   const params = new URLSearchParams();
