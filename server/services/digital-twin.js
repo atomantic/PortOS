@@ -223,6 +223,40 @@ export const ENRICHMENT_CATEGORIES = {
   }
 };
 
+// Scale questions for Likert-based trait scoring (1-5)
+export const SCALE_QUESTIONS = [
+  // Big Five — Openness (2 items)
+  { id: 'bf-o-1', text: 'I enjoy exploring new ideas and unconventional perspectives.', category: 'personality_assessments', dimension: 'openness', trait: 'O', traitPath: 'bigFive.O', direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'bf-o-2', text: 'I prefer familiar routines over trying something new.', category: 'personality_assessments', dimension: 'openness', trait: 'O', traitPath: 'bigFive.O', direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Big Five — Conscientiousness (2 items)
+  { id: 'bf-c-1', text: 'I keep a detailed plan and follow through on commitments.', category: 'personality_assessments', dimension: 'conscientiousness', trait: 'C', traitPath: 'bigFive.C', direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'bf-c-2', text: 'I tend to leave things unfinished or improvise instead of planning.', category: 'personality_assessments', dimension: 'conscientiousness', trait: 'C', traitPath: 'bigFive.C', direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Big Five — Extraversion (2 items)
+  { id: 'bf-e-1', text: 'I feel energized after spending time with a group of people.', category: 'personality_assessments', dimension: 'extraversion', trait: 'E', traitPath: 'bigFive.E', direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'bf-e-2', text: 'I prefer solitary activities over social gatherings.', category: 'personality_assessments', dimension: 'extraversion', trait: 'E', traitPath: 'bigFive.E', direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Big Five — Agreeableness (2 items)
+  { id: 'bf-a-1', text: 'I go out of my way to help others, even at personal cost.', category: 'personality_assessments', dimension: 'agreeableness', trait: 'A', traitPath: 'bigFive.A', direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'bf-a-2', text: 'I prioritize my own goals over group harmony.', category: 'personality_assessments', dimension: 'agreeableness', trait: 'A', traitPath: 'bigFive.A', direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Big Five — Neuroticism (2 items)
+  { id: 'bf-n-1', text: 'I frequently worry about things that might go wrong.', category: 'personality_assessments', dimension: 'neuroticism', trait: 'N', traitPath: 'bigFive.N', direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'bf-n-2', text: 'I stay calm and composed under pressure.', category: 'personality_assessments', dimension: 'neuroticism', trait: 'N', traitPath: 'bigFive.N', direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Communication — formality + verbosity (2 items)
+  { id: 'comm-f', text: 'I prefer formal, structured language over casual speech.', category: 'communication', dimension: 'communication', trait: 'formality', traitPath: 'communicationProfile.formality', direction: 1, labels: ['Very Casual', 'Casual', 'Balanced', 'Formal', 'Very Formal'] },
+  { id: 'comm-v', text: 'I prefer thorough, detailed explanations over brief answers.', category: 'communication', dimension: 'communication', trait: 'verbosity', traitPath: 'communicationProfile.verbosity', direction: 1, labels: ['Very Terse', 'Brief', 'Balanced', 'Detailed', 'Very Elaborate'] },
+  // Daily routines — conscientiousness proxy (2 items)
+  { id: 'rout-1', text: 'My day follows a consistent structure and set of rituals.', category: 'daily_routines', dimension: 'conscientiousness', trait: 'C', traitPath: 'bigFive.C', direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'rout-2', text: 'I adapt my schedule spontaneously based on how I feel.', category: 'daily_routines', dimension: 'conscientiousness', trait: 'C', traitPath: 'bigFive.C', direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Values (2 items)
+  { id: 'val-1', text: 'I would sacrifice personal gain to uphold a principle.', category: 'values', dimension: 'values', trait: 'values', traitPath: null, direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'val-2', text: 'Pragmatism matters more to me than idealism.', category: 'values', dimension: 'values', trait: 'values', traitPath: null, direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  // Decision heuristics (2 items)
+  { id: 'dec-1', text: 'I make decisions quickly with available information rather than waiting.', category: 'decision_heuristics', dimension: 'decision_making', trait: 'decision_making', traitPath: null, direction: 1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] },
+  { id: 'dec-2', text: 'I prefer to gather extensive data before committing to a choice.', category: 'decision_heuristics', dimension: 'decision_making', trait: 'decision_making', traitPath: null, direction: -1, labels: ['Strongly Disagree', 'Disagree', 'Neutral', 'Agree', 'Strongly Agree'] }
+];
+
+const SCALE_WEIGHT = 0.3;
+const CONFIDENCE_BOOST = 0.15;
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -240,6 +274,91 @@ async function ensureSoulDir() {
     await mkdir(DIGITAL_TWIN_DIR, { recursive: true });
     console.log(`🧬 Created soul data directory: ${DIGITAL_TWIN_DIR}`);
   }
+}
+
+/**
+ * Call any AI provider (API or CLI) with a prompt and return the response text.
+ */
+async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_tokens = 4000 } = {}) {
+  const timeout = provider.timeout || 300000;
+
+  if (provider.type === 'api') {
+    const headers = { 'Content-Type': 'application/json' };
+    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    const response = await fetch(`${provider.endpoint}/chat/completions`, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature,
+        max_tokens
+      })
+    }).catch((err) => {
+      clearTimeout(timer);
+      return { ok: false, _fetchError: err.name === 'AbortError' ? 'AI request timed out' : err.message };
+    });
+
+    clearTimeout(timer);
+
+    if (response._fetchError) {
+      return { error: response._fetchError };
+    }
+
+    if (!response.ok) {
+      return { error: `Provider API error: ${response.status}` };
+    }
+
+    const data = await response.json();
+    return { text: data.choices?.[0]?.message?.content || '' };
+  }
+
+  // CLI provider — pipe prompt via stdin to avoid arg length limits on large prompts
+  const { spawn } = await import('child_process');
+  return new Promise((resolve) => {
+    const args = [...(provider.args || [])];
+    let output = '';
+    let resolved = false;
+
+    const child = spawn(provider.command, args, {
+      env: { ...process.env, ...provider.envVars },
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    // Pipe prompt via stdin
+    child.stdin.write(prompt);
+    child.stdin.end();
+
+    child.stdout.on('data', (data) => { output += data.toString(); });
+    child.stderr.on('data', (data) => { output += data.toString(); });
+    child.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
+      if (code === 0) {
+        resolve({ text: output });
+      } else {
+        resolve({ error: `CLI exited with code ${code}: ${output.substring(0, 500)}` });
+      }
+    });
+    child.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      resolve({ error: err.message });
+    });
+
+    setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      child.kill();
+      resolve({ error: 'AI request timed out' });
+    }, timeout);
+  });
 }
 
 // =============================================================================
@@ -782,6 +901,26 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
     };
   }
 
+  // Serve unanswered scale questions for this category
+  const answered = meta.enrichment.scaleQuestionsAnswered || {};
+  const categoryScaleQuestions = SCALE_QUESTIONS.filter(q => q.category === category);
+  const unanswered = categoryScaleQuestions.filter(q => !(q.id in answered));
+  if (unanswered.length > 0) {
+    const sq = unanswered[0];
+    return {
+      questionId: generateId(),
+      category,
+      question: sq.text,
+      questionType: 'scale',
+      labels: sq.labels,
+      dimension: sq.dimension,
+      scaleQuestionId: sq.id,
+      isGenerated: false,
+      questionNumber: questionsAnswered + 1,
+      totalQuestions: config.questions.length + categoryScaleQuestions.length
+    };
+  }
+
   // Generate follow-up question using AI
   const existingSoul = await getSoulForPrompt({ maxTokens: 2000 });
 
@@ -847,7 +986,123 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   };
 }
 
+async function processScaleAnswer(data) {
+  const { category, question, scaleValue, scaleQuestionId } = data;
+  const config = ENRICHMENT_CATEGORIES[category];
+  if (!config) throw new Error(`Unknown enrichment category: ${category}`);
+
+  const scaleDef = SCALE_QUESTIONS.find(q => q.id === scaleQuestionId);
+  if (!scaleDef) throw new Error(`Unknown scale question: ${scaleQuestionId}`);
+
+  // Convert 1-5 to 0-1, apply direction
+  const rawScore = (scaleValue - 1) / 4;
+  const adjustedScore = scaleDef.direction === 1 ? rawScore : (1 - rawScore);
+
+  const meta = await loadMeta();
+  if (!meta.traits) meta.traits = {};
+
+  // Update trait score via weighted moving average
+  if (scaleDef.traitPath) {
+    const parts = scaleDef.traitPath.split('.');
+    const section = parts[0]; // e.g. 'bigFive' or 'communicationProfile'
+    const field = parts[1];   // e.g. 'O' or 'formality'
+
+    if (!meta.traits[section]) meta.traits[section] = {};
+    const existing = meta.traits[section][field];
+
+    // communicationProfile fields are integer 1-10
+    if (section === 'communicationProfile') {
+      const mapped = Math.round(adjustedScore * 9) + 1; // 1-10
+      meta.traits[section][field] = existing == null
+        ? mapped
+        : Math.round(existing * (1 - SCALE_WEIGHT) + mapped * SCALE_WEIGHT);
+    } else {
+      meta.traits[section][field] = existing == null
+        ? Math.round(adjustedScore * 100) / 100
+        : Math.round((existing * (1 - SCALE_WEIGHT) + adjustedScore * SCALE_WEIGHT) * 100) / 100;
+    }
+
+    meta.traits.lastAnalyzed = now();
+  }
+
+  // Boost confidence for the dimension
+  if (!meta.confidence) meta.confidence = { overall: 0, dimensions: {}, gaps: [], lastCalculated: now() };
+  if (!meta.confidence.dimensions) meta.confidence.dimensions = {};
+  const currentConf = meta.confidence.dimensions[scaleDef.dimension] || 0;
+  meta.confidence.dimensions[scaleDef.dimension] = Math.min(1, Math.round((currentConf + CONFIDENCE_BOOST) * 100) / 100);
+
+  // Recalculate overall confidence
+  const dimValues = Object.values(meta.confidence.dimensions);
+  meta.confidence.overall = dimValues.length > 0
+    ? Math.round((dimValues.reduce((a, b) => a + b, 0) / dimValues.length) * 100) / 100
+    : 0;
+
+  // Regenerate gap recommendations
+  meta.confidence.gaps = generateGapRecommendations(meta.confidence.dimensions);
+  meta.confidence.lastCalculated = now();
+
+  // Store readable line in target document
+  const labelText = scaleDef.labels[scaleValue - 1] || String(scaleValue);
+  const formattedContent = `### ${question}\n\nResponse: ${labelText} (${scaleValue}/5)\n\n`;
+
+  await ensureSoulDir();
+  const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
+  let existingContent = '';
+  if (existsSync(targetPath)) {
+    existingContent = await readFile(targetPath, 'utf-8');
+  } else {
+    existingContent = `# ${config.label}\n\n`;
+  }
+  await writeFile(targetPath, existingContent + '\n' + formattedContent);
+
+  // Record scale answer
+  if (!meta.enrichment.scaleQuestionsAnswered) meta.enrichment.scaleQuestionsAnswered = {};
+  meta.enrichment.scaleQuestionsAnswered[scaleQuestionId] = scaleValue;
+
+  // Increment questions answered for the category
+  if (!meta.enrichment.questionsAnswered) meta.enrichment.questionsAnswered = {};
+  meta.enrichment.questionsAnswered[category] = (meta.enrichment.questionsAnswered[category] || 0) + 1;
+  meta.enrichment.lastSession = now();
+
+  if (meta.enrichment.questionsAnswered[category] >= 3 &&
+      !meta.enrichment.completedCategories.includes(category)) {
+    meta.enrichment.completedCategories.push(category);
+  }
+
+  // Ensure document is in meta
+  const existingDoc = meta.documents.find(d => d.filename === config.targetDoc);
+  if (!existingDoc) {
+    meta.documents.push({
+      id: generateId(),
+      filename: config.targetDoc,
+      title: config.label,
+      category: config.targetCategory || 'enrichment',
+      enabled: true,
+      priority: 30
+    });
+  }
+
+  await saveMeta(meta);
+
+  digitalTwinEvents.emit('traits:updated', meta.traits);
+  digitalTwinEvents.emit('confidence:calculated', meta.confidence);
+
+  console.log(`📊 Scale answer processed: ${scaleQuestionId}=${scaleValue} → ${scaleDef.dimension} confidence=${meta.confidence.dimensions[scaleDef.dimension]}`);
+
+  return {
+    category,
+    targetDoc: config.targetDoc,
+    contentAdded: formattedContent,
+    traitsUpdated: true,
+    dimension: scaleDef.dimension,
+    newConfidence: meta.confidence.dimensions[scaleDef.dimension]
+  };
+}
+
 export async function processEnrichmentAnswer(data) {
+  // Branch for scale questions
+  if (data.questionType === 'scale') return processScaleAnswer(data);
+
   const { category, question, answer, providerOverride, modelOverride } = data;
   const config = ENRICHMENT_CATEGORIES[category];
 
@@ -1835,6 +2090,9 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
       await saveMeta(meta);
       digitalTwinEvents.emit('traits:analyzed', traits);
 
+      // Recalculate confidence with updated traits
+      await calculateConfidence();
+
       return { traits, analysisNotes: parsedTraits.analysisNotes };
     }
 
@@ -1846,16 +2104,18 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
 
 function parseTraitsResponse(response) {
   const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[1]);
-    return parsed;
+  const jsonStr = jsonMatch ? jsonMatch[1] : (response.trim().startsWith('{') ? response.trim() : null);
+
+  if (!jsonStr) {
+    return { error: 'Failed to parse traits response - no JSON found', rawResponse: response };
   }
 
-  if (response.trim().startsWith('{')) {
-    return JSON.parse(response);
+  const parsed = safeJSONParse(jsonStr, null, { allowArray: false });
+  if (!parsed) {
+    return { error: 'Failed to parse traits response - invalid JSON', rawResponse: response };
   }
 
-  return { error: 'Failed to parse traits response', rawResponse: response };
+  return parsed;
 }
 
 /**
@@ -2581,6 +2841,102 @@ export async function saveImportAsDocument(source, suggestedDoc) {
     enabled: true,
     priority: 5
   });
+}
+
+// =============================================================================
+// ASSESSMENT ANALYZER
+// =============================================================================
+
+/**
+ * Analyze a pasted personality assessment without session management.
+ * Extracts traits, creates/updates documents, and returns gap recommendations.
+ */
+export async function analyzeAssessment(content, providerId, model) {
+  console.log(`🧪 [${now()}] Assessment analysis: provider=${providerId}, model=${model}, content=${content.length} chars`);
+
+  // 1. Load twin context
+  const twinContent = await getAllTwinContent();
+  const meta = await loadMeta();
+  const currentTraits = meta.traits || {};
+  const confidenceBefore = meta.confidence?.overall || 0;
+
+  // 2. Build analysis prompt
+  const analysisPrompt = await buildPrompt('twin-interview-analyze', {
+    twinContent: twinContent || 'No existing twin documents yet.',
+    currentTraits: JSON.stringify(currentTraits, null, 2) || '{}',
+    pastedContent: content
+  }).catch(() => null);
+
+  if (!analysisPrompt) {
+    return { error: 'Analysis prompt template not found' };
+  }
+
+  const provider = await getProviderById(providerId);
+  if (!provider || !provider.enabled) {
+    return { error: 'Provider not found or disabled' };
+  }
+
+  // 3. Call AI for analysis
+  console.log(`🧪 [${now()}] Calling ${provider.name} (${model}), prompt=${analysisPrompt.length} chars`);
+  const aiResponse = await callProviderAI(provider, model, analysisPrompt, { temperature: 0.3, max_tokens: 4000 });
+
+  if (aiResponse.error) {
+    return { error: aiResponse.error };
+  }
+
+  const parsed = parseTraitsResponse(aiResponse.text);
+  if (parsed.error) {
+    return { error: parsed.error };
+  }
+
+  // 4. Apply trait updates
+  const traitUpdates = {};
+  if (parsed.bigFive) traitUpdates.bigFive = parsed.bigFive;
+  if (parsed.valuesHierarchy) traitUpdates.valuesHierarchy = parsed.valuesHierarchy;
+  if (parsed.communicationProfile) traitUpdates.communicationProfile = parsed.communicationProfile;
+
+  if (Object.keys(traitUpdates).length > 0) {
+    await updateTraits(traitUpdates);
+  }
+
+  // 5. Create/update documents from suggestions
+  const docsCreated = [];
+  const docsUpdated = [];
+  for (const doc of (parsed.suggestedDocuments || [])) {
+    if (!doc.filename || !doc.content) continue;
+    const currentMeta = await loadMeta();
+    const existsBefore = currentMeta.documents.some(d => d.filename === doc.filename);
+    const result = await saveImportAsDocument('interview', {
+      filename: doc.filename,
+      title: doc.title || doc.filename.replace('.md', ''),
+      category: doc.category || 'enrichment',
+      content: doc.content
+    });
+    if (result) {
+      (existsBefore ? docsUpdated : docsCreated).push(doc.filename);
+    }
+  }
+
+  // 6. Recalculate confidence with updated content and traits
+  const confidenceResult = await calculateConfidence();
+  const confidenceAfter = confidenceResult.confidence?.overall || confidenceBefore;
+
+  // 7. Get gap recommendations
+  const gaps = await getGapRecommendations();
+
+  const analysisResult = {
+    traitsUpdated: traitUpdates,
+    documentsCreated: docsCreated,
+    documentsUpdated: docsUpdated,
+    newDimensions: parsed.newDimensions || [],
+    confidenceDelta: { before: confidenceBefore, after: confidenceAfter },
+    summary: parsed.summary || 'Analysis complete. Twin profile updated.'
+  };
+
+  digitalTwinEvents.emit('interview:analyzed', { analysisResult });
+  console.log(`🧪 [${now()}] Assessment complete: ${docsCreated.length} created, ${docsUpdated.length} updated, ${Object.keys(traitUpdates).length} trait categories`);
+
+  return { analysisResult, gaps };
 }
 
 /**

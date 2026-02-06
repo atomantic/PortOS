@@ -78,7 +78,8 @@ export const testResultSchema = z.object({
 export const enrichmentProgressSchema = z.object({
   completedCategories: z.array(enrichmentCategoryEnum).default([]),
   lastSession: z.string().datetime().nullable().optional(),
-  questionsAnswered: z.record(enrichmentCategoryEnum, z.number().int().min(0)).optional()
+  questionsAnswered: z.record(enrichmentCategoryEnum, z.number().int().min(0)).optional(),
+  scaleQuestionsAnswered: z.record(z.string(), z.number().int().min(1).max(5)).optional()
 });
 
 // Digital Twin settings schema
@@ -213,10 +214,17 @@ export const enrichmentAnswerInputSchema = z.object({
   questionId: z.string().uuid(),
   category: enrichmentCategoryEnum,
   question: z.string().min(1),
-  answer: z.string().min(1).max(10000),
+  answer: z.string().min(1).max(10000).optional(),
+  scaleValue: z.number().int().min(1).max(5).optional(),
+  questionType: z.enum(['text', 'scale']).default('text'),
+  scaleQuestionId: z.string().optional(),
   providerOverride: z.string().optional(),
   modelOverride: z.string().optional()
-});
+}).refine(
+  data => (data.questionType === 'text' && data.answer) ||
+          (data.questionType === 'scale' && data.scaleValue != null),
+  { message: 'Text questions require answer; scale questions require scaleValue' }
+);
 
 // Export input
 export const exportInputSchema = z.object({
@@ -353,6 +361,15 @@ export const calendarEventSchema = z.object({
 export const importDataInputSchema = z.object({
   source: importSourceEnum,
   data: z.string().min(1).max(10000000), // Up to 10MB of text data
+  providerId: z.string().min(1),
+  model: z.string().min(1)
+});
+
+// --- Assessment Analyzer Schema ---
+
+// Analyze assessment input
+export const analyzeAssessmentInputSchema = z.object({
+  content: z.string().min(50, 'Assessment must be at least 50 characters'),
   providerId: z.string().min(1),
   model: z.string().min(1)
 });

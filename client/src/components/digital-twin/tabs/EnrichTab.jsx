@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
   ChevronRight,
@@ -17,8 +18,10 @@ import toast from 'react-hot-toast';
 
 import { ENRICHMENT_CATEGORIES } from '../constants';
 import ListEnrichment from '../ListEnrichment';
+import ScaleInput from '../ScaleInput';
 
 export default function EnrichTab({ onRefresh }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [categories, setCategories] = useState([]);
   const [progress, setProgress] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +30,7 @@ export default function EnrichTab({ onRefresh }) {
   const [activeCategory, setActiveCategory] = useState(null);
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [answer, setAnswer] = useState('');
+  const [scaleValue, setScaleValue] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingQuestion, setLoadingQuestion] = useState(false);
 
@@ -43,6 +47,16 @@ export default function EnrichTab({ onRefresh }) {
     loadData();
     loadProviders();
   }, []);
+
+  // Auto-select category from query param
+  useEffect(() => {
+    const categoryParam = searchParams.get('category');
+    if (categoryParam && ENRICHMENT_CATEGORIES[categoryParam] && !loading) {
+      startCategory(categoryParam);
+      // Clear the param so back navigation works cleanly
+      setSearchParams({}, { replace: true });
+    }
+  }, [loading, searchParams]);
 
   const loadData = async () => {
     setLoading(true);
@@ -148,24 +162,42 @@ export default function EnrichTab({ onRefresh }) {
     const question = await api.getSoulEnrichQuestion(categoryId);
     setCurrentQuestion(question);
     setAnswer('');
+    setScaleValue(null);
     setLoadingQuestion(false);
   };
 
   const submitAnswer = async () => {
-    if (!answer.trim()) {
+    const isScale = currentQuestion?.questionType === 'scale';
+
+    if (isScale && scaleValue == null) {
+      toast.error('Please select a rating');
+      return;
+    }
+    if (!isScale && !answer.trim()) {
       toast.error('Please provide an answer');
       return;
     }
 
     setSubmitting(true);
-    await api.submitSoulEnrichAnswer({
+
+    const payload = {
       questionId: currentQuestion.questionId,
       category: activeCategory,
-      question: currentQuestion.question,
-      answer: answer.trim()
-    });
+      question: currentQuestion.question
+    };
 
-    toast.success('Answer saved');
+    if (isScale) {
+      payload.questionType = 'scale';
+      payload.scaleValue = scaleValue;
+      payload.scaleQuestionId = currentQuestion.scaleQuestionId;
+    } else {
+      payload.questionType = 'text';
+      payload.answer = answer.trim();
+    }
+
+    await api.submitSoulEnrichAnswer(payload);
+
+    toast.success(isScale ? 'Rating saved' : 'Answer saved');
     await loadData();
 
     // Load next question
@@ -182,6 +214,7 @@ export default function EnrichTab({ onRefresh }) {
     setActiveCategory(null);
     setCurrentQuestion(null);
     setAnswer('');
+    setScaleValue(null);
   };
 
   if (loading) {
@@ -265,23 +298,34 @@ export default function EnrichTab({ onRefresh }) {
           <div className="bg-port-card rounded-lg border border-port-border p-6">
             <div className="mb-6">
               <span className="text-xs text-gray-500 uppercase tracking-wider">
-                {currentQuestion.isGenerated ? 'AI Generated Follow-up' : 'Core Question'}
+                {currentQuestion.questionType === 'scale' ? 'Rate This Statement' : currentQuestion.isGenerated ? 'AI Generated Follow-up' : 'Core Question'}
               </span>
               <h3 className="text-xl text-white mt-2">{currentQuestion.question}</h3>
             </div>
 
             <div className="mb-6">
-              <textarea
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Type your answer here..."
-                rows={6}
-                className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white resize-none focus:outline-none focus:border-port-accent"
-                autoFocus
-              />
-              <div className="text-xs text-gray-500 mt-2">
-                Be as specific as possible. Your answers help create a more accurate digital twin.
-              </div>
+              {currentQuestion.questionType === 'scale' ? (
+                <ScaleInput
+                  labels={currentQuestion.labels}
+                  value={scaleValue}
+                  onChange={setScaleValue}
+                  disabled={submitting}
+                />
+              ) : (
+                <>
+                  <textarea
+                    value={answer}
+                    onChange={(e) => setAnswer(e.target.value)}
+                    placeholder="Type your answer here..."
+                    rows={6}
+                    className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white resize-none focus:outline-none focus:border-port-accent"
+                    autoFocus
+                  />
+                  <div className="text-xs text-gray-500 mt-2">
+                    Be as specific as possible. Your answers help create a more accurate digital twin.
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -295,7 +339,7 @@ export default function EnrichTab({ onRefresh }) {
 
               <button
                 onClick={submitAnswer}
-                disabled={submitting || !answer.trim()}
+                disabled={submitting || (currentQuestion?.questionType === 'scale' ? scaleValue == null : !answer.trim())}
                 className="flex items-center justify-center gap-2 px-6 py-3 min-h-[48px] bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting ? (
