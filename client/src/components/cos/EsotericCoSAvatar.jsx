@@ -1,6 +1,6 @@
 import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Float, MeshDistortMaterial, Sparkles, Stars, Trail } from '@react-three/drei';
+import { Float, MeshDistortMaterial, Sparkles, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 
@@ -162,12 +162,6 @@ function AncientHalo({ color, state }) {
 }
 
 function FloatingRunes({ color }) {
-    // Generate random positions for "runes" (small geometries)
-    const count = 15;
-    const positions = useMemo(() => {
-        return new Float32Array(count * 3).map(() => (Math.random() - 0.5) * 5);
-    }, []);
-
     return (
         <Sparkles 
             count={30}

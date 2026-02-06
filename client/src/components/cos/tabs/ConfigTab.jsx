@@ -62,9 +62,6 @@ function AutonomyControl({ config, onLevelChange }) {
       ? AUTONOMY_LEVELS.find(l => l.id === currentLevel)
       : null;
 
-  // Get current params for comparison
-  const currentParams = previewLevel?.params || {};
-
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 mb-6">
       <div className="flex items-center justify-between mb-3">

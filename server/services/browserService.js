@@ -97,7 +97,7 @@ async function pm2Action(action) {
   const execFileAsync = promisify(execFile);
 
   console.log(`🌐 Browser PM2 ${action}: portos-browser`);
-  const { stdout } = await execFileAsync('pm2', [action, 'portos-browser']);
+  await execFileAsync('pm2', [action, 'portos-browser']);
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle

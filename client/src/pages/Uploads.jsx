@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Upload, Trash2, Download, FileText, Image, File, X, FolderOpen, RefreshCw } from 'lucide-react';
+import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 

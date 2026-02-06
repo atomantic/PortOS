@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
-  ExternalLink, FileText, ChevronDown, ChevronRight
+  FileText, ChevronDown, ChevronRight
 } from 'lucide-react';
 import {
   getBrowserStatus, getBrowserConfig, updateBrowserConfig,
   launchBrowser, stopBrowser, restartBrowser,
-  getBrowserPages, getBrowserLogs
+  getBrowserLogs
 } from '../services/api';
 import toast from 'react-hot-toast';
 

@@ -1,6 +1,6 @@
 import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Float, MeshDistortMaterial, Sparkles, Trail } from '@react-three/drei';
+import { Float, MeshDistortMaterial, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 
@@ -54,8 +54,6 @@ function CyberHead({ color, state, speaking }) {
       }
     }
   });
-
-  const threeColor = new THREE.Color(color);
 
   return (
     <group ref={glitchRef}>
