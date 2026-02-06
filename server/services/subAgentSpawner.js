@@ -1463,8 +1463,11 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
   await updateAgent(agentId, { pid: claudeProcess.pid });
 
   let outputBuffer = '';
+  let rawStreamBuffer = ''; // Raw stdout for stream-json (used for error analysis)
   let hasStartedWorking = false;
   const outputFile = join(agentDir, 'output.txt');
+  const isStreamJson = cliConfig.streamFormat === 'stream-json';
+  const streamParser = isStreamJson ? createStreamJsonParser() : null;
 
   // If no output after 3 seconds, transition from initializing to working to show progress
   const initializationTimeout = setTimeout(async () => {
@@ -1477,7 +1480,6 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
   claudeProcess.stdout.on('data', async (data) => {
     const text = data.toString();
-    outputBuffer += text;
 
     if (!hasStartedWorking) {
       hasStartedWorking = true;
@@ -1485,8 +1487,21 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
       emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
     }
 
-    await writeFile(outputFile, outputBuffer).catch(() => {});
-    await appendAgentOutput(agentId, text);
+    if (streamParser) {
+      // Parse stream-json and emit extracted text lines
+      rawStreamBuffer += text;
+      const lines = streamParser.processChunk(text);
+      for (const line of lines) {
+        outputBuffer += line + '\n';
+        await appendAgentOutput(agentId, line);
+      }
+      await writeFile(outputFile, outputBuffer).catch(() => {});
+    } else {
+      // Non-stream providers: emit raw stdout as before
+      outputBuffer += text;
+      await writeFile(outputFile, outputBuffer).catch(() => {});
+      await appendAgentOutput(agentId, text);
+    }
   });
 
   claudeProcess.stderr.on('data', async (data) => {
@@ -1524,6 +1539,20 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
 
+    // Flush remaining stream parser data
+    if (streamParser) {
+      const remaining = streamParser.flush();
+      for (const line of remaining) {
+        outputBuffer += line + '\n';
+        await appendAgentOutput(agentId, line);
+      }
+      // Use the parsed final result for the output file if available
+      const finalResult = streamParser.getFinalResult();
+      if (finalResult) {
+        outputBuffer = finalResult;
+      }
+    }
+
     // Release execution lane
     if (agentData?.laneName) {
       release(agentId);
@@ -1541,7 +1570,9 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
-    const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, model);
+    // Use raw stream buffer for error analysis (contains full JSON with error details)
+    const analysisBuffer = rawStreamBuffer || outputBuffer;
+    const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
     await completeAgent(agentId, {
       success,
@@ -1607,6 +1638,102 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 }
 
 /**
+ * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
+ * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
+ * The parser handles:
+ *   - content_block_delta: incremental text tokens as they stream
+ *   - tool_use events: shows tool calls for visibility (e.g. "🔧 Using Edit on file.js")
+ *   - result: final result text (used for output file)
+ */
+function createStreamJsonParser() {
+  let lineBuffer = '';
+  let finalResult = '';
+  let textBuffer = '';
+
+  const processChunk = (rawData) => {
+    const lines = [];
+    lineBuffer += rawData;
+
+    // Split on newlines - each JSON object is on its own line
+    const parts = lineBuffer.split('\n');
+    // Keep the last incomplete line in the buffer
+    lineBuffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+
+      let parsed;
+      // Skip non-JSON lines (stderr mixed in, etc.)
+      if (!trimmed.startsWith('{')) continue;
+      parsed = JSON.parse(trimmed);
+      if (!parsed) continue;
+
+      // Extract text from streaming deltas
+      if (parsed.type === 'stream_event') {
+        const event = parsed.event;
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          const text = event.delta.text;
+          textBuffer += text;
+          // Emit complete lines for readability, accumulate partial
+          const textLines = textBuffer.split('\n');
+          textBuffer = textLines.pop() || '';
+          for (const tl of textLines) {
+            lines.push(tl);
+          }
+        }
+        // Show tool use starts for visibility
+        if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const toolName = event.content_block.name || 'unknown';
+          lines.push(`🔧 Using ${toolName}...`);
+        }
+      }
+
+      // Extract tool results from assistant messages
+      if (parsed.type === 'assistant') {
+        const content = parsed.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && typeof block.content === 'string') {
+              // Summarize tool results (first line only to avoid noise)
+              const firstLine = block.content.split('\n')[0]?.substring(0, 200);
+              if (firstLine) {
+                lines.push(`  ↳ ${firstLine}`);
+              }
+            }
+          }
+        }
+      }
+
+      // Capture final result text for output file
+      if (parsed.type === 'result') {
+        // Flush any remaining text buffer
+        if (textBuffer) {
+          lines.push(textBuffer);
+          textBuffer = '';
+        }
+        finalResult = parsed.result || '';
+      }
+    }
+
+    return lines;
+  };
+
+  const flush = () => {
+    const lines = [];
+    if (textBuffer) {
+      lines.push(textBuffer);
+      textBuffer = '';
+    }
+    return lines;
+  };
+
+  const getFinalResult = () => finalResult;
+
+  return { processChunk, flush, getFinalResult };
+}
+
+/**
  * Build spawn command and arguments for a CLI provider
  * Returns { command, args, stdinMode } based on provider type
  */
@@ -1643,6 +1770,9 @@ function buildCliSpawnConfig(provider, model) {
   const args = [
     '--dangerously-skip-permissions', // Unrestricted mode
     '--print',                          // Print output and exit
+    '--output-format', 'stream-json',   // Stream JSON events for live output
+    '--verbose',                        // Required for stream-json
+    '--include-partial-messages',       // Include incremental text deltas
   ];
   if (model) {
     args.push('--model', model);
@@ -1651,7 +1781,8 @@ function buildCliSpawnConfig(provider, model) {
   return {
     command: process.env.CLAUDE_PATH || 'claude',
     args,
-    stdinMode: 'prompt'
+    stdinMode: 'prompt',
+    streamFormat: 'stream-json'
   };
 }
 
@@ -1666,6 +1797,9 @@ function buildSpawnArgs(config, model) {
   const args = [
     '--dangerously-skip-permissions', // Unrestricted mode
     '--print',                          // Print output and exit
+    '--output-format', 'stream-json',   // Stream JSON events for live output
+    '--verbose',                        // Required for stream-json
+    '--include-partial-messages',       // Include incremental text deltas
   ];
 
   // Add model selection if specified

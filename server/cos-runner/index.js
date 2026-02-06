@@ -54,6 +54,87 @@ function isAllowedCommand(command) {
   return ALLOWED_COMMANDS.has(baseName);
 }
 
+/**
+ * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
+ * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
+ */
+function createStreamJsonParser() {
+  let lineBuffer = '';
+  let finalResult = '';
+  let textBuffer = '';
+
+  const processChunk = (rawData) => {
+    const lines = [];
+    lineBuffer += rawData;
+
+    const parts = lineBuffer.split('\n');
+    lineBuffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed || !trimmed.startsWith('{')) continue;
+
+      let parsed;
+      parsed = JSON.parse(trimmed);
+      if (!parsed) continue;
+
+      if (parsed.type === 'stream_event') {
+        const event = parsed.event;
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          const text = event.delta.text;
+          textBuffer += text;
+          const textLines = textBuffer.split('\n');
+          textBuffer = textLines.pop() || '';
+          for (const tl of textLines) {
+            lines.push(tl);
+          }
+        }
+        if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const toolName = event.content_block.name || 'unknown';
+          lines.push(`🔧 Using ${toolName}...`);
+        }
+      }
+
+      if (parsed.type === 'assistant') {
+        const content = parsed.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && typeof block.content === 'string') {
+              const firstLine = block.content.split('\n')[0]?.substring(0, 200);
+              if (firstLine) {
+                lines.push(`  ↳ ${firstLine}`);
+              }
+            }
+          }
+        }
+      }
+
+      if (parsed.type === 'result') {
+        if (textBuffer) {
+          lines.push(textBuffer);
+          textBuffer = '';
+        }
+        finalResult = parsed.result || '';
+      }
+    }
+
+    return lines;
+  };
+
+  const flush = () => {
+    const lines = [];
+    if (textBuffer) {
+      lines.push(textBuffer);
+      textBuffer = '';
+    }
+    return lines;
+  };
+
+  const getFinalResult = () => finalResult;
+
+  return { processChunk, flush, getFinalResult };
+}
+
 // Active agent processes (in memory)
 const activeAgents = new Map();
 
@@ -270,7 +351,10 @@ app.post('/spawn', async (req, res) => {
     command = claudePath;
     spawnArgs = [
       '--dangerously-skip-permissions',
-      '--print'
+      '--print',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages'
     ];
     if (model) {
       spawnArgs.push('--model', model);
@@ -290,13 +374,19 @@ app.post('/spawn', async (req, res) => {
     env: { ...process.env, ...envVars }
   });
 
+  // Detect if stream-json format is active (Claude CLI with streaming)
+  const isStreamJson = spawnArgs.includes('stream-json');
+  const streamParser = isStreamJson ? createStreamJsonParser() : null;
+
   // Store in memory
   activeAgents.set(agentId, {
     process: claudeProcess,
     taskId,
     pid: claudeProcess.pid,
     startedAt: Date.now(),
-    outputBuffer: ''
+    outputBuffer: '',
+    rawStreamBuffer: '',
+    streamParser
   });
 
   // Send prompt via stdin
@@ -307,10 +397,22 @@ app.post('/spawn', async (req, res) => {
   claudeProcess.stdout.on('data', (data) => {
     const text = data.toString();
     const agent = activeAgents.get(agentId);
-    if (agent) {
-      agent.outputBuffer += text;
+
+    if (agent?.streamParser) {
+      // Parse stream-json and emit extracted text lines
+      agent.rawStreamBuffer += text;
+      const lines = agent.streamParser.processChunk(text);
+      for (const line of lines) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
+      }
+    } else {
+      // Non-stream providers: emit raw stdout as before
+      if (agent) {
+        agent.outputBuffer += text;
+      }
+      emitToServer('agent:output', { agentId, text });
     }
-    emitToServer('agent:output', { agentId, text });
   });
 
   // Handle stderr
@@ -334,6 +436,21 @@ app.post('/spawn', async (req, res) => {
   claudeProcess.on('close', async (code) => {
     const agent = activeAgents.get(agentId);
     const duration = Date.now() - (agent?.startedAt || Date.now());
+
+    // Flush remaining stream parser data
+    if (agent?.streamParser) {
+      const remaining = agent.streamParser.flush();
+      for (const line of remaining) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
+      }
+      // Use the parsed final result for the output file if available
+      const finalResult = agent.streamParser.getFinalResult();
+      if (finalResult) {
+        agent.outputBuffer = finalResult;
+      }
+    }
+
     const output = agent?.outputBuffer || '';
 
     console.log(`${code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}`);
