@@ -11,8 +11,10 @@ import { EventEmitter } from 'events';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '..', '..', 'data');
+const PROJECT_ROOT = join(__dirname, '..', '..');
+const DATA_DIR = join(PROJECT_ROOT, 'data');
 const CONFIG_FILE = join(DATA_DIR, 'browser-config.json');
+const ECOSYSTEM_FILE = join(PROJECT_ROOT, 'ecosystem.config.cjs');
 
 export const browserEvents = new EventEmitter();
 
@@ -94,13 +96,13 @@ export async function getHealthStatus() {
 
 // ---------- PM2 process management ----------
 
-async function pm2Action(action) {
+async function pm2Action(action, args) {
   const { execFile } = await import('child_process');
   const { promisify } = await import('util');
   const execFileAsync = promisify(execFile);
 
   console.log(`🌐 Browser PM2 ${action}: portos-browser`);
-  await execFileAsync('pm2', [action, 'portos-browser']);
+  await execFileAsync('pm2', [action, ...args]);
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle
@@ -112,15 +114,16 @@ async function pm2Action(action) {
 }
 
 export async function launchBrowser() {
-  return pm2Action('start');
+  // Use ecosystem file so PM2 has the full process config even after pm2 flush/delete
+  return pm2Action('start', [ECOSYSTEM_FILE, '--only', 'portos-browser']);
 }
 
 export async function stopBrowser() {
-  return pm2Action('stop');
+  return pm2Action('stop', ['portos-browser']);
 }
 
 export async function restartBrowser() {
-  return pm2Action('restart');
+  return pm2Action('restart', ['portos-browser']);
 }
 
 // ---------- PM2 status (process-level) ----------
