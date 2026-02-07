@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
-  FileText, ChevronDown, ChevronRight
+  FileText, ChevronDown, ChevronRight, ExternalLink
 } from 'lucide-react';
 import {
   getBrowserStatus, getBrowserConfig, updateBrowserConfig,
   launchBrowser, stopBrowser, restartBrowser,
-  getBrowserLogs
+  getBrowserLogs, navigateBrowser
 } from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -48,6 +48,7 @@ export default function BrowserPage() {
   const [logs, setLogs] = useState('');
   const [config, setConfig] = useState(null);
   const [configDraft, setConfigDraft] = useState(null);
+  const [navUrl, setNavUrl] = useState('');
 
   const fetchStatus = useCallback(async () => {
     const data = await getBrowserStatus().catch(() => null);
@@ -117,6 +118,23 @@ export default function BrowserPage() {
       toast.success('Browser config saved');
     }
   }, [configDraft]);
+
+  const handleNavigate = useCallback(async () => {
+    const trimmed = navUrl.trim();
+    if (!trimmed) return;
+    const url = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    setActionLoading('navigate');
+    const result = await navigateBrowser(url).catch(err => {
+      toast.error(`Failed to navigate: ${err.message}`);
+      return null;
+    });
+    if (result) {
+      toast.success(`Opened ${url}`);
+      setNavUrl('');
+      await fetchStatus();
+    }
+    setActionLoading(null);
+  }, [navUrl, fetchStatus]);
 
   const isRunning = status?.process?.status === 'online';
   const isConnected = status?.connected;
@@ -378,6 +396,39 @@ export default function BrowserPage() {
               )}
             </div>
           </div>
+
+          {/* Navigate to URL */}
+          {isConnected && (
+            <div className="bg-port-card border border-port-border rounded-xl p-5">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <ExternalLink size={20} className="text-port-accent" />
+                Open URL
+              </h3>
+              <form
+                onSubmit={e => { e.preventDefault(); handleNavigate(); }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={navUrl}
+                  onChange={e => setNavUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-none focus:border-port-accent placeholder-gray-600"
+                />
+                <button
+                  type="submit"
+                  disabled={!navUrl.trim() || actionLoading !== null}
+                  className="flex items-center gap-2 px-5 py-2 bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'navigate'
+                    ? <RefreshCw size={16} className="animate-spin" />
+                    : <Globe size={16} />
+                  }
+                  Go
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* Open Pages */}
           <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">

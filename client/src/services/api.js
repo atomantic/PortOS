@@ -907,6 +907,10 @@ export const getBrowserProcess = () => request('/browser/process');
 export const getBrowserPages = () => request('/browser/pages');
 export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
+export const navigateBrowser = (url) => request('/browser/navigate', {
+  method: 'POST',
+  body: JSON.stringify({ url })
+});
 
 // Default export for simplified imports
 export default {

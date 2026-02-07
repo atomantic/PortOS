@@ -162,6 +162,28 @@ export async function getRecentLogs(lines = 50) {
   return { stdout: stdout || '', stderr: stderr || '' };
 }
 
+// ---------- CDP navigation ----------
+
+export async function navigateToUrl(url) {
+  const config = await loadConfig();
+  const newTabUrl = `http://${config.cdpHost}:${config.cdpPort}/json/new?${encodeURIComponent(url)}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  const response = await fetch(newTabUrl, { method: 'PUT', signal: controller.signal });
+  clearTimeout(timeout);
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`CDP navigate failed (${response.status}): ${text}`);
+  }
+
+  const page = await response.json();
+  console.log(`🌐 Opened ${url} in CDP browser (tab ${page.id})`);
+  return { id: page.id, title: page.title || '(loading)', url: page.url, type: page.type };
+}
+
 // ---------- CDP page listing (connects to the debug endpoint) ----------
 
 export async function getOpenPages() {

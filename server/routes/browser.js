@@ -5,6 +5,10 @@ import * as browserService from '../services/browserService.js';
 const router = express.Router();
 
 // Validation schemas
+const navigateSchema = z.object({
+  url: z.string().url()
+});
+
 const updateConfigSchema = z.object({
   cdpPort: z.number().int().min(1024).max(65535).optional(),
   cdpHost: z.enum(['127.0.0.1', 'localhost', '::1']).optional(),
@@ -52,6 +56,14 @@ router.post('/restart', async (req, res) => {
   console.log('🔄 Browser restart requested');
   const status = await browserService.restartBrowser();
   res.json(status);
+});
+
+// POST /api/browser/navigate - Open a URL in the CDP browser
+router.post('/navigate', async (req, res) => {
+  const { url } = navigateSchema.parse(req.body);
+  console.log(`🌐 Navigate requested: ${url}`);
+  const page = await browserService.navigateToUrl(url);
+  res.json(page);
 });
 
 // GET /api/browser/health - Quick health check
