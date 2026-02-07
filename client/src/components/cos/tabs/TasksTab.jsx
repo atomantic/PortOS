@@ -329,10 +329,13 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {showTemplates && (
               <div className="flex flex-wrap gap-2">
                 {templates.map(template => (
-                  <button
+                  <div
                     key={template.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => applyTemplate(template)}
-                    className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors"
+                    onKeyDown={(e) => e.key === 'Enter' && applyTemplate(template)}
+                    className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
                     title={template.description}
                   >
                     <span>{template.icon || '📝'}</span>
@@ -349,7 +352,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                         <X size={10} />
                       </button>
                     )}
-                  </button>
+                  </div>
                 ))}
               </div>
             )}

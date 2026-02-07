@@ -671,7 +671,6 @@ export async function evaluateTasks() {
       if (tasksToSpawn.length >= availableSlots) break;
       const task = generateTaskFromJob(job);
       tasksToSpawn.push(task);
-      await recordJobExecution(job.id);
       emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
         jobId: job.id,
         category: job.category
@@ -2843,6 +2842,13 @@ async function init() {
   // When an agent completes, immediately try to dequeue the next pending task
   cosEvents.on('agent:completed', () => {
     setImmediate(() => dequeueNextTask());
+  });
+
+  // Record autonomous job execution only after the agent actually spawns
+  cosEvents.on('job:spawned', async ({ jobId }) => {
+    await recordJobExecution(jobId).catch(err =>
+      console.error(`❌ Failed to record job execution for ${jobId}: ${err.message}`)
+    );
   });
 
   const state = await loadState();

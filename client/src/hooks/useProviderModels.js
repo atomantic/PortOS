@@ -24,7 +24,7 @@ export default function useProviderModels({ filter } = {}) {
       setSelectedModel(filtered[0].defaultModel || '');
     }
     setLoading(false);
-  }, [filter]);
+  }, [filter, selectedProviderId]);
 
   useEffect(() => { load(); }, [load]);
 

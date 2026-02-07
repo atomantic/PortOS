@@ -3,7 +3,7 @@
  * Re-exports toolkit runner service functions with local overrides
  */
 import { spawn } from 'child_process';
-import { writeFile, readFile } from 'fs/promises';
+import { writeFile, readFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
@@ -27,6 +27,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   const runsPath = join(aiToolkitInstance.config.dataDir || './data', 'runs');
   const runDir = join(runsPath, runId);
+  await mkdir(runDir, { recursive: true });
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
 
@@ -118,6 +119,13 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
 
 export async function stopRun(runId) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
+  // Check local active runs first (CLI runs spawned by this override)
+  const localProcess = aiToolkitInstance.services.runner._portosActiveRuns?.get(runId);
+  if (localProcess && !localProcess.killed) {
+    localProcess.kill('SIGTERM');
+    aiToolkitInstance.services.runner._portosActiveRuns.delete(runId);
+    return { stopped: true, runId };
+  }
   return aiToolkitInstance.services.runner.stopRun(runId);
 }
 

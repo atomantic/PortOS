@@ -997,10 +997,19 @@ async function syncRunnerAgents() {
   return syncedCount;
 }
 
+// Guard against duplicate spawns for the same task (e.g. immediate spawn + evaluation loop race)
+const spawningTasks = new Set();
+
 /**
  * Spawn an agent for a task
  */
 export async function spawnAgentForTask(task) {
+  if (spawningTasks.has(task.id)) {
+    console.log(`⚠️ Task ${task.id} already being spawned, skipping duplicate`);
+    return null;
+  }
+  spawningTasks.add(task.id);
+
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
   // Determine execution lane and acquire slot
@@ -1031,6 +1040,7 @@ export async function spawnAgentForTask(task) {
 
   // Helper to cleanup on early exit
   const cleanupOnError = (error) => {
+    spawningTasks.delete(task.id);
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
@@ -1211,6 +1221,12 @@ export async function spawnAgentForTask(task) {
 
   // Mark the task as in_progress to prevent re-spawning
   await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user');
+  spawningTasks.delete(task.id);
+
+  // Record autonomous job execution now that the task is confirmed spawning
+  if (task.metadata?.autonomousJob && task.metadata?.jobId) {
+    cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
+  }
 
   // Build CLI-specific spawn configuration
   const cliConfig = buildCliSpawnConfig(provider, selectedModel);
@@ -1754,12 +1770,14 @@ function createStreamJsonParser() {
         if (event?.type === 'content_block_stop') {
           const idx = event.index;
           const tool = activeTools.get(idx);
-          if (tool && tool.inputJson) {
-            const input = safeParse(tool.inputJson);
-            if (input) {
-              const detail = summarizeToolInput(tool.name, input);
-              if (detail) {
-                lines.push(`  → ${detail}`);
+          if (tool) {
+            if (tool.inputJson) {
+              const input = safeParse(tool.inputJson);
+              if (input) {
+                const detail = summarizeToolInput(tool.name, input);
+                if (detail) {
+                  lines.push(`  → ${detail}`);
+                }
               }
             }
             activeTools.delete(idx);

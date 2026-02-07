@@ -152,12 +152,14 @@ function createStreamJsonParser() {
         if (event?.type === 'content_block_stop') {
           const idx = event.index;
           const tool = activeTools.get(idx);
-          if (tool && tool.inputJson) {
-            const input = safeParse(tool.inputJson);
-            if (input) {
-              const detail = summarizeToolInput(tool.name, input);
-              if (detail) {
-                lines.push(`  → ${detail}`);
+          if (tool) {
+            if (tool.inputJson) {
+              const input = safeParse(tool.inputJson);
+              if (input) {
+                const detail = summarizeToolInput(tool.name, input);
+                if (detail) {
+                  lines.push(`  → ${detail}`);
+                }
               }
             }
             activeTools.delete(idx);
