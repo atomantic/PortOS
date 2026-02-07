@@ -55,6 +55,46 @@ function isAllowedCommand(command) {
 }
 
 /**
+ * Summarize tool input into a concise description for display.
+ */
+function summarizeToolInput(toolName, input) {
+  if (!input || typeof input !== 'object') return '';
+  const shorten = (p) => {
+    if (!p || typeof p !== 'string') return '';
+    const parts = p.split('/').filter(Boolean);
+    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : p;
+  };
+  switch (toolName) {
+    case 'Read':
+      return shorten(input.file_path);
+    case 'Edit':
+      return shorten(input.file_path);
+    case 'Write':
+      return shorten(input.file_path);
+    case 'Glob':
+      return input.pattern || '';
+    case 'Grep':
+      return `"${(input.pattern || '').substring(0, 60)}"${input.path ? ` in ${shorten(input.path)}` : ''}`;
+    case 'Bash': {
+      const cmd = input.command || input.description || '';
+      return cmd.substring(0, 80);
+    }
+    case 'Task':
+      return input.description || '';
+    case 'WebFetch':
+      return shorten(input.url || '');
+    case 'WebSearch':
+      return `"${(input.query || '').substring(0, 60)}"`;
+    case 'TodoWrite':
+      return input.todos?.length ? `${input.todos.length} items` : '';
+    case 'NotebookEdit':
+      return shorten(input.notebook_path);
+    default:
+      return '';
+  }
+}
+
+/**
  * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
  * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
  */
@@ -62,6 +102,7 @@ function createStreamJsonParser() {
   let lineBuffer = '';
   let finalResult = '';
   let textBuffer = '';
+  const activeTools = new Map();
 
   const processChunk = (rawData) => {
     const lines = [];
@@ -89,9 +130,33 @@ function createStreamJsonParser() {
             lines.push(tl);
           }
         }
+        // Accumulate tool input JSON deltas
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+          const idx = event.index;
+          const tool = activeTools.get(idx);
+          if (tool) {
+            tool.inputJson += event.delta.partial_json || '';
+          }
+        }
         if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
           const toolName = event.content_block.name || 'unknown';
+          const idx = event.index;
+          activeTools.set(idx, { name: toolName, inputJson: '' });
           lines.push(`🔧 Using ${toolName}...`);
+        }
+        // Emit detailed summary when tool input is complete
+        if (event?.type === 'content_block_stop') {
+          const idx = event.index;
+          const tool = activeTools.get(idx);
+          if (tool && tool.inputJson) {
+            let input;
+            input = JSON.parse(tool.inputJson);
+            const detail = summarizeToolInput(tool.name, input);
+            if (detail) {
+              lines.push(`  → ${detail}`);
+            }
+            activeTools.delete(idx);
+          }
         }
       }
 
