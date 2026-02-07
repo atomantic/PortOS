@@ -12,6 +12,7 @@ import * as taskSchedule from '../services/taskSchedule.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
+import * as productivity from '../services/productivity.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -826,6 +827,28 @@ router.delete('/templates/:id', asyncHandler(async (req, res) => {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
   res.json(result);
+}));
+
+// ============================================================
+// Productivity & Streaks Routes
+// ============================================================
+
+// GET /api/cos/productivity - Get productivity insights and streaks
+router.get('/productivity', asyncHandler(async (req, res) => {
+  const insights = await productivity.getProductivityInsights();
+  res.json(insights);
+}));
+
+// GET /api/cos/productivity/summary - Get quick summary for dashboard
+router.get('/productivity/summary', asyncHandler(async (req, res) => {
+  const summary = await productivity.getProductivitySummary();
+  res.json(summary);
+}));
+
+// POST /api/cos/productivity/recalculate - Force recalculation from history
+router.post('/productivity/recalculate', asyncHandler(async (req, res) => {
+  const data = await productivity.recalculateProductivity();
+  res.json({ success: true, data });
 }));
 
 export default router;
