@@ -15,12 +15,16 @@ const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);
 // portos-server which can proxy connections with proper authentication
 const CDP_HOST = process.env.CDP_HOST || '127.0.0.1';
 
-let browser = null;
+let context = null;
 let headlessMode = true;
 
 async function loadConfig() {
   const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
   return raw ? JSON.parse(raw) : {};
+}
+
+function isConnected() {
+  return context?.browser()?.isConnected() ?? false;
 }
 
 async function launchBrowser() {
@@ -32,12 +36,11 @@ async function launchBrowser() {
 
   console.log(`🌐 Launching browser (headless=${headlessMode}, profile=${profileDir}) CDP on ${CDP_HOST}:${CDP_PORT}`);
 
-  browser = await chromium.launch({
+  context = await chromium.launchPersistentContext(profileDir, {
     headless: headlessMode,
     args: [
       `--remote-debugging-port=${CDP_PORT}`,
       `--remote-debugging-address=${CDP_HOST}`,
-      `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-networking',
@@ -49,20 +52,21 @@ async function launchBrowser() {
     ]
   });
 
-  browser.on('disconnected', () => {
+  context.browser()?.on('disconnected', () => {
     console.log('⚠️ Browser disconnected, restarting...');
+    context = null;
     setTimeout(launchBrowser, 1000);
   });
 
   console.log(`✅ Browser launched, CDP available at ws://${CDP_HOST}:${CDP_PORT}`);
-  return browser;
 }
 
 // Simple health check server
 const healthServer = createServer((req, res) => {
   if (req.url === '/health') {
-    const status = browser && browser.isConnected() ? 'healthy' : 'unhealthy';
-    res.writeHead(browser && browser.isConnected() ? 200 : 503, { 'Content-Type': 'application/json' });
+    const connected = isConnected();
+    const status = connected ? 'healthy' : 'unhealthy';
+    res.writeHead(connected ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status,
       cdpPort: CDP_PORT,
@@ -90,8 +94,8 @@ const healthServer = createServer((req, res) => {
 
 async function shutdown() {
   console.log('🛑 Shutting down browser...');
-  if (browser) {
-    await browser.close();
+  if (context) {
+    await context.close().catch(() => {});
   }
   healthServer.close();
   process.exit(0);
