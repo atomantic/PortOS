@@ -42,25 +42,47 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const [submitting, setSubmitting] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
 
+  const [currentGapIdx, setCurrentGapIdx] = useState(0);
+
   const hasTraits = traits && Object.keys(traits).length > 0;
   const hasEnrichment = (status?.enrichmentProgress?.completedCategories?.length || 0) > 0;
   const hasGaps = gaps && gaps.length > 0;
 
-  const topGap = hasGaps ? gaps[0] : null;
-  const topCategory = topGap?.suggestedCategory;
-  const isListBased = topCategory && ENRICHMENT_CATEGORIES[topCategory]?.listBased;
+  // Use currentGapIdx to allow advancing past exhausted categories
+  const activeGap = hasGaps ? gaps[currentGapIdx] || null : null;
+  const activeCategory = activeGap?.suggestedCategory;
+  const isListBased = activeCategory && ENRICHMENT_CATEGORIES[activeCategory]?.listBased;
 
-  // Load a question for the top gap's category (only for Q&A categories)
+  // Reset gap index when the actual gap categories change (stable dep, not array reference)
+  const gapKey = gaps?.map(g => g.suggestedCategory).join(',') || '';
   useEffect(() => {
-    if (topCategory && !isListBased) {
+    setCurrentGapIdx(0);
+    setQuestion(null);
+  }, [gapKey]);
+
+  // Load a question for the active gap's category (only for Q&A categories)
+  useEffect(() => {
+    if (activeCategory && !isListBased) {
       setSkippedIndices([]);
-      loadQuestion(topCategory);
+      loadQuestion(activeCategory);
     }
-  }, [topCategory, isListBased]);
+  }, [activeCategory, isListBased]);
 
   const loadQuestion = async (category, skipList = []) => {
     setLoading(true);
     const q = await api.getSoulEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
+    if (!q) {
+      // Category exhausted — advance to the next gap with available questions
+      setCurrentGapIdx(prev => {
+        for (let i = prev + 1; i < (gaps?.length || 0); i++) {
+          if (gaps[i]?.suggestedCategory) return i;
+        }
+        return prev; // No more gaps, stay put (render will show completion)
+      });
+      setQuestion(null);
+      setLoading(false);
+      return;
+    }
     setQuestion(q);
     setAnswer('');
     setScaleValue(null);
@@ -78,7 +100,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
 
     const payload = {
       questionId: question.questionId,
-      category: topCategory,
+      category: activeCategory,
       question: question.question
     };
 
@@ -102,16 +124,16 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setScaleValue(null);
     setSkippedIndices([]);
     onRefresh?.();
-    await loadQuestion(topCategory);
+    await loadQuestion(activeCategory);
     setSubmitting(false);
   };
 
   const handleSkip = () => {
-    if (!topCategory || !question) return;
+    if (!activeCategory || !question) return;
     const idx = question.questionType === 'scale' ? -(question.scaleIndex + 1) : question.questionIndex;
     const nextSkipped = idx != null ? [...skippedIndices, idx] : skippedIndices;
     setSkippedIndices(nextSkipped);
-    loadQuestion(topCategory, nextSkipped);
+    loadQuestion(activeCategory, nextSkipped);
   };
 
   const handleKeyDown = (e) => {
@@ -170,12 +192,45 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   }
 
   // Mode 2: Gaps exist - inline question or navigate prompt
-  const urgency = getUrgencyBadge(topGap.confidence);
-  const dimensionLabel = DIMENSION_LABELS[topGap.dimension] || topGap.dimension;
+  // If all Q&A gaps are exhausted (activeGap is null), show completion
+  if (!activeGap) {
+    return (
+      <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-5">
+        <div className="flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 text-green-400 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <h3 className="text-white font-medium mb-1">Enrichment questions complete</h3>
+            <p className="text-sm text-gray-400 mb-3">
+              All available enrichment questions have been answered. Run an interview or behavioral tests to strengthen remaining dimensions.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => navigate('/digital-twin/interview')}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 flex items-center gap-2"
+              >
+                Run Interview
+                <ArrowRight size={14} />
+              </button>
+              <button
+                onClick={() => navigate('/digital-twin/test')}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-500 flex items-center gap-2"
+              >
+                Run Tests
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const urgency = getUrgencyBadge(activeGap.confidence);
+  const dimensionLabel = DIMENSION_LABELS[activeGap.dimension] || activeGap.dimension;
 
   // List-based category: show navigate prompt instead of inline Q&A
   if (isListBased) {
-    const catConfig = ENRICHMENT_CATEGORIES[topCategory];
+    const catConfig = ENRICHMENT_CATEGORIES[activeCategory];
     return (
       <div className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/30 rounded-lg p-5">
         <div className="flex items-start gap-3">
@@ -189,7 +244,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
               Add your {catConfig?.label?.toLowerCase() || 'items'} to strengthen this dimension.
             </p>
             <button
-              onClick={() => navigate(`/digital-twin/enrich?category=${topCategory}`)}
+              onClick={() => navigate(`/digital-twin/enrich?category=${activeCategory}`)}
               className="px-4 py-2 bg-yellow-600 text-white rounded-lg text-sm hover:bg-yellow-500 flex items-center gap-2"
             >
               Add {catConfig?.label || 'Items'}
@@ -258,7 +313,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                   </button>
                 </div>
                 <button
-                  onClick={() => navigate(`/digital-twin/enrich?category=${topCategory}`)}
+                  onClick={() => navigate(`/digital-twin/enrich?category=${activeCategory}`)}
                   className="text-xs text-port-accent hover:text-white"
                 >
                   Full enrichment →
@@ -269,7 +324,15 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
               )}
             </>
           ) : (
-            <p className="text-sm text-gray-400">Unable to load question.</p>
+            <p className="text-sm text-gray-400">
+              All questions for this dimension have been answered.{' '}
+              <button
+                onClick={() => navigate('/digital-twin/interview')}
+                className="text-port-accent hover:text-white"
+              >
+                Run an interview
+              </button>{' '}to strengthen it further.
+            </p>
           )}
         </div>
       </div>
