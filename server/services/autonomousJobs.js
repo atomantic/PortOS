@@ -50,8 +50,6 @@ const DEFAULT_JOBS = [
 
 You are acting as my Chief of Staff, maintaining my GitHub repositories.
 
-My GitHub username is: atomantic
-
 Tasks to perform:
 1. Check my local git repositories for uncommitted changes or stale branches
 2. Look for repositories that haven't been updated recently

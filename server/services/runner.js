@@ -33,16 +33,18 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   const startTime = Date.now();
   let output = '';
 
-  // Build command with args - NO shell: true
-  const args = [...(provider.args || []), prompt];
-  console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')}`);
-  console.log(`📝 Prompt length: ${prompt.length} chars, first 100: ${prompt.substring(0, 100)}`);
+  // Build command with args - prompt passed via stdin to avoid argv limits
+  const args = [...(provider.args || []), '-p', '-'];
+  console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
   const childProcess = spawn(provider.command, args, {
     cwd: workspacePath,
     env: { ...process.env, ...provider.envVars }
-    // Removed shell: true - this fixes the security warning and ensures proper argument handling
   });
+
+  // Pass prompt via stdin to avoid OS argv limits
+  childProcess.stdin.write(prompt);
+  childProcess.stdin.end();
 
   // Track active run (store on the runner service itself for stopRun to access)
   if (!aiToolkitInstance.services.runner._portosActiveRuns) {

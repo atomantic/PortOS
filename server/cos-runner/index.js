@@ -94,6 +94,10 @@ function summarizeToolInput(toolName, input) {
   }
 }
 
+function safeParse(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
 /**
  * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
  * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
@@ -116,7 +120,7 @@ function createStreamJsonParser() {
       if (!trimmed || !trimmed.startsWith('{')) continue;
 
       let parsed;
-      parsed = JSON.parse(trimmed);
+      parsed = safeParse(trimmed);
       if (!parsed) continue;
 
       if (parsed.type === 'stream_event') {
@@ -149,11 +153,12 @@ function createStreamJsonParser() {
           const idx = event.index;
           const tool = activeTools.get(idx);
           if (tool && tool.inputJson) {
-            let input;
-            input = JSON.parse(tool.inputJson);
-            const detail = summarizeToolInput(tool.name, input);
-            if (detail) {
-              lines.push(`  → ${detail}`);
+            const input = safeParse(tool.inputJson);
+            if (input) {
+              const detail = summarizeToolInput(tool.name, input);
+              if (detail) {
+                lines.push(`  → ${detail}`);
+              }
             }
             activeTools.delete(idx);
           }
@@ -464,8 +469,11 @@ app.post('/spawn', async (req, res) => {
     const agent = activeAgents.get(agentId);
 
     if (agent?.streamParser) {
-      // Parse stream-json and emit extracted text lines
+      // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
       agent.rawStreamBuffer += text;
+      if (agent.rawStreamBuffer.length > 512 * 1024) {
+        agent.rawStreamBuffer = agent.rawStreamBuffer.slice(-512 * 1024);
+      }
       const lines = agent.streamParser.processChunk(text);
       for (const line of lines) {
         agent.outputBuffer += line + '\n';

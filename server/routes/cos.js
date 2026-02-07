@@ -733,14 +733,14 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  // Generate task and add to CoS task queue
+  // Generate task and add to CoS internal task queue
   const task = autonomousJobs.generateTaskFromJob(job);
   const result = await cos.addTask({
     description: task.description,
     priority: task.priority,
     context: `Manually triggered autonomous job: ${job.name}`,
-    ...task.metadata
-  }, 'cos');
+    approvalRequired: !task.autoApprove
+  }, 'internal');
   await autonomousJobs.recordJobExecution(job.id);
 
   res.json({ success: true, task: result });

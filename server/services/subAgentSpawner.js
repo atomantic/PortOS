@@ -1488,8 +1488,11 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     }
 
     if (streamParser) {
-      // Parse stream-json and emit extracted text lines
+      // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
       rawStreamBuffer += text;
+      if (rawStreamBuffer.length > 512 * 1024) {
+        rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+      }
       const lines = streamParser.processChunk(text);
       for (const line of lines) {
         outputBuffer += line + '\n';
@@ -1679,6 +1682,10 @@ function summarizeToolInput(toolName, input) {
   }
 }
 
+function safeParse(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
 /**
  * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
  * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
@@ -1712,7 +1719,7 @@ function createStreamJsonParser() {
       let parsed;
       // Skip non-JSON lines (stderr mixed in, etc.)
       if (!trimmed.startsWith('{')) continue;
-      parsed = JSON.parse(trimmed);
+      parsed = safeParse(trimmed);
       if (!parsed) continue;
 
       // Extract text from streaming deltas
@@ -1748,12 +1755,12 @@ function createStreamJsonParser() {
           const idx = event.index;
           const tool = activeTools.get(idx);
           if (tool && tool.inputJson) {
-            let input;
-            // Parse accumulated JSON - may be incomplete for very large inputs
-            input = JSON.parse(tool.inputJson);
-            const detail = summarizeToolInput(tool.name, input);
-            if (detail) {
-              lines.push(`  → ${detail}`);
+            const input = safeParse(tool.inputJson);
+            if (input) {
+              const detail = summarizeToolInput(tool.name, input);
+              if (detail) {
+                lines.push(`  → ${detail}`);
+              }
             }
             activeTools.delete(idx);
           }

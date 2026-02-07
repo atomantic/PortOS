@@ -184,7 +184,8 @@ export async function captureThought(text, providerOverride, modelOverride) {
   console.log(`🧠 Thought captured, classifying in background: ${inboxEntry.id}`);
 
   // Run AI classification in background (don't await)
-  classifyInBackground(inboxEntry.id, text, meta, providerOverride, modelOverride);
+  classifyInBackground(inboxEntry.id, text, meta, providerOverride, modelOverride)
+    .catch(err => console.error(`❌ Background classification failed for ${inboxEntry.id}: ${err.message}`));
 
   return {
     inboxLog: inboxEntry,

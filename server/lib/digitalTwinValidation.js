@@ -207,7 +207,7 @@ export const enrichmentQuestionInputSchema = z.object({
   category: enrichmentCategoryEnum,
   providerOverride: z.string().optional(),
   modelOverride: z.string().optional(),
-  skipIndices: z.array(z.number().int().min(0)).optional()
+  skipIndices: z.array(z.number().int()).optional()
 });
 
 // Enrichment answer input
@@ -225,6 +225,9 @@ export const enrichmentAnswerInputSchema = z.object({
   data => (data.questionType === 'text' && data.answer) ||
           (data.questionType === 'scale' && data.scaleValue != null),
   { message: 'Text questions require answer; scale questions require scaleValue' }
+).refine(
+  data => data.questionType !== 'scale' || data.scaleQuestionId,
+  { message: 'Scale questions require scaleQuestionId' }
 );
 
 // Export input
