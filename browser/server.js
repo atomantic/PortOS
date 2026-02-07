@@ -1,5 +1,13 @@
 import { chromium } from 'playwright';
 import { createServer } from 'http';
+import { readFile, mkdir } from 'fs/promises';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, '..');
+const CONFIG_FILE = resolve(PROJECT_ROOT, 'data', 'browser-config.json');
+const DEFAULT_PROFILE_DIR = resolve(PROJECT_ROOT, 'data', 'browser-profile');
 
 const CDP_PORT = parseInt(process.env.CDP_PORT || '5556', 10);
 const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);
@@ -8,15 +16,28 @@ const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);
 const CDP_HOST = process.env.CDP_HOST || '127.0.0.1';
 
 let browser = null;
+let headlessMode = true;
+
+async function loadConfig() {
+  const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
+  return raw ? JSON.parse(raw) : {};
+}
 
 async function launchBrowser() {
-  console.log(`🌐 Launching persistent Chromium browser with CDP on ${CDP_HOST}:${CDP_PORT}`);
+  const config = await loadConfig();
+  headlessMode = config.headless !== false;
+  const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
+
+  await mkdir(profileDir, { recursive: true });
+
+  console.log(`🌐 Launching browser (headless=${headlessMode}, profile=${profileDir}) CDP on ${CDP_HOST}:${CDP_PORT}`);
 
   browser = await chromium.launch({
-    headless: true,
+    headless: headlessMode,
     args: [
       `--remote-debugging-port=${CDP_PORT}`,
       `--remote-debugging-address=${CDP_HOST}`,
+      `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-networking',
@@ -46,7 +67,8 @@ const healthServer = createServer((req, res) => {
       status,
       cdpPort: CDP_PORT,
       cdpHost: CDP_HOST,
-      cdpEndpoint: `ws://${CDP_HOST}:${CDP_PORT}`
+      cdpEndpoint: `ws://${CDP_HOST}:${CDP_PORT}`,
+      headless: headlessMode
     }));
   } else if (req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });

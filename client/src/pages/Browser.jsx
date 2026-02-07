@@ -115,7 +115,7 @@ export default function BrowserPage() {
     if (saved) {
       setConfig(saved);
       setConfigDraft(saved);
-      toast.success('Browser config saved');
+      toast.success('Browser config saved — restart browser to apply changes');
     }
   }, [configDraft]);
 
@@ -494,9 +494,9 @@ export default function BrowserPage() {
                 <span className="text-sm font-mono text-white">{status?.config?.healthPort || '-'}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">Headless</span>
-                <span className={`text-sm font-medium ${status?.config?.headless ? 'text-port-success' : 'text-port-warning'}`}>
-                  {status?.config?.headless ? 'Yes' : 'No'}
+                <span className="text-gray-400 text-sm">Mode</span>
+                <span className={`text-sm font-medium ${status?.headless === false ? 'text-port-warning' : 'text-port-success'}`}>
+                  {status?.headless === false ? 'Headed (visible)' : 'Headless'}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -524,9 +524,9 @@ export default function BrowserPage() {
             <h3 className="font-semibold text-white mb-3">Usage</h3>
             <ul className="space-y-2 text-sm text-gray-400">
               <li>1. Launch the browser using the controls</li>
-              <li>2. Browser runs as a PM2 process (portos-browser)</li>
-              <li>3. Connect via CDP endpoint for automation</li>
-              <li>4. Sessions persist across restarts</li>
+              <li>2. To sign in to sites, disable headless in Config, restart, then navigate to the login page</li>
+              <li>3. Auth cookies persist across restarts in the browser profile</li>
+              <li>4. Switch back to headless after authenticating</li>
             </ul>
           </div>
         </div>

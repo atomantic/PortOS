@@ -16,13 +16,15 @@ const CONFIG_FILE = join(DATA_DIR, 'browser-config.json');
 
 export const browserEvents = new EventEmitter();
 
+const DEFAULT_PROFILE_DIR = join(DATA_DIR, 'browser-profile');
+
 const DEFAULT_CONFIG = {
   cdpPort: 5556,
   cdpHost: '127.0.0.1',
   healthPort: 5557,
   autoConnect: true,
   headless: true,
-  userDataDir: ''
+  userDataDir: DEFAULT_PROFILE_DIR
 };
 
 let cachedConfig = null;
@@ -85,6 +87,7 @@ export async function getHealthStatus() {
     cdpHost: data.cdpHost || config.cdpHost,
     healthPort: config.healthPort,
     cdpEndpoint: data.cdpEndpoint || `ws://${config.cdpHost}:${config.cdpPort}`,
+    headless: data.headless ?? config.headless,
     status: data.status
   };
 }
