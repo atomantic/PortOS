@@ -54,6 +54,159 @@ function isAllowedCommand(command) {
   return ALLOWED_COMMANDS.has(baseName);
 }
 
+/**
+ * Summarize tool input into a concise description for display.
+ */
+function summarizeToolInput(toolName, input) {
+  if (!input || typeof input !== 'object') return '';
+  const shorten = (p) => {
+    if (!p || typeof p !== 'string') return '';
+    const parts = p.split('/').filter(Boolean);
+    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : p;
+  };
+  switch (toolName) {
+    case 'Read':
+      return shorten(input.file_path);
+    case 'Edit':
+      return shorten(input.file_path);
+    case 'Write':
+      return shorten(input.file_path);
+    case 'Glob':
+      return input.pattern || '';
+    case 'Grep':
+      return `"${(input.pattern || '').substring(0, 60)}"${input.path ? ` in ${shorten(input.path)}` : ''}`;
+    case 'Bash': {
+      const cmd = input.command || input.description || '';
+      return cmd.substring(0, 80);
+    }
+    case 'Task':
+      return input.description || '';
+    case 'WebFetch':
+      return shorten(input.url || '');
+    case 'WebSearch':
+      return `"${(input.query || '').substring(0, 60)}"`;
+    case 'TodoWrite':
+      return input.todos?.length ? `${input.todos.length} items` : '';
+    case 'NotebookEdit':
+      return shorten(input.notebook_path);
+    default:
+      return '';
+  }
+}
+
+function safeParse(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
+/**
+ * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
+ * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
+ */
+function createStreamJsonParser() {
+  let lineBuffer = '';
+  let finalResult = '';
+  let textBuffer = '';
+  const activeTools = new Map();
+
+  const processChunk = (rawData) => {
+    const lines = [];
+    lineBuffer += rawData;
+
+    const parts = lineBuffer.split('\n');
+    lineBuffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed || !trimmed.startsWith('{')) continue;
+
+      let parsed;
+      parsed = safeParse(trimmed);
+      if (!parsed) continue;
+
+      if (parsed.type === 'stream_event') {
+        const event = parsed.event;
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          const text = event.delta.text;
+          textBuffer += text;
+          const textLines = textBuffer.split('\n');
+          textBuffer = textLines.pop() || '';
+          for (const tl of textLines) {
+            lines.push(tl);
+          }
+        }
+        // Accumulate tool input JSON deltas
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+          const idx = event.index;
+          const tool = activeTools.get(idx);
+          if (tool) {
+            tool.inputJson += event.delta.partial_json || '';
+          }
+        }
+        if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const toolName = event.content_block.name || 'unknown';
+          const idx = event.index;
+          activeTools.set(idx, { name: toolName, inputJson: '' });
+          lines.push(`🔧 Using ${toolName}...`);
+        }
+        // Emit detailed summary when tool input is complete
+        if (event?.type === 'content_block_stop') {
+          const idx = event.index;
+          const tool = activeTools.get(idx);
+          if (tool) {
+            if (tool.inputJson) {
+              const input = safeParse(tool.inputJson);
+              if (input) {
+                const detail = summarizeToolInput(tool.name, input);
+                if (detail) {
+                  lines.push(`  → ${detail}`);
+                }
+              }
+            }
+            activeTools.delete(idx);
+          }
+        }
+      }
+
+      if (parsed.type === 'assistant') {
+        const content = parsed.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && typeof block.content === 'string') {
+              const firstLine = block.content.split('\n')[0]?.substring(0, 200);
+              if (firstLine) {
+                lines.push(`  ↳ ${firstLine}`);
+              }
+            }
+          }
+        }
+      }
+
+      if (parsed.type === 'result') {
+        if (textBuffer) {
+          lines.push(textBuffer);
+          textBuffer = '';
+        }
+        finalResult = parsed.result || '';
+      }
+    }
+
+    return lines;
+  };
+
+  const flush = () => {
+    const lines = [];
+    if (textBuffer) {
+      lines.push(textBuffer);
+      textBuffer = '';
+    }
+    return lines;
+  };
+
+  const getFinalResult = () => finalResult;
+
+  return { processChunk, flush, getFinalResult };
+}
+
 // Active agent processes (in memory)
 const activeAgents = new Map();
 
@@ -270,7 +423,10 @@ app.post('/spawn', async (req, res) => {
     command = claudePath;
     spawnArgs = [
       '--dangerously-skip-permissions',
-      '--print'
+      '--print',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages'
     ];
     if (model) {
       spawnArgs.push('--model', model);
@@ -290,13 +446,19 @@ app.post('/spawn', async (req, res) => {
     env: { ...process.env, ...envVars }
   });
 
+  // Detect if stream-json format is active (Claude CLI with streaming)
+  const isStreamJson = spawnArgs.includes('stream-json');
+  const streamParser = isStreamJson ? createStreamJsonParser() : null;
+
   // Store in memory
   activeAgents.set(agentId, {
     process: claudeProcess,
     taskId,
     pid: claudeProcess.pid,
     startedAt: Date.now(),
-    outputBuffer: ''
+    outputBuffer: '',
+    rawStreamBuffer: '',
+    streamParser
   });
 
   // Send prompt via stdin
@@ -307,10 +469,25 @@ app.post('/spawn', async (req, res) => {
   claudeProcess.stdout.on('data', (data) => {
     const text = data.toString();
     const agent = activeAgents.get(agentId);
-    if (agent) {
-      agent.outputBuffer += text;
+
+    if (agent?.streamParser) {
+      // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
+      agent.rawStreamBuffer += text;
+      if (agent.rawStreamBuffer.length > 512 * 1024) {
+        agent.rawStreamBuffer = agent.rawStreamBuffer.slice(-512 * 1024);
+      }
+      const lines = agent.streamParser.processChunk(text);
+      for (const line of lines) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
+      }
+    } else {
+      // Non-stream providers: emit raw stdout as before
+      if (agent) {
+        agent.outputBuffer += text;
+      }
+      emitToServer('agent:output', { agentId, text });
     }
-    emitToServer('agent:output', { agentId, text });
   });
 
   // Handle stderr
@@ -334,6 +511,21 @@ app.post('/spawn', async (req, res) => {
   claudeProcess.on('close', async (code) => {
     const agent = activeAgents.get(agentId);
     const duration = Date.now() - (agent?.startedAt || Date.now());
+
+    // Flush remaining stream parser data
+    if (agent?.streamParser) {
+      const remaining = agent.streamParser.flush();
+      for (const line of remaining) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
+      }
+      // Use the parsed final result for the output file if available
+      const finalResult = agent.streamParser.getFinalResult();
+      if (finalResult) {
+        agent.outputBuffer = finalResult;
+      }
+    }
+
     const output = agent?.outputBuffer || '';
 
     console.log(`${code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}`);

@@ -13,7 +13,7 @@ import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog } from './cos.js';
+import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog, getTaskById } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
@@ -997,10 +997,19 @@ async function syncRunnerAgents() {
   return syncedCount;
 }
 
+// Guard against duplicate spawns for the same task (e.g. immediate spawn + evaluation loop race)
+const spawningTasks = new Set();
+
 /**
  * Spawn an agent for a task
  */
 export async function spawnAgentForTask(task) {
+  if (spawningTasks.has(task.id)) {
+    console.log(`⚠️ Task ${task.id} already being spawned, skipping duplicate`);
+    return null;
+  }
+  spawningTasks.add(task.id);
+
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
   // Determine execution lane and acquire slot
@@ -1009,6 +1018,7 @@ export async function spawnAgentForTask(task) {
     // Wait for lane availability (max 30 seconds)
     const laneResult = await waitForLane(laneName, agentId, { timeoutMs: 30000, metadata: { taskId: task.id } });
     if (!laneResult.success) {
+      spawningTasks.delete(task.id);
       emitLog('warning', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
       cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'lane-capacity', lane: laneName });
       return null;
@@ -1016,6 +1026,7 @@ export async function spawnAgentForTask(task) {
   } else {
     const laneResult = acquire(laneName, agentId, { taskId: task.id });
     if (!laneResult.success) {
+      spawningTasks.delete(task.id);
       emitLog('warning', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
       return null;
     }
@@ -1031,6 +1042,7 @@ export async function spawnAgentForTask(task) {
 
   // Helper to cleanup on early exit
   const cleanupOnError = (error) => {
+    spawningTasks.delete(task.id);
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
@@ -1210,7 +1222,21 @@ export async function spawnAgentForTask(task) {
   emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}`, { agentId, taskId: task.id });
 
   // Mark the task as in_progress to prevent re-spawning
-  await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user');
+  const updateResult = await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user')
+    .catch(err => {
+      console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
+      return null;
+    });
+  spawningTasks.delete(task.id);
+  if (!updateResult) {
+    cleanupOnError('Failed to update task status');
+    return null;
+  }
+
+  // Record autonomous job execution now that the task is confirmed spawning
+  if (task.metadata?.autonomousJob && task.metadata?.jobId) {
+    cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
+  }
 
   // Build CLI-specific spawn configuration
   const cliConfig = buildCliSpawnConfig(provider, selectedModel);
@@ -1313,7 +1339,37 @@ async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provi
 async function handleAgentCompletion(agentId, exitCode, success, duration) {
   const agent = runnerAgents.get(agentId);
   if (!agent) {
-    console.log(`⚠️ Received completion for unknown agent: ${agentId}`);
+    // Agent not in memory map (server restarted). Check cos state for context.
+    const { getAgent: getAgentState } = await import('./cos.js');
+    const cosAgent = await getAgentState(agentId).catch(() => null);
+    if (!cosAgent) {
+      console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
+      return;
+    }
+    if (cosAgent.status === 'completed') {
+      console.log(`✅ Agent ${agentId} already completed (handled by orphan cleanup)`);
+      return;
+    }
+    // Agent still running in cos state but not in memory - handle completion with cos data
+    console.log(`🔄 Completing untracked agent ${agentId} from cos state (post-restart)`);
+    await completeAgent(agentId, {
+      success,
+      exitCode,
+      duration,
+      orphaned: true,
+      error: success ? undefined : 'Agent completed after server restart'
+    });
+    if (cosAgent.taskId) {
+      const task = await getTaskById(cosAgent.taskId).catch(() => null);
+      if (task && task.status !== 'completed') {
+        const taskType = task.taskType || 'user';
+        if (success) {
+          await updateTask(cosAgent.taskId, { status: 'completed' }, taskType);
+        } else {
+          await updateTask(cosAgent.taskId, { status: 'ready', metadata: { retryReason: 'orphaned-agent' } }, taskType);
+        }
+      }
+    }
     return;
   }
 
@@ -1463,8 +1519,11 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
   await updateAgent(agentId, { pid: claudeProcess.pid });
 
   let outputBuffer = '';
+  let rawStreamBuffer = ''; // Raw stdout for stream-json (used for error analysis)
   let hasStartedWorking = false;
   const outputFile = join(agentDir, 'output.txt');
+  const isStreamJson = cliConfig.streamFormat === 'stream-json';
+  const streamParser = isStreamJson ? createStreamJsonParser() : null;
 
   // If no output after 3 seconds, transition from initializing to working to show progress
   const initializationTimeout = setTimeout(async () => {
@@ -1477,7 +1536,6 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
   claudeProcess.stdout.on('data', async (data) => {
     const text = data.toString();
-    outputBuffer += text;
 
     if (!hasStartedWorking) {
       hasStartedWorking = true;
@@ -1485,8 +1543,24 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
       emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
     }
 
-    await writeFile(outputFile, outputBuffer).catch(() => {});
-    await appendAgentOutput(agentId, text);
+    if (streamParser) {
+      // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
+      rawStreamBuffer += text;
+      if (rawStreamBuffer.length > 512 * 1024) {
+        rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+      }
+      const lines = streamParser.processChunk(text);
+      for (const line of lines) {
+        outputBuffer += line + '\n';
+        await appendAgentOutput(agentId, line);
+      }
+      await writeFile(outputFile, outputBuffer).catch(() => {});
+    } else {
+      // Non-stream providers: emit raw stdout as before
+      outputBuffer += text;
+      await writeFile(outputFile, outputBuffer).catch(() => {});
+      await appendAgentOutput(agentId, text);
+    }
   });
 
   claudeProcess.stderr.on('data', async (data) => {
@@ -1524,6 +1598,20 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
 
+    // Flush remaining stream parser data
+    if (streamParser) {
+      const remaining = streamParser.flush();
+      for (const line of remaining) {
+        outputBuffer += line + '\n';
+        await appendAgentOutput(agentId, line);
+      }
+      // Use the parsed final result for the output file if available
+      const finalResult = streamParser.getFinalResult();
+      if (finalResult) {
+        outputBuffer = finalResult;
+      }
+    }
+
     // Release execution lane
     if (agentData?.laneName) {
       release(agentId);
@@ -1541,7 +1629,9 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
-    const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, model);
+    // Use raw stream buffer for error analysis (contains full JSON with error details)
+    const analysisBuffer = rawStreamBuffer || outputBuffer;
+    const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
     await completeAgent(agentId, {
       success,
@@ -1607,6 +1697,179 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 }
 
 /**
+ * Summarize tool input into a concise description for display.
+ * Extracts the most relevant parameter from each tool type.
+ */
+function summarizeToolInput(toolName, input) {
+  if (!input || typeof input !== 'object') return '';
+  const shorten = (p) => {
+    if (!p || typeof p !== 'string') return '';
+    // Strip long absolute paths to just filename or last 2 segments
+    const parts = p.split('/').filter(Boolean);
+    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : p;
+  };
+  switch (toolName) {
+    case 'Read':
+      return shorten(input.file_path);
+    case 'Edit':
+      return shorten(input.file_path);
+    case 'Write':
+      return shorten(input.file_path);
+    case 'Glob':
+      return input.pattern || '';
+    case 'Grep':
+      return `"${(input.pattern || '').substring(0, 60)}"${input.path ? ` in ${shorten(input.path)}` : ''}`;
+    case 'Bash': {
+      const cmd = input.command || input.description || '';
+      return cmd.substring(0, 80);
+    }
+    case 'Task':
+      return input.description || '';
+    case 'WebFetch':
+      return shorten(input.url || '');
+    case 'WebSearch':
+      return `"${(input.query || '').substring(0, 60)}"`;
+    case 'TodoWrite':
+      return input.todos?.length ? `${input.todos.length} items` : '';
+    case 'NotebookEdit':
+      return shorten(input.notebook_path);
+    default:
+      return '';
+  }
+}
+
+function safeParse(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
+/**
+ * Create a Claude stream-json parser that extracts human-readable text from JSON stream events.
+ * Returns a stateful parser with a `processChunk(data)` method that returns extracted text lines.
+ * The parser handles:
+ *   - content_block_delta: incremental text tokens as they stream
+ *   - tool_use events: shows tool calls with input details (e.g. "🔧 Read …/services/api.js")
+ *   - input_json_delta: accumulates tool input JSON for detailed summaries
+ *   - content_block_stop: emits detailed tool summary when input is complete
+ *   - result: final result text (used for output file)
+ */
+function createStreamJsonParser() {
+  let lineBuffer = '';
+  let finalResult = '';
+  let textBuffer = '';
+  // Track active tool blocks by index for input accumulation
+  const activeTools = new Map(); // index -> { name, inputJson }
+
+  const processChunk = (rawData) => {
+    const lines = [];
+    lineBuffer += rawData;
+
+    // Split on newlines - each JSON object is on its own line
+    const parts = lineBuffer.split('\n');
+    // Keep the last incomplete line in the buffer
+    lineBuffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+
+      let parsed;
+      // Skip non-JSON lines (stderr mixed in, etc.)
+      if (!trimmed.startsWith('{')) continue;
+      parsed = safeParse(trimmed);
+      if (!parsed) continue;
+
+      // Extract text from streaming deltas
+      if (parsed.type === 'stream_event') {
+        const event = parsed.event;
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          const text = event.delta.text;
+          textBuffer += text;
+          // Emit complete lines for readability, accumulate partial
+          const textLines = textBuffer.split('\n');
+          textBuffer = textLines.pop() || '';
+          for (const tl of textLines) {
+            lines.push(tl);
+          }
+        }
+        // Accumulate tool input JSON deltas
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+          const idx = event.index;
+          const tool = activeTools.get(idx);
+          if (tool) {
+            tool.inputJson += event.delta.partial_json || '';
+          }
+        }
+        // Track tool use start - record name and begin accumulating input
+        if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const toolName = event.content_block.name || 'unknown';
+          const idx = event.index;
+          activeTools.set(idx, { name: toolName, inputJson: '' });
+          lines.push(`🔧 Using ${toolName}...`);
+        }
+        // When tool input is complete, emit a detailed summary line
+        if (event?.type === 'content_block_stop') {
+          const idx = event.index;
+          const tool = activeTools.get(idx);
+          if (tool) {
+            if (tool.inputJson) {
+              const input = safeParse(tool.inputJson);
+              if (input) {
+                const detail = summarizeToolInput(tool.name, input);
+                if (detail) {
+                  lines.push(`  → ${detail}`);
+                }
+              }
+            }
+            activeTools.delete(idx);
+          }
+        }
+      }
+
+      // Extract tool results from assistant messages
+      if (parsed.type === 'assistant') {
+        const content = parsed.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && typeof block.content === 'string') {
+              // Summarize tool results (first line only to avoid noise)
+              const firstLine = block.content.split('\n')[0]?.substring(0, 200);
+              if (firstLine) {
+                lines.push(`  ↳ ${firstLine}`);
+              }
+            }
+          }
+        }
+      }
+
+      // Capture final result text for output file
+      if (parsed.type === 'result') {
+        // Flush any remaining text buffer
+        if (textBuffer) {
+          lines.push(textBuffer);
+          textBuffer = '';
+        }
+        finalResult = parsed.result || '';
+      }
+    }
+
+    return lines;
+  };
+
+  const flush = () => {
+    const lines = [];
+    if (textBuffer) {
+      lines.push(textBuffer);
+      textBuffer = '';
+    }
+    return lines;
+  };
+
+  const getFinalResult = () => finalResult;
+
+  return { processChunk, flush, getFinalResult };
+}
+
+/**
  * Build spawn command and arguments for a CLI provider
  * Returns { command, args, stdinMode } based on provider type
  */
@@ -1643,6 +1906,9 @@ function buildCliSpawnConfig(provider, model) {
   const args = [
     '--dangerously-skip-permissions', // Unrestricted mode
     '--print',                          // Print output and exit
+    '--output-format', 'stream-json',   // Stream JSON events for live output
+    '--verbose',                        // Required for stream-json
+    '--include-partial-messages',       // Include incremental text deltas
   ];
   if (model) {
     args.push('--model', model);
@@ -1651,7 +1917,8 @@ function buildCliSpawnConfig(provider, model) {
   return {
     command: process.env.CLAUDE_PATH || 'claude',
     args,
-    stdinMode: 'prompt'
+    stdinMode: 'prompt',
+    streamFormat: 'stream-json'
   };
 }
 
@@ -1666,6 +1933,9 @@ function buildSpawnArgs(config, model) {
   const args = [
     '--dangerously-skip-permissions', // Unrestricted mode
     '--print',                          // Print output and exit
+    '--output-format', 'stream-json',   // Stream JSON events for live output
+    '--verbose',                        // Required for stream-json
+    '--include-partial-messages',       // Include incremental text deltas
   ];
 
   // Add model selection if specified
@@ -1899,6 +2169,22 @@ export async function terminateAgent(agentId) {
   // Mark agent as completed immediately with termination status
   await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
 
+  // Block task immediately (don't defer to close handler — prevents requeue on server restart)
+  if (agent.taskId) {
+    const task = await getTaskById(agent.taskId).catch(() => null);
+    if (task) {
+      await updateTask(agent.taskId, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: 'Terminated by user',
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
+        }
+      }, task.taskType || 'user');
+    }
+  }
+
   // Kill the process
   agent.process.kill('SIGTERM');
 
@@ -1992,6 +2278,22 @@ export async function killAgent(agentId) {
 
   // Mark agent as completed immediately with kill status
   await completeAgent(agentId, { success: false, error: 'Agent force killed by user (SIGKILL)' });
+
+  // Block task immediately (don't defer to close handler — prevents requeue on server restart)
+  if (agent.taskId) {
+    const task = await getTaskById(agent.taskId).catch(() => null);
+    if (task) {
+      await updateTask(agent.taskId, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: 'Force killed by user',
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
+        }
+      }, task.taskType || 'user');
+    }
+  }
 
   // Kill the process immediately with SIGKILL
   agent.process.kill('SIGKILL');
@@ -2187,6 +2489,12 @@ async function handleOrphanedTask(taskId, agentId, getTaskById) {
   const task = await getTaskById(taskId).catch(() => null);
   if (!task) {
     emitLog('warn', `Could not find task ${taskId} for orphaned agent ${agentId}`, { taskId, agentId });
+    return;
+  }
+
+  // Never requeue tasks that were explicitly terminated by the user
+  if (task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') {
+    emitLog('info', `⏭️ Skipping orphaned task ${taskId} — user-terminated`, { taskId, agentId });
     return;
   }
 

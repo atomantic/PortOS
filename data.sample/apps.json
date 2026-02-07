@@ -1,25 +1,61 @@
 {
   "apps": {
-    "portos-autofixer": {
-      "id": "portos-autofixer",
-      "name": "PortOS Autofixer",
-      "description": "Autonomous PM2 crash detection and repair using Claude CLI",
-      "repoPath": "/path/to/PortOS",
+    "portos-default": {
+      "id": "portos-default",
+      "name": "PortOS",
+      "description": "Local App OS portal for dev machines",
+      "repoPath": "__PORTOS_ROOT__",
       "type": "express",
-      "uiPort": 5560,
-      "apiPort": null,
+      "uiPort": 5555,
+      "apiPort": 5554,
       "startCommands": [
-        "pm2 start ecosystem.config.cjs --only portos-autofixer,portos-autofixer-ui"
+        "npm run dev"
       ],
       "pm2ProcessNames": [
+        "portos-server",
+        "portos-cos",
+        "portos-ui",
         "portos-autofixer",
-        "portos-autofixer-ui"
+        "portos-autofixer-ui",
+        "portos-browser"
       ],
-      "envFile": null,
-      "icon": null,
+      "envFile": ".env",
+      "icon": "portos",
       "editorCommand": "code .",
       "createdAt": "2024-01-01T00:00:00.000Z",
-      "updatedAt": "2024-01-01T00:00:00.000Z"
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "processes": [
+        {
+          "name": "portos-server",
+          "port": 5554,
+          "ports": { "api": 5554 }
+        },
+        {
+          "name": "portos-cos",
+          "port": 5558,
+          "ports": { "api": 5558 }
+        },
+        {
+          "name": "portos-ui",
+          "port": 5555,
+          "ports": { "ui": 5555 }
+        },
+        {
+          "name": "portos-autofixer",
+          "port": 5559,
+          "ports": { "api": 5559 }
+        },
+        {
+          "name": "portos-autofixer-ui",
+          "port": 5560,
+          "ports": { "ui": 5560 }
+        },
+        {
+          "name": "portos-browser",
+          "port": 5556,
+          "ports": { "cdp": 5556, "health": 5557 }
+        }
+      ]
     },
     "example-app-1": {
       "id": "example-app-1",

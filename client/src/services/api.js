@@ -399,6 +399,25 @@ export const getCosLearningPerformance = () => request('/cos/learning/performanc
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
+// CoS Quick Task Templates
+export const getCosTaskTemplates = () => request('/cos/templates');
+export const getCosPopularTemplates = (limit = 5) => request(`/cos/templates/popular?limit=${limit}`);
+export const getCosTemplateCategories = () => request('/cos/templates/categories');
+export const createCosTaskTemplate = (data) => request('/cos/templates', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const createCosTemplateFromTask = (task, templateName) => request('/cos/templates/from-task', {
+  method: 'POST',
+  body: JSON.stringify({ task, templateName })
+});
+export const useCosTaskTemplate = (id) => request(`/cos/templates/${id}/use`, { method: 'POST' });
+export const updateCosTaskTemplate = (id, data) => request(`/cos/templates/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteCosTaskTemplate = (id) => request(`/cos/templates/${id}`, { method: 'DELETE' });
+
 // CoS Scripts
 export const getCosScripts = () => request('/cos/scripts');
 export const getCosScript = (id) => request(`/cos/scripts/${id}`);
@@ -460,6 +479,23 @@ export const addCosScheduleTemplate = (template) => request('/cos/schedule/templ
   body: JSON.stringify(template)
 });
 export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/templates/${templateId}`, { method: 'DELETE' });
+
+// Autonomous Jobs
+export const getCosJobs = () => request('/cos/jobs');
+export const getCosJobsDue = () => request('/cos/jobs/due');
+export const getCosJobIntervals = () => request('/cos/jobs/intervals');
+export const getCosJob = (id) => request(`/cos/jobs/${id}`);
+export const createCosJob = (data) => request('/cos/jobs', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateCosJob = (id, data) => request(`/cos/jobs/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const toggleCosJob = (id) => request(`/cos/jobs/${id}/toggle`, { method: 'POST' });
+export const triggerCosJob = (id) => request(`/cos/jobs/${id}/trigger`, { method: 'POST' });
+export const deleteCosJob = (id) => request(`/cos/jobs/${id}`, { method: 'DELETE' });
 
 // Memory
 export const getMemories = (options = {}) => {
@@ -739,9 +775,9 @@ export const getDigitalTwinEnrichCategories = () => request('/digital-twin/enric
 export const getSoulEnrichCategories = getDigitalTwinEnrichCategories;
 export const getDigitalTwinEnrichProgress = () => request('/digital-twin/enrich/progress');
 export const getSoulEnrichProgress = getDigitalTwinEnrichProgress;
-export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride) => request('/digital-twin/enrich/question', {
+export const getDigitalTwinEnrichQuestion = (category, providerOverride, modelOverride, skipIndices) => request('/digital-twin/enrich/question', {
   method: 'POST',
-  body: JSON.stringify({ category, providerOverride, modelOverride })
+  body: JSON.stringify({ category, providerOverride, modelOverride, ...(skipIndices?.length ? { skipIndices } : {}) })
 });
 export const getSoulEnrichQuestion = getDigitalTwinEnrichQuestion;
 export const submitDigitalTwinEnrichAnswer = (data) => request('/digital-twin/enrich/answer', {
@@ -824,6 +860,13 @@ export const saveDigitalTwinImport = (source, suggestedDoc) => request('/digital
   method: 'POST',
   body: JSON.stringify({ source, suggestedDoc })
 });
+
+// Digital Twin - Assessment Analyzer
+export const analyzeAssessment = (content, providerId, model) =>
+  request('/digital-twin/interview/analyze', {
+    method: 'POST',
+    body: JSON.stringify({ content, providerId, model })
+  });
 
 // Digital Twin - Social Accounts
 export const getSocialAccounts = (params = {}) => {

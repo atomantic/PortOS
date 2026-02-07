@@ -33,6 +33,7 @@ export const TABS = [
   { id: 'test', label: 'Test', icon: CheckCircle },
   { id: 'enrich', label: 'Enrich', icon: Sparkles },
   { id: 'accounts', label: 'Accounts', icon: Globe },
+  { id: 'interview', label: 'Interview', icon: MessageSquare },
   { id: 'import', label: 'Import', icon: Upload },
   { id: 'export', label: 'Export', icon: Download }
 ];
@@ -153,7 +154,8 @@ export const ENRICHMENT_CATEGORIES = {
     label: 'Communication Style',
     description: 'How you prefer to give and receive information',
     icon: MessageSquare,
-    color: 'cyan'
+    color: 'cyan',
+    hasScaleQuestions: true
   },
   decision_making: {
     id: 'decision_making',
@@ -167,7 +169,8 @@ export const ENRICHMENT_CATEGORIES = {
     label: 'Values',
     description: 'Core principles that guide your actions',
     icon: Heart,
-    color: 'pink'
+    color: 'pink',
+    hasScaleQuestions: true
   },
   aesthetics: {
     id: 'aesthetics',
@@ -181,7 +184,8 @@ export const ENRICHMENT_CATEGORIES = {
     label: 'Daily Routines',
     description: 'Habits and rhythms that structure your day',
     icon: Clock,
-    color: 'amber'
+    color: 'amber',
+    hasScaleQuestions: true
   },
   career_skills: {
     id: 'career_skills',
@@ -202,7 +206,8 @@ export const ENRICHMENT_CATEGORIES = {
     label: 'Decision Heuristics',
     description: 'Mental models and shortcuts for making choices',
     icon: GitBranch,
-    color: 'indigo'
+    color: 'indigo',
+    hasScaleQuestions: true
   },
   error_intolerance: {
     id: 'error_intolerance',
@@ -216,7 +221,8 @@ export const ENRICHMENT_CATEGORIES = {
     label: 'Personality Assessments',
     description: 'Myers-Briggs, Big Five, Enneagram, and other personality type results',
     icon: Fingerprint,
-    color: 'sky'
+    color: 'sky',
+    hasScaleQuestions: true
   }
 };
 

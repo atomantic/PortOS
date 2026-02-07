@@ -21,6 +21,7 @@ export { default as EventLog } from './EventLog';
 // Tab Components
 export { default as TasksTab } from './tabs/TasksTab';
 export { default as AgentsTab } from './tabs/AgentsTab';
+export { default as JobsTab } from './tabs/JobsTab';
 export { default as ScriptsTab } from './tabs/ScriptsTab';
 export { default as ScheduleTab } from './tabs/ScheduleTab';
 export { default as LearningTab } from './tabs/LearningTab';

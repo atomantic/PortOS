@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import {
   Send,
   RefreshCw,
@@ -11,7 +12,8 @@ import {
   ExternalLink,
   Trash2,
   Save,
-  X
+  X,
+  Brain
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -47,6 +49,24 @@ export default function InboxTab({ onRefresh, settings }) {
   useEffect(() => {
     fetchInbox();
   }, [fetchInbox]);
+
+  // Listen for background classification results
+  useEffect(() => {
+    const handleClassified = (data) => {
+      if (data.status === 'filed') {
+        toast.success(`Classified as ${data.destination}: ${data.title}`);
+      } else if (data.error) {
+        toast.error(`Classification failed: ${data.error}`);
+      } else {
+        toast(`Low confidence (${Math.round((data.confidence || 0) * 100)}%) — needs review`, { icon: '🤔' });
+      }
+      fetchInbox();
+      onRefresh?.();
+    };
+
+    socket.on('brain:classified', handleClassified);
+    return () => socket.off('brain:classified', handleClassified);
+  }, [fetchInbox, onRefresh]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -155,6 +175,7 @@ export default function InboxTab({ onRefresh, settings }) {
     onRefresh?.();
   };
 
+  const classifyingEntries = entries.filter(e => e.status === 'classifying');
   const needsReviewEntries = entries.filter(e => e.status === 'needs_review');
   const filedEntries = entries.filter(e => e.status === 'filed' || e.status === 'corrected');
   const errorEntries = entries.filter(e => e.status === 'error');
@@ -201,6 +222,35 @@ export default function InboxTab({ onRefresh, settings }) {
           )}
         </p>
       </form>
+
+      {/* Classifying section */}
+      {classifyingEntries.length > 0 && (
+        <div className="mb-4">
+          <div className="flex items-center gap-2 text-port-accent font-medium mb-2">
+            <Brain size={16} className="animate-pulse" />
+            Classifying ({classifyingEntries.length})
+          </div>
+          <div className="space-y-2">
+            {classifyingEntries.map(entry => (
+              <div
+                key={entry.id}
+                className="p-3 bg-port-card border border-port-accent/30 rounded-lg"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-white flex-1">{entry.capturedText}</p>
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4 text-port-accent animate-spin" />
+                    <span className="text-xs text-gray-500 whitespace-nowrap">
+                      {formatRelativeTime(entry.capturedAt)}
+                    </span>
+                  </div>
+                </div>
+                <p className="text-xs text-port-accent mt-1">AI is classifying this thought...</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Needs Review section */}
       {needsReviewEntries.length > 0 && (

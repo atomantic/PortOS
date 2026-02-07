@@ -113,7 +113,7 @@ export default function GapRecommendations({ gaps, maxDisplay = 3 }) {
                   </div>
                 </div>
                 <button
-                  onClick={() => navigate('/digital-twin/enrich')}
+                  onClick={() => navigate(`/digital-twin/enrich?category=${gap.suggestedCategory}`)}
                   className="flex items-center gap-1 text-sm text-port-accent hover:text-white transition-colors"
                 >
                   Enrich
@@ -151,7 +151,7 @@ export default function GapRecommendations({ gaps, maxDisplay = 3 }) {
       </div>
 
       <button
-        onClick={() => navigate('/digital-twin/enrich')}
+        onClick={() => navigate(`/digital-twin/enrich?category=${gaps[0]?.suggestedCategory || ''}`)}
         className="w-full mt-4 px-4 py-3 bg-port-accent/20 border border-port-accent/50 text-port-accent rounded-lg text-sm hover:bg-port-accent/30 transition-colors flex items-center justify-center gap-2"
       >
         Start Enrichment Session

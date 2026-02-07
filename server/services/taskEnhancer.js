@@ -160,10 +160,16 @@ export async function enhanceTaskPrompt(description, context = '') {
 
   enhancedDescription = enhancedDescription.trim();
 
-  // Ensure we have a valid enhanced description
+  // Fall back to original description if enhancement returned empty
   if (!enhancedDescription) {
-    console.warn(`⚠️ Task enhancement returned empty result from ${provider.name}/${model}`);
-    throw new Error('AI enhancement returned empty result');
+    console.warn(`⚠️ Task enhancement returned empty result from ${provider.name}/${model}, using original`);
+    return {
+      enhancedDescription: description,
+      originalDescription: description,
+      model,
+      provider: provider.id,
+      fallback: true
+    };
   }
 
   console.log(`✅ Enhanced task prompt (${enhancedDescription.length} chars) using ${provider.name}/${model}`);

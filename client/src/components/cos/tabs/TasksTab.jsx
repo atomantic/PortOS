@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -32,14 +32,82 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [showCompletedSystemTasks, setShowCompletedSystemTasks] = useState(false);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [showTemplates, setShowTemplates] = useState(true);
   const fileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
 
-  // Fetch task duration estimates from learning data
+  // Fetch task duration estimates and templates
   useEffect(() => {
     api.getCosLearningDurations()
       .then(setDurations)
       .catch(() => setDurations(null));
+
+    api.getCosPopularTemplates(8)
+      .then(data => setTemplates(data.templates || []))
+      .catch(() => setTemplates([]));
+  }, []);
+
+  // Apply template to form
+  const applyTemplate = useCallback(async (template) => {
+    setNewTask({
+      description: template.description,
+      context: template.context || '',
+      model: template.model || '',
+      provider: template.provider || '',
+      app: template.app || ''
+    });
+
+    // Record usage for popularity tracking
+    await api.useCosTaskTemplate(template.id).catch(() => {});
+
+    toast.success(`Template applied: ${template.name}`);
+  }, []);
+
+  // Save current form as template
+  const saveAsTemplate = useCallback(async () => {
+    if (!newTask.description.trim()) {
+      toast.error('Enter a task description first');
+      return;
+    }
+
+    const name = prompt('Template name:', newTask.description.substring(0, 40));
+    if (!name) return;
+
+    const result = await api.createCosTaskTemplate({
+      name,
+      description: newTask.description,
+      context: newTask.context,
+      provider: newTask.provider,
+      model: newTask.model,
+      app: newTask.app
+    }).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+
+    if (result?.success) {
+      toast.success('Template saved');
+      // Refresh templates
+      api.getCosPopularTemplates(8)
+        .then(data => setTemplates(data.templates || []))
+        .catch(() => {});
+    }
+  }, [newTask]);
+
+  // Delete a user template
+  const deleteTemplate = useCallback(async (templateId, e) => {
+    e.stopPropagation();
+
+    const result = await api.deleteCosTaskTemplate(templateId).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+
+    if (result?.success) {
+      toast.success('Template deleted');
+      setTemplates(prev => prev.filter(t => t.id !== templateId));
+    }
   }, []);
 
   // Memoize task arrays to prevent unnecessary re-renders
@@ -245,6 +313,52 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           </button>
         </div>
 
+        {/* Quick Templates */}
+        {templates.length > 0 && (
+          <div className="mb-4">
+            <button
+              onClick={() => setShowTemplates(!showTemplates)}
+              className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors mb-2"
+              aria-expanded={showTemplates}
+            >
+              {showTemplates ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <Zap size={14} className="text-yellow-500" />
+              Quick Templates
+              <span className="text-xs text-gray-600">({templates.length})</span>
+            </button>
+            {showTemplates && (
+              <div className="flex flex-wrap gap-2">
+                {templates.map(template => (
+                  <div
+                    key={template.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => applyTemplate(template)}
+                    onKeyDown={(e) => e.key === 'Enter' && applyTemplate(template)}
+                    className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
+                    title={template.description}
+                  >
+                    <span>{template.icon || '📝'}</span>
+                    <span className="max-w-[120px] truncate">{template.name}</span>
+                    {template.useCount > 0 && (
+                      <span className="text-xs text-gray-600">({template.useCount})</span>
+                    )}
+                    {!template.isBuiltin && (
+                      <button
+                        onClick={(e) => deleteTemplate(template.id, e)}
+                        className="hidden group-hover:flex absolute -top-1 -right-1 w-4 h-4 bg-port-error rounded-full items-center justify-center"
+                        title="Delete template"
+                      >
+                        <X size={10} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Add Task Form */}
         {showAddTask && (
           <div className="bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
@@ -447,7 +561,16 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   ))}
                 </div>
               )}
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={saveAsTemplate}
+                  type="button"
+                  className="flex items-center gap-1 px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-400 hover:text-white rounded-lg text-sm transition-colors min-h-[40px]"
+                  title="Save current form as a reusable template"
+                >
+                  <Bookmark size={14} aria-hidden="true" />
+                  <span className="hidden sm:inline">Save Template</span>
+                </button>
                 <button
                   onClick={handleAddTask}
                   disabled={isEnhancing}

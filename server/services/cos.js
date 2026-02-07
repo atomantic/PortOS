@@ -19,6 +19,7 @@ import { getActiveApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
+import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
 import { formatDuration } from '../lib/fileUtils.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
@@ -102,6 +103,7 @@ const DEFAULT_CONFIG = {
   comprehensiveAppImprovement: true,       // Use comprehensive analysis for managed apps (same as PortOS self-improvement)
   immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
   proactiveMode: true,                     // Be proactive about finding work
+  autonomousJobsEnabled: true,             // Enable recurring autonomous jobs (git maintenance, brain processing, etc.)
   autonomyLevel: 'manager',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   autoFixThresholds: {
@@ -654,6 +656,24 @@ export async function evaluateTasks() {
       emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
         missionId: missionTask.metadata?.missionId,
         appId: missionTask.metadata?.appId
+      });
+    }
+  }
+
+  // Priority 3.5: Autonomous jobs (recurring scheduled jobs)
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.autonomousJobsEnabled) {
+    const dueJobs = await getDueJobs().catch(err => {
+      emitLog('debug', `Autonomous jobs check failed: ${err.message}`);
+      return [];
+    });
+
+    for (const job of dueJobs) {
+      if (tasksToSpawn.length >= availableSlots) break;
+      const task = generateTaskFromJob(job);
+      tasksToSpawn.push(task);
+      emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
+        jobId: job.id,
+        category: job.category
       });
     }
   }
@@ -2555,7 +2575,85 @@ export async function addTask(taskData, taskType = 'user') {
   await writeFile(filePath, markdown);
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'added', task: newTask });
+
+  // Immediately attempt to spawn user tasks if slots are available
+  // This avoids waiting for the next evaluation interval (which is meant for system task generation)
+  if (taskType === 'user') {
+    setImmediate(() => tryImmediateSpawn(newTask));
+  }
+
   return newTask;
+}
+
+/**
+ * Attempt to immediately spawn a newly added user task if there are available agent slots.
+ * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
+ */
+async function tryImmediateSpawn(task) {
+  if (!daemonRunning) return;
+
+  const paused = await isPaused();
+  if (paused) return;
+
+  const state = await loadState();
+  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  if (availableSlots <= 0) {
+    emitLog('debug', `⏳ Queued task ${task.id} - no available slots (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    return;
+  }
+
+  emitLog('info', `⚡ Immediate spawn: ${task.id} (${task.priority || 'MEDIUM'})`, {
+    taskId: task.id,
+    availableSlots
+  });
+  cosEvents.emit('task:ready', { ...task, taskType: 'user' });
+}
+
+/**
+ * When an agent completes (freeing a slot), immediately try to dequeue and spawn the next pending task.
+ * Checks user tasks first, then auto-approved system tasks.
+ */
+async function dequeueNextTask() {
+  if (!daemonRunning) return;
+
+  const paused = await isPaused();
+  if (paused) return;
+
+  const state = await loadState();
+  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  if (availableSlots <= 0) return;
+
+  // Check user tasks first (highest priority)
+  const userTaskData = await getUserTasks();
+  const pendingUserTasks = userTaskData.grouped?.pending || [];
+
+  for (const task of pendingUserTasks) {
+    emitLog('info', `⚡ Dequeue on slot free: ${task.id} (${task.priority || 'MEDIUM'})`, {
+      taskId: task.id,
+      availableSlots
+    });
+    cosEvents.emit('task:ready', { ...task, taskType: 'user' });
+    return; // One at a time — let the next completion trigger more
+  }
+
+  // No user tasks — check auto-approved system tasks
+  const cosTaskData = await getCosTasks();
+  const autoApproved = cosTaskData.autoApproved || [];
+
+  for (const task of autoApproved) {
+    const appId = task.metadata?.app;
+    if (appId) {
+      const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
+      if (onCooldown) continue;
+    }
+    emitLog('info', `⚡ Dequeue system task on slot free: ${task.id}`, { taskId: task.id, availableSlots });
+    cosEvents.emit('task:ready', { ...task, taskType: 'internal' });
+    return;
+  }
 }
 
 const PRIORITY_VALUES = {
@@ -2740,6 +2838,18 @@ export async function approveTask(taskId) {
  */
 async function init() {
   await ensureDirectories();
+
+  // When an agent completes, immediately try to dequeue the next pending task
+  cosEvents.on('agent:completed', () => {
+    setImmediate(() => dequeueNextTask());
+  });
+
+  // Record autonomous job execution only after the agent actually spawns
+  cosEvents.on('job:spawned', async ({ jobId }) => {
+    await recordJobExecution(jobId).catch(err =>
+      console.error(`❌ Failed to record job execution for ${jobId}: ${err.message}`)
+    );
+  });
 
   const state = await loadState();
 

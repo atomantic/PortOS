@@ -9,6 +9,8 @@ import * as appActivity from '../services/appActivity.js';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import * as taskSchedule from '../services/taskSchedule.js';
+import * as autonomousJobs from '../services/autonomousJobs.js';
+import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
@@ -659,5 +661,171 @@ router.get('/schedule/interval-types', (req, res) => {
     }
   });
 });
+
+// ============================================================
+// Autonomous Jobs Routes
+// ============================================================
+
+// GET /api/cos/jobs - Get all autonomous jobs
+router.get('/jobs', asyncHandler(async (req, res) => {
+  const jobs = await autonomousJobs.getAllJobs();
+  const stats = await autonomousJobs.getJobStats();
+  res.json({ jobs, stats });
+}));
+
+// GET /api/cos/jobs/due - Get jobs that are due to run
+router.get('/jobs/due', asyncHandler(async (req, res) => {
+  const due = await autonomousJobs.getDueJobs();
+  res.json({ due });
+}));
+
+// GET /api/cos/jobs/intervals - Get available interval options
+router.get('/jobs/intervals', (req, res) => {
+  res.json({ intervals: autonomousJobs.INTERVAL_OPTIONS });
+});
+
+// GET /api/cos/jobs/:id - Get a single job
+router.get('/jobs/:id', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.getJob(req.params.id);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(job);
+}));
+
+// POST /api/cos/jobs - Create a new autonomous job
+router.post('/jobs', asyncHandler(async (req, res) => {
+  const { name, description, category, interval, intervalMs, enabled, priority, autonomyLevel, promptTemplate } = req.body;
+
+  if (!name || !promptTemplate) {
+    throw new ServerError('name and promptTemplate are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const job = await autonomousJobs.createJob({
+    name, description, category, interval, intervalMs,
+    enabled, priority, autonomyLevel, promptTemplate
+  });
+  res.json({ success: true, job });
+}));
+
+// PUT /api/cos/jobs/:id - Update a job
+router.put('/jobs/:id', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.updateJob(req.params.id, req.body);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true, job });
+}));
+
+// POST /api/cos/jobs/:id/toggle - Toggle job enabled/disabled
+router.post('/jobs/:id/toggle', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.toggleJob(req.params.id);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true, job });
+}));
+
+// POST /api/cos/jobs/:id/trigger - Manually trigger a job now
+router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
+  const job = await autonomousJobs.getJob(req.params.id);
+  if (!job) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  // Generate task and add to CoS internal task queue
+  // Job execution is recorded via the job:spawned event when the agent actually starts
+  const task = autonomousJobs.generateTaskFromJob(job);
+  const result = await cos.addTask({
+    description: task.description,
+    priority: task.priority,
+    context: `Manually triggered autonomous job: ${job.name}`,
+    approvalRequired: !task.autoApprove
+  }, 'internal');
+
+  res.json({ success: true, task: result });
+}));
+
+// DELETE /api/cos/jobs/:id - Delete a job
+router.delete('/jobs/:id', asyncHandler(async (req, res) => {
+  const deleted = await autonomousJobs.deleteJob(req.params.id);
+  if (!deleted) {
+    throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true });
+}));
+
+// ============================================================
+// Quick Task Templates Routes
+// ============================================================
+
+// GET /api/cos/templates - Get all task templates
+router.get('/templates', asyncHandler(async (req, res) => {
+  const templates = await taskTemplates.getAllTemplates();
+  res.json({ templates });
+}));
+
+// GET /api/cos/templates/popular - Get popular templates
+router.get('/templates/popular', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 5;
+  const templates = await taskTemplates.getPopularTemplates(limit);
+  res.json({ templates });
+}));
+
+// GET /api/cos/templates/categories - Get template categories
+router.get('/templates/categories', asyncHandler(async (req, res) => {
+  const categories = await taskTemplates.getCategories();
+  res.json({ categories });
+}));
+
+// POST /api/cos/templates - Create a new template
+router.post('/templates', asyncHandler(async (req, res) => {
+  const { name, icon, description, context, category, provider, model, app } = req.body;
+
+  if (!name || !description) {
+    throw new ServerError('name and description are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const template = await taskTemplates.createTemplate({
+    name, icon, description, context, category, provider, model, app
+  });
+  res.json({ success: true, template });
+}));
+
+// POST /api/cos/templates/from-task - Create template from task
+router.post('/templates/from-task', asyncHandler(async (req, res) => {
+  const { task, templateName } = req.body;
+
+  if (!task || !task.description) {
+    throw new ServerError('task with description is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const template = await taskTemplates.createTemplateFromTask(task, templateName);
+  res.json({ success: true, template });
+}));
+
+// POST /api/cos/templates/:id/use - Record template usage
+router.post('/templates/:id/use', asyncHandler(async (req, res) => {
+  const useCount = await taskTemplates.recordTemplateUsage(req.params.id);
+  res.json({ success: true, useCount });
+}));
+
+// PUT /api/cos/templates/:id - Update a template
+router.put('/templates/:id', asyncHandler(async (req, res) => {
+  const result = await taskTemplates.updateTemplate(req.params.id, req.body);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
+  }
+  res.json({ success: true, template: result });
+}));
+
+// DELETE /api/cos/templates/:id - Delete a template
+router.delete('/templates/:id', asyncHandler(async (req, res) => {
+  const result = await taskTemplates.deleteTemplate(req.params.id);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
+  }
+  res.json(result);
+}));
 
 export default router;
