@@ -53,155 +53,84 @@ function parseMemoryBlocks(output) {
 
 /**
  * Extract implicit patterns from agent output
- * Looks for common patterns that indicate learnings/observations
+ * Focuses on user preferences and values — not implementation details
  */
 function extractPatterns(output) {
   const memories = [];
   let match;
 
-  // Pattern: "I learned that..." or "I discovered that..."
-  const learnedRegex = /(?:I\s+)?(?:learned|discovered|found out|realized|noticed)\s+that\s+(.+?)(?:\.|$)/gi;
-  while ((match = learnedRegex.exec(output)) !== null) {
-    memories.push({
-      type: 'learning',
-      content: match[1].trim(),
-      confidence: 0.6,
-      category: 'other',
-      tags: []
-    });
-  }
-
-  // Pattern: "The codebase uses..." or "This project uses..."
-  const usesRegex = /(?:The\s+)?(?:codebase|project|app|system)\s+uses\s+(.+?)(?:\.|$)/gi;
-  while ((match = usesRegex.exec(output)) !== null) {
-    memories.push({
-      type: 'fact',
-      content: `The codebase uses ${match[1].trim()}`,
-      confidence: 0.7,
-      category: 'codebase',
-      tags: ['architecture']
-    });
-  }
-
-  // Pattern: "User prefers..." or "The user wants..."
-  const prefersRegex = /(?:The\s+)?user\s+(?:prefers|wants|likes|requested)\s+(.+?)(?:\.|$)/gi;
+  // Pattern: "User prefers..." or "The user wants..." or "User values..."
+  const prefersRegex = /(?:The\s+)?user\s+(?:prefers|wants|likes|requested|values|cares about|insists on|prioritizes|expects)\s+(.+?)(?:\.|$)/gi;
   while ((match = prefersRegex.exec(output)) !== null) {
-    memories.push({
-      type: 'preference',
-      content: `User prefers ${match[1].trim()}`,
-      confidence: 0.8,
-      category: 'preferences',
-      tags: ['user-preference']
-    });
-  }
-
-  // Pattern: "I decided to..." or "We should..."
-  const decidedRegex = /(?:I\s+)?(?:decided|chose)\s+to\s+(.+?)\s+because\s+(.+?)(?:\.|$)/gi;
-  while ((match = decidedRegex.exec(output)) !== null) {
-    memories.push({
-      type: 'decision',
-      content: `Decided to ${match[1].trim()} because ${match[2].trim()}`,
-      confidence: 0.7,
-      category: 'workflow',
-      tags: ['decision']
-    });
-  }
-
-  // Pattern: "Note:" or "Important:"
-  const noteRegex = /(?:Note|Important|Remember):\s*(.+?)(?:\.|$)/gi;
-  while ((match = noteRegex.exec(output)) !== null) {
-    memories.push({
-      type: 'context',
-      content: match[1].trim(),
-      confidence: 0.65,
-      category: 'other',
-      tags: ['note']
-    });
-  }
-
-  // Pattern: "No Issues Found" / "No issues detected" / "No fixes required"
-  // High confidence - this is a clear finding that something is working well
-  const noIssuesRegex = /\*\*(?:No\s+(?:Issues?|Problems?|Errors?|Bugs?)\s+Found|No\s+(?:fixes?|changes?)\s+(?:required|needed|necessary))\*\*/gi;
-  if (noIssuesRegex.test(output)) {
-    memories.push({
-      type: 'observation',
-      content: 'Analysis found no issues requiring fixes',
-      confidence: 0.85,
-      category: 'codebase',
-      tags: ['audit-result', 'no-action-needed']
-    });
-  }
-
-  // Pattern: "already well-optimized" / "already has excellent" / "already implemented"
-  // Exclude colons to prevent truncated memories like "Already has excellent responsive design:"
-  const alreadyWorkingRegex = /(?:already|currently)\s+(?:has\s+)?(?:excellent|good|great|proper|well[- ]?optimized|well[- ]?implemented|working\s+well|fully\s+implemented)\s+([^\n.:]+)/gi;
-  while ((match = alreadyWorkingRegex.exec(output)) !== null) {
-    const captured = match[1].trim();
-    // Skip if capture is too short or empty
-    if (captured.length < 5) continue;
-    memories.push({
-      type: 'fact',
-      content: `Already has excellent ${captured}`,
-      confidence: 0.85,
-      category: 'codebase',
-      tags: ['existing-feature', 'no-action-needed']
-    });
-  }
-
-  // Pattern: Conclusion sections - extract the actual conclusion content
-  const conclusionRegex = /#{1,3}\s*Conclusion\s*\n+(.+?)(?:\n\n|\n#|$)/gis;
-  while ((match = conclusionRegex.exec(output)) !== null) {
-    const conclusion = match[1].trim().replace(/\n/g, ' ').substring(0, 300);
-    if (conclusion.length > 20) {
+    const content = match[1].trim();
+    // Only keep if substantive (not just a single word or implementation detail)
+    if (content.length >= 15 && !isImplementationDetail(content)) {
       memories.push({
-        type: 'learning',
-        content: conclusion,
-        confidence: 0.85,
-        category: 'codebase',
-        tags: ['conclusion', 'audit-result']
+        type: 'preference',
+        content: `User prefers ${content}`,
+        confidence: 0.8,
+        category: 'preferences',
+        tags: ['user-preference']
       });
     }
   }
 
-  // Pattern: "The application/UI/system is..." followed by positive assessment
-  const assessmentRegex = /(?:The\s+)?(?:application|app|UI|system|codebase|code)\s+(?:is|has)\s+(?:already\s+)?(?:well[- ]?(?:optimized|designed|structured|implemented)|properly\s+(?:configured|set up)|fully\s+(?:functional|working))/gi;
-  while ((match = assessmentRegex.exec(output)) !== null) {
-    memories.push({
-      type: 'observation',
-      content: match[0].trim(),
-      confidence: 0.8,
-      category: 'codebase',
-      tags: ['assessment', 'status']
-    });
+  // Pattern: User pushed back on something (reveals values)
+  const pushbackRegex = /user\s+(?:pushed back on|rejected|didn't like|asked (?:us|me) to (?:change|redo|fix))\s+(.+?)(?:\.|$)/gi;
+  while ((match = pushbackRegex.exec(output)) !== null) {
+    const content = match[1].trim();
+    if (content.length >= 15 && !isImplementationDetail(content)) {
+      memories.push({
+        type: 'preference',
+        content: `User pushed back on: ${content}`,
+        confidence: 0.8,
+        category: 'values',
+        tags: ['user-feedback', 'values']
+      });
+    }
   }
 
   return memories;
 }
 
 /**
- * Extract task-related context
+ * Check if content is an implementation detail rather than a user insight
  */
-function extractTaskContext(task, output, success) {
-  const memories = [];
+function isImplementationDetail(content) {
+  const lower = content.toLowerCase();
 
-  if (success && task.description) {
-    // Successful task completion - extract what was done
-    const summary = output.length > 500 ? output.substring(0, 500) + '...' : output;
+  // File paths, function names, component references
+  if (/\.(jsx?|tsx?|css|json|md|py|sh|yml)\b/i.test(content)) return true;
+  if (/(?:function|class|component|const|import|export|require)\s/i.test(content)) return true;
 
-    // Look for completion summary at end of output
-    const summaryMatch = output.match(/(?:Summary|Done|Completed):\s*(.+?)(?:\n\n|$)/is);
-    if (summaryMatch) {
-      memories.push({
-        type: 'learning',
-        content: `Task "${task.description.substring(0, 100)}": ${summaryMatch[1].trim()}`,
-        confidence: 0.75,
-        category: 'workflow',
-        tags: ['task-completion']
-      });
-    }
-  }
+  // Specific code references (line numbers, variable names with dots)
+  if (/\b(?:line\s+\d+|\.js\b|\.ts\b)/i.test(content)) return true;
+  if (/[a-z]+\.[a-z]+\(/i.test(content)) return true;
 
-  return memories;
+  // CSS/styling specifics
+  if (/\b(?:\d+px|#[0-9a-f]{3,8}|p[xytblr]-\d|sm:|md:|lg:)\b/i.test(content)) return true;
+
+  // Package/dependency names
+  if (/\b(?:npm|yarn|package\.json|node_modules|import\s+\{)\b/i.test(content)) return true;
+
+  // Port numbers, URLs, endpoints
+  if (/(?:port\s+\d{4}|localhost|\/api\/|endpoint)/i.test(content)) return true;
+
+  // Architecture descriptions (easily discoverable)
+  if (/\b(?:uses?\s+(?:express|react|vite|pm2|socket\.io|zod))\b/i.test(lower)) return true;
+  if (/\b(?:monorepo|middleware|route\s+handler|service\s+layer)\b/i.test(lower)) return true;
+
+  return false;
+}
+
+/**
+ * Extract task-related context
+ * Only extracts if the output reveals something about user preferences
+ */
+function extractTaskContext(_task, _output, _success) {
+  // Task completion summaries are not useful memories — they're git history.
+  // Only the LLM classifier should extract user-insight memories from task output.
+  return [];
 }
 
 /**
@@ -293,9 +222,9 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   // Deduplicate
   const unique = deduplicateMemories(allMemories);
 
-  // Filter by confidence
-  const highConfidence = unique.filter(m => m.confidence >= 0.8);
-  const mediumConfidence = unique.filter(m => m.confidence >= 0.5 && m.confidence < 0.8);
+  // Filter by confidence — only high-quality memories pass through
+  const highConfidence = unique.filter(m => m.confidence >= 0.85);
+  const mediumConfidence = unique.filter(m => m.confidence >= 0.7 && m.confidence < 0.85);
 
   const created = [];
 
