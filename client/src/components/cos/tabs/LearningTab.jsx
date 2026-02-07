@@ -399,7 +399,8 @@ export default function LearningTab() {
                     <thead className="bg-port-bg">
                       <tr>
                         <th className="text-left p-3 text-gray-500 font-medium">Task Type</th>
-                        <th className="text-right p-3 text-gray-500 font-medium">Avg Duration</th>
+                        <th className="text-right p-3 text-gray-500 font-medium">Avg</th>
+                        <th className="text-right p-3 text-gray-500 font-medium" title="P80 estimate used for progress bars">Est</th>
                         <th className="text-right p-3 text-gray-500 font-medium hidden sm:table-cell">Samples</th>
                         <th className="text-right p-3 text-gray-500 font-medium hidden sm:table-cell">Success</th>
                       </tr>
@@ -408,8 +409,11 @@ export default function LearningTab() {
                       {sortedDurations.map(([taskType, data], idx) => (
                         <tr key={idx} className="border-t border-port-border">
                           <td className="p-3 text-gray-300 truncate max-w-[200px]">{taskType}</td>
-                          <td className="p-3 text-right text-cyan-400 font-mono">
+                          <td className="p-3 text-right text-gray-500 font-mono">
                             {formatDuration(data.avgDurationMs)}
+                          </td>
+                          <td className="p-3 text-right text-cyan-400 font-mono" title="P80 estimate used for progress bars and ETAs">
+                            {formatDuration(data.p80DurationMs || data.avgDurationMs)}
                           </td>
                           <td className="p-3 text-right text-gray-500 hidden sm:table-cell">
                             {data.completed}
