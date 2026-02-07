@@ -8,9 +8,11 @@ import { join } from 'path';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
+let runnerConfig = { dataDir: './data', hooks: {} };
 
-export function setAIToolkit(toolkit) {
+export function setAIToolkit(toolkit, config = {}) {
   aiToolkitInstance = toolkit;
+  runnerConfig = { dataDir: config.dataDir || './data', hooks: config.hooks || {} };
 }
 
 export async function createRun(options) {
@@ -25,7 +27,7 @@ export async function createRun(options) {
 export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
 
-  const runsPath = join(aiToolkitInstance.config.dataDir || './data', 'runs');
+  const runsPath = join(runnerConfig.dataDir, 'runs');
   const runDir = join(runsPath, runId);
   await mkdir(runDir, { recursive: true });
   const outputPath = join(runDir, 'output.txt');
@@ -54,7 +56,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   aiToolkitInstance.services.runner._portosActiveRuns.set(runId, childProcess);
 
   // Call hooks
-  aiToolkitInstance.config.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
+  runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
 
   // Set timeout (default 5 min, guard against undefined which would fire immediately)
   const effectiveTimeout = timeout ?? provider.timeout ?? 300000;
@@ -94,7 +96,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
     await writeFile(outputPath, output).catch(() => {});
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
-    aiToolkitInstance.config.hooks?.onRunFailed?.(metadata, metadata.error, output);
+    runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
     onComplete?.(metadata);
   });
 
@@ -124,9 +126,9 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
     if (metadata.success) {
-      aiToolkitInstance.config.hooks?.onRunCompleted?.(metadata, output);
+      runnerConfig.hooks?.onRunCompleted?.(metadata, output);
     } else {
-      aiToolkitInstance.config.hooks?.onRunFailed?.(metadata, metadata.error, output);
+      runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
     }
 
     onComplete?.(metadata);
