@@ -91,7 +91,12 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
       payload.answer = answer.trim();
     }
 
-    await api.submitSoulEnrichAnswer(payload);
+    const result = await api.submitSoulEnrichAnswer(payload).catch(() => null);
+    if (!result) {
+      toast.error('Failed to save response. Please try again.');
+      setSubmitting(false);
+      return;
+    }
     toast.success(isScale ? 'Rating saved' : 'Answer saved');
     setAnswer('');
     setScaleValue(null);

@@ -337,7 +337,15 @@ async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_
 
     child.stdout.on('data', (data) => { output += data.toString(); });
     child.stderr.on('data', (data) => { output += data.toString(); });
+    const timeoutHandle = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      child.kill();
+      resolve({ error: 'AI request timed out' });
+    }, timeout);
+
     child.on('close', (code) => {
+      clearTimeout(timeoutHandle);
       if (resolved) return;
       resolved = true;
       if (code === 0) {
@@ -347,17 +355,11 @@ async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_
       }
     });
     child.on('error', (err) => {
+      clearTimeout(timeoutHandle);
       if (resolved) return;
       resolved = true;
       resolve({ error: err.message });
     });
-
-    setTimeout(() => {
-      if (resolved) return;
-      resolved = true;
-      child.kill();
-      resolve({ error: 'AI request timed out' });
-    }, timeout);
   });
 }
 

@@ -1222,8 +1222,16 @@ export async function spawnAgentForTask(task) {
   emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}`, { agentId, taskId: task.id });
 
   // Mark the task as in_progress to prevent re-spawning
-  await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user');
+  const updateResult = await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user')
+    .catch(err => {
+      console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
+      return null;
+    });
   spawningTasks.delete(task.id);
+  if (!updateResult) {
+    cleanupOnError('Failed to update task status');
+    return null;
+  }
 
   // Record autonomous job execution now that the task is confirmed spawning
   if (task.metadata?.autonomousJob && task.metadata?.jobId) {

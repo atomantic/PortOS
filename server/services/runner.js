@@ -84,7 +84,8 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     await writeFile(outputPath, output);
 
     const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
-    const metadata = metadataStr ? JSON.parse(metadataStr) : {};
+    let metadata = {};
+    try { metadata = JSON.parse(metadataStr); } catch { /* corrupted metadata, start fresh */ }
     metadata.endTime = new Date().toISOString();
     metadata.duration = Date.now() - startTime;
     metadata.exitCode = code;
