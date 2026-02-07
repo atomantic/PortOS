@@ -1339,7 +1339,37 @@ async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provi
 async function handleAgentCompletion(agentId, exitCode, success, duration) {
   const agent = runnerAgents.get(agentId);
   if (!agent) {
-    console.log(`⚠️ Received completion for unknown agent: ${agentId}`);
+    // Agent not in memory map (server restarted). Check cos state for context.
+    const { getAgent: getAgentState } = await import('./cos.js');
+    const cosAgent = await getAgentState(agentId).catch(() => null);
+    if (!cosAgent) {
+      console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
+      return;
+    }
+    if (cosAgent.status === 'completed') {
+      console.log(`✅ Agent ${agentId} already completed (handled by orphan cleanup)`);
+      return;
+    }
+    // Agent still running in cos state but not in memory - handle completion with cos data
+    console.log(`🔄 Completing untracked agent ${agentId} from cos state (post-restart)`);
+    await completeAgent(agentId, {
+      success,
+      exitCode,
+      duration,
+      orphaned: true,
+      error: success ? undefined : 'Agent completed after server restart'
+    });
+    if (cosAgent.taskId) {
+      const task = await getTaskById(cosAgent.taskId).catch(() => null);
+      if (task && task.status !== 'completed') {
+        const taskType = task.taskType || 'user';
+        if (success) {
+          await updateTask(cosAgent.taskId, { status: 'completed' }, taskType);
+        } else {
+          await updateTask(cosAgent.taskId, { status: 'ready', metadata: { retryReason: 'orphaned-agent' } }, taskType);
+        }
+      }
+    }
     return;
   }
 
