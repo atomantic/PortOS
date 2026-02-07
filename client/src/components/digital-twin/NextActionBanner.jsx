@@ -131,7 +131,18 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const handleSkip = () => {
     if (!activeCategory || !question) return;
     const idx = question.questionType === 'scale' ? -(question.scaleIndex + 1) : question.questionIndex;
-    const nextSkipped = idx != null ? [...skippedIndices, idx] : skippedIndices;
+    // Fallback/generated questions have no index — treat skip as category exhaustion
+    if (idx == null) {
+      setCurrentGapIdx(prev => {
+        for (let i = prev + 1; i < (gaps?.length || 0); i++) {
+          if (gaps[i]?.suggestedCategory) return i;
+        }
+        return prev;
+      });
+      setQuestion(null);
+      return;
+    }
+    const nextSkipped = [...skippedIndices, idx];
     setSkippedIndices(nextSkipped);
     loadQuestion(activeCategory, nextSkipped);
   };

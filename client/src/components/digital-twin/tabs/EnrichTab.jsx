@@ -196,7 +196,12 @@ export default function EnrichTab({ onRefresh }) {
       payload.answer = answer.trim();
     }
 
-    await api.submitSoulEnrichAnswer(payload);
+    const result = await api.submitSoulEnrichAnswer(payload).catch(() => null);
+    if (!result) {
+      toast.error('Failed to save response. Please try again.');
+      setSubmitting(false);
+      return;
+    }
 
     toast.success(isScale ? 'Rating saved' : 'Answer saved');
     setSkippedIndices([]);
@@ -210,7 +215,12 @@ export default function EnrichTab({ onRefresh }) {
 
   const skipQuestion = async () => {
     const idx = currentQuestion?.questionType === 'scale' ? -(currentQuestion.scaleIndex + 1) : currentQuestion?.questionIndex;
-    const nextSkipped = idx != null ? [...skippedIndices, idx] : skippedIndices;
+    // Fallback/generated questions have no index — treat skip as category-complete
+    if (idx == null) {
+      setCurrentQuestion(null);
+      return;
+    }
+    const nextSkipped = [...skippedIndices, idx];
     setSkippedIndices(nextSkipped);
     await loadQuestion(activeCategory, nextSkipped);
   };

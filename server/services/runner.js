@@ -77,6 +77,27 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     onData?.(text);
   });
 
+  childProcess.on('error', async (err) => {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    aiToolkitInstance.services.runner._portosActiveRuns?.delete(runId);
+    console.error(`❌ Run ${runId} spawn error: ${err.message}`);
+
+    const metadata = {
+      endTime: new Date().toISOString(),
+      duration: Date.now() - startTime,
+      exitCode: -1,
+      success: false,
+      error: `Spawn failed: ${err.message}`,
+      errorCategory: 'spawn_error',
+      outputSize: Buffer.byteLength(output)
+    };
+
+    await writeFile(outputPath, output).catch(() => {});
+    await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+    aiToolkitInstance.config.hooks?.onRunFailed?.(metadata, metadata.error, output);
+    onComplete?.(metadata);
+  });
+
   childProcess.on('close', async (code) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
     aiToolkitInstance.services.runner._portosActiveRuns?.delete(runId);
