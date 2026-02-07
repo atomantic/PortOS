@@ -106,7 +106,7 @@ const DEFAULT_STATE = {
 async function loadState() {
   const data = await readJSONFile(TEMPLATES_FILE);
   if (!data) return { ...DEFAULT_STATE };
-  return data;
+  return { ...DEFAULT_STATE, ...data, userTemplates: data.userTemplates || [], usage: data.usage || {} };
 }
 
 /**

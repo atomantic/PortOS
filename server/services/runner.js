@@ -56,13 +56,14 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   // Call hooks
   aiToolkitInstance.config.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
 
-  // Set timeout
-  const timeoutHandle = setTimeout(() => {
+  // Set timeout (default 5 min, guard against undefined which would fire immediately)
+  const effectiveTimeout = timeout ?? provider.timeout ?? 300000;
+  const timeoutHandle = effectiveTimeout > 0 ? setTimeout(() => {
     if (childProcess && !childProcess.killed) {
-      console.log(`⏱️ Run ${runId} timed out after ${timeout}ms`);
+      console.log(`⏱️ Run ${runId} timed out after ${effectiveTimeout}ms`);
       childProcess.kill('SIGTERM');
     }
-  }, timeout);
+  }, effectiveTimeout) : null;
 
   childProcess.stdout?.on('data', (data) => {
     const text = data.toString();
@@ -77,7 +78,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   });
 
   childProcess.on('close', async (code) => {
-    clearTimeout(timeoutHandle);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     aiToolkitInstance.services.runner._portosActiveRuns?.delete(runId);
 
     await writeFile(outputPath, output);

@@ -43,7 +43,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const [skippedIndices, setSkippedIndices] = useState([]);
 
   const hasTraits = traits && Object.keys(traits).length > 0;
-  const hasEnrichment = (status?.enrichmentProgress?.completedCategories || 0) > 0;
+  const hasEnrichment = (status?.enrichmentProgress?.completedCategories?.length || 0) > 0;
   const hasGaps = gaps && gaps.length > 0;
 
   const topGap = hasGaps ? gaps[0] : null;

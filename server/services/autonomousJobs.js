@@ -295,7 +295,7 @@ async function createJob(jobData) {
     description: jobData.description || '',
     category: jobData.category || 'custom',
     interval: jobData.interval || 'weekly',
-    intervalMs: resolveIntervalMs(jobData.interval, jobData.intervalMs),
+    intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
     enabled: jobData.enabled !== undefined ? jobData.enabled : false,
     priority: jobData.priority || 'MEDIUM',
     autonomyLevel: jobData.autonomyLevel || 'manager',

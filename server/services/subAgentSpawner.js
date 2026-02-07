@@ -1018,6 +1018,7 @@ export async function spawnAgentForTask(task) {
     // Wait for lane availability (max 30 seconds)
     const laneResult = await waitForLane(laneName, agentId, { timeoutMs: 30000, metadata: { taskId: task.id } });
     if (!laneResult.success) {
+      spawningTasks.delete(task.id);
       emitLog('warning', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
       cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'lane-capacity', lane: laneName });
       return null;
@@ -1025,6 +1026,7 @@ export async function spawnAgentForTask(task) {
   } else {
     const laneResult = acquire(laneName, agentId, { taskId: task.id });
     if (!laneResult.success) {
+      spawningTasks.delete(task.id);
       emitLog('warning', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
       return null;
     }
