@@ -205,6 +205,18 @@ export const createCommit = (path, message) => request('/git/commit', {
   method: 'POST',
   body: JSON.stringify({ path, message })
 });
+export const updateBranches = (path) => request('/git/update-branches', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});
+export const getBranchComparison = (path, base, head) => request('/git/branch-comparison', {
+  method: 'POST',
+  body: JSON.stringify({ path, base, head })
+});
+export const pushBranch = (path, branch) => request('/git/push', {
+  method: 'POST',
+  body: JSON.stringify({ path, branch })
+});
 
 // Usage
 export const getUsage = () => request('/usage');
