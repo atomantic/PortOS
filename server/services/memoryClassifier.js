@@ -24,7 +24,7 @@ const DEFAULT_CONFIG = {
   model: 'gptoss-20b',
   timeout: 60000,
   maxOutputLength: 10000,
-  minConfidence: 0.6,
+  minConfidence: 0.7,
   fallbackToPatterns: true
 };
 
@@ -111,24 +111,28 @@ async function buildClassificationPrompt(task, agentOutput, config) {
  * Fallback prompt if template not found
  */
 function buildFallbackPrompt(task, agentOutput) {
-  return `Analyze this agent output and extract useful memories.
+  return `Analyze this agent output and extract memories about the USER — their values, preferences, work patterns, and qualities they care about.
 
 Task: ${task.description || 'Unknown task'}
 Output:
 ${agentOutput.substring(0, 8000)}
 
 Return JSON with memories array. Each memory should have:
-- type: fact|learning|observation|decision|preference
-- category: codebase|workflow|tools|architecture|patterns|conventions|preferences
-- content: the actual memory
-- confidence: 0.6-1.0
+- type: preference|decision|learning
+- category: values|workflow|preferences|communication|aesthetics|patterns
+- content: the actual memory about the user
+- confidence: 0.7-1.0
 - tags: relevant tags
-- reasoning: why this is worth remembering
+- reasoning: what this reveals about the user
 
-Only include memories with genuine reusable value. Do not include:
-- Task echoes (e.g., "Task X was completed")
-- Generic summaries
-- Temporary or session-specific info
+DO NOT include:
+- Implementation details (file paths, function names, CSS values, component structures)
+- Architecture descriptions (easily discoverable from code)
+- Task completion summaries (that's git history)
+- Generic best practices any developer would know
+- One-time code observations or status assessments
+
+Most outputs should produce ZERO memories. Only extract when you observe something genuinely revealing about the user's values, preferences, or work patterns.
 
 Return: {"memories": [...], "rejected": [...]}`;
 }
@@ -200,15 +204,30 @@ function parseLLMResponse(response) {
     return { memories: [], rejected: parsed.rejected || [], parseError: false };
   }
 
-  // Validate each memory
+  // Validate each memory — reject implementation details and low-value noise
   const validMemories = parsed.memories.filter(m => {
     if (!m.type || !m.content || typeof m.confidence !== 'number') return false;
-    if (m.confidence < 0.6) return false;
-    if (m.content.length < 10) return false;
+    if (m.confidence < 0.7) return false;
+    if (m.content.length < 15) return false;
 
     // Reject obvious task echoes
     if (/^Task\s+['"].*['"]\s*:/i.test(m.content)) return false;
-    if (/was\s+(completed|successful|done)/i.test(m.content) && m.content.length < 50) return false;
+    if (/was\s+(completed|successful|done)/i.test(m.content) && m.content.length < 80) return false;
+
+    // Reject implementation details — file paths, function names, CSS values
+    if (/\.(jsx?|tsx?|css|json|md|py|sh|yml)\b/i.test(m.content) && m.type !== 'preference') return false;
+    if (/\b\d+px\b/.test(m.content)) return false;
+    if (/\b#[0-9a-f]{6}\b/i.test(m.content) && m.type !== 'preference') return false;
+    if (/\bport\s+\d{4}\b/i.test(m.content)) return false;
+
+    // Reject architecture descriptions (easily discoverable from code)
+    if (/\b(?:uses?\s+(?:express|react|vite|pm2|tailwind|socket\.io|zod))\b/i.test(m.content) && m.type === 'fact') return false;
+
+    // Reject positive status assessments (not memories)
+    if (/\b(?:no\s+issues?\s+found|well[- ]optimized|already\s+(?:has|implements)|no\s+(?:fixes?|changes?)\s+(?:required|needed))\b/i.test(m.content)) return false;
+
+    // Reject one-time observations about code state
+    if (/\b(?:imported?\s+but\s+(?:not\s+used|unused|never)|is\s+sized|has\s+\d+\s+lines?)\b/i.test(m.content)) return false;
 
     return true;
   });
