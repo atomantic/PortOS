@@ -495,8 +495,8 @@ export default function BrowserPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-400 text-sm">Mode</span>
-                <span className={`text-sm font-medium ${status?.headless === false ? 'text-port-warning' : 'text-port-success'}`}>
-                  {status?.headless === false ? 'Headed (visible)' : 'Headless'}
+                <span className={`text-sm font-medium ${(status?.headless ?? status?.config?.headless) === false ? 'text-port-warning' : 'text-port-success'}`}>
+                  {(status?.headless ?? status?.config?.headless) === false ? 'Headed (visible)' : 'Headless'}
                 </span>
               </div>
               <div className="flex items-center justify-between">
