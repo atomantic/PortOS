@@ -150,6 +150,25 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     : (liveOutput || agent.output || []);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
+  // Extract recent tool activity (last few tool lines) for live display
+  const recentActivity = useMemo(() => {
+    if (completed || output.length === 0) return [];
+    const recent = [];
+    // Walk backwards to find the last 3 tool actions (🔧 lines with their → details)
+    for (let i = output.length - 1; i >= 0 && recent.length < 6; i--) {
+      const line = output[i]?.line || '';
+      if (line.startsWith('🔧') || line.startsWith('  →')) {
+        recent.unshift(output[i]);
+      }
+    }
+    return recent;
+  }, [completed, output]);
+
+  // Count total tool invocations
+  const toolCount = useMemo(() => {
+    return output.filter(o => o?.line?.startsWith('🔧')).length;
+  }, [output]);
+
   return (
     <div className={`bg-port-card border rounded-lg overflow-hidden ${
       completed
@@ -281,10 +300,27 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         </div>
         <p className="text-white text-sm mb-2">{agent.metadata?.taskDescription || agent.taskId}</p>
 
-        {/* Status / Last output line */}
-        {!completed && lastOutput && (
+        {/* Live activity feed for running agents */}
+        {!completed && recentActivity.length > 0 && (
+          <div className="text-xs font-mono bg-port-bg/50 px-2 py-1.5 rounded space-y-0.5">
+            {recentActivity.map((o, i) => {
+              const line = o.line || '';
+              if (line.startsWith('🔧')) {
+                return <div key={i} className="text-gray-400 truncate">{line}</div>;
+              }
+              if (line.startsWith('  →')) {
+                return <div key={i} className="text-gray-500 truncate pl-4">{line.substring(4)}</div>;
+              }
+              return <div key={i} className="text-gray-500 truncate">{line.substring(0, 100)}</div>;
+            })}
+            {toolCount > 3 && (
+              <div className="text-gray-600 text-[10px]">{toolCount} tools used</div>
+            )}
+          </div>
+        )}
+        {!completed && recentActivity.length === 0 && lastOutput && (
           <div className="text-xs text-gray-500 font-mono truncate bg-port-bg/50 px-2 py-1 rounded">
-            {lastOutput.substring(0, 100)}...
+            {lastOutput.substring(0, 100)}
           </div>
         )}
 
@@ -348,19 +384,27 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
       {/* Expanded output view */}
       {expanded && (
-        <div className="border-t border-port-border bg-port-bg/50 p-3">
+        <div className="border-t border-port-border bg-port-bg/50 p-3 max-h-96 overflow-y-auto">
           {loadingOutput ? (
             <div className="flex items-center gap-2 text-gray-500 text-sm">
               <Loader2 size={14} aria-hidden="true" className="animate-spin" />
               Loading full output...
             </div>
           ) : output.length > 0 ? (
-            <pre className="text-xs font-mono text-gray-400 whitespace-pre-wrap">
-              {output.map((o, i) => (
-                <div key={i} className="py-0.5">
-                  {o.line}
-                </div>
-              ))}
+            <pre className="text-xs font-mono whitespace-pre-wrap">
+              {output.map((o, i) => {
+                const line = o.line || '';
+                if (line.startsWith('🔧')) {
+                  return <div key={i} className="py-0.5 text-port-accent">{line}</div>;
+                }
+                if (line.startsWith('  →')) {
+                  return <div key={i} className="py-0.5 text-gray-500 pl-4">{line.substring(4)}</div>;
+                }
+                if (line.startsWith('  ↳')) {
+                  return <div key={i} className="py-0.5 text-gray-600 pl-4">{line.substring(4)}</div>;
+                }
+                return <div key={i} className="py-0.5 text-gray-400">{line}</div>;
+              })}
             </pre>
           ) : (
             <div className="text-gray-500 text-sm">No output captured</div>
