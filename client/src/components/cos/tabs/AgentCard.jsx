@@ -101,6 +101,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   };
 
   // Calculate duration estimate for running agents
+  // Uses P80 (80th percentile approximation) for progress bars to prevent premature 100%
   const durationEstimate = useMemo(() => {
     if (completed || !durations) return null;
 
@@ -110,7 +111,8 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
     if (typeData && typeData.avgDurationMs) {
       return {
-        estimatedMs: typeData.avgDurationMs,
+        estimatedMs: typeData.p80DurationMs || typeData.avgDurationMs,
+        avgMs: typeData.avgDurationMs,
         basedOn: typeData.completed,
         taskType,
         isTypeSpecific: true
@@ -119,7 +121,8 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
     if (overallData && overallData.avgDurationMs) {
       return {
-        estimatedMs: overallData.avgDurationMs,
+        estimatedMs: overallData.p80DurationMs || overallData.avgDurationMs,
+        avgMs: overallData.avgDurationMs,
         basedOn: overallData.completed,
         taskType: 'all tasks',
         isTypeSpecific: false
@@ -129,14 +132,14 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     return null;
   }, [completed, durations, agent.metadata?.taskDescription]);
 
-  // Calculate progress percentage
+  // Calculate progress percentage using P80-based estimate
   const progress = useMemo(() => {
     if (!durationEstimate) return null;
     const percent = Math.min(100, Math.round((duration / durationEstimate.estimatedMs) * 100));
     return percent;
   }, [duration, durationEstimate]);
 
-  // Calculate remaining time (ETA)
+  // Calculate remaining time (ETA) based on P80 estimate
   const remainingTime = useMemo(() => {
     if (!durationEstimate || completed) return null;
     const remaining = durationEstimate.estimatedMs - duration;
@@ -253,7 +256,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           {!completed && durationEstimate ? (
             <span
               className="flex items-center gap-1.5 text-gray-500 whitespace-nowrap"
-              title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
+              title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (avg: ${formatDuration(durationEstimate.avgMs)}, est: ${formatDuration(durationEstimate.estimatedMs)})`}
             >
               <Clock size={12} aria-hidden="true" className="flex-shrink-0" />
               <span className="font-mono">{formatDuration(duration)}</span>

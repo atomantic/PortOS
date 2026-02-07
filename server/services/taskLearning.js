@@ -143,6 +143,8 @@ export async function recordTaskCompletion(agent, task) {
       failed: 0,
       totalDurationMs: 0,
       avgDurationMs: 0,
+      maxDurationMs: 0,
+      p80DurationMs: 0,
       lastCompleted: null,
       successRate: 0
     };
@@ -169,6 +171,12 @@ export async function recordTaskCompletion(agent, task) {
   }
   typeMetrics.totalDurationMs += duration;
   typeMetrics.avgDurationMs = Math.round(typeMetrics.totalDurationMs / typeMetrics.completed);
+  typeMetrics.maxDurationMs = Math.max(typeMetrics.maxDurationMs || 0, duration);
+  // P80 estimate: avg + 60% of the gap between avg and max
+  // This provides a realistic upper-bound for progress bars so they don't hit 100% too early
+  typeMetrics.p80DurationMs = Math.round(
+    typeMetrics.avgDurationMs + 0.6 * (typeMetrics.maxDurationMs - typeMetrics.avgDurationMs)
+  );
   typeMetrics.lastCompleted = new Date().toISOString();
   typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
 
@@ -211,6 +219,10 @@ export async function recordTaskCompletion(agent, task) {
   }
   data.totals.totalDurationMs += duration;
   data.totals.avgDurationMs = Math.round(data.totals.totalDurationMs / data.totals.completed);
+  data.totals.maxDurationMs = Math.max(data.totals.maxDurationMs || 0, duration);
+  data.totals.p80DurationMs = Math.round(
+    data.totals.avgDurationMs + 0.6 * ((data.totals.maxDurationMs || data.totals.avgDurationMs) - data.totals.avgDurationMs)
+  );
 
   await saveLearningData(data);
 
@@ -732,6 +744,12 @@ export async function resetTaskTypeLearning(taskType) {
   data.totals.avgDurationMs = data.totals.completed > 0
     ? Math.round(data.totals.totalDurationMs / data.totals.completed)
     : 0;
+  // Recalculate max from remaining task types (we can't subtract a max)
+  const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
+  data.totals.maxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.maxDurationMs || 0), 0);
+  data.totals.p80DurationMs = data.totals.completed > 0
+    ? Math.round(data.totals.avgDurationMs + 0.6 * ((data.totals.maxDurationMs || data.totals.avgDurationMs) - data.totals.avgDurationMs))
+    : 0;
 
   // Clean up error patterns referencing this task type
   for (const [category, pattern] of Object.entries(data.errorPatterns)) {
@@ -787,6 +805,7 @@ export async function getTaskDurationEstimate(taskDescription) {
     return {
       estimatedDurationMs: metrics.avgDurationMs,
       estimatedDurationMin: Math.round(metrics.avgDurationMs / 60000),
+      p80DurationMs: metrics.p80DurationMs || metrics.avgDurationMs,
       confidence: metrics.completed >= 10 ? 'high' : metrics.completed >= 5 ? 'medium' : 'low',
       basedOn: metrics.completed,
       taskType,
@@ -799,6 +818,7 @@ export async function getTaskDurationEstimate(taskDescription) {
     return {
       estimatedDurationMs: data.totals.avgDurationMs,
       estimatedDurationMin: Math.round(data.totals.avgDurationMs / 60000),
+      p80DurationMs: data.totals.p80DurationMs || data.totals.avgDurationMs,
       confidence: 'low',
       basedOn: data.totals.completed,
       taskType: 'all',
@@ -828,9 +848,12 @@ export async function getAllTaskDurations() {
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed >= 1) {
+      const p80 = metrics.p80DurationMs || metrics.avgDurationMs;
       durations[taskType] = {
         avgDurationMs: metrics.avgDurationMs,
         avgDurationMin: Math.round(metrics.avgDurationMs / 60000),
+        p80DurationMs: p80,
+        maxDurationMs: metrics.maxDurationMs || metrics.avgDurationMs,
         completed: metrics.completed,
         successRate: metrics.successRate
       };
@@ -839,9 +862,12 @@ export async function getAllTaskDurations() {
 
   // Add overall average
   if (data.totals.completed >= 1) {
+    const overallP80 = data.totals.p80DurationMs || data.totals.avgDurationMs;
     durations._overall = {
       avgDurationMs: data.totals.avgDurationMs,
       avgDurationMin: Math.round(data.totals.avgDurationMs / 60000),
+      p80DurationMs: overallP80,
+      maxDurationMs: data.totals.maxDurationMs || data.totals.avgDurationMs,
       completed: data.totals.completed,
       successRate: Math.round((data.totals.succeeded / data.totals.completed) * 100)
     };

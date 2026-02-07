@@ -112,6 +112,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   const editModels = editProvider?.models || [];
 
   // Calculate duration estimate for pending tasks
+  // Uses P80 estimate when available for more realistic time predictions
   const durationEstimate = useMemo(() => {
     if (!durations || task.status !== 'pending') return null;
 
@@ -120,8 +121,10 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     const overallData = durations._overall;
 
     if (typeData && typeData.avgDurationMin) {
+      const p80Min = typeData.p80DurationMs ? Math.round(typeData.p80DurationMs / 60000) : typeData.avgDurationMin;
       return {
-        estimatedMin: typeData.avgDurationMin,
+        estimatedMin: p80Min,
+        avgMin: typeData.avgDurationMin,
         basedOn: typeData.completed,
         taskType,
         successRate: typeData.successRate,
@@ -130,8 +133,10 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     }
 
     if (overallData && overallData.avgDurationMin) {
+      const p80Min = overallData.p80DurationMs ? Math.round(overallData.p80DurationMs / 60000) : overallData.avgDurationMin;
       return {
-        estimatedMin: overallData.avgDurationMin,
+        estimatedMin: p80Min,
+        avgMin: overallData.avgDurationMin,
         basedOn: overallData.completed,
         taskType: 'all tasks',
         successRate: overallData.successRate,
