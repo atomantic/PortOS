@@ -223,7 +223,9 @@ export async function fetchOrigin(dir) {
 }
 
 /**
- * Update dev and main branches from origin
+ * Update dev and main branches from origin without switching branches.
+ * Uses fetch refspecs for non-current branches to avoid checkout (which
+ * would swap files on disk and trigger HMR/server restarts).
  */
 export async function updateBranches(dir) {
   await fetchOrigin(dir);
@@ -233,37 +235,23 @@ export async function updateBranches(dir) {
   let stashed = false;
   let stashRestored = false;
 
-  if (!status.clean) {
-    await execGit(['stash', 'push', '-m', 'portos-auto-stash'], dir);
-    stashed = true;
-  }
-
   const results = { dev: null, main: null, stashed, stashRestored: false, currentBranch };
 
-  // Update current branch if it's dev
-  if (currentBranch === 'dev') {
-    const devResult = await execGit(['merge', 'origin/dev', '--ff-only'], dir, { ignoreExitCode: true });
-    results.dev = devResult.stderr?.includes('fatal') ? 'failed' : 'updated';
+  // Update non-current branches via fetch refspec (no checkout needed)
+  for (const branch of ['dev', 'main'].filter(b => b !== currentBranch)) {
+    const r = await execGit(['fetch', 'origin', `${branch}:${branch}`], dir, { ignoreExitCode: true });
+    results[branch] = (r.stderr?.includes('fatal') || r.stderr?.includes('rejected')) ? 'failed' : 'updated';
   }
 
-  // Update main
-  await execGit(['checkout', 'main'], dir, { ignoreExitCode: true });
-  const mainResult = await execGit(['merge', 'origin/main', '--ff-only'], dir, { ignoreExitCode: true });
-  results.main = mainResult.stderr?.includes('fatal') ? 'failed' : 'updated';
-
-  // Return to original branch
-  if (currentBranch !== 'main') {
-    await execGit(['checkout', currentBranch], dir);
-  }
-
-  // If we also need to update dev and weren't on it
-  if (currentBranch !== 'dev') {
-    await execGit(['checkout', 'dev'], dir, { ignoreExitCode: true });
-    const devResult = await execGit(['merge', 'origin/dev', '--ff-only'], dir, { ignoreExitCode: true });
-    results.dev = devResult.stderr?.includes('fatal') ? 'failed' : 'updated';
-    if (currentBranch !== 'dev') {
-      await execGit(['checkout', currentBranch], dir);
+  // Update current branch if it's dev or main — requires merge
+  if (currentBranch === 'dev' || currentBranch === 'main') {
+    if (!status.clean) {
+      await execGit(['stash', 'push', '-m', 'portos-auto-stash'], dir);
+      stashed = true;
+      results.stashed = true;
     }
+    const r = await execGit(['merge', '--ff-only', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
+    results[currentBranch] = r.stderr?.includes('fatal') ? 'failed' : 'updated';
   }
 
   if (stashed) {
