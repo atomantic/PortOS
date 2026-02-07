@@ -16,8 +16,7 @@ vi.mock('fs', () => ({
 
 // Import after mocking
 const { readJSONFile } = await import('../lib/fileUtils.js');
-const { writeFile, mkdir } = await import('fs/promises');
-const { existsSync } = await import('fs');
+const { writeFile } = await import('fs/promises');
 const {
   getAllTemplates,
   getPopularTemplates,
