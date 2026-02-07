@@ -92,6 +92,42 @@ router.post('/commit', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// POST /api/git/update-branches - Fetch and merge latest dev and main
+router.post('/update-branches', asyncHandler(async (req, res) => {
+  const { path } = req.body;
+
+  if (!path) {
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await git.updateBranches(path);
+  res.json(result);
+}));
+
+// POST /api/git/branch-comparison - Compare two branches
+router.post('/branch-comparison', asyncHandler(async (req, res) => {
+  const { path, base, head } = req.body;
+
+  if (!path) {
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await git.getBranchComparison(path, base || 'main', head || 'dev');
+  res.json(result);
+}));
+
+// POST /api/git/push - Push to origin
+router.post('/push', asyncHandler(async (req, res) => {
+  const { path, branch } = req.body;
+
+  if (!path) {
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await git.push(path, branch);
+  res.json(result);
+}));
+
 // POST /api/git/info - Get full git info for a path
 router.post('/info', asyncHandler(async (req, res) => {
   const { path } = req.body;

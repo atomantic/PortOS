@@ -215,6 +215,109 @@ export async function getRemote(dir) {
 }
 
 /**
+ * Fetch from origin
+ */
+export async function fetchOrigin(dir) {
+  await execGit(['fetch', 'origin'], dir);
+  return true;
+}
+
+/**
+ * Update dev and main branches from origin
+ */
+export async function updateBranches(dir) {
+  await fetchOrigin(dir);
+
+  const status = await getStatus(dir);
+  const currentBranch = await getBranch(dir);
+  let stashed = false;
+  let stashRestored = false;
+
+  if (!status.clean) {
+    await execGit(['stash', 'push', '-m', 'portos-auto-stash'], dir);
+    stashed = true;
+  }
+
+  const results = { dev: null, main: null, stashed, stashRestored: false, currentBranch };
+
+  // Update current branch if it's dev
+  if (currentBranch === 'dev') {
+    const devResult = await execGit(['merge', 'origin/dev', '--ff-only'], dir, { ignoreExitCode: true });
+    results.dev = devResult.stderr?.includes('fatal') ? 'failed' : 'updated';
+  }
+
+  // Update main
+  await execGit(['checkout', 'main'], dir, { ignoreExitCode: true });
+  const mainResult = await execGit(['merge', 'origin/main', '--ff-only'], dir, { ignoreExitCode: true });
+  results.main = mainResult.stderr?.includes('fatal') ? 'failed' : 'updated';
+
+  // Return to original branch
+  if (currentBranch !== 'main') {
+    await execGit(['checkout', currentBranch], dir);
+  }
+
+  // If we also need to update dev and weren't on it
+  if (currentBranch !== 'dev') {
+    await execGit(['checkout', 'dev'], dir, { ignoreExitCode: true });
+    const devResult = await execGit(['merge', 'origin/dev', '--ff-only'], dir, { ignoreExitCode: true });
+    results.dev = devResult.stderr?.includes('fatal') ? 'failed' : 'updated';
+    if (currentBranch !== 'dev') {
+      await execGit(['checkout', currentBranch], dir);
+    }
+  }
+
+  if (stashed) {
+    const popResult = await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
+    stashRestored = !popResult.stderr?.includes('CONFLICT');
+    results.stashRestored = stashRestored;
+  }
+
+  return results;
+}
+
+/**
+ * Get branch comparison (how far ahead headBranch is from baseBranch)
+ */
+export async function getBranchComparison(dir, baseBranch = 'main', headBranch = 'dev') {
+  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%ci"}';
+  const logResult = await execGit(
+    ['log', format, `${baseBranch}..${headBranch}`], dir, { ignoreExitCode: true }
+  );
+
+  const commits = logResult.stdout.trim()
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
+
+  const statResult = await execGit(
+    ['diff', '--stat', `${baseBranch}...${headBranch}`], dir, { ignoreExitCode: true }
+  );
+  const statsLine = statResult.stdout.trim().split('\n').pop() || '';
+  const filesMatch = statsLine.match(/(\d+) files? changed/);
+  const insertionsMatch = statsLine.match(/(\d+) insertions?/);
+  const deletionsMatch = statsLine.match(/(\d+) deletions?/);
+
+  return {
+    ahead: commits.length,
+    commits,
+    stats: {
+      files: filesMatch ? parseInt(filesMatch[1]) : 0,
+      insertions: insertionsMatch ? parseInt(insertionsMatch[1]) : 0,
+      deletions: deletionsMatch ? parseInt(deletionsMatch[1]) : 0
+    }
+  };
+}
+
+/**
+ * Push to origin
+ */
+export async function push(dir, branch = null) {
+  const args = branch ? ['push', 'origin', branch] : ['push'];
+  const result = await execGit(args, dir);
+  return { success: true, output: result.stdout + result.stderr };
+}
+
+/**
  * Get comprehensive git info
  */
 export async function getGitInfo(dir) {
