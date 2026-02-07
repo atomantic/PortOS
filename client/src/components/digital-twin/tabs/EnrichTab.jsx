@@ -249,6 +249,37 @@ export default function EnrichTab({ onRefresh }) {
     );
   }
 
+  // All questions exhausted for this category
+  if (activeCategory && !currentQuestion && !loadingQuestion) {
+    const categoryConfig = ENRICHMENT_CATEGORIES[activeCategory];
+    const Icon = categoryConfig?.icon || Sparkles;
+    return (
+      <div className="max-w-2xl mx-auto px-1">
+        <div className="mb-6">
+          <button
+            onClick={exitCategory}
+            className="flex items-center gap-2 text-gray-400 hover:text-white mb-4 py-2 min-h-[44px]"
+          >
+            <ArrowLeft size={18} />
+            Back to categories
+          </button>
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-lg bg-${categoryConfig?.color || 'blue'}-500/20`}>
+              <Icon className={`w-5 h-5 text-${categoryConfig?.color || 'blue'}-400`} />
+            </div>
+            <h2 className="text-xl font-semibold text-white">{categoryConfig?.label}</h2>
+          </div>
+        </div>
+        <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+          <div className="flex items-center gap-3">
+            <Check className="w-5 h-5 text-green-400" />
+            <span className="text-green-400">All questions for this category have been answered. Great job!</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Q&A-based enrichment session
   if (activeCategory && currentQuestion) {
     const categoryConfig = ENRICHMENT_CATEGORIES[activeCategory];

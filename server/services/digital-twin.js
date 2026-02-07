@@ -933,6 +933,10 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
     };
   }
 
+  // Check if fallback was already served (all structured questions exhausted + at least one AI/fallback answered)
+  const structuredTotal = config.questions.length + categoryScaleQuestions.length;
+  const fallbackAlreadyAnswered = questionsAnswered > structuredTotal;
+
   // Generate follow-up question using AI
   const existingSoul = await getSoulForPrompt({ maxTokens: 2000 });
 
@@ -945,6 +949,8 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   }).catch(() => null);
 
   if (!prompt) {
+    // Only serve the generic fallback once — if already answered, signal category is done
+    if (fallbackAlreadyAnswered) return null;
     return {
       questionId: generateId(),
       category,
@@ -965,7 +971,8 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
 
   const model = modelOverride || provider.defaultModel;
 
-  let question = `What else should your digital twin know about your ${config.label.toLowerCase()}?`; // Fallback
+  const fallbackText = `What else should your digital twin know about your ${config.label.toLowerCase()}?`;
+  let question = null;
 
   if (provider.type === 'api') {
     const headers = { 'Content-Type': 'application/json' };
@@ -984,8 +991,14 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
 
     if (response.ok) {
       const data = await response.json();
-      question = data.choices?.[0]?.message?.content?.trim() || question;
+      question = data.choices?.[0]?.message?.content?.trim() || null;
     }
+  }
+
+  // If AI didn't produce a question, use generic fallback (but only once)
+  if (!question) {
+    if (fallbackAlreadyAnswered) return null;
+    question = fallbackText;
   }
 
   return {
