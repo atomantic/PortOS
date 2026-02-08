@@ -29,9 +29,9 @@ async function request(endpoint, options = {}) {
   const response = await fetch(url, config);
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    const error = await response.json().catch(() => ({}));
     const message = error.error || error.message || `HTTP ${response.status}`;
-    console.error(`❌ Moltbook API error: ${message}`);
+    console.error(`❌ Moltbook API error: ${response.status} ${message}`);
     throw new Error(message);
   }
 

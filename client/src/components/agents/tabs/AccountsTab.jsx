@@ -122,7 +122,15 @@ export default function AccountsTab({ onRefresh }) {
               <label className="block text-sm text-gray-400 mb-1">Agent</label>
               <select
                 value={formData.agentId}
-                onChange={(e) => setFormData({ ...formData, agentId: e.target.value })}
+                onChange={(e) => {
+                  const selectedAgent = agents.find(a => a.id === e.target.value);
+                  setFormData({
+                    ...formData,
+                    agentId: e.target.value,
+                    name: selectedAgent?.name || '',
+                    description: selectedAgent?.description || ''
+                  });
+                }}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 required
               >
