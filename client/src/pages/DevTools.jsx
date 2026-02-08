@@ -1675,22 +1675,12 @@ export function ProcessesPage() {
   );
 }
 
-function buildReleasePrompt(repoPath, comparison) {
+function buildReleasePrompt({ repoPath, appName, comparison, baseBranch, devBranch, hasChangelog }) {
   const commitList = comparison.commits
     .map(c => `- ${c.hash} ${c.message}`)
     .join('\n');
 
-  return `You are performing a release workflow for PortOS. The repo is at: ${repoPath}
-
-## Commits to release (${comparison.ahead} commits ahead of main):
-${commitList}
-
-## Steps
-
-1. **Ensure clean state**:
-   - Check for uncommitted changes. If any, stage, commit with a descriptive message, then run \`git pull --rebase --autostash && git push\`
-   - If no uncommitted changes, still run \`git pull --rebase --autostash && git push\` to ensure we're up to date (CI auto-bumps version)
-
+  const changelogStep = hasChangelog ? `
 2. **Changelog management**:
    - Read version from package.json to determine the minor version series (e.g., 0.12.x)
    - Check if \`.changelog/v{major}.{minor}.x.md\` exists
@@ -1699,17 +1689,38 @@ ${commitList}
    - Keep the version as literal "x" — the release workflow substitutes the actual version
    - Commit the changelog: \`git add .changelog/ && git commit -m "docs: update changelog for release"\`
    - Push: \`git pull --rebase --autostash && git push\`
+` : '';
 
-3. **Create PR**:
-   - Check for existing PR: \`gh pr list --base main --head dev --state open\`
-   - If no existing PR, create one: \`gh pr create --base main --head dev --title "Release vX.Y.Z" --body "Release notes..."\`
+  // Adjust step numbers based on whether changelog step is included
+  const prStep = hasChangelog ? 3 : 2;
+  const reviewStep = prStep + 1;
+  const feedbackStep = reviewStep + 1;
+  const reRequestStep = feedbackStep + 1;
+  const iterateStep = reRequestStep + 1;
+  const ciStep = iterateStep + 1;
+  const mergeStep = ciStep + 1;
+
+  return `You are performing a release workflow for ${appName}. The repo is at: ${repoPath}
+
+## Commits to release (${comparison.ahead} commits ahead of ${baseBranch}):
+${commitList}
+
+## Steps
+
+1. **Ensure clean state**:
+   - Check for uncommitted changes. If any, stage, commit with a descriptive message, then run \`git pull --rebase --autostash && git push\`
+   - If no uncommitted changes, still run \`git pull --rebase --autostash && git push\` to ensure we're up to date
+${changelogStep}
+${prStep}. **Create PR**:
+   - Check for existing PR: \`gh pr list --base ${baseBranch} --head ${devBranch} --state open\`
+   - If no existing PR, create one: \`gh pr create --base ${baseBranch} --head ${devBranch} --title "Release vX.Y.Z" --body "Release notes..."\`
    - Include a summary of changes in the PR body
 
-4. **Wait for Copilot review**:
+${reviewStep}. **Wait for Copilot review**:
    - Poll \`gh pr view --json reviews\` every 30 seconds
    - Timeout after 2 minutes if no review appears
 
-5. **Address review feedback** (if any):
+${feedbackStep}. **Address review feedback** (if any):
    - Fetch unresolved threads via GraphQL:
      \`\`\`
      gh api graphql -f query='query(\$owner: String!, \$repo: String!, \$pr: Int!) { repository(owner: \$owner, name: \$repo) { pullRequest(number: \$pr) { reviewThreads(first: 100) { nodes { id isResolved comments(first: 10) { nodes { body path line author { login } } } } } } } }'
@@ -1717,22 +1728,21 @@ ${commitList}
    - Make requested changes, commit, push (\`git pull --rebase --autostash && git push\`)
    - Resolve addressed threads via GraphQL mutation
 
-6. **Re-request review**:
+${reRequestStep}. **Re-request review**:
    - Get repo info: \`gh repo view --json owner,name\`
    - Get PR number from \`gh pr view --json number\`
    - Try API: \`gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers -f '{"reviewers":["copilot-pull-request-reviewer"]}' --method POST\`
    - If that fails, use browser MCP to navigate to the PR page and click the re-request review button (the sync icon button with \`name="re_request_reviewer_id"\`)
 
-7. **Iterate**: Repeat steps 4-6 up to 3 times max
+${iterateStep}. **Iterate**: Repeat steps ${reviewStep}-${reRequestStep} up to 3 times max
 
-8. **Verify CI**: Run \`gh pr checks\` and fix any failures
+${ciStep}. **Verify CI**: Run \`gh pr checks\` and fix any failures
 
-9. **Merge**: Once approved and CI passes, merge with \`gh pr merge --merge\`
+${mergeStep}. **Merge**: Once approved and CI passes, merge with \`gh pr merge --merge\`
 
 ## Important rules:
-- Always \`git pull --rebase --autostash\` before pushing (CI auto-bumps version on dev)
-- No co-author info in commits
-- Keep changelog version as literal "x" (the release workflow substitutes the actual version number)
+- Always \`git pull --rebase --autostash\` before pushing
+- No co-author info in commits${hasChangelog ? '\n- Keep changelog version as literal "x" (the release workflow substitutes the actual version number)' : ''}
 - Max 3 review iterations to prevent infinite loops
 - Report clearly if something fails
 - Parse repo owner/name from \`gh repo view --json owner,name\``;
@@ -1740,7 +1750,7 @@ ${commitList}
 
 export function GitPage() {
   const [apps, setApps] = useState([]);
-  const [selectedApp, setSelectedApp] = useState('');
+  const [selectedAppId, setSelectedAppId] = useState('');
   const [gitInfo, setGitInfo] = useState(null);
   const [diff, setDiff] = useState('');
   const [showDiff, setShowDiff] = useState(false);
@@ -1752,66 +1762,76 @@ export function GitPage() {
   const [releasing, setReleasing] = useState(false);
   const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
 
+  const selectedApp = apps.find(a => a.id === selectedAppId);
+  const repoPath = selectedApp?.repoPath || '';
+  const appName = selectedApp?.name || '';
+
   useEffect(() => {
-    api.getApps().then(apps => {
-      setApps(apps);
-      if (apps.length > 0) {
-        setSelectedApp(apps[0].repoPath);
+    api.getApps().then(allApps => {
+      const active = allApps.filter(a => !a.archived);
+      setApps(active);
+      if (active.length > 0) {
+        setSelectedAppId(active[0].id);
       }
     }).catch(() => []);
   }, []);
 
   useEffect(() => {
-    if (selectedApp) loadGitInfo();
-  }, [selectedApp]);
+    if (repoPath) loadGitInfo();
+  }, [selectedAppId]);
 
   const loadGitInfo = async () => {
-    if (!selectedApp) return;
+    if (!repoPath) return;
     setLoading(true);
-    const [info, comparison] = await Promise.all([
-      api.getGitInfo(selectedApp).catch(() => null),
-      api.getBranchComparison(selectedApp).catch(() => null)
-    ]);
+    const info = await api.getGitInfo(repoPath).catch(() => null);
+    let comparison = null;
+    if (info?.baseBranch && info?.devBranch) {
+      comparison = await api.getBranchComparison(repoPath, info.baseBranch, info.devBranch).catch(() => null);
+    }
     setGitInfo(info);
     setBranchComparison(comparison);
     setLoading(false);
   };
 
   const loadDiff = async () => {
-    if (!selectedApp) return;
-    const result = await api.getGitDiff(selectedApp).catch(() => ({ diff: '' }));
+    if (!repoPath) return;
+    const result = await api.getGitDiff(repoPath).catch(() => ({ diff: '' }));
     setDiff(result.diff || '');
     setShowDiff(true);
   };
 
   const handleStage = async (file) => {
-    await api.stageFiles(selectedApp, [file]);
+    await api.stageFiles(repoPath, [file]);
     await loadGitInfo();
   };
 
   const handleUnstage = async (file) => {
-    await api.unstageFiles(selectedApp, [file]);
+    await api.unstageFiles(repoPath, [file]);
     await loadGitInfo();
   };
 
   const handleCommit = async () => {
     if (!commitMessage.trim()) return;
     setCommitting(true);
-    await api.createCommit(selectedApp, commitMessage).catch(() => null);
+    await api.createCommit(repoPath, commitMessage).catch(() => null);
     setCommitMessage('');
     setCommitting(false);
     await loadGitInfo();
   };
 
   const handleUpdateBranches = async () => {
-    if (!selectedApp) return;
+    if (!repoPath) return;
     setUpdating(true);
-    const result = await api.updateBranches(selectedApp).catch(() => null);
+    const result = await api.updateBranches(repoPath).catch(() => null);
     setUpdating(false);
     if (result) {
       const parts = [];
-      if (result.dev) parts.push(`dev: ${result.dev}`);
-      if (result.main) parts.push(`main: ${result.main}`);
+      // Dynamically iterate branch results instead of hardcoded dev/main
+      for (const [key, val] of Object.entries(result)) {
+        if (key !== 'stashed' && key !== 'stashRestored' && key !== 'currentBranch' && val) {
+          parts.push(`${key}: ${val}`);
+        }
+      }
       if (result.stashed) parts.push(result.stashRestored ? 'stash restored' : 'stash conflict');
       toast.success(`Branches updated — ${parts.join(', ')}`);
     }
@@ -1822,16 +1842,23 @@ export function GitPage() {
     if (!branchComparison || branchComparison.ahead === 0) return;
     setShowReleaseConfirm(false);
     setReleasing(true);
-    const prompt = buildReleasePrompt(selectedApp, branchComparison);
+    const prompt = buildReleasePrompt({
+      repoPath,
+      appName,
+      comparison: branchComparison,
+      baseBranch: gitInfo?.baseBranch || 'main',
+      devBranch: gitInfo?.devBranch || 'dev',
+      hasChangelog: gitInfo?.hasChangelog || false
+    });
     const result = await api.addCosTask({
       description: prompt,
-      context: `Release PR for ${selectedApp}`,
+      context: `Release PR for ${appName}`,
       priority: 'high',
       autoApprove: true
     }).catch(() => null);
     setReleasing(false);
     if (result) {
-      toast.success('Release task queued — check CoS Agents tab');
+      toast.success(`Release task queued for ${appName} — check CoS Agents tab`);
       await api.forceCosEvaluate().catch(() => null);
     }
   };
@@ -1848,17 +1875,17 @@ export function GitPage() {
         <h1 className="text-2xl font-bold text-white">Git Status</h1>
         <div className="flex items-center gap-4">
           <select
-            value={selectedApp}
-            onChange={(e) => setSelectedApp(e.target.value)}
+            value={selectedAppId}
+            onChange={(e) => setSelectedAppId(e.target.value)}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
           >
             {apps.map(app => (
-              <option key={app.id} value={app.repoPath}>{app.name}</option>
+              <option key={app.id} value={app.id}>{app.name}</option>
             ))}
           </select>
           <button
             onClick={handleUpdateBranches}
-            disabled={updating || !selectedApp}
+            disabled={updating || !repoPath}
             className="flex items-center gap-1.5 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50"
           >
             <Download size={16} className={updating ? 'animate-bounce' : ''} />
@@ -1884,7 +1911,7 @@ export function GitPage() {
                 <div className="flex items-center gap-3">
                   <h3 className="text-sm font-medium text-gray-400">Release Status</h3>
                   <span className="text-xs font-medium text-port-accent px-2 py-0.5 bg-port-accent/20 rounded">
-                    {branchComparison.ahead} ahead of main
+                    {branchComparison.ahead} ahead of {gitInfo?.baseBranch || 'main'}
                   </span>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-gray-400">
@@ -1903,7 +1930,7 @@ export function GitPage() {
                 ))}
               </div>
 
-              {gitInfo.branch === 'dev' && (
+              {gitInfo.devBranch && gitInfo.branch === gitInfo.devBranch && (
                 <button
                   onClick={() => setShowReleaseConfirm(true)}
                   disabled={releasing}
@@ -2063,7 +2090,7 @@ export function GitPage() {
             <div className="flex items-center justify-between p-4 border-b border-port-border">
               <h3 className="font-medium text-white flex items-center gap-2">
                 <Rocket size={18} className="text-port-accent" />
-                Create Release PR
+                Create Release PR for {appName}
               </h3>
               <button onClick={() => setShowReleaseConfirm(false)} className="text-gray-400 hover:text-white">×</button>
             </div>
@@ -2072,9 +2099,9 @@ export function GitPage() {
                 This will create a CoS agent task to automate the full release workflow:
               </p>
               <ul className="text-sm text-gray-400 space-y-1.5 ml-4 list-disc">
-                <li>Push local commits to origin/dev</li>
-                <li>Check and update the changelog</li>
-                <li>Create PR from dev to main</li>
+                <li>Push local commits to origin/{gitInfo?.devBranch || 'dev'}</li>
+                {gitInfo?.hasChangelog && <li>Check and update the changelog</li>}
+                <li>Create PR from {gitInfo?.devBranch || 'dev'} to {gitInfo?.baseBranch || 'main'}</li>
                 <li>Wait for Copilot review and address feedback</li>
                 <li>Merge when approved and CI passes</li>
               </ul>

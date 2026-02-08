@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import { join } from 'path';
 
 /**
  * Execute a git command safely using spawn (prevents shell injection)
@@ -232,19 +234,21 @@ export async function updateBranches(dir) {
 
   const status = await getStatus(dir);
   const currentBranch = await getBranch(dir);
+  const { baseBranch, devBranch } = await getRepoBranches(dir);
+  const trackBranches = [devBranch, baseBranch].filter(Boolean);
   let stashed = false;
   let stashRestored = false;
 
-  const results = { dev: null, main: null, stashed, stashRestored: false, currentBranch };
+  const results = { stashed, stashRestored: false, currentBranch };
 
   // Update non-current branches via fetch refspec (no checkout needed)
-  for (const branch of ['dev', 'main'].filter(b => b !== currentBranch)) {
+  for (const branch of trackBranches.filter(b => b !== currentBranch)) {
     const r = await execGit(['fetch', 'origin', `${branch}:${branch}`], dir, { ignoreExitCode: true });
     results[branch] = (r.stderr?.includes('fatal') || r.stderr?.includes('rejected')) ? 'failed' : 'updated';
   }
 
-  // Update current branch if it's dev or main — requires merge
-  if (currentBranch === 'dev' || currentBranch === 'main') {
+  // Update current branch if it's one of the tracked branches — requires merge
+  if (trackBranches.includes(currentBranch)) {
     if (!status.clean) {
       await execGit(['stash', 'push', '-m', 'portos-auto-stash'], dir);
       stashed = true;
@@ -306,16 +310,37 @@ export async function push(dir, branch = null) {
 }
 
 /**
+ * Detect base and dev branches from local branch list
+ * @returns {{ baseBranch: string|null, devBranch: string|null }}
+ */
+export async function getRepoBranches(dir) {
+  const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
+  const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
+  return {
+    baseBranch: branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : null,
+    devBranch: branches.includes('dev') ? 'dev' : branches.includes('develop') ? 'develop' : null
+  };
+}
+
+/**
+ * Check if a .changelog/ directory exists in the repo
+ */
+export function hasChangelogDir(dir) {
+  return existsSync(join(dir, '.changelog'));
+}
+
+/**
  * Get comprehensive git info
  */
 export async function getGitInfo(dir) {
-  const [isGit, branch, status, commits, diffStats, remote] = await Promise.all([
+  const [isGit, branch, status, commits, diffStats, remote, repoBranches] = await Promise.all([
     isRepo(dir),
     getBranch(dir).catch(() => null),
     getStatus(dir).catch(() => ({ clean: true, files: [] })),
     getCommits(dir, 5).catch(() => []),
     getDiffStats(dir).catch(() => ({ files: 0, insertions: 0, deletions: 0 })),
-    getRemote(dir).catch(() => null)
+    getRemote(dir).catch(() => null),
+    getRepoBranches(dir).catch(() => ({ baseBranch: null, devBranch: null }))
   ]);
 
   return {
@@ -324,6 +349,9 @@ export async function getGitInfo(dir) {
     status,
     recentCommits: commits,
     diffStats,
-    remote
+    remote,
+    baseBranch: repoBranches.baseBranch,
+    devBranch: repoBranches.devBranch,
+    hasChangelog: hasChangelogDir(dir)
   };
 }
