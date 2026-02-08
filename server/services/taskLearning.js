@@ -1172,3 +1172,66 @@ export async function backfillFromHistory() {
   emitLog('info', `Backfilled ${backfilled} completed tasks into learning system`, { backfilled }, '📚 TaskLearning');
   return backfilled;
 }
+
+/**
+ * Get a lightweight learning health summary for dashboard display
+ * Returns just the key metrics needed for a quick health overview
+ */
+export async function getLearningSummary() {
+  const data = await loadLearningData();
+
+  // Count task types in various health states
+  let healthyCount = 0;
+  let warningCount = 0;
+  let criticalCount = 0;
+  let skippedCount = 0;
+
+  for (const [, metrics] of Object.entries(data.byTaskType)) {
+    if (metrics.completed < 3) continue; // Insufficient data
+
+    if (metrics.successRate >= 70) {
+      healthyCount++;
+    } else if (metrics.successRate >= 40) {
+      warningCount++;
+    } else {
+      criticalCount++;
+      if (metrics.completed >= 5 && metrics.successRate < 30) {
+        skippedCount++;
+      }
+    }
+  }
+
+  const totalTypes = healthyCount + warningCount + criticalCount;
+
+  // Determine overall health status
+  let status = 'good';
+  let statusMessage = 'All task types healthy';
+
+  if (skippedCount > 0) {
+    status = 'critical';
+    statusMessage = `${skippedCount} task type${skippedCount > 1 ? 's' : ''} skipped`;
+  } else if (criticalCount > 0) {
+    status = 'warning';
+    statusMessage = `${criticalCount} need${criticalCount === 1 ? 's' : ''} attention`;
+  } else if (warningCount > 0) {
+    status = 'ok';
+    statusMessage = `${warningCount} underperforming`;
+  } else if (totalTypes === 0) {
+    status = 'none';
+    statusMessage = 'No data yet';
+  }
+
+  return {
+    status,
+    statusMessage,
+    totalTypes,
+    healthy: healthyCount,
+    warning: warningCount,
+    critical: criticalCount,
+    skipped: skippedCount,
+    overallSuccessRate: data.totals.completed > 0
+      ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
+      : null,
+    totalCompleted: data.totals.completed
+  };
+}

@@ -382,6 +382,12 @@ router.get('/learning/performance', asyncHandler(async (req, res) => {
   res.json(summary);
 }));
 
+// GET /api/cos/learning/summary - Get lightweight learning health summary for dashboard
+router.get('/learning/summary', asyncHandler(async (req, res) => {
+  const summary = await taskLearning.getLearningSummary();
+  res.json(summary);
+}));
+
 // GET /api/cos/learning/insights - Get recent learning insights
 router.get('/learning/insights', asyncHandler(async (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 10;
