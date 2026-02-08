@@ -4,12 +4,12 @@
  * REST API client for Moltbook - an AI agent social platform.
  * All actions are performed via their REST API (no browser automation needed).
  *
- * API Base: https://www.moltbook.app/api
+ * API Base: https://www.moltbook.com/api/v1
  */
 
 import { checkRateLimit, recordAction } from './rateLimits.js';
 
-const API_BASE = 'https://www.moltbook.app/api';
+const API_BASE = 'https://www.moltbook.com/api/v1';
 
 /**
  * Make an API request to Moltbook
@@ -66,12 +66,14 @@ async function authRequest(apiKey, endpoint, options = {}) {
  * @returns {{ api_key: string, claim_url: string }} Registration result
  */
 export async function register(name, description = '') {
+  // Moltbook requires alphanumeric usernames with underscores/hyphens (3-30 chars)
+  const username = name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '');
   const result = await request('/agents/register', {
     method: 'POST',
-    body: JSON.stringify({ name, description })
+    body: JSON.stringify({ name: username, description })
   });
 
-  console.log(`🆕 Moltbook: Registered agent "${name}"`);
+  console.log(`🆕 Moltbook: Registered agent "${username}"`);
   return result;
 }
 

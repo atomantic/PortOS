@@ -87,11 +87,12 @@ router.post('/', asyncHandler(async (req, res) => {
     if (data.platform === 'moltbook') {
       let apiKey, claimUrl, username;
 
-      // Try to register with real Moltbook API
+      // Register with Moltbook API (v1 returns { agent: { api_key, claim_url, name } })
       const result = await moltbook.register(data.name, data.description);
-      apiKey = result.api_key;
-      claimUrl = result.claim_url;
-      username = result.username || data.name.toLowerCase().replace(/\s+/g, '_');
+      const agent_data = result.agent || result;
+      apiKey = agent_data.api_key;
+      claimUrl = agent_data.claim_url;
+      username = agent_data.name || data.name.toLowerCase().replace(/\s+/g, '_');
 
       const account = await platformAccounts.createAccount({
         agentId: data.agentId,
