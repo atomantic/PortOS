@@ -103,7 +103,7 @@ const navItems = [
       { to: '/digital-twin', label: 'Digital Twin', icon: Heart }
     ]
   },
-  { to: '/media', label: 'Media', icon: Camera, single: true },
+  { to: '/security', label: 'Security', icon: Camera, single: true },
   { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true },
   { to: '/uploads', label: 'Uploads', icon: Upload, single: true }
 ];

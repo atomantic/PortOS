@@ -8,7 +8,7 @@ import Templates from './pages/Templates';
 import PromptManager from './pages/PromptManager';
 import ChiefOfStaff from './pages/ChiefOfStaff';
 import Brain from './pages/Brain';
-import Media from './pages/Media';
+import Security from './pages/Security';
 import DigitalTwin from './pages/DigitalTwin';
 import Agents from './pages/Agents';
 import Uploads from './pages/Uploads';
@@ -58,7 +58,7 @@ export default function App() {
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
           <Route path="apps/create" element={<CreateApp />} />
           <Route path="templates" element={<Templates />} />
-          <Route path="media" element={<Media />} />
+          <Route path="security" element={<Security />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
