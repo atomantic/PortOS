@@ -279,6 +279,16 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
               <span className="font-mono">{formatDuration(duration)}</span>
             </span>
           )}
+          {/* Completed timestamp */}
+          {completed && agent.completedAt && (
+            <>
+              <span className="text-gray-600">|</span>
+              <span className="text-gray-500 whitespace-nowrap" title={new Date(agent.completedAt).toLocaleString()}>
+                {new Date(agent.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}{' '}
+                {new Date(agent.completedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+              </span>
+            </>
+          )}
           {/* Process stats for running agents - inline */}
           {!completed && processStats?.active && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-success/20 text-port-success whitespace-nowrap"
