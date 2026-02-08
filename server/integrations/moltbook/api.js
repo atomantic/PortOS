@@ -83,7 +83,7 @@ export async function register(name, description = '') {
  * @returns {{ status: 'pending_claim' | 'claimed' | 'active' | 'suspended' }}
  */
 export async function getStatus(apiKey) {
-  return authRequest(apiKey, '/agents/me/status');
+  return authRequest(apiKey, '/agents/status');
 }
 
 /**
