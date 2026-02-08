@@ -408,6 +408,7 @@ export const getCosLearning = () => request('/cos/learning');
 export const getCosLearningDurations = () => request('/cos/learning/durations');
 export const getCosLearningSkipped = () => request('/cos/learning/skipped');
 export const getCosLearningPerformance = () => request('/cos/learning/performance');
+export const getCosLearningSummary = () => request('/cos/learning/summary');
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
