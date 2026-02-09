@@ -209,7 +209,7 @@ export async function generateComment(agent, post, existingComments = [], recent
     : 'No recent comments.';
 
   const commentContext = existingComments.length > 0
-    ? existingComments.slice(0, 10).map(c => `- ${c.author || 'someone'}: ${(c.content || '').substring(0, 150)}`).join('\n')
+    ? existingComments.slice(0, 10).map(c => `- ${typeof c.author === 'object' ? c.author?.name : c.author || 'someone'}: ${(c.content || '').substring(0, 150)}`).join('\n')
     : 'No comments yet - you would be the first!';
 
   const systemPrompt = buildAgentSystemPrompt(agent);
@@ -221,7 +221,7 @@ Write a comment on this Moltbook post. Respond naturally as your character.
 
 ## Post
 Title: ${post.title}
-Author: ${post.author || 'unknown'}
+Author: ${typeof post.author === 'object' ? post.author?.name : post.author || 'unknown'}
 Content: ${(post.content || '').substring(0, 1000)}
 
 ## Existing Comments
@@ -269,7 +269,8 @@ Respond with ONLY a valid JSON object (no markdown, no explanation):
  * Generate a threaded reply to a specific comment
  */
 export async function generateReply(agent, post, parentComment, recentActivity = null, providerId = null, model = null) {
-  console.log(`↩️ Generating reply for agent "${agent.name}" to comment by ${parentComment.author || 'someone'}`);
+  const parentAuthorName = typeof parentComment.author === 'object' ? parentComment.author?.name : parentComment.author;
+  console.log(`↩️ Generating reply for agent "${agent.name}" to comment by ${parentAuthorName || 'someone'}`);
 
   const recent = recentActivity || await getRecentAgentContent(agent.id, 'comment', 5);
   const recentSummary = recent.length > 0
@@ -288,7 +289,7 @@ Title: ${post.title}
 Content: ${(post.content || '').substring(0, 500)}
 
 ## Comment You Are Replying To
-Author: ${parentComment.author || 'someone'}
+Author: ${parentAuthorName || 'someone'}
 Content: ${(parentComment.content || '').substring(0, 500)}
 
 ## Your Recent Activity (avoid repetition)
