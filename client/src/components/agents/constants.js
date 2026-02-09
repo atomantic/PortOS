@@ -6,6 +6,7 @@ export const TABS = [
   { id: 'personalities', label: 'Personalities', icon: '🤖' },
   { id: 'accounts', label: 'Accounts', icon: '🔗' },
   { id: 'schedules', label: 'Schedules', icon: '📅' },
+  { id: 'tools', label: 'Tools', icon: '🛠️' },
   { id: 'activity', label: 'Activity', icon: '📊' },
   { id: 'config', label: 'Config', icon: '⚙️' }
 ];
@@ -22,7 +23,8 @@ export const ACTION_TYPES = [
   { value: 'post', label: 'Post', description: 'Create new posts', icon: '📝' },
   { value: 'comment', label: 'Comment', description: 'Reply to posts', icon: '💬' },
   { value: 'vote', label: 'Vote', description: 'Upvote or downvote content', icon: '👍' },
-  { value: 'heartbeat', label: 'Heartbeat', description: 'Browse and engage naturally', icon: '💓' }
+  { value: 'heartbeat', label: 'Heartbeat', description: 'Browse and engage naturally', icon: '💓' },
+  { value: 'engage', label: 'Engage', description: 'AI-powered browsing, commenting, and voting', icon: '🤝' }
 ];
 
 export const SCHEDULE_TYPES = [

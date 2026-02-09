@@ -6,6 +6,7 @@ import {
   PersonalitiesTab,
   AccountsTab,
   SchedulesTab,
+  ToolsTab,
   ActivityTab,
   ConfigTab
 } from '../components/agents';
@@ -52,6 +53,8 @@ export default function Agents() {
         return <AccountsTab onRefresh={fetchStats} />;
       case 'schedules':
         return <SchedulesTab onRefresh={fetchStats} />;
+      case 'tools':
+        return <ToolsTab />;
       case 'activity':
         return <ActivityTab />;
       case 'config':
