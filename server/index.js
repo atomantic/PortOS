@@ -23,6 +23,7 @@ import agentPersonalitiesRoutes from './routes/agentPersonalities.js';
 import platformAccountsRoutes from './routes/platformAccounts.js';
 import automationSchedulesRoutes from './routes/automationSchedules.js';
 import agentActivityRoutes from './routes/agentActivity.js';
+import agentToolsRoutes from './routes/agentTools.js';
 import cosRoutes from './routes/cos.js';
 import scriptsRoutes from './routes/scripts.js';
 import memoryRoutes from './routes/memory.js';
@@ -182,6 +183,7 @@ app.use('/api/agents/personalities', agentPersonalitiesRoutes);
 app.use('/api/agents/accounts', platformAccountsRoutes);
 app.use('/api/agents/schedules', automationSchedulesRoutes);
 app.use('/api/agents/activity', agentActivityRoutes);
+app.use('/api/agents/tools', agentToolsRoutes);
 // Existing running agents routes (process management)
 app.use('/api/agents', agentsRoutes);
 app.use('/api/cos/scripts', scriptsRoutes); // Mount before /api/cos to avoid route conflicts

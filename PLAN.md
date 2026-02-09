@@ -64,6 +64,7 @@ pm2 logs
 - [x] **M35.1**: CoS UI - Added Arcane Sigil (3D) avatar style option alongside Cyberpunk 3D
 - [x] **M36**: Browser Management - CDP/Playwright browser page with status, controls, config, and logs
 - [x] **M37**: Autonomous Jobs - Recurring scheduled jobs that the CoS executes proactively using digital twin identity
+- [x] **M38**: Agent Tools - AI content generation, feed browsing, and autonomous engagement for Moltbook agents
 
 ### Planned
 

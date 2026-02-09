@@ -327,6 +327,42 @@ export const toggleAutomationSchedule = (id, enabled) => request(`/agents/schedu
 });
 export const runAutomationScheduleNow = (id) => request(`/agents/schedules/${id}/run`, { method: 'POST' });
 
+// Agent Tools
+export const generateAgentPost = (agentId, accountId, submolt, providerId, model) => request('/agents/tools/generate-post', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, submolt, providerId, model })
+});
+export const generateAgentComment = (agentId, accountId, postId, parentId, providerId, model) => request('/agents/tools/generate-comment', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, postId, parentId, providerId, model })
+});
+export const publishAgentPost = (agentId, accountId, submolt, title, content) => request('/agents/tools/publish-post', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, submolt, title, content })
+});
+export const publishAgentComment = (agentId, accountId, postId, content, parentId) => request('/agents/tools/publish-comment', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, postId, content, parentId })
+});
+export const engageAgent = (agentId, accountId, maxComments, maxVotes) => request('/agents/tools/engage', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, maxComments, maxVotes })
+});
+export const getAgentFeed = (accountId, sort, limit) => {
+  const params = new URLSearchParams({ accountId });
+  if (sort) params.set('sort', sort);
+  if (limit) params.set('limit', limit);
+  return request(`/agents/tools/feed?${params}`);
+};
+export const getAgentRelevantPosts = (agentId, accountId, maxResults) => {
+  const params = new URLSearchParams({ agentId, accountId });
+  if (maxResults) params.set('maxResults', maxResults);
+  return request(`/agents/tools/relevant-posts?${params}`);
+};
+export const getAgentSubmolts = (accountId) => request(`/agents/tools/submolts?accountId=${accountId}`);
+export const getAgentPost = (accountId, postId) => request(`/agents/tools/post/${postId}?accountId=${accountId}`);
+export const getAgentRateLimits = (accountId) => request(`/agents/tools/rate-limits?accountId=${accountId}`);
+
 // Agent Activity
 export const getAgentActivities = (limit = 50, agentIds = null, action = null) => {
   const params = new URLSearchParams();

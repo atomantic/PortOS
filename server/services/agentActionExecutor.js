@@ -3,13 +3,18 @@
  *
  * Executes scheduled agent actions by connecting to platform APIs.
  * Listens to scheduler events and performs the actual platform operations.
+ * Supports AI-generated content when params are missing.
  */
 
 import { scheduleEvents } from './automationScheduler.js';
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
-import { MoltbookClient } from '../integrations/moltbook/index.js';
+import { MoltbookClient, checkRateLimit } from '../integrations/moltbook/index.js';
+import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
+import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Execute an action based on type
@@ -30,6 +35,9 @@ async function executeAction(schedule, account, agent) {
 
     case 'vote':
       return executeVote(client, action.params);
+
+    case 'engage':
+      return executeEngage(client, agent, action.params);
 
     default:
       throw new Error(`Unknown action type: ${action.type}`);
@@ -54,14 +62,22 @@ async function executeHeartbeat(client, params) {
 
 /**
  * Execute a post action
+ * When title/content missing, uses AI generation
  */
 async function executePost(client, agent, params) {
-  // If content is not provided, we would need AI generation
-  // For now, require content in params
-  const { submolt = 'general', title, content } = params;
+  const { submolt = 'general', aiGenerate } = params;
+  let { title, content } = params;
+
+  // AI generate if content not provided
+  if ((!title || !content) && aiGenerate !== false) {
+    console.log(`🤖 AI generating post content for "${agent.name}"`);
+    const generated = await generatePost(agent, { submolt });
+    title = generated.title;
+    content = generated.content;
+  }
 
   if (!title || !content) {
-    throw new Error('Post action requires title and content in params');
+    throw new Error('Post action requires title and content in params (or aiGenerate enabled)');
   }
 
   const post = await client.createPost(submolt, title, content);
@@ -69,18 +85,60 @@ async function executePost(client, agent, params) {
     type: 'post',
     postId: post.id,
     submolt,
-    title
+    title,
+    generated: !params.title || !params.content
   };
 }
 
 /**
  * Execute a comment action
+ * When postId missing, finds relevant post. When content missing, uses AI generation.
  */
 async function executeComment(client, agent, params) {
-  const { postId, content, parentId } = params;
+  let { postId, content, parentId } = params;
+
+  // Find a relevant post if no postId specified
+  if (!postId) {
+    console.log(`🔍 Finding relevant post for "${agent.name}" to comment on`);
+    const opportunities = await findReplyOpportunities(client, agent, { maxCandidates: 3 });
+
+    if (opportunities.length === 0) {
+      return { type: 'comment', action: 'none', reason: 'no relevant posts found' };
+    }
+
+    const pick = opportunities[0];
+    postId = pick.post.id;
+
+    // AI generate comment if no content
+    if (!content) {
+      console.log(`🤖 AI generating comment for "${agent.name}" on post ${postId}`);
+      const generated = await generateComment(agent, pick.post, pick.comments);
+      content = generated.content;
+    }
+  } else if (!content) {
+    // Have postId but no content - generate it
+    console.log(`🤖 AI generating comment for "${agent.name}" on post ${postId}`);
+    const post = await client.getPost(postId);
+    const commentsResponse = await client.getComments(postId);
+    const comments = commentsResponse.comments || commentsResponse || [];
+
+    if (parentId) {
+      const parent = comments.find(c => c.id === parentId);
+      if (parent) {
+        const generated = await generateReply(agent, post, parent);
+        content = generated.content;
+      } else {
+        const generated = await generateComment(agent, post, comments);
+        content = generated.content;
+      }
+    } else {
+      const generated = await generateComment(agent, post, comments);
+      content = generated.content;
+    }
+  }
 
   if (!postId || !content) {
-    throw new Error('Comment action requires postId and content in params');
+    throw new Error('Comment action requires postId and content');
   }
 
   let result;
@@ -94,7 +152,8 @@ async function executeComment(client, agent, params) {
     type: 'comment',
     commentId: result.id,
     postId,
-    isReply: !!parentId
+    isReply: !!parentId,
+    generated: !params.content
   };
 }
 
@@ -137,6 +196,73 @@ async function executeVote(client, params) {
   }
 
   return { type: 'vote', action: direction === 'up' ? 'upvote' : 'downvote', postId };
+}
+
+/**
+ * Execute an engage action - compound autonomous browsing, voting, and commenting
+ */
+async function executeEngage(client, agent, params) {
+  const { maxComments = 1, maxVotes = 3 } = params;
+
+  console.log(`🤝 Starting engage for "${agent.name}" (maxComments=${maxComments}, maxVotes=${maxVotes})`);
+
+  const relevantPosts = await findRelevantPosts(client, agent, {
+    sort: 'hot',
+    limit: 25,
+    minScore: 1,
+    maxResults: 10
+  });
+
+  const votes = [];
+  const comments = [];
+
+  // Vote on relevant posts
+  for (const post of relevantPosts) {
+    if (votes.length >= maxVotes) break;
+
+    const rateCheck = checkRateLimit(client.apiKey, 'vote');
+    if (!rateCheck.allowed) break;
+
+    await client.upvote(post.id);
+    votes.push({ postId: post.id, title: post.title });
+    await delay(1500);
+  }
+
+  // Comment on best matches
+  if (maxComments > 0) {
+    const opportunities = await findReplyOpportunities(client, agent, {
+      sort: 'hot',
+      minScore: 2,
+      maxCandidates: maxComments + 2
+    });
+
+    for (const opportunity of opportunities) {
+      if (comments.length >= maxComments) break;
+
+      const rateCheck = checkRateLimit(client.apiKey, 'comment');
+      if (!rateCheck.allowed) break;
+
+      const generated = await generateComment(agent, opportunity.post, opportunity.comments);
+      const result = await client.createComment(opportunity.post.id, generated.content);
+
+      comments.push({
+        postId: opportunity.post.id,
+        postTitle: opportunity.post.title,
+        commentId: result.id,
+        reason: opportunity.reason
+      });
+      await delay(1500);
+    }
+  }
+
+  console.log(`🤝 Engage complete for "${agent.name}": ${votes.length} votes, ${comments.length} comments`);
+
+  return {
+    type: 'engage',
+    postsReviewed: relevantPosts.length,
+    votes,
+    comments
+  };
 }
 
 /**

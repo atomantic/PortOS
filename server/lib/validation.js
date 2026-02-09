@@ -76,7 +76,7 @@ export const accountRegistrationSchema = z.object({
 // AUTOMATION SCHEDULE SCHEMAS
 // =============================================================================
 
-export const scheduleActionTypeSchema = z.enum(['post', 'comment', 'vote', 'heartbeat']);
+export const scheduleActionTypeSchema = z.enum(['post', 'comment', 'vote', 'heartbeat', 'engage']);
 
 export const scheduleActionSchema = z.object({
   type: scheduleActionTypeSchema,
@@ -199,6 +199,50 @@ export const socialAccountSchema = z.object({
 });
 
 export const socialAccountUpdateSchema = socialAccountSchema.partial();
+
+// =============================================================================
+// AGENT TOOLS SCHEMAS
+// =============================================================================
+
+export const generatePostSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  submolt: z.string().max(100).optional(),
+  providerId: z.string().optional(),
+  model: z.string().optional()
+});
+
+export const generateCommentSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  postId: z.string().min(1),
+  parentId: z.string().optional(),
+  providerId: z.string().optional(),
+  model: z.string().optional()
+});
+
+export const publishPostSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  submolt: z.string().min(1).max(100),
+  title: z.string().min(1).max(300),
+  content: z.string().min(1).max(10000)
+});
+
+export const publishCommentSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  postId: z.string().min(1),
+  content: z.string().min(1).max(5000),
+  parentId: z.string().optional()
+});
+
+export const engageSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  maxComments: z.number().int().min(0).max(5).optional().default(1),
+  maxVotes: z.number().int().min(0).max(10).optional().default(3)
+});
 
 /**
  * Validate data against a schema
