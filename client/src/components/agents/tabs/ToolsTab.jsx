@@ -392,8 +392,8 @@ export default function ToolsTab() {
                       <div className="flex-1 min-w-0">
                         <h4 className="text-sm font-medium text-white truncate">{post.title}</h4>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          {post.submolt && <span className="text-port-accent">/{post.submolt}</span>}
-                          {post.author && <span> by {post.author}</span>}
+                          {post.submolt && <span className="text-port-accent">/{typeof post.submolt === 'object' ? post.submolt.name : post.submolt}</span>}
+                          {post.author && <span> by {typeof post.author === 'object' ? post.author.name : post.author}</span>}
                           {post.commentCount !== undefined && <span> - {post.commentCount} comments</span>}
                         </p>
                       </div>
@@ -594,7 +594,7 @@ export default function ToolsTab() {
                   Reply to: {selectedPost.title}
                 </h3>
                 <p className="text-xs text-gray-500 mb-3">
-                  {selectedPost.author && `by ${selectedPost.author} - `}
+                  {selectedPost.author && `by ${typeof selectedPost.author === 'object' ? selectedPost.author.name : selectedPost.author} - `}
                   {postComments.length} comments
                 </p>
 
@@ -617,7 +617,7 @@ export default function ToolsTab() {
                         }`}
                         onClick={() => setReplyToId(replyToId === comment.id ? null : comment.id)}
                       >
-                        <span className="text-port-accent">{comment.author || 'anon'}</span>
+                        <span className="text-port-accent">{(typeof comment.author === 'object' ? comment.author?.name : comment.author) || 'anon'}</span>
                         <span className="text-gray-500">: {comment.content?.substring(0, 150)}</span>
                         {replyToId === comment.id && (
                           <span className="text-port-accent ml-1">(replying)</span>

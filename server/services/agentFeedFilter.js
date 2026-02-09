@@ -32,7 +32,8 @@ export function scorePosts(agent, posts) {
     }
 
     // Submolt alignment: +2 if submolt matches a topic
-    const submoltLower = (post.submolt || '').toLowerCase();
+    const submoltRaw = typeof post.submolt === 'object' ? post.submolt?.name : post.submolt;
+    const submoltLower = (submoltRaw || '').toLowerCase();
     if (topics.some(t => submoltLower.includes(t) || t.includes(submoltLower))) {
       score += 2;
     }
@@ -108,7 +109,7 @@ export async function findReplyOpportunities(client, agent, options = {}) {
     const comments = commentsResponse.comments || commentsResponse || [];
 
     // Skip if agent already commented
-    if (agentUsername && comments.some(c => c.author === agentUsername)) {
+    if (agentUsername && comments.some(c => (typeof c.author === 'object' ? c.author?.name : c.author) === agentUsername)) {
       continue;
     }
 
