@@ -82,6 +82,11 @@ export default function ToolsTab() {
     setDraftsLoading(false);
   }, []);
 
+  // Load drafts when agent changes
+  useEffect(() => {
+    loadDrafts(selectedAgentId);
+  }, [selectedAgentId, loadDrafts]);
+
   const handleAgentChange = (agentId) => {
     setSelectedAgentId(agentId);
     setSelectedAccountId('');
@@ -92,7 +97,6 @@ export default function ToolsTab() {
     setCommentContent('');
     setEngageResult(null);
     setActiveDraftId(null);
-    loadDrafts(agentId);
   };
 
   const handleBrowseFeed = async () => {
