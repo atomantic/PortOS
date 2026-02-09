@@ -101,6 +101,7 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
 
   const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
   const post = await client.createPost(data.submolt, data.title, data.content);
+  const postId = post?.id || post?._id || post?.post_id;
 
   await platformAccounts.recordActivity(data.accountId);
   await agentActivity.logActivity({
@@ -109,7 +110,7 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
     action: 'post',
     params: { submolt: data.submolt, title: data.title },
     status: 'completed',
-    result: { type: 'post', postId: post.id, submolt: data.submolt, title: data.title },
+    result: { type: 'post', postId, submolt: data.submolt, title: data.title },
     timestamp: new Date().toISOString()
   });
 
@@ -141,7 +142,7 @@ router.post('/publish-comment', asyncHandler(async (req, res) => {
     action: 'comment',
     params: { postId: data.postId, parentId: data.parentId },
     status: 'completed',
-    result: { type: 'comment', commentId: result.id, postId: data.postId, isReply: !!data.parentId },
+    result: { type: 'comment', commentId: result?.id || result?._id || result?.comment_id, postId: data.postId, isReply: !!data.parentId },
     timestamp: new Date().toISOString()
   });
 
@@ -204,9 +205,9 @@ router.post('/engage', asyncHandler(async (req, res) => {
       const result = await client.createComment(opportunity.post.id, generated.content);
 
       comments.push({
-        postId: opportunity.post.id,
+        postId: opportunity.post.id || opportunity.post._id,
         postTitle: opportunity.post.title,
-        commentId: result.id,
+        commentId: result?.id || result?._id || result?.comment_id,
         content: generated.content,
         reason: opportunity.reason
       });
@@ -329,6 +330,119 @@ router.get('/rate-limits', asyncHandler(async (req, res) => {
   const client = new MoltbookClient(account.credentials.apiKey);
   const rateLimits = client.getRateLimitStatus();
   res.json(rateLimits);
+}));
+
+// GET /published - Aggregate published content across multiple days
+router.get('/published', asyncHandler(async (req, res) => {
+  const { agentId, accountId, days = '7' } = req.query;
+
+  if (!agentId || !accountId) {
+    throw new ServerError('agentId and accountId required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const numDays = Math.min(Math.max(parseInt(days, 10) || 7, 1), 30);
+  console.log(`🛠️ GET /api/agents/tools/published agent=${agentId} days=${numDays}`);
+
+  const { client } = await getClientAndAgent(accountId, agentId);
+
+  // Collect activities across multiple days
+  const postMap = new Map();
+  const commentMap = new Map();
+
+  for (let i = 0; i < numDays; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+
+    const [postActivities, commentActivities, engageActivities] = await Promise.all([
+      agentActivity.getActivities(agentId, { date, action: 'post' }),
+      agentActivity.getActivities(agentId, { date, action: 'comment' }),
+      agentActivity.getActivities(agentId, { date, action: 'engage' })
+    ]);
+
+    // Extract posts
+    for (const activity of postActivities) {
+      if (activity.status !== 'completed') continue;
+      const postId = activity.result?.postId || activity.id;
+      const title = activity.result?.title || activity.params?.title;
+      const submolt = activity.result?.submolt || activity.params?.submolt;
+      if (!postMap.has(postId)) {
+        postMap.set(postId, { postId: activity.result?.postId || null, title, submolt, publishedAt: activity.timestamp });
+      }
+    }
+
+    // Extract comments
+    for (const activity of commentActivities) {
+      if (activity.status !== 'completed') continue;
+      const commentId = activity.result?.commentId || activity.id;
+      const postId = activity.result?.postId || activity.params?.postId;
+      const isReply = activity.result?.isReply;
+      if (!commentMap.has(commentId)) {
+        commentMap.set(commentId, { commentId: activity.result?.commentId || null, postId, isReply: !!isReply, publishedAt: activity.timestamp });
+      }
+    }
+
+    // Extract comments from engage results
+    for (const activity of engageActivities) {
+      if (activity.status !== 'completed' || !activity.result?.comments) continue;
+      for (const c of activity.result.comments) {
+        if (!c.commentId || commentMap.has(c.commentId)) continue;
+        commentMap.set(c.commentId, {
+          commentId: c.commentId,
+          postId: c.postId,
+          postTitle: c.postTitle,
+          isReply: false,
+          publishedAt: activity.timestamp
+        });
+      }
+    }
+  }
+
+  // Fetch live engagement for posts (only for those with postId)
+  const posts = Array.from(postMap.values());
+  const postsWithId = posts.filter(p => p.postId);
+  const postResults = await Promise.allSettled(
+    postsWithId.map(p => client.getPost(p.postId))
+  );
+
+  const liveDataMap = {};
+  postsWithId.forEach((post, i) => {
+    if (postResults[i].status === 'fulfilled') {
+      liveDataMap[post.postId] = postResults[i].value;
+    }
+  });
+
+  const enrichedPosts = posts.map(post => {
+    const live = post.postId ? liveDataMap[post.postId] : null;
+    return {
+      ...post,
+      score: live?.score ?? null,
+      commentCount: live?.commentCount ?? null,
+      url: post.postId ? `https://www.moltbook.com/post/${post.postId}` : null
+    };
+  }).sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+  // Enrich comments with post titles where missing
+  const comments = Array.from(commentMap.values());
+  const missingTitlePostIds = [...new Set(
+    comments.filter(c => !c.postTitle && c.postId).map(c => c.postId)
+  )];
+  const titleResults = await Promise.allSettled(
+    missingTitlePostIds.map(id => client.getPost(id))
+  );
+  const titleMap = {};
+  missingTitlePostIds.forEach((id, i) => {
+    if (titleResults[i].status === 'fulfilled') {
+      titleMap[id] = titleResults[i].value.title;
+    }
+  });
+
+  const enrichedComments = comments.map(c => ({
+    ...c,
+    postTitle: c.postTitle || titleMap[c.postId] || 'Unknown post',
+    url: c.postId ? `https://www.moltbook.com/post/${c.postId}` : null
+  })).sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+  res.json({ posts: enrichedPosts, comments: enrichedComments });
 }));
 
 // =============================================================================

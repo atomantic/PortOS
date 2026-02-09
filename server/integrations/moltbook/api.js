@@ -131,7 +131,8 @@ export async function createPost(apiKey, submolt, title, content) {
   });
 
   recordAction(apiKey, 'post');
-  console.log(`📝 Moltbook: Created post "${title}" in ${submolt}`);
+  const postId = result?.id || result?._id || result?.post_id;
+  console.log(`📝 Moltbook: Created post "${title}" in ${submolt} (id=${postId}, keys=${Object.keys(result || {}).join(',')})`);
   return result;
 }
 

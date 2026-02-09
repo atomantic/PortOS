@@ -83,7 +83,7 @@ async function executePost(client, agent, params) {
   const post = await client.createPost(submolt, title, content);
   return {
     type: 'post',
-    postId: post.id,
+    postId: post?.id || post?._id || post?.post_id,
     submolt,
     title,
     generated: !params.title || !params.content
@@ -150,7 +150,7 @@ async function executeComment(client, agent, params) {
 
   return {
     type: 'comment',
-    commentId: result.id,
+    commentId: result?.id || result?._id || result?.comment_id,
     postId,
     isReply: !!parentId,
     generated: !params.content
@@ -246,9 +246,9 @@ async function executeEngage(client, agent, params) {
       const result = await client.createComment(opportunity.post.id, generated.content);
 
       comments.push({
-        postId: opportunity.post.id,
+        postId: opportunity.post.id || opportunity.post._id,
         postTitle: opportunity.post.title,
-        commentId: result.id,
+        commentId: result?.id || result?._id || result?.comment_id,
         reason: opportunity.reason
       });
       await delay(1500);

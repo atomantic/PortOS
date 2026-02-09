@@ -162,15 +162,19 @@ export default function PublishedTab({ agentId }) {
                           {formatRelativeTime(post.publishedAt)}
                         </td>
                         <td className="py-2">
-                          <a
-                            href={post.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-port-accent hover:text-port-accent/80"
-                            title="Open on Moltbook"
-                          >
-                            ↗
-                          </a>
+                          {post.url ? (
+                            <a
+                              href={post.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-port-accent hover:text-port-accent/80"
+                              title="Open on Moltbook"
+                            >
+                              ↗
+                            </a>
+                          ) : (
+                            <span className="text-gray-600">-</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -195,8 +199,8 @@ export default function PublishedTab({ agentId }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {published.comments.map(comment => (
-                      <tr key={comment.commentId} className="border-b border-port-border/50 hover:bg-port-bg/50">
+                    {published.comments.map((comment, index) => (
+                      <tr key={comment.commentId || index} className="border-b border-port-border/50 hover:bg-port-bg/50">
                         <td className="py-2 pr-4 max-w-[350px]">
                           <span className="text-white truncate block" title={comment.postTitle}>
                             {comment.postTitle}
@@ -215,15 +219,19 @@ export default function PublishedTab({ agentId }) {
                           {formatRelativeTime(comment.publishedAt)}
                         </td>
                         <td className="py-2">
-                          <a
-                            href={comment.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-port-accent hover:text-port-accent/80"
-                            title="Open on Moltbook"
-                          >
-                            ↗
-                          </a>
+                          {comment.url ? (
+                            <a
+                              href={comment.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-port-accent hover:text-port-accent/80"
+                              title="Open on Moltbook"
+                            >
+                              ↗
+                            </a>
+                          ) : (
+                            <span className="text-gray-600">-</span>
+                          )}
                         </td>
                       </tr>
                     ))}
