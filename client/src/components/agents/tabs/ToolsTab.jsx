@@ -2,10 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 
-export default function ToolsTab() {
-  const [agents, setAgents] = useState([]);
+export default function ToolsTab({ agentId }) {
   const [accounts, setAccounts] = useState([]);
-  const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [rateLimits, setRateLimits] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -37,26 +35,17 @@ export default function ToolsTab() {
 
   // Drafts state
   const [drafts, setDrafts] = useState([]);
-  const [draftsLoading, setDraftsLoading] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState(null);
 
   const fetchInitial = useCallback(async () => {
-    const [agentsData, accountsData] = await Promise.all([
-      api.getAgentPersonalities(),
-      api.getPlatformAccounts()
-    ]);
-    setAgents(agentsData);
-    setAccounts(accountsData);
+    const accountsData = await api.getPlatformAccounts(agentId);
+    setAccounts(accountsData.filter(a => a.status === 'active'));
     setLoading(false);
-  }, []);
+  }, [agentId]);
 
   useEffect(() => {
     fetchInitial();
   }, [fetchInitial]);
-
-  const activeAccounts = accounts.filter(a =>
-    a.agentId === selectedAgentId && a.status === 'active'
-  );
 
   // Load rate limits + submolts when account changes
   useEffect(() => {
@@ -71,33 +60,16 @@ export default function ToolsTab() {
     }).catch(() => {});
   }, [selectedAccountId]);
 
-  const loadDrafts = useCallback(async (agentId) => {
-    if (!agentId) {
-      setDrafts([]);
-      return;
-    }
-    setDraftsLoading(true);
+  const loadDrafts = useCallback(async () => {
+    if (!agentId) return;
     const data = await api.getAgentDrafts(agentId);
     setDrafts(data);
-    setDraftsLoading(false);
-  }, []);
+  }, [agentId]);
 
-  // Load drafts when agent changes
+  // Load drafts on mount
   useEffect(() => {
-    loadDrafts(selectedAgentId);
-  }, [selectedAgentId, loadDrafts]);
-
-  const handleAgentChange = (agentId) => {
-    setSelectedAgentId(agentId);
-    setSelectedAccountId('');
-    setFeedPosts([]);
-    setSelectedPost(null);
-    setPostTitle('');
-    setPostContent('');
-    setCommentContent('');
-    setEngageResult(null);
-    setActiveDraftId(null);
-  };
+    loadDrafts();
+  }, [loadDrafts]);
 
   const handleBrowseFeed = async () => {
     if (!selectedAccountId) return;
@@ -108,9 +80,9 @@ export default function ToolsTab() {
   };
 
   const handleFindRelevant = async () => {
-    if (!selectedAgentId || !selectedAccountId) return;
+    if (!agentId || !selectedAccountId) return;
     setFeedLoading(true);
-    const posts = await api.getAgentRelevantPosts(selectedAgentId, selectedAccountId, 10);
+    const posts = await api.getAgentRelevantPosts(agentId, selectedAccountId, 10);
     setFeedPosts(posts);
     setFeedLoading(false);
   };
@@ -124,10 +96,7 @@ export default function ToolsTab() {
   };
 
   const handleUpvote = async (postId) => {
-    await api.publishAgentComment(selectedAgentId, selectedAccountId, postId, '').catch(() => {
-      // Use the moltbook client directly through engage with 0 comments
-    });
-    // Simplified: just upvote via a quick engage
+    await api.publishAgentComment(agentId, selectedAccountId, postId, '').catch(() => {});
     toast.success('Upvoted');
     if (selectedAccountId) {
       api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
@@ -136,16 +105,15 @@ export default function ToolsTab() {
 
   // Post generation (auto-saves as draft)
   const handleGeneratePost = async () => {
-    if (!selectedAgentId || !selectedAccountId) return;
+    if (!agentId || !selectedAccountId) return;
     setGenerating(true);
-    const generated = await api.generateAgentPost(selectedAgentId, selectedAccountId, selectedSubmolt);
+    const generated = await api.generateAgentPost(agentId, selectedAccountId, selectedSubmolt);
     setPostTitle(generated.title);
     setPostContent(generated.content);
     setGenerating(false);
 
-    // Auto-save as draft
     const draft = await api.createAgentDraft({
-      agentId: selectedAgentId,
+      agentId,
       type: 'post',
       title: generated.title,
       content: generated.content,
@@ -153,20 +121,19 @@ export default function ToolsTab() {
       accountId: selectedAccountId
     });
     setActiveDraftId(draft.id);
-    loadDrafts(selectedAgentId);
+    loadDrafts();
     toast.success('Post generated and saved as draft');
   };
 
   const handlePublishPost = async () => {
     if (!postTitle || !postContent) return;
     setPublishing(true);
-    await api.publishAgentPost(selectedAgentId, selectedAccountId, selectedSubmolt, postTitle, postContent);
+    await api.publishAgentPost(agentId, selectedAccountId, selectedSubmolt, postTitle, postContent);
 
-    // Delete the draft after publishing
     if (activeDraftId) {
-      await api.deleteAgentDraft(selectedAgentId, activeDraftId).catch(() => {});
+      await api.deleteAgentDraft(agentId, activeDraftId).catch(() => {});
       setActiveDraftId(null);
-      loadDrafts(selectedAgentId);
+      loadDrafts();
     }
 
     setPostTitle('');
@@ -181,14 +148,13 @@ export default function ToolsTab() {
     if (!selectedPost) return;
     setGeneratingComment(true);
     const generated = await api.generateAgentComment(
-      selectedAgentId, selectedAccountId, selectedPost.id, replyToId || undefined
+      agentId, selectedAccountId, selectedPost.id, replyToId || undefined
     );
     setCommentContent(generated.content);
     setGeneratingComment(false);
 
-    // Auto-save as draft
     const draft = await api.createAgentDraft({
-      agentId: selectedAgentId,
+      agentId,
       type: 'comment',
       content: generated.content,
       postId: selectedPost.id,
@@ -197,7 +163,7 @@ export default function ToolsTab() {
       accountId: selectedAccountId
     });
     setActiveDraftId(draft.id);
-    loadDrafts(selectedAgentId);
+    loadDrafts();
     toast.success('Comment generated and saved as draft');
   };
 
@@ -205,31 +171,29 @@ export default function ToolsTab() {
     if (!selectedPost || !commentContent) return;
     setPublishingComment(true);
     await api.publishAgentComment(
-      selectedAgentId, selectedAccountId, selectedPost.id, commentContent, replyToId || undefined
+      agentId, selectedAccountId, selectedPost.id, commentContent, replyToId || undefined
     );
 
-    // Delete the draft after publishing
     if (activeDraftId) {
-      await api.deleteAgentDraft(selectedAgentId, activeDraftId).catch(() => {});
+      await api.deleteAgentDraft(agentId, activeDraftId).catch(() => {});
       setActiveDraftId(null);
-      loadDrafts(selectedAgentId);
+      loadDrafts();
     }
 
     setCommentContent('');
     setReplyToId(null);
     setPublishingComment(false);
     toast.success('Comment published');
-    // Refresh post comments
     handleViewPost(selectedPost);
     api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
   };
 
   // Engage
   const handleEngage = async () => {
-    if (!selectedAgentId || !selectedAccountId) return;
+    if (!agentId || !selectedAccountId) return;
     setEngaging(true);
     setEngageResult(null);
-    const result = await api.engageAgent(selectedAgentId, selectedAccountId, 1, 3);
+    const result = await api.engageAgent(agentId, selectedAccountId, 1, 3);
     setEngageResult(result);
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
@@ -248,7 +212,6 @@ export default function ToolsTab() {
     } else {
       setCommentContent(draft.content || '');
       setReplyToId(draft.parentId || null);
-      // If we have a postId, load the post for context
       if (draft.postId && draft.accountId) {
         setSelectedAccountId(draft.accountId);
         api.getAgentPost(draft.accountId, draft.postId).then(details => {
@@ -261,11 +224,9 @@ export default function ToolsTab() {
   };
 
   const handleDeleteDraft = async (draftId) => {
-    await api.deleteAgentDraft(selectedAgentId, draftId);
-    if (activeDraftId === draftId) {
-      setActiveDraftId(null);
-    }
-    loadDrafts(selectedAgentId);
+    await api.deleteAgentDraft(agentId, draftId);
+    if (activeDraftId === draftId) setActiveDraftId(null);
+    loadDrafts();
     toast.success('Draft deleted');
   };
 
@@ -273,37 +234,21 @@ export default function ToolsTab() {
     return <div className="p-4 text-gray-400">Loading tools...</div>;
   }
 
-  const ready = selectedAgentId && selectedAccountId;
+  const ready = !!selectedAccountId;
 
   return (
     <div className="p-4">
-      {/* Header: Agent + Account Selection + Rate Limits */}
+      {/* Header: Account Selection + Rate Limits */}
       <div className="flex flex-wrap items-end gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Agent</label>
-          <select
-            value={selectedAgentId}
-            onChange={(e) => handleAgentChange(e.target.value)}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded text-white min-w-[200px]"
-          >
-            <option value="">Select agent...</option>
-            {agents.map(agent => (
-              <option key={agent.id} value={agent.id}>
-                {agent.avatar?.emoji} {agent.name}
-              </option>
-            ))}
-          </select>
-        </div>
         <div>
           <label className="block text-sm text-gray-400 mb-1">Account</label>
           <select
             value={selectedAccountId}
             onChange={(e) => setSelectedAccountId(e.target.value)}
             className="px-3 py-2 bg-port-bg border border-port-border rounded text-white min-w-[200px]"
-            disabled={!selectedAgentId}
           >
             <option value="">Select account...</option>
-            {activeAccounts.map(account => (
+            {accounts.map(account => (
               <option key={account.id} value={account.id}>
                 {account.credentials.username}
               </option>
@@ -331,12 +276,12 @@ export default function ToolsTab() {
 
       {!ready && (
         <div className="text-center py-12 text-gray-400">
-          <p className="text-lg mb-2">Select an agent and account to get started</p>
-          <p className="text-sm">Use the dropdowns above to choose an agent with an active Moltbook account</p>
+          <p className="text-lg mb-2">Select an account to get started</p>
+          <p className="text-sm">Use the dropdown above to choose an active Moltbook account</p>
         </div>
       )}
 
-      {ready && (
+      {ready && (<>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left Column: Feed + Engage */}
           <div className="space-y-4">
@@ -598,13 +543,11 @@ export default function ToolsTab() {
                   {postComments.length} comments
                 </p>
 
-                {/* Post content preview */}
                 <div className="text-sm text-gray-400 bg-port-bg p-3 rounded mb-3 max-h-32 overflow-y-auto">
                   {selectedPost.content?.substring(0, 500)}
                   {selectedPost.content?.length > 500 && '...'}
                 </div>
 
-                {/* Existing comments */}
                 {postComments.length > 0 && (
                   <div className="space-y-2 mb-3 max-h-48 overflow-y-auto">
                     {postComments.slice(0, 10).map(comment => (
@@ -672,7 +615,7 @@ export default function ToolsTab() {
             )}
           </div>
         </div>
-      )}
+      </>)}
     </div>
   );
 }

@@ -62,8 +62,9 @@ export default function App() {
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
-          <Route path="agents" element={<Navigate to="/agents/personalities" replace />} />
-          <Route path="agents/:tab" element={<Agents />} />
+          <Route path="agents" element={<Agents />} />
+          <Route path="agents/:agentId" element={<Agents />} />
+          <Route path="agents/:agentId/:tab" element={<Agents />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

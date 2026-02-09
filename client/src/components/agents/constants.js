@@ -2,13 +2,12 @@
  * Agent Feature Constants
  */
 
-export const TABS = [
-  { id: 'personalities', label: 'Personalities', icon: '🤖' },
-  { id: 'accounts', label: 'Accounts', icon: '🔗' },
-  { id: 'schedules', label: 'Schedules', icon: '📅' },
+export const AGENT_DETAIL_TABS = [
+  { id: 'overview', label: 'Overview', icon: '📋' },
   { id: 'tools', label: 'Tools', icon: '🛠️' },
-  { id: 'activity', label: 'Activity', icon: '📊' },
-  { id: 'config', label: 'Config', icon: '⚙️' }
+  { id: 'published', label: 'Published', icon: '📰' },
+  { id: 'schedules', label: 'Schedules', icon: '📅' },
+  { id: 'activity', label: 'Activity', icon: '📊' }
 ];
 
 export const PERSONALITY_STYLES = [

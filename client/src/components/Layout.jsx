@@ -29,8 +29,6 @@ import {
   GraduationCap,
   Settings,
   Users,
-  Link2,
-  LineChart,
   Upload,
   SquareTerminal,
   Globe
@@ -44,17 +42,7 @@ import NotificationDropdown from './NotificationDropdown';
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
   { separator: true },
-  {
-    label: 'Agents',
-    icon: Users,
-    children: [
-      { to: '/agents/personalities', label: 'Personalities', icon: Bot },
-      { to: '/agents/accounts', label: 'Accounts', icon: Link2 },
-      { to: '/agents/schedules', label: 'Schedules', icon: Calendar },
-      { to: '/agents/activity', label: 'Activity', icon: LineChart },
-      { to: '/agents/config', label: 'Config', icon: Settings }
-    ]
-  },
+  { to: '/agents', label: 'Agents', icon: Users, single: true },
   {
     label: 'AI Config',
     icon: Bot,
