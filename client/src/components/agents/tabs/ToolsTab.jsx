@@ -216,13 +216,19 @@ export default function ToolsTab() {
         </div>
         {rateLimits && (
           <div className="flex gap-3 ml-auto">
-            {Object.entries(rateLimits).map(([action, rl]) => (
-              <div key={action} className={`text-xs px-2 py-1 rounded ${
-                rl.remaining > 0 ? 'bg-port-success/20 text-port-success' : 'bg-port-error/20 text-port-error'
-              }`}>
-                {action}: {rl.remaining}/{rl.maxPerDay}
-              </div>
-            ))}
+            {Object.entries(rateLimits).map(([action, rl]) => {
+              const pct = rl.remaining / rl.maxPerDay;
+              const colorClass = pct === 0
+                ? 'bg-port-error/20 text-port-error'
+                : pct < 0.25
+                  ? 'bg-port-warning/20 text-port-warning'
+                  : 'bg-port-success/20 text-port-success';
+              return (
+                <div key={action} className={`text-xs px-2 py-1 rounded ${colorClass}`} title={`${rl.remaining} of ${rl.maxPerDay} ${action}s remaining today`}>
+                  {action}: {rl.remaining} left
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
