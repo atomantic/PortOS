@@ -363,6 +363,20 @@ export const getAgentSubmolts = (accountId) => request(`/agents/tools/submolts?a
 export const getAgentPost = (accountId, postId) => request(`/agents/tools/post/${postId}?accountId=${accountId}`);
 export const getAgentRateLimits = (accountId) => request(`/agents/tools/rate-limits?accountId=${accountId}`);
 
+// Agent Drafts
+export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
+export const createAgentDraft = (data) => request('/agents/tools/drafts', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateAgentDraft = (agentId, draftId, data) => request(`/agents/tools/drafts/${draftId}?agentId=${agentId}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteAgentDraft = (agentId, draftId) => request(`/agents/tools/drafts/${draftId}?agentId=${agentId}`, {
+  method: 'DELETE'
+});
+
 // Agent Activity
 export const getAgentActivities = (limit = 50, agentIds = null, action = null) => {
   const params = new URLSearchParams();

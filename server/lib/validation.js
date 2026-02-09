@@ -244,6 +244,24 @@ export const engageSchema = z.object({
   maxVotes: z.number().int().min(0).max(10).optional().default(3)
 });
 
+export const createDraftSchema = z.object({
+  agentId: z.string().min(1),
+  type: z.enum(['post', 'comment']),
+  title: z.string().max(300).optional().nullable(),
+  content: z.string().min(1).max(10000),
+  submolt: z.string().max(100).optional().nullable(),
+  postId: z.string().optional().nullable(),
+  parentId: z.string().optional().nullable(),
+  postTitle: z.string().max(300).optional().nullable(),
+  accountId: z.string().optional().nullable()
+});
+
+export const updateDraftSchema = z.object({
+  title: z.string().max(300).optional().nullable(),
+  content: z.string().min(1).max(10000).optional(),
+  submolt: z.string().max(100).optional().nullable()
+});
+
 /**
  * Validate data against a schema
  * Returns { success: true, data } or { success: false, errors }

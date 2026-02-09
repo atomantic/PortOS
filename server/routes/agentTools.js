@@ -13,11 +13,14 @@ import {
   generateCommentSchema,
   publishPostSchema,
   publishCommentSchema,
-  engageSchema
+  engageSchema,
+  createDraftSchema,
+  updateDraftSchema
 } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
+import * as agentDrafts from '../services/agentDrafts.js';
 import { generatePost, generateComment, generateReply } from '../services/agentContentGenerator.js';
 import { findRelevantPosts } from '../services/agentFeedFilter.js';
 import { MoltbookClient } from '../integrations/moltbook/index.js';
@@ -326,6 +329,71 @@ router.get('/rate-limits', asyncHandler(async (req, res) => {
   const client = new MoltbookClient(account.credentials.apiKey);
   const rateLimits = client.getRateLimitStatus();
   res.json(rateLimits);
+}));
+
+// =============================================================================
+// DRAFTS
+// =============================================================================
+
+// GET /drafts - List drafts for an agent
+router.get('/drafts', asyncHandler(async (req, res) => {
+  const { agentId } = req.query;
+  if (!agentId) {
+    throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  console.log(`🛠️ GET /api/agents/tools/drafts agent=${agentId}`);
+  const drafts = await agentDrafts.listDrafts(agentId);
+  res.json(drafts);
+}));
+
+// POST /drafts - Create a draft
+router.post('/drafts', asyncHandler(async (req, res) => {
+  const { success, data, errors } = validate(createDraftSchema, req.body);
+  if (!success) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
+  }
+
+  console.log(`🛠️ POST /api/agents/tools/drafts agent=${data.agentId} type=${data.type}`);
+  const draft = await agentDrafts.createDraft(data.agentId, data);
+  res.status(201).json(draft);
+}));
+
+// PUT /drafts/:draftId - Update a draft
+router.put('/drafts/:draftId', asyncHandler(async (req, res) => {
+  const { draftId } = req.params;
+  const { agentId } = req.query;
+  if (!agentId) {
+    throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const { success, data, errors } = validate(updateDraftSchema, req.body);
+  if (!success) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
+  }
+
+  console.log(`🛠️ PUT /api/agents/tools/drafts/${draftId} agent=${agentId}`);
+  const updated = await agentDrafts.updateDraft(agentId, draftId, data);
+  if (!updated) {
+    throw new ServerError('Draft not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(updated);
+}));
+
+// DELETE /drafts/:draftId - Delete a draft
+router.delete('/drafts/:draftId', asyncHandler(async (req, res) => {
+  const { draftId } = req.params;
+  const { agentId } = req.query;
+  if (!agentId) {
+    throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  console.log(`🛠️ DELETE /api/agents/tools/drafts/${draftId} agent=${agentId}`);
+  const deleted = await agentDrafts.deleteDraft(agentId, draftId);
+  if (!deleted) {
+    throw new ServerError('Draft not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.status(204).send();
 }));
 
 export default router;

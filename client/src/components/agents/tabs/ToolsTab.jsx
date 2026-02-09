@@ -35,6 +35,11 @@ export default function ToolsTab() {
   const [engaging, setEngaging] = useState(false);
   const [engageResult, setEngageResult] = useState(null);
 
+  // Drafts state
+  const [drafts, setDrafts] = useState([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState(null);
+
   const fetchInitial = useCallback(async () => {
     const [agentsData, accountsData] = await Promise.all([
       api.getAgentPersonalities(),
@@ -66,6 +71,17 @@ export default function ToolsTab() {
     }).catch(() => {});
   }, [selectedAccountId]);
 
+  const loadDrafts = useCallback(async (agentId) => {
+    if (!agentId) {
+      setDrafts([]);
+      return;
+    }
+    setDraftsLoading(true);
+    const data = await api.getAgentDrafts(agentId);
+    setDrafts(data);
+    setDraftsLoading(false);
+  }, []);
+
   const handleAgentChange = (agentId) => {
     setSelectedAgentId(agentId);
     setSelectedAccountId('');
@@ -75,6 +91,8 @@ export default function ToolsTab() {
     setPostContent('');
     setCommentContent('');
     setEngageResult(null);
+    setActiveDraftId(null);
+    loadDrafts(agentId);
   };
 
   const handleBrowseFeed = async () => {
@@ -112,7 +130,7 @@ export default function ToolsTab() {
     }
   };
 
-  // Post generation
+  // Post generation (auto-saves as draft)
   const handleGeneratePost = async () => {
     if (!selectedAgentId || !selectedAccountId) return;
     setGenerating(true);
@@ -120,13 +138,33 @@ export default function ToolsTab() {
     setPostTitle(generated.title);
     setPostContent(generated.content);
     setGenerating(false);
-    toast.success('Post generated');
+
+    // Auto-save as draft
+    const draft = await api.createAgentDraft({
+      agentId: selectedAgentId,
+      type: 'post',
+      title: generated.title,
+      content: generated.content,
+      submolt: selectedSubmolt,
+      accountId: selectedAccountId
+    });
+    setActiveDraftId(draft.id);
+    loadDrafts(selectedAgentId);
+    toast.success('Post generated and saved as draft');
   };
 
   const handlePublishPost = async () => {
     if (!postTitle || !postContent) return;
     setPublishing(true);
     await api.publishAgentPost(selectedAgentId, selectedAccountId, selectedSubmolt, postTitle, postContent);
+
+    // Delete the draft after publishing
+    if (activeDraftId) {
+      await api.deleteAgentDraft(selectedAgentId, activeDraftId).catch(() => {});
+      setActiveDraftId(null);
+      loadDrafts(selectedAgentId);
+    }
+
     setPostTitle('');
     setPostContent('');
     setPublishing(false);
@@ -134,7 +172,7 @@ export default function ToolsTab() {
     api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
   };
 
-  // Comment generation
+  // Comment generation (auto-saves as draft)
   const handleGenerateComment = async () => {
     if (!selectedPost) return;
     setGeneratingComment(true);
@@ -143,7 +181,20 @@ export default function ToolsTab() {
     );
     setCommentContent(generated.content);
     setGeneratingComment(false);
-    toast.success('Comment generated');
+
+    // Auto-save as draft
+    const draft = await api.createAgentDraft({
+      agentId: selectedAgentId,
+      type: 'comment',
+      content: generated.content,
+      postId: selectedPost.id,
+      parentId: replyToId || null,
+      postTitle: selectedPost.title,
+      accountId: selectedAccountId
+    });
+    setActiveDraftId(draft.id);
+    loadDrafts(selectedAgentId);
+    toast.success('Comment generated and saved as draft');
   };
 
   const handlePublishComment = async () => {
@@ -152,6 +203,14 @@ export default function ToolsTab() {
     await api.publishAgentComment(
       selectedAgentId, selectedAccountId, selectedPost.id, commentContent, replyToId || undefined
     );
+
+    // Delete the draft after publishing
+    if (activeDraftId) {
+      await api.deleteAgentDraft(selectedAgentId, activeDraftId).catch(() => {});
+      setActiveDraftId(null);
+      loadDrafts(selectedAgentId);
+    }
+
     setCommentContent('');
     setReplyToId(null);
     setPublishingComment(false);
@@ -171,6 +230,39 @@ export default function ToolsTab() {
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
     api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+  };
+
+  const handleLoadDraft = (draft) => {
+    setActiveDraftId(draft.id);
+    if (draft.type === 'post') {
+      setPostTitle(draft.title || '');
+      setPostContent(draft.content || '');
+      if (draft.submolt) setSelectedSubmolt(draft.submolt);
+      if (draft.accountId) setSelectedAccountId(draft.accountId);
+      setSelectedPost(null);
+      setCommentContent('');
+    } else {
+      setCommentContent(draft.content || '');
+      setReplyToId(draft.parentId || null);
+      // If we have a postId, load the post for context
+      if (draft.postId && draft.accountId) {
+        setSelectedAccountId(draft.accountId);
+        api.getAgentPost(draft.accountId, draft.postId).then(details => {
+          setSelectedPost(details);
+          setPostComments(details.comments || []);
+        }).catch(() => {});
+      }
+    }
+    toast.success(`Loaded ${draft.type} draft`);
+  };
+
+  const handleDeleteDraft = async (draftId) => {
+    await api.deleteAgentDraft(selectedAgentId, draftId);
+    if (activeDraftId === draftId) {
+      setActiveDraftId(null);
+    }
+    loadDrafts(selectedAgentId);
+    toast.success('Draft deleted');
   };
 
   if (loading) {
@@ -438,6 +530,58 @@ export default function ToolsTab() {
                 )}
               </div>
             </div>
+
+            {/* Drafts */}
+            {drafts.length > 0 && (
+              <div className="bg-port-card border border-port-border rounded-lg p-4">
+                <h3 className="font-semibold text-white mb-3">
+                  Drafts ({drafts.length})
+                </h3>
+                <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  {drafts.map(draft => (
+                    <div
+                      key={draft.id}
+                      className={`p-3 border rounded transition-colors ${
+                        activeDraftId === draft.id
+                          ? 'border-port-accent bg-port-accent/10'
+                          : 'border-port-border hover:border-port-border/80'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleLoadDraft(draft)}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">
+                              {draft.type}
+                            </span>
+                            {draft.submolt && (
+                              <span className="text-xs text-gray-500">/{draft.submolt}</span>
+                            )}
+                          </div>
+                          <p className="text-sm text-white mt-1 truncate">
+                            {draft.title || draft.content?.substring(0, 80)}
+                          </p>
+                          {draft.postTitle && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              re: {draft.postTitle}
+                            </p>
+                          )}
+                          <p className="text-[10px] text-gray-600 mt-1">
+                            {new Date(draft.createdAt).toLocaleString()}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteDraft(draft.id)}
+                          className="text-gray-600 hover:text-port-error ml-2 shrink-0 text-sm"
+                          title="Delete draft"
+                        >
+                          x
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Comment Composer */}
             {selectedPost && (
