@@ -14,6 +14,7 @@ import {
   publishPostSchema,
   publishCommentSchema,
   engageSchema,
+  checkPostsSchema,
   createDraftSchema,
   updateDraftSchema
 } from '../lib/validation.js';
@@ -24,6 +25,7 @@ import * as agentDrafts from '../services/agentDrafts.js';
 import { generatePost, generateComment, generateReply } from '../services/agentContentGenerator.js';
 import { findRelevantPosts } from '../services/agentFeedFilter.js';
 import { MoltbookClient } from '../integrations/moltbook/index.js';
+import { collectPublishedPosts } from '../services/agentPublished.js';
 
 const router = Router();
 
@@ -100,7 +102,8 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
   console.log(`🛠️ POST /api/agents/tools/publish-post agent=${data.agentId} submolt=${data.submolt}`);
 
   const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
-  const post = await client.createPost(data.submolt, data.title, data.content);
+  const result = await client.createPost(data.submolt, data.title, data.content);
+  const post = result?.post || result;
   const postId = post?.id || post?._id || post?.post_id;
 
   await platformAccounts.recordActivity(data.accountId);
@@ -345,57 +348,7 @@ router.get('/published', asyncHandler(async (req, res) => {
 
   const { client } = await getClientAndAgent(accountId, agentId);
 
-  // Collect activities across multiple days
-  const postMap = new Map();
-  const commentMap = new Map();
-
-  for (let i = 0; i < numDays; i++) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-
-    const [postActivities, commentActivities, engageActivities] = await Promise.all([
-      agentActivity.getActivities(agentId, { date, action: 'post' }),
-      agentActivity.getActivities(agentId, { date, action: 'comment' }),
-      agentActivity.getActivities(agentId, { date, action: 'engage' })
-    ]);
-
-    // Extract posts
-    for (const activity of postActivities) {
-      if (activity.status !== 'completed') continue;
-      const postId = activity.result?.postId || activity.id;
-      const title = activity.result?.title || activity.params?.title;
-      const submolt = activity.result?.submolt || activity.params?.submolt;
-      if (!postMap.has(postId)) {
-        postMap.set(postId, { postId: activity.result?.postId || null, title, submolt, publishedAt: activity.timestamp });
-      }
-    }
-
-    // Extract comments
-    for (const activity of commentActivities) {
-      if (activity.status !== 'completed') continue;
-      const commentId = activity.result?.commentId || activity.id;
-      const postId = activity.result?.postId || activity.params?.postId;
-      const isReply = activity.result?.isReply;
-      if (!commentMap.has(commentId)) {
-        commentMap.set(commentId, { commentId: activity.result?.commentId || null, postId, isReply: !!isReply, publishedAt: activity.timestamp });
-      }
-    }
-
-    // Extract comments from engage results
-    for (const activity of engageActivities) {
-      if (activity.status !== 'completed' || !activity.result?.comments) continue;
-      for (const c of activity.result.comments) {
-        if (!c.commentId || commentMap.has(c.commentId)) continue;
-        commentMap.set(c.commentId, {
-          commentId: c.commentId,
-          postId: c.postId,
-          postTitle: c.postTitle,
-          isReply: false,
-          publishedAt: activity.timestamp
-        });
-      }
-    }
-  }
+  const { postMap, commentMap } = await collectPublishedPosts(agentId, numDays);
 
   // Fetch live engagement for posts (only for those with postId)
   const posts = Array.from(postMap.values());
@@ -443,6 +396,134 @@ router.get('/published', asyncHandler(async (req, res) => {
   })).sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
   res.json({ posts: enrichedPosts, comments: enrichedComments });
+}));
+
+// POST /check-posts - Check engagement on published posts and respond
+router.post('/check-posts', asyncHandler(async (req, res) => {
+  const { success, data, errors } = validate(checkPostsSchema, req.body);
+  if (!success) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
+  }
+
+  console.log(`👀 POST /api/agents/tools/check-posts agent=${data.agentId} days=${data.days}`);
+
+  const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
+  const { checkRateLimit, isAccountSuspended } = await import('../integrations/moltbook/index.js');
+
+  const agentUsername = account.credentials.username;
+
+  // Fetch posts directly from Moltbook API — more reliable than activity logs
+  const allPosts = await client.getPostsByAuthor(agentUsername);
+
+  // Filter to posts within the requested day range
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - data.days);
+  const posts = allPosts.filter(p => new Date(p.created_at) >= cutoff);
+
+  console.log(`👀 Found ${allPosts.length} total posts by ${agentUsername}, ${posts.length} within ${data.days} days`);
+  const upvoted = [];
+  const replied = [];
+  const skipped = [];
+  let totalComments = 0;
+  let newComments = 0;
+  let suspended = false;
+  const delayMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  for (const post of posts) {
+    if (suspended) break;
+
+    const postId = post.id;
+    const commentsResponse = await client.getComments(postId).catch(e => {
+      if (isAccountSuspended(e)) suspended = true;
+      return { comments: [] };
+    });
+    if (suspended) break;
+
+    const allComments = commentsResponse.comments || commentsResponse || [];
+    totalComments += allComments.length;
+
+    // Filter to comments NOT by the agent
+    const otherComments = allComments.filter(c => {
+      const authorName = typeof c.author === 'object' ? c.author?.name : c.author;
+      return authorName !== agentUsername;
+    });
+    newComments += otherComments.length;
+
+    for (const comment of otherComments) {
+      if (suspended) break;
+
+      // Upvote positive comments
+      if (upvoted.length < data.maxUpvotes) {
+        const rateCheck = checkRateLimit(client.apiKey, 'vote');
+        if (rateCheck.allowed) {
+          const voted = await client.upvoteComment(comment.id).catch(e => {
+            if (isAccountSuspended(e)) suspended = true;
+            else console.log(`👀 Upvote failed for comment ${comment.id}: ${e.message}`);
+            return null;
+          });
+          if (suspended) break;
+          if (voted) {
+            upvoted.push({
+              commentId: comment.id,
+              postId,
+              postTitle: post.title,
+              snippet: (comment.content || '').substring(0, 80)
+            });
+          }
+          await delayMs(1500);
+        }
+      }
+
+      // Generate replies for top comments
+      if (!suspended && replied.length < data.maxReplies) {
+        const rateCheck = checkRateLimit(client.apiKey, 'comment');
+        if (rateCheck.allowed) {
+          const generated = await generateReply(agent, post, comment);
+          const replyResult = await client.replyToComment(postId, comment.id, generated.content).catch(e => {
+            if (isAccountSuspended(e)) suspended = true;
+            else console.log(`👀 Reply failed on post ${postId}: ${e.message}`);
+            return null;
+          });
+          if (suspended) break;
+          if (replyResult) {
+            replied.push({
+              commentId: comment.id,
+              replyId: replyResult?.id || replyResult?._id || replyResult?.comment_id,
+              postId,
+              postTitle: post.title,
+              snippet: (comment.content || '').substring(0, 80),
+              reply: generated.content
+            });
+          }
+          await delayMs(1500);
+        }
+      }
+
+      if (upvoted.length >= data.maxUpvotes && replied.length >= data.maxReplies) break;
+    }
+  }
+
+  // If account was suspended, mark it and halt early
+  if (suspended) {
+    console.log(`🚫 Account ${agentUsername} suspended — halting monitor, marking account`);
+    await platformAccounts.updateAccountStatus(data.accountId, 'suspended');
+  }
+
+  await platformAccounts.recordActivity(data.accountId);
+  await agentActivity.logActivity({
+    agentId: data.agentId,
+    accountId: data.accountId,
+    action: 'monitor',
+    params: { days: data.days, maxReplies: data.maxReplies, maxUpvotes: data.maxUpvotes },
+    status: suspended ? 'failed' : 'completed',
+    error: suspended ? 'Account suspended by platform' : undefined,
+    result: { type: 'monitor', postsChecked: posts.length, totalComments, newComments, upvoted, replied },
+    timestamp: new Date().toISOString()
+  });
+
+  console.log(`👀 Monitor ${suspended ? 'aborted (suspended)' : 'complete'} for "${agent.name}": ${posts.length} posts, ${newComments} new comments, ${upvoted.length} upvotes, ${replied.length} replies`);
+
+  res.json({ postsChecked: posts.length, suspended, engagement: { totalComments, newComments, upvoted, replied, skipped } });
 }));
 
 // =============================================================================

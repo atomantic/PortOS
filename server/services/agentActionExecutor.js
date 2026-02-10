@@ -10,7 +10,7 @@ import { scheduleEvents } from './automationScheduler.js';
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
-import { MoltbookClient, checkRateLimit } from '../integrations/moltbook/index.js';
+import { MoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
 import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 
@@ -38,6 +38,9 @@ async function executeAction(schedule, account, agent) {
 
     case 'engage':
       return executeEngage(client, agent, action.params);
+
+    case 'monitor':
+      return executeMonitor(client, agent, schedule, action.params);
 
     default:
       throw new Error(`Unknown action type: ${action.type}`);
@@ -80,7 +83,8 @@ async function executePost(client, agent, params) {
     throw new Error('Post action requires title and content in params (or aiGenerate enabled)');
   }
 
-  const post = await client.createPost(submolt, title, content);
+  const result = await client.createPost(submolt, title, content);
+  const post = result?.post || result;
   return {
     type: 'post',
     postId: post?.id || post?._id || post?.post_id,
@@ -215,21 +219,25 @@ async function executeEngage(client, agent, params) {
 
   const votes = [];
   const comments = [];
+  let suspended = false;
 
   // Vote on relevant posts
   for (const post of relevantPosts) {
-    if (votes.length >= maxVotes) break;
+    if (votes.length >= maxVotes || suspended) break;
 
     const rateCheck = checkRateLimit(client.apiKey, 'vote');
     if (!rateCheck.allowed) break;
 
-    await client.upvote(post.id);
+    await client.upvote(post.id).catch(e => {
+      if (isAccountSuspended(e)) suspended = true;
+    });
+    if (suspended) break;
     votes.push({ postId: post.id, title: post.title });
     await delay(1500);
   }
 
   // Comment on best matches
-  if (maxComments > 0) {
+  if (maxComments > 0 && !suspended) {
     const opportunities = await findReplyOpportunities(client, agent, {
       sort: 'hot',
       minScore: 2,
@@ -237,31 +245,136 @@ async function executeEngage(client, agent, params) {
     });
 
     for (const opportunity of opportunities) {
-      if (comments.length >= maxComments) break;
+      if (comments.length >= maxComments || suspended) break;
 
       const rateCheck = checkRateLimit(client.apiKey, 'comment');
       if (!rateCheck.allowed) break;
 
       const generated = await generateComment(agent, opportunity.post, opportunity.comments);
-      const result = await client.createComment(opportunity.post.id, generated.content);
+      await client.createComment(opportunity.post.id, generated.content).catch(e => {
+        if (isAccountSuspended(e)) suspended = true;
+      });
+      if (suspended) break;
 
       comments.push({
         postId: opportunity.post.id || opportunity.post._id,
         postTitle: opportunity.post.title,
-        commentId: result?.id || result?._id || result?.comment_id,
         reason: opportunity.reason
       });
       await delay(1500);
     }
   }
 
-  console.log(`🤝 Engage complete for "${agent.name}": ${votes.length} votes, ${comments.length} comments`);
+  if (suspended) {
+    console.log(`🚫 Account suspended during engage — halting`);
+  }
+
+  console.log(`🤝 Engage ${suspended ? 'aborted (suspended)' : 'complete'} for "${agent.name}": ${votes.length} votes, ${comments.length} comments`);
 
   return {
     type: 'engage',
     postsReviewed: relevantPosts.length,
     votes,
-    comments
+    comments,
+    suspended
+  };
+}
+
+/**
+ * Execute a monitor action - check engagement on published posts and respond
+ */
+async function executeMonitor(client, agent, schedule, params) {
+  const { days = 7, maxReplies = 2, maxUpvotes = 10 } = params;
+
+  console.log(`👀 Starting monitor for "${agent.name}" (days=${days}, maxReplies=${maxReplies}, maxUpvotes=${maxUpvotes})`);
+
+  const account = await platformAccounts.getAccountWithCredentials(schedule.accountId);
+  const agentUsername = account?.credentials?.username;
+
+  // Fetch posts directly from Moltbook API
+  const allPosts = await client.getPostsByAuthor(agentUsername);
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const posts = allPosts.filter(p => new Date(p.created_at) >= cutoff);
+
+  console.log(`👀 Found ${allPosts.length} total posts by ${agentUsername}, ${posts.length} within ${days} days`);
+
+  const upvoted = [];
+  const replied = [];
+  let totalComments = 0;
+  let newComments = 0;
+  let suspended = false;
+
+  for (const post of posts) {
+    if (suspended) break;
+
+    const postId = post.id;
+    const commentsResponse = await client.getComments(postId).catch(e => {
+      if (isAccountSuspended(e)) suspended = true;
+      return { comments: [] };
+    });
+    if (suspended) break;
+
+    const allComments = commentsResponse.comments || commentsResponse || [];
+    totalComments += allComments.length;
+
+    const otherComments = allComments.filter(c => {
+      const authorName = typeof c.author === 'object' ? c.author?.name : c.author;
+      return authorName !== agentUsername;
+    });
+    newComments += otherComments.length;
+
+    for (const comment of otherComments) {
+      if (suspended) break;
+
+      if (upvoted.length < maxUpvotes) {
+        const rateCheck = checkRateLimit(client.apiKey, 'vote');
+        if (rateCheck.allowed) {
+          await client.upvoteComment(comment.id).catch(e => {
+            if (isAccountSuspended(e)) suspended = true;
+          });
+          if (suspended) break;
+          upvoted.push({ commentId: comment.id, postId, postTitle: post.title });
+          await delay(1500);
+        }
+      }
+
+      if (!suspended && replied.length < maxReplies) {
+        const rateCheck = checkRateLimit(client.apiKey, 'comment');
+        if (rateCheck.allowed) {
+          const generated = await generateReply(agent, post, comment);
+          await client.replyToComment(postId, comment.id, generated.content).catch(e => {
+            if (isAccountSuspended(e)) suspended = true;
+          });
+          if (suspended) break;
+          replied.push({
+            commentId: comment.id,
+            postId,
+            postTitle: post.title
+          });
+          await delay(1500);
+        }
+      }
+
+      if (upvoted.length >= maxUpvotes && replied.length >= maxReplies) break;
+    }
+  }
+
+  if (suspended) {
+    console.log(`🚫 Account ${agentUsername} suspended — halting monitor, marking account`);
+    await platformAccounts.updateAccountStatus(schedule.accountId, 'suspended');
+  }
+
+  console.log(`👀 Monitor ${suspended ? 'aborted (suspended)' : 'complete'} for "${agent.name}": ${posts.length} posts, ${newComments} new comments, ${upvoted.length} upvotes, ${replied.length} replies`);
+
+  return {
+    type: 'monitor',
+    postsChecked: posts.length,
+    totalComments,
+    newComments,
+    upvoted,
+    replied,
+    suspended
   };
 }
 

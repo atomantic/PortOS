@@ -33,6 +33,10 @@ export default function ToolsTab({ agentId }) {
   const [engaging, setEngaging] = useState(false);
   const [engageResult, setEngageResult] = useState(null);
 
+  // Check Posts (Monitor) state
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState(null);
+
   // Drafts state
   const [drafts, setDrafts] = useState([]);
   const [activeDraftId, setActiveDraftId] = useState(null);
@@ -197,6 +201,19 @@ export default function ToolsTab({ agentId }) {
     setEngageResult(result);
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
+    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+  };
+
+  // Check Posts (Monitor)
+  const handleCheckPosts = async () => {
+    if (!agentId || !selectedAccountId) return;
+    setChecking(true);
+    setCheckResult(null);
+    const result = await api.checkAgentPosts(agentId, selectedAccountId, 7, 2, 10).catch(() => null);
+    setChecking(false);
+    if (!result) return;
+    setCheckResult(result);
+    toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
     api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
   };
 
@@ -408,6 +425,68 @@ export default function ToolsTab({ agentId }) {
                         </div>
                       ))}
                     </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Check Posts (Monitor) */}
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-semibold text-white">Check Posts</h3>
+                  <p className="text-xs text-gray-500">Check engagement on published posts, upvote comments, and reply</p>
+                </div>
+                <button
+                  onClick={handleCheckPosts}
+                  disabled={checking}
+                  className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50"
+                >
+                  {checking ? 'Checking...' : 'Check Posts'}
+                </button>
+              </div>
+
+              {checking && (
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  <span className="animate-spin">⏳</span>
+                  Scanning published posts for new engagement...
+                </div>
+              )}
+
+              {checkResult && (
+                <div className="text-sm space-y-2">
+                  <div className="flex gap-4 text-gray-400">
+                    <span>{checkResult.postsChecked} posts checked</span>
+                    <span>{checkResult.engagement?.totalComments || 0} total comments</span>
+                    <span className="text-port-accent">{checkResult.engagement?.newComments || 0} by others</span>
+                  </div>
+
+                  {checkResult.engagement?.upvoted?.length > 0 && (
+                    <div>
+                      <p className="text-port-accent font-medium">Upvoted ({checkResult.engagement.upvoted.length})</p>
+                      {checkResult.engagement.upvoted.map((u, i) => (
+                        <div key={i} className="text-xs pl-2 mt-1">
+                          <p className="text-gray-400">{u.postTitle}</p>
+                          <p className="text-gray-500 italic">{u.snippet}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {checkResult.engagement?.replied?.length > 0 && (
+                    <div>
+                      <p className="text-port-success font-medium">Replied ({checkResult.engagement.replied.length})</p>
+                      {checkResult.engagement.replied.map((r, i) => (
+                        <div key={i} className="text-xs pl-2 mt-1">
+                          <p className="text-gray-400">{r.postTitle} - re: {r.snippet}</p>
+                          <p className="text-gray-500 italic">{r.reply?.substring(0, 120)}...</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {(checkResult.engagement?.upvoted?.length === 0 && checkResult.engagement?.replied?.length === 0) && (
+                    <p className="text-gray-500 text-xs">No new engagement actions taken</p>
                   )}
                 </div>
               )}

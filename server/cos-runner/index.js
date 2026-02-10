@@ -12,7 +12,7 @@ import express from 'express';
 import { spawn } from 'child_process';
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { writeFile, mkdir, readFile } from 'fs/promises';
+import { writeFile, mkdir, readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
@@ -222,52 +222,40 @@ const io = new SocketServer(server, {
   cors: { origin: '*' }
 });
 
+const DEFAULT_STATE = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
+let stateLock = Promise.resolve();
+
 /**
- * Validate JSON string before parsing
+ * Write state atomically using temp file + rename to prevent partial-write corruption
  */
-function isValidJSON(str) {
-  if (!str || !str.trim()) return false;
-  const trimmed = str.trim();
-  // Check for basic JSON structure
-  if (!(trimmed.startsWith('{') && trimmed.endsWith('}'))) return false;
-  // Check for common corruption patterns
-  if (trimmed.endsWith('}}') || trimmed.includes('}{')) return false;
-  return true;
+async function atomicWrite(filePath, data) {
+  const tmpPath = `${filePath}.tmp.${process.pid}`;
+  await writeFile(tmpPath, data);
+  await rename(tmpPath, filePath);
 }
 
 /**
  * Load runner state from disk
  */
 async function loadState() {
-  const defaultState = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
-
-  if (!existsSync(STATE_FILE)) {
-    return defaultState;
-  }
+  if (!existsSync(STATE_FILE)) return { ...DEFAULT_STATE, agents: {}, stats: { ...DEFAULT_STATE.stats } };
 
   const content = await readFile(STATE_FILE, 'utf-8');
-
-  if (!isValidJSON(content)) {
-    console.log('⚠️ Corrupted or empty state file, returning default state');
-    // Backup the corrupted file for debugging
-    const backupPath = `${STATE_FILE}.corrupted.${Date.now()}`;
-    await writeFile(backupPath, content).catch(() => {});
-    console.log(`📝 Backed up corrupted state to ${backupPath}`);
-    return defaultState;
-  }
+  if (!content || !content.trim()) return { ...DEFAULT_STATE, agents: {}, stats: { ...DEFAULT_STATE.stats } };
 
   return JSON.parse(content);
 }
 
 /**
- * Save runner state to disk
+ * Save runner state to disk (serialized with atomic writes to prevent corruption)
  */
-async function saveState(state) {
-  const dir = dirname(STATE_FILE);
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
-  await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+function saveState(state) {
+  stateLock = stateLock.then(async () => {
+    const dir = dirname(STATE_FILE);
+    if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+    await atomicWrite(STATE_FILE, JSON.stringify(state, null, 2));
+  });
+  return stateLock;
 }
 
 /**

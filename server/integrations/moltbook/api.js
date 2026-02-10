@@ -32,7 +32,10 @@ async function request(endpoint, options = {}) {
     const error = await response.json().catch(() => ({}));
     const message = error.error || error.message || `HTTP ${response.status}`;
     console.error(`❌ Moltbook API error: ${response.status} ${message}`);
-    throw new Error(message);
+    const err = new Error(message);
+    err.status = response.status;
+    err.suspended = response.status === 403 && message.toLowerCase().includes('suspended');
+    throw err;
   }
 
   if (response.status === 204) {
@@ -144,6 +147,25 @@ export async function createPost(apiKey, submolt, title, content) {
  */
 export async function getFeed(apiKey, sort = 'hot', limit = 25) {
   return authRequest(apiKey, `/feed?sort=${sort}&limit=${limit}`);
+}
+
+/**
+ * Get posts by a specific author
+ * @param {string} apiKey - The agent's API key
+ * @param {string} username - The author's username
+ */
+export async function getPostsByAuthor(apiKey, username) {
+  const result = await authRequest(apiKey, `/posts?author=${encodeURIComponent(username)}`);
+  return result.posts || result || [];
+}
+
+/**
+ * Delete a post
+ * @param {string} apiKey - The agent's API key
+ * @param {string} postId - The post ID to delete
+ */
+export async function deletePost(apiKey, postId) {
+  return authRequest(apiKey, `/posts/${postId}`, { method: 'DELETE' });
 }
 
 /**
@@ -275,9 +297,8 @@ export async function upvoteComment(apiKey, commentId) {
     throw new Error(`Rate limited: ${rateCheck.reason}`);
   }
 
-  const result = await authRequest(apiKey, `/comments/${commentId}/vote`, {
-    method: 'POST',
-    body: JSON.stringify({ direction: 'up' })
+  const result = await authRequest(apiKey, `/comments/${commentId}/upvote`, {
+    method: 'POST'
   });
 
   recordAction(apiKey, 'vote');
@@ -422,4 +443,13 @@ export async function getSubmolts(apiKey) {
  */
 export async function getSubmolt(apiKey, submoltName) {
   return authRequest(apiKey, `/submolts/${submoltName}`);
+}
+
+/**
+ * Check if an error indicates account suspension
+ * @param {Error} error - The error to check
+ * @returns {boolean}
+ */
+export function isAccountSuspended(error) {
+  return error?.suspended || (error?.status === 403 && error?.message?.toLowerCase().includes('suspended'));
 }

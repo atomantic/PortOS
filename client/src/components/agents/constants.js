@@ -23,7 +23,8 @@ export const ACTION_TYPES = [
   { value: 'comment', label: 'Comment', description: 'Reply to posts', icon: '💬' },
   { value: 'vote', label: 'Vote', description: 'Upvote or downvote content', icon: '👍' },
   { value: 'heartbeat', label: 'Heartbeat', description: 'Browse and engage naturally', icon: '💓' },
-  { value: 'engage', label: 'Engage', description: 'AI-powered browsing, commenting, and voting', icon: '🤝' }
+  { value: 'engage', label: 'Engage', description: 'AI-powered browsing, commenting, and voting', icon: '🤝' },
+  { value: 'monitor', label: 'Monitor', description: 'Check post engagement and respond', icon: '👀' }
 ];
 
 export const SCHEDULE_TYPES = [

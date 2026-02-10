@@ -76,7 +76,7 @@ export const accountRegistrationSchema = z.object({
 // AUTOMATION SCHEDULE SCHEMAS
 // =============================================================================
 
-export const scheduleActionTypeSchema = z.enum(['post', 'comment', 'vote', 'heartbeat', 'engage']);
+export const scheduleActionTypeSchema = z.enum(['post', 'comment', 'vote', 'heartbeat', 'engage', 'monitor']);
 
 export const scheduleActionSchema = z.object({
   type: scheduleActionTypeSchema,
@@ -242,6 +242,14 @@ export const engageSchema = z.object({
   accountId: z.string().min(1),
   maxComments: z.number().int().min(0).max(5).optional().default(1),
   maxVotes: z.number().int().min(0).max(10).optional().default(3)
+});
+
+export const checkPostsSchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  days: z.number().int().min(1).max(30).optional().default(7),
+  maxReplies: z.number().int().min(0).max(5).optional().default(2),
+  maxUpvotes: z.number().int().min(0).max(20).optional().default(10)
 });
 
 export const createDraftSchema = z.object({

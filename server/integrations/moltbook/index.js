@@ -7,7 +7,7 @@
  * @module integrations/moltbook
  */
 
-// Re-export all API functions
+// Re-export all API functions (including isAccountSuspended)
 export * from './api.js';
 
 // Re-export rate limit utilities
@@ -40,6 +40,8 @@ export class MoltbookClient {
   createPost(submolt, title, content) { return api.createPost(this.apiKey, submolt, title, content); }
   getFeed(sort, limit) { return api.getFeed(this.apiKey, sort, limit); }
   getPost(postId) { return api.getPost(this.apiKey, postId); }
+  getPostsByAuthor(username) { return api.getPostsByAuthor(this.apiKey, username); }
+  deletePost(postId) { return api.deletePost(this.apiKey, postId); }
 
   // Comments
   createComment(postId, content) { return api.createComment(this.apiKey, postId, content); }
