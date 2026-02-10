@@ -12,6 +12,7 @@ import {
   Brain
 } from 'lucide-react';
 import * as api from '../../../services/api';
+import MarkdownOutput from '../MarkdownOutput';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {
@@ -32,6 +33,57 @@ function extractTaskType(description) {
   if (d.includes('investigate') || d.includes('debug')) return 'investigation';
   if (d.includes('self-improvement') || d.includes('feature idea')) return 'self-improvement';
   return 'feature';
+}
+
+const isToolLine = (line) =>
+  line.startsWith('🔧') || line.startsWith('  →') || line.startsWith('  ↳') || line.startsWith('[stderr]');
+
+function OutputBlocks({ output }) {
+  // Group consecutive lines: tool lines render as monospace, content lines as markdown
+  const blocks = useMemo(() => {
+    const result = [];
+    let mdLines = [];
+
+    const flushMd = () => {
+      if (mdLines.length > 0) {
+        result.push({ type: 'md', content: mdLines.join('\n') });
+        mdLines = [];
+      }
+    };
+
+    for (const o of output) {
+      const line = o.line || '';
+      if (isToolLine(line)) {
+        flushMd();
+        result.push({ type: 'tool', line });
+      } else {
+        mdLines.push(line);
+      }
+    }
+    flushMd();
+    return result;
+  }, [output]);
+
+  return (
+    <div className="space-y-0.5">
+      {blocks.map((block, i) => {
+        if (block.type === 'tool') {
+          const line = block.line;
+          if (line.startsWith('🔧')) {
+            return <div key={i} className="py-0.5 text-xs font-mono text-port-accent">{line}</div>;
+          }
+          if (line.startsWith('  →')) {
+            return <div key={i} className="py-0.5 text-xs font-mono text-gray-500 pl-4">{line.substring(4)}</div>;
+          }
+          if (line.startsWith('  ↳')) {
+            return <div key={i} className="py-0.5 text-xs font-mono text-gray-600 pl-4">{line.substring(4)}</div>;
+          }
+          return <div key={i} className="py-0.5 text-xs font-mono text-yellow-500">{line}</div>;
+        }
+        return <MarkdownOutput key={i} content={block.content} />;
+      })}
+    </div>
+  );
 }
 
 export default function AgentCard({ agent, onKill, onDelete, onResume, completed, liveOutput, durations }) {
@@ -404,21 +456,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
               Loading full output...
             </div>
           ) : output.length > 0 ? (
-            <pre className="text-xs font-mono whitespace-pre-wrap">
-              {output.map((o, i) => {
-                const line = o.line || '';
-                if (line.startsWith('🔧')) {
-                  return <div key={i} className="py-0.5 text-port-accent">{line}</div>;
-                }
-                if (line.startsWith('  →')) {
-                  return <div key={i} className="py-0.5 text-gray-500 pl-4">{line.substring(4)}</div>;
-                }
-                if (line.startsWith('  ↳')) {
-                  return <div key={i} className="py-0.5 text-gray-600 pl-4">{line.substring(4)}</div>;
-                }
-                return <div key={i} className="py-0.5 text-gray-400">{line}</div>;
-              })}
-            </pre>
+            <OutputBlocks output={output} />
           ) : (
             <div className="text-gray-500 text-sm">No output captured</div>
           )}
