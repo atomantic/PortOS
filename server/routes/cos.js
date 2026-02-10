@@ -275,6 +275,27 @@ router.post('/reports/generate', asyncHandler(async (req, res) => {
   res.json(report);
 }));
 
+// GET /api/cos/briefings - List all briefings
+router.get('/briefings', asyncHandler(async (req, res) => {
+  const briefings = await cos.listBriefings();
+  res.json({ briefings });
+}));
+
+// GET /api/cos/briefings/latest - Get latest briefing
+router.get('/briefings/latest', asyncHandler(async (req, res) => {
+  const briefing = await cos.getLatestBriefing();
+  res.json(briefing);
+}));
+
+// GET /api/cos/briefings/:date - Get briefing by date
+router.get('/briefings/:date', asyncHandler(async (req, res) => {
+  const briefing = await cos.getBriefing(req.params.date);
+  if (!briefing) {
+    throw new ServerError('Briefing not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(briefing);
+}));
+
 // GET /api/cos/scripts - List generated scripts
 router.get('/scripts', asyncHandler(async (req, res) => {
   const scripts = await cos.listScripts();

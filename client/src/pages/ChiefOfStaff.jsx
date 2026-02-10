@@ -31,7 +31,8 @@ import {
   LearningTab,
   MemoryTab,
   HealthTab,
-  ConfigTab
+  ConfigTab,
+  BriefingTab
 } from '../components/cos';
 import { resolveDynamicAvatar } from '../components/cos/constants';
 
@@ -598,6 +599,11 @@ export default function ChiefOfStaff() {
         </div>
 
         {/* Tab Content */}
+        {activeTab === 'briefing' && (
+          <div role="tabpanel" id="tabpanel-briefing" aria-labelledby="tab-briefing">
+            <BriefingTab />
+          </div>
+        )}
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <TasksTab tasks={tasks} onRefresh={fetchData} providers={providers} apps={apps} />

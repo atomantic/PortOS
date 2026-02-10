@@ -9,10 +9,12 @@ import {
   Clock,
   GraduationCap,
   Bot,
-  Flame
+  Flame,
+  Newspaper
 } from 'lucide-react';
 
 export const TABS = [
+  { id: 'briefing', label: 'Briefing', icon: Newspaper },
   { id: 'tasks', label: 'Tasks', icon: FileText },
   { id: 'agents', label: 'Agents', icon: Cpu },
   { id: 'jobs', label: 'Jobs', icon: Bot },

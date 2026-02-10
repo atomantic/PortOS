@@ -457,6 +457,11 @@ export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');
 export const getCosReport = (date) => request(`/cos/reports/${date}`);
 
+// CoS Briefings
+export const getCosBriefings = () => request('/cos/briefings');
+export const getCosLatestBriefing = () => request('/cos/briefings/latest');
+export const getCosBriefing = (date) => request(`/cos/briefings/${date}`);
+
 // CoS Activity
 export const getCosTodayActivity = () => request('/cos/activity/today');
 
