@@ -362,6 +362,13 @@ export const getAgentRelevantPosts = (agentId, accountId, maxResults) => {
 export const getAgentSubmolts = (accountId) => request(`/agents/tools/submolts?accountId=${accountId}`);
 export const getAgentPost = (accountId, postId) => request(`/agents/tools/post/${postId}?accountId=${accountId}`);
 export const getAgentRateLimits = (accountId) => request(`/agents/tools/rate-limits?accountId=${accountId}`);
+export const getAgentPublished = (agentId, accountId, days = 7) =>
+  request(`/agents/tools/published?agentId=${agentId}&accountId=${accountId}&days=${days}`);
+export const checkAgentPosts = (agentId, accountId, days, maxReplies, maxUpvotes) =>
+  request('/agents/tools/check-posts', {
+    method: 'POST',
+    body: JSON.stringify({ agentId, accountId, days, maxReplies, maxUpvotes })
+  });
 
 // Agent Drafts
 export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
@@ -518,6 +525,7 @@ export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?we
 export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
+export const getCosQuickSummary = () => request('/cos/quick-summary');
 
 // Task Schedule (Configurable Intervals)
 export const getCosSchedule = () => request('/cos/schedule');

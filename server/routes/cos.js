@@ -857,4 +857,49 @@ router.post('/productivity/recalculate', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+// GET /api/cos/quick-summary - Get at-a-glance dashboard summary
+// Combines today's activity, streak status, next job, and pending approvals into one efficient call
+router.get('/quick-summary', asyncHandler(async (req, res) => {
+  const [todayActivity, productivityData, tasksData, jobStats] = await Promise.all([
+    cos.getTodayActivity(),
+    productivity.getProductivitySummary(),
+    cos.getAllTasks(),
+    autonomousJobs.getJobStats()
+  ]);
+
+  // Count pending approvals from system tasks
+  const pendingApprovals = tasksData.cos?.awaitingApproval?.length || 0;
+
+  // Count pending user tasks
+  const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
+
+  res.json({
+    today: {
+      completed: todayActivity.stats.completed,
+      succeeded: todayActivity.stats.succeeded,
+      failed: todayActivity.stats.failed,
+      running: todayActivity.stats.running,
+      successRate: todayActivity.stats.successRate,
+      timeWorked: todayActivity.time.combined
+    },
+    streak: {
+      current: productivityData.currentStreak,
+      longest: productivityData.longestStreak,
+      weekly: productivityData.weeklyStreak,
+      lastActive: productivityData.lastActive
+    },
+    nextJob: jobStats.nextDue,
+    queue: {
+      pendingApprovals,
+      pendingUserTasks,
+      total: pendingApprovals + pendingUserTasks
+    },
+    status: {
+      running: todayActivity.isRunning,
+      paused: todayActivity.isPaused,
+      lastEvaluation: todayActivity.lastEvaluation
+    }
+  });
+}));
+
 export default router;
