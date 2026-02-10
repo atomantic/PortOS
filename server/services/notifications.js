@@ -28,7 +28,8 @@ export const NOTIFICATION_TYPES = {
   MEMORY_APPROVAL: 'memory_approval',
   TASK_APPROVAL: 'task_approval',
   CODE_REVIEW: 'code_review',
-  HEALTH_ISSUE: 'health_issue'
+  HEALTH_ISSUE: 'health_issue',
+  BRIEFING_READY: 'briefing_ready'
 };
 
 // Priority levels

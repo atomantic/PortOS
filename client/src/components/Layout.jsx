@@ -31,7 +31,8 @@ import {
   Users,
   Upload,
   SquareTerminal,
-  Globe
+  Globe,
+  Newspaper
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -59,6 +60,7 @@ const navItems = [
     icon: Crown,
     showBadge: true,
     children: [
+      { to: '/cos/briefing', label: 'Briefing', icon: Newspaper },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText },
       { to: '/cos/agents', label: 'Agents', icon: Cpu },
       { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
