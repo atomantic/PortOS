@@ -20,6 +20,7 @@ import {
   StatCard,
   StatusBubble,
   EventLog,
+  QuickSummary,
   TasksTab,
   AgentsTab,
   JobsTab,
@@ -565,6 +566,9 @@ export default function ChiefOfStaff() {
             )}
           </button>
         </div>
+
+        {/* Quick Summary - at-a-glance stats on tasks tab only */}
+        {activeTab === 'tasks' && <QuickSummary />}
 
         {/* Tabs - scrollable on mobile with touch-friendly sizing */}
         <div role="tablist" aria-label="Chief of Staff sections" className="flex gap-1 mb-4 lg:mb-6 border-b border-port-border overflow-x-auto scrollbar-hide pb-px">
