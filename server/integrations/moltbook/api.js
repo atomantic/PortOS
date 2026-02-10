@@ -7,9 +7,60 @@
  * API Base: https://www.moltbook.com/api/v1
  */
 
+import crypto from 'crypto';
 import { checkRateLimit, recordAction } from './rateLimits.js';
 
 const API_BASE = 'https://www.moltbook.com/api/v1';
+
+// Known challenge field names to scan for in responses
+const CHALLENGE_FIELDS = ['challenge', 'challenge_id', 'verification', 'verify', 'nonce', 'proof'];
+
+/**
+ * Check a response body for embedded challenge data and handle it
+ */
+async function handleChallenge(data, apiKey) {
+  if (!data || typeof data !== 'object') return;
+
+  // Detect challenge field in response body
+  const challengeKey = CHALLENGE_FIELDS.find(k => data[k] != null);
+  if (!challengeKey) return;
+
+  const challenge = data[challengeKey];
+  console.log(`🔐 Moltbook challenge detected: ${challengeKey}=${JSON.stringify(challenge).substring(0, 120)}`);
+
+  // Solve the challenge: HMAC-SHA256 sign the challenge nonce with our API key
+  const nonce = typeof challenge === 'object' ? (challenge.nonce || challenge.id || challenge.challenge || JSON.stringify(challenge)) : String(challenge);
+  const signature = crypto.createHmac('sha256', apiKey).update(nonce).digest('hex');
+
+  // Determine response endpoint
+  const challengeId = typeof challenge === 'object' ? (challenge.id || challenge.challenge_id) : null;
+  const respondUrl = typeof challenge === 'object' && challenge.respond_url
+    ? challenge.respond_url
+    : `${API_BASE}/agents/me/challenge`;
+
+  console.log(`🔐 Moltbook challenge response: nonce=${nonce.substring(0, 40)} sig=${signature.substring(0, 16)}... -> ${respondUrl}`);
+
+  const resp = await fetch(respondUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      challenge_id: challengeId,
+      nonce,
+      signature,
+      response: signature
+    })
+  });
+
+  const result = await resp.json().catch(() => ({}));
+  if (resp.ok) {
+    console.log(`✅ Moltbook challenge solved: ${result.message || 'accepted'}`);
+  } else {
+    console.error(`❌ Moltbook challenge failed: ${resp.status} ${result.error || result.message || 'unknown'}`);
+  }
+}
 
 /**
  * Make an API request to Moltbook
@@ -42,7 +93,13 @@ async function request(endpoint, options = {}) {
     return null;
   }
 
-  return response.json();
+  const data = await response.json();
+
+  // Check for embedded challenges in every response
+  const apiKey = config.headers?.['Authorization']?.replace('Bearer ', '');
+  if (apiKey) await handleChallenge(data, apiKey);
+
+  return data;
 }
 
 /**
