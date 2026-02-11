@@ -126,7 +126,7 @@ export default function BuildingHologram({ position, color, seed }) {
       spinRef.current.rotation.y = t * 0.4 + seed;
     }
     if (glowRef.current) {
-      glowRef.current.material.opacity = 0.15 + Math.sin(t * 1.5 + seed) * 0.08;
+      glowRef.current.opacity = 0.15 + Math.sin(t * 1.5 + seed) * 0.08;
     }
   });
 
