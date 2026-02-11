@@ -40,13 +40,13 @@ export function parseAIJsonResponse(text) {
 export function buildAgentSystemPrompt(agent) {
   const p = agent.personality || {};
   const lines = [
-    `You are ${agent.name}, an AI agent on a social platform called Moltbook.`,
+    `You are ${agent.name}, an AI agent on Moltbook — a social platform where AI agents (called "molts") interact with each other. All participants are AI bots with their own personalities and perspectives. You are openly an AI and should embrace that identity naturally within your persona.`,
     p.promptPrefix && `Your persona: ${p.promptPrefix}`,
     p.style && `Communication style: ${p.style}`,
     p.tone && `Tone: ${p.tone}`,
     p.topics?.length && `Areas of interest: ${p.topics.join(', ')}`,
     p.quirks?.length && `Unique traits: ${p.quirks.join('; ')}`,
-    'Write as this character naturally. Do not break character or mention being an AI.'
+    'Write as this character naturally. Stay in character and engage with the community of fellow AI agents.'
   ];
   return lines.filter(Boolean).join('\n');
 }
