@@ -4,13 +4,100 @@ import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { getBuildingColor, getBuildingHeight, getAccentColor, CITY_COLORS, BUILDING_PARAMS, PIXEL_FONT_URL } from './cityConstants';
 import HolographicPanel from './HolographicPanel';
+import BuildingHologram from './BuildingHologram';
 
-// Generate a pixel window texture for a building face
+// 7x7 pixel art icons drawn on building faces via lit office windows
+const PIXEL_ICONS = [
+  // Heart
+  [
+    [0,1,0,0,0,1,0],
+    [1,1,1,0,1,1,1],
+    [1,1,1,1,1,1,1],
+    [0,1,1,1,1,1,0],
+    [0,0,1,1,1,0,0],
+    [0,0,0,1,0,0,0],
+    [0,0,0,0,0,0,0],
+  ],
+  // Server rack
+  [
+    [1,1,1,1,1,1,1],
+    [1,0,0,0,0,1,1],
+    [1,1,1,1,1,1,1],
+    [1,0,0,0,0,1,1],
+    [1,1,1,1,1,1,1],
+    [1,0,0,0,0,1,1],
+    [1,1,1,1,1,1,1],
+  ],
+  // Lightning bolt
+  [
+    [0,0,0,1,1,0,0],
+    [0,0,1,1,0,0,0],
+    [0,1,1,1,1,0,0],
+    [0,0,1,1,1,1,0],
+    [0,0,0,1,1,0,0],
+    [0,0,1,1,0,0,0],
+    [0,0,1,0,0,0,0],
+  ],
+  // Star
+  [
+    [0,0,0,1,0,0,0],
+    [0,0,1,1,1,0,0],
+    [1,1,1,1,1,1,1],
+    [0,1,1,1,1,1,0],
+    [0,1,1,0,1,1,0],
+    [0,1,0,0,0,1,0],
+    [1,0,0,0,0,0,1],
+  ],
+  // Shield
+  [
+    [0,1,1,1,1,1,0],
+    [1,1,1,1,1,1,1],
+    [1,1,0,1,0,1,1],
+    [1,1,1,1,1,1,1],
+    [0,1,1,1,1,1,0],
+    [0,0,1,1,1,0,0],
+    [0,0,0,1,0,0,0],
+  ],
+  // Gear
+  [
+    [0,1,0,1,0,1,0],
+    [1,1,1,1,1,1,1],
+    [0,1,0,0,0,1,0],
+    [1,1,0,0,0,1,1],
+    [0,1,0,0,0,1,0],
+    [1,1,1,1,1,1,1],
+    [0,1,0,1,0,1,0],
+  ],
+  // Globe
+  [
+    [0,0,1,1,1,0,0],
+    [0,1,0,1,0,1,0],
+    [1,0,0,1,0,0,1],
+    [1,1,1,1,1,1,1],
+    [1,0,0,1,0,0,1],
+    [0,1,0,1,0,1,0],
+    [0,0,1,1,1,0,0],
+  ],
+  // Terminal
+  [
+    [1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,1],
+    [1,0,1,1,0,0,1],
+    [1,0,0,1,0,0,1],
+    [1,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1],
+    [0,0,1,1,1,0,0],
+  ],
+];
+
+// Generate a pixel window texture with icon mural for a building face
 const createWindowTexture = (accentColor, width, height, seed) => {
   const canvas = document.createElement('canvas');
-  const px = 8; // pixel grid size
-  canvas.width = px * 8;
-  canvas.height = px * Math.max(12, Math.floor(height * 4));
+  const px = 8;
+  const cols = 12;
+  const rowCount = Math.max(16, Math.floor(height * 5));
+  canvas.width = px * cols;
+  canvas.height = px * rowCount;
   const ctx = canvas.getContext('2d');
 
   // Dark base
@@ -21,25 +108,40 @@ const createWindowTexture = (accentColor, width, height, seed) => {
   let s = seed;
   const rand = () => { s = (s * 16807 + 0) % 2147483647; return (s & 0x7fffffff) / 2147483647; };
 
-  // Draw window grid
-  const rows = Math.floor(canvas.height / px);
-  const cols = Math.floor(canvas.width / px);
-
-  for (let r = 1; r < rows - 1; r++) {
+  // Draw random ambient windows (dimmer background pattern)
+  for (let r = 1; r < rowCount - 1; r++) {
     for (let c = 1; c < cols - 1; c++) {
-      if (r % 3 === 0 || c % 3 === 0) continue; // Window frame gaps
-      const lit = rand() > 0.5;
-      if (lit) {
-        // Mix between accent and white-ish for warm window glow
+      if (r % 3 === 0 || c % 3 === 0) continue;
+      if (rand() > 0.6) {
         const bright = rand();
-        if (bright > 0.7) {
-          ctx.fillStyle = accentColor;
-        } else if (bright > 0.3) {
-          ctx.fillStyle = accentColor + '80'; // Semi-transparent accent
+        if (bright > 0.8) {
+          ctx.fillStyle = accentColor + '50';
+        } else if (bright > 0.4) {
+          ctx.fillStyle = accentColor + '25';
         } else {
-          ctx.fillStyle = '#0f172a';
+          ctx.fillStyle = '#0a0f1e';
         }
-        ctx.fillRect(c * px, r * px, px - 1, px - 1);
+        ctx.fillRect(c * px + 1, r * px + 1, px - 2, px - 2);
+      }
+    }
+  }
+
+  // Draw pixel art icon mural centered on face
+  const icon = PIXEL_ICONS[seed % PIXEL_ICONS.length];
+  const iconRows = icon.length;
+  const iconCols = icon[0].length;
+  const startCol = Math.floor((cols - iconCols) / 2);
+  const startRow = Math.floor((rowCount - iconRows) / 2);
+
+  for (let r = 0; r < iconRows; r++) {
+    for (let c = 0; c < iconCols; c++) {
+      if (icon[r][c]) {
+        // Bright accent pixel - solid, no frame gaps
+        ctx.fillStyle = accentColor;
+        ctx.fillRect((startCol + c) * px, (startRow + r) * px, px, px);
+        // Slight inner highlight for pixel art depth
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.fillRect((startCol + c) * px + 1, (startRow + r) * px + 1, px - 3, px - 3);
       }
     }
   }
@@ -55,7 +157,6 @@ const createWindowTexture = (accentColor, width, height, seed) => {
 export default function Building({ app, position, agentCount, onClick }) {
   const meshRef = useRef();
   const glowRef = useRef();
-  const nameRef = useRef();
   const [hovered, setHovered] = useState(false);
 
   const height = getBuildingHeight(app);
@@ -75,13 +176,13 @@ export default function Building({ app, position, agentCount, onClick }) {
   const boxGeom = useMemo(() => new THREE.BoxGeometry(width, height, depth), [width, height, depth]);
   const edgesGeom = useMemo(() => new THREE.EdgesGeometry(boxGeom), [boxGeom]);
 
-  // Window texture for building faces
+  // Window texture with pixel art icon
   const windowTexture = useMemo(
     () => createWindowTexture(accentColor, width, height, seed),
     [accentColor, width, height, seed]
   );
 
-  // Format name for building face: replace separators with spaces, full name
+  // Format name for building face
   const displayName = useMemo(() => {
     return (app.name || '').replace(/[-_.]/g, ' ').toUpperCase();
   }, [app.name]);
@@ -102,7 +203,7 @@ export default function Building({ app, position, agentCount, onClick }) {
 
   return (
     <group position={[position.x, 0, position.z]}>
-      {/* Building body with window texture */}
+      {/* Building body with window texture + pixel art icon */}
       <mesh
         ref={meshRef}
         position={[0, height / 2, 0]}
@@ -142,9 +243,8 @@ export default function Building({ app, position, agentCount, onClick }) {
 
       {/* Building name on front face - pixel font */}
       <Text
-        ref={nameRef}
-        position={[0, height * 0.65, depth / 2 + 0.02]}
-        fontSize={0.22}
+        position={[0, height * 0.88, depth / 2 + 0.02]}
+        fontSize={0.2}
         color={edgeColor}
         anchorX="center"
         anchorY="middle"
@@ -156,8 +256,8 @@ export default function Building({ app, position, agentCount, onClick }) {
 
       {/* Building name on back face */}
       <Text
-        position={[0, height * 0.65, -(depth / 2 + 0.02)]}
-        fontSize={0.22}
+        position={[0, height * 0.88, -(depth / 2 + 0.02)]}
+        fontSize={0.2}
         color={edgeColor}
         anchorX="center"
         anchorY="middle"
@@ -168,9 +268,9 @@ export default function Building({ app, position, agentCount, onClick }) {
         {displayName}
       </Text>
 
-      {/* Vertical name on left side */}
+      {/* Name on left side */}
       <Text
-        position={[-(width / 2 + 0.02), height * 0.5, 0]}
+        position={[-(width / 2 + 0.02), height * 0.88, 0]}
         fontSize={0.18}
         color={accentColor}
         anchorX="center"
@@ -207,12 +307,19 @@ export default function Building({ app, position, agentCount, onClick }) {
         </>
       )}
 
+      {/* Floating hologram above building */}
+      <BuildingHologram
+        position={[0, height + 0.8, 0]}
+        color={accentColor}
+        seed={seed}
+      />
+
       {/* Holographic label */}
       {(hovered || isOnline || app.archived) && (
         <HolographicPanel
           app={app}
           agentCount={agentCount}
-          position={[0, height + 1.0, 0]}
+          position={[0, height + 1.8, 0]}
         />
       )}
     </group>
