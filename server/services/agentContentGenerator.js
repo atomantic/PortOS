@@ -120,7 +120,7 @@ async function runAIGeneration(prompt, providerId, model, source) {
         prompt,
         process.cwd(),
         [],
-        (data) => { if (data?.text) responseText += data.text; },
+        (data) => { responseText += typeof data === 'string' ? data : (data?.text || ''); },
         (result) => {
           if (result?.error) {
             reject(new Error(result.error));
