@@ -5,15 +5,11 @@
  * Prevents the CoS from working on the same app in a loop.
  */
 
-import { writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
+import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data/cos');
+const DATA_DIR = PATHS.cos;
 const ACTIVITY_FILE = join(DATA_DIR, 'app-activity.json');
 
 const DEFAULT_ACTIVITY = {
@@ -27,17 +23,15 @@ const DEFAULT_ACTIVITY = {
 /**
  * Ensure the data directory exists
  */
-async function ensureDir() {
-  if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
-  }
+async function ensureDataDir() {
+  await ensureDir(DATA_DIR);
 }
 
 /**
  * Load app activity data
  */
 export async function loadAppActivity() {
-  await ensureDir();
+  await ensureDataDir();
 
   const loaded = await readJSONFile(ACTIVITY_FILE, null);
   return loaded ? { ...DEFAULT_ACTIVITY, ...loaded } : { ...DEFAULT_ACTIVITY };
@@ -47,7 +41,7 @@ export async function loadAppActivity() {
  * Save app activity data
  */
 export async function saveAppActivity(activity) {
-  await ensureDir();
+  await ensureDataDir();
   await writeFile(ACTIVITY_FILE, JSON.stringify(activity, null, 2));
 }
 

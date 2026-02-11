@@ -14,18 +14,14 @@
  * - Custom user-defined jobs
  */
 
-import { promises as fs } from 'fs'
-import { existsSync } from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { writeFile } from 'fs/promises'
+import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
-import { readJSONFile } from '../lib/fileUtils.js'
+import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const DATA_DIR = path.join(__dirname, '../../data/cos')
-const JOBS_FILE = path.join(DATA_DIR, 'autonomous-jobs.json')
+const DATA_DIR = PATHS.cos
+const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
 
 // Time constants
 const HOUR = 60 * 60 * 1000
@@ -155,9 +151,7 @@ Report a project health summary when done.`,
  * Ensure data directory exists
  */
 async function ensureDataDir() {
-  if (!existsSync(DATA_DIR)) {
-    await fs.mkdir(DATA_DIR, { recursive: true })
-  }
+  await ensureDir(DATA_DIR)
 }
 
 /**
@@ -221,7 +215,7 @@ function mergeWithDefaults(loaded) {
 async function saveJobs(data) {
   await ensureDataDir()
   data.lastUpdated = new Date().toISOString()
-  await fs.writeFile(JOBS_FILE, JSON.stringify(data, null, 2))
+  await writeFile(JOBS_FILE, JSON.stringify(data, null, 2))
 }
 
 /**
