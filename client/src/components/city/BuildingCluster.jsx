@@ -53,7 +53,7 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick }) {
         <Text
           position={[0, 0.5, warehouseMinZ - 2]}
           fontSize={0.8}
-          color="#1e293b"
+          color="#475569"
           anchorX="center"
           anchorY="middle"
           font={PIXEL_FONT_URL}

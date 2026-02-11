@@ -81,10 +81,9 @@ export default function Building({ app, position, agentCount, onClick }) {
     [accentColor, width, height, seed]
   );
 
-  // Truncate name for building face display
+  // Format name for building face: replace separators with spaces, full name
   const displayName = useMemo(() => {
-    const name = app.name || '';
-    return name.length > 10 ? name.slice(0, 9) + '.' : name;
+    return (app.name || '').replace(/[-_.]/g, ' ').toUpperCase();
   }, [app.name]);
 
   useFrame(({ clock }) => {
@@ -118,7 +117,7 @@ export default function Building({ app, position, agentCount, onClick }) {
           emissiveIntensity={0.1}
           map={windowTexture}
           transparent
-          opacity={app.archived ? 0.5 : 0.95}
+          opacity={app.archived ? 0.75 : 0.95}
         />
       </mesh>
 
@@ -127,21 +126,19 @@ export default function Building({ app, position, agentCount, onClick }) {
         <lineBasicMaterial
           color={edgeColor}
           transparent
-          opacity={app.archived ? 0.2 : 0.9}
+          opacity={app.archived ? 0.5 : 0.9}
         />
       </lineSegments>
 
       {/* Neon accent strip at building top */}
-      {!app.archived && (
-        <mesh position={[0, height + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[width + 0.1, depth + 0.1]} />
-          <meshBasicMaterial
-            color={edgeColor}
-            transparent
-            opacity={0.4}
-          />
-        </mesh>
-      )}
+      <mesh position={[0, height + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[width + 0.1, depth + 0.1]} />
+        <meshBasicMaterial
+          color={edgeColor}
+          transparent
+          opacity={app.archived ? 0.2 : 0.4}
+        />
+      </mesh>
 
       {/* Building name on front face - pixel font */}
       <Text
@@ -154,7 +151,7 @@ export default function Building({ app, position, agentCount, onClick }) {
         font={PIXEL_FONT_URL}
         maxWidth={width * 0.9}
       >
-        {displayName.toUpperCase()}
+        {displayName}
       </Text>
 
       {/* Building name on back face */}
@@ -168,7 +165,7 @@ export default function Building({ app, position, agentCount, onClick }) {
         font={PIXEL_FONT_URL}
         maxWidth={width * 0.9}
       >
-        {displayName.toUpperCase()}
+        {displayName}
       </Text>
 
       {/* Vertical name on left side */}
@@ -182,7 +179,7 @@ export default function Building({ app, position, agentCount, onClick }) {
         font={PIXEL_FONT_URL}
         maxWidth={depth * 0.85}
       >
-        {displayName.toUpperCase()}
+        {displayName}
       </Text>
 
       {/* Base glow circle */}
@@ -211,7 +208,7 @@ export default function Building({ app, position, agentCount, onClick }) {
       )}
 
       {/* Holographic label */}
-      {(hovered || isOnline) && (
+      {(hovered || isOnline || app.archived) && (
         <HolographicPanel
           app={app}
           agentCount={agentCount}

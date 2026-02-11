@@ -11,7 +11,7 @@ export const CITY_COLORS = {
     stopped: '#f59e0b',
     not_started: '#6366f1',
     not_found: '#6366f1',
-    archived: '#1e293b',
+    archived: '#475569',
   },
   buildingBody: '#080816',
   particles: '#06b6d4',
@@ -32,7 +32,7 @@ export const BUILDING_PARAMS = {
     stopped: 2.5,
     not_started: 1.5,
     not_found: 1.5,
-    archived: 1.0,
+    archived: 2.0,
   },
   processHeightBonus: 0.8,
   // Height variation: seeded by app name hash for consistent randomness
@@ -41,7 +41,7 @@ export const BUILDING_PARAMS = {
 
 export const DISTRICT_PARAMS = {
   warehouseOffset: 18,
-  gap: 6,
+  gap: 4,
 };
 
 // Simple string hash for consistent per-app randomness
