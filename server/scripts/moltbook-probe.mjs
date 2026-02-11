@@ -78,12 +78,14 @@ async function rawRequest(apiKey, method, endpoint, body = null) {
 
   // Log raw body
   const text = await response.text();
-  console.log(`📥 Body (raw): ${text}`);
+  const isJson = (response.headers.get('content-type') || '').includes('application/json');
+  console.log(`📥 Body (raw): ${isJson ? text : text.substring(0, 200) + (text.length > 200 ? '...[HTML/truncated]' : '')}`);
 
   // Parse JSON if possible
   let data = null;
-  if (text) {
-    data = JSON.parse(text);
+  const parsed = isJson && text ? (() => { try { return JSON.parse(text); } catch { return null; } })() : null;
+  if (parsed) {
+    data = parsed;
     // Scan for anything that looks like a challenge
     if (data && typeof data === 'object') {
       const challengeKeys = ['challenge', 'challenge_id', 'verification', 'verify', 'nonce', 'proof', 'puzzle', 'captcha', 'token'];
