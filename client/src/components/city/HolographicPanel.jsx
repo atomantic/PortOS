@@ -20,11 +20,11 @@ export default function HolographicPanel({ app, agentCount, position }) {
       occlude
       style={{ pointerEvents: 'none' }}
     >
-      <div className={`bg-black/80 border ${colorClass} rounded px-2 py-1 font-mono text-xs whitespace-nowrap backdrop-blur-sm`}>
-        <div className="font-bold text-[10px] truncate max-w-[120px]">{app.name}</div>
-        <div className="flex items-center gap-1 text-[9px] opacity-75">
-          <span>{app.archived ? 'archived' : app.overallStatus}</span>
-          {agentCount > 0 && <span>| {agentCount} agent{agentCount > 1 ? 's' : ''}</span>}
+      <div className={`bg-black/85 border ${colorClass} rounded px-2.5 py-1.5 whitespace-nowrap backdrop-blur-sm`}>
+        <div className="font-pixel text-[11px] tracking-wider truncate max-w-[140px]">{app.name}</div>
+        <div className="flex items-center gap-1.5 text-[9px] font-pixel tracking-wide opacity-75 mt-0.5">
+          <span>{app.archived ? 'ARCHIVED' : (app.overallStatus || '').toUpperCase().replace('_', ' ')}</span>
+          {agentCount > 0 && <span>| {agentCount} AGENT{agentCount > 1 ? 'S' : ''}</span>}
         </div>
       </div>
     </Html>

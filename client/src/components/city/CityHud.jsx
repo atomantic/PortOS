@@ -17,29 +17,36 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
       {/* Top-left: Clock + system status */}
       <div className="absolute top-3 left-3 pointer-events-auto">
-        <div className="bg-black/60 backdrop-blur-sm border border-cyan-500/20 rounded-lg px-3 py-2">
-          <div className="font-mono text-cyan-400 text-sm font-bold">
+        <div className="bg-black/70 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-4 py-2.5">
+          <div className="font-pixel text-cyan-400 text-lg tracking-wider">
             {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </div>
-          <div className="font-mono text-[10px] text-gray-500">
-            {activeApps}/{totalApps} apps online
+          <div className="font-pixel text-[10px] text-cyan-600 tracking-wide">
+            {activeApps}/{totalApps} SYSTEMS ONLINE
           </div>
+        </div>
+      </div>
+
+      {/* Top-center: CyberCity title */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
+        <div className="font-pixel text-cyan-400/40 text-xs tracking-[0.3em]">
+          CYBERCITY
         </div>
       </div>
 
       {/* Top-right: Connection + CoS status */}
       <div className="absolute top-3 right-3 pointer-events-auto">
-        <div className="bg-black/60 backdrop-blur-sm border border-cyan-500/20 rounded-lg px-3 py-2 flex items-center gap-3">
+        <div className="bg-black/70 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2 flex items-center gap-3">
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400'}`} />
-            <span className="font-mono text-[10px] text-gray-400">
-              {connected ? 'CONNECTED' : 'OFFLINE'}
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">
+              {connected ? 'LINK' : 'OFFLINE'}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${cosStatus?.running ? 'bg-cyan-400 animate-pulse' : 'bg-gray-600'}`} />
-            <span className="font-mono text-[10px] text-gray-400">
-              CoS {cosStatus?.running ? 'ACTIVE' : 'IDLE'}
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">
+              CoS {cosStatus?.running ? 'RUN' : 'IDLE'}
             </span>
           </div>
         </div>

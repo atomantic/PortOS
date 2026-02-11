@@ -2,6 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Geist Pixel font for CyberCity */
+@font-face {
+  font-family: 'GeistPixelSquare';
+  src: url('/node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Square.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GeistPixelGrid';
+  src: url('/node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Grid.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+.font-pixel {
+  font-family: 'GeistPixelSquare', 'Courier New', monospace;
+}
+
+.font-pixel-grid {
+  font-family: 'GeistPixelGrid', 'Courier New', monospace;
+}
+
 body {
   background-color: #0f0f0f;
   color: #e5e5e5;

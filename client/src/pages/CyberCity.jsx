@@ -13,14 +13,16 @@ export default function CyberCity() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full bg-[#0a0a0f]">
-        <div className="font-mono text-cyan-400 animate-pulse">Initializing CyberCity...</div>
+      <div className="flex items-center justify-center h-full" style={{ background: '#030308' }}>
+        <div className="font-pixel text-cyan-400 text-sm tracking-widest animate-pulse">
+          INITIALIZING CYBERCITY...
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="relative w-full h-full" style={{ background: '#0a0a0f' }}>
+    <div className="relative w-full h-full" style={{ background: '#030308' }}>
       <CityScene
         apps={apps}
         agentMap={agentMap}

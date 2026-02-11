@@ -21,8 +21,8 @@ export default function CityActivityLog({ logs }) {
 
   return (
     <div className="absolute top-16 right-3 bottom-20 w-72 pointer-events-auto">
-      <div className="h-full bg-black/60 backdrop-blur-sm border border-cyan-500/20 rounded-lg overflow-hidden flex flex-col">
-        <div className="px-3 py-2 border-b border-cyan-500/20 text-cyan-400 text-xs font-mono font-bold">
+      <div className="h-full bg-black/70 backdrop-blur-sm border border-cyan-500/20 rounded-lg overflow-hidden flex flex-col">
+        <div className="px-3 py-2 border-b border-cyan-500/20 text-cyan-400 text-[10px] font-pixel tracking-wider font-bold">
           ACTIVITY LOG
         </div>
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-1 space-y-0.5">
@@ -34,7 +34,7 @@ export default function CityActivityLog({ logs }) {
               : '';
 
             return (
-              <div key={i} className="font-mono text-[10px] leading-tight flex gap-1.5">
+              <div key={i} className="font-pixel text-[9px] leading-tight flex gap-1.5 tracking-wide">
                 <span className="text-gray-600 shrink-0">{time}</span>
                 <span className={colorClass}>{log.message || log.event || JSON.stringify(log)}</span>
               </div>

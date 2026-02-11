@@ -1,35 +1,57 @@
+// Geist Pixel Square font URL for drei <Text> in 3D scene
+export const PIXEL_FONT_URL = '/node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Square.woff2';
+
 export const CITY_COLORS = {
   ground: '#06b6d4',
-  fog: '#0a0a0f',
-  ambient: '#1a1a3e',
+  fog: '#050510',
+  sky: '#030308',
+  ambient: '#0d0d2b',
   building: {
     online: '#06b6d4',
     stopped: '#f59e0b',
     not_started: '#6366f1',
     not_found: '#6366f1',
-    archived: '#334155',
+    archived: '#1e293b',
   },
-  buildingBody: '#0a0a1e',
+  buildingBody: '#080816',
   particles: '#06b6d4',
+  stars: '#ffffff',
+  // Neon accent palette for building window/decoration variety
+  neonAccents: ['#06b6d4', '#ec4899', '#8b5cf6', '#22c55e', '#f97316', '#3b82f6', '#f43f5e', '#a855f7'],
+  // Celestial colors
+  planet: '#3b82f6',
+  orbit: '#1e3a5f',
 };
 
 export const BUILDING_PARAMS = {
-  width: 1.5,
-  depth: 1.5,
-  spacing: 3.5,
+  width: 2.0,
+  depth: 2.0,
+  spacing: 4.0,
   heights: {
-    online: 4,
-    stopped: 2,
-    not_started: 1.2,
-    not_found: 1.2,
-    archived: 0.8,
+    online: 5,
+    stopped: 2.5,
+    not_started: 1.5,
+    not_found: 1.5,
+    archived: 1.0,
   },
-  processHeightBonus: 0.5,
+  processHeightBonus: 0.8,
+  // Height variation: seeded by app name hash for consistent randomness
+  heightVariation: 2.5,
 };
 
 export const DISTRICT_PARAMS = {
   warehouseOffset: 18,
-  gap: 5,
+  gap: 6,
+};
+
+// Simple string hash for consistent per-app randomness
+const hashString = (str) => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
 };
 
 export const getBuildingColor = (status, archived) => {
@@ -40,6 +62,17 @@ export const getBuildingColor = (status, archived) => {
 export const getBuildingHeight = (app) => {
   if (app.archived) return BUILDING_PARAMS.heights.archived;
   const base = BUILDING_PARAMS.heights[app.overallStatus] || BUILDING_PARAMS.heights.not_started;
-  const processBonus = app.overallStatus === 'online' ? (app.processes?.length || 0) * BUILDING_PARAMS.processHeightBonus : 0;
-  return base + processBonus;
+  const processBonus = app.overallStatus === 'online'
+    ? (app.processes?.length || 0) * BUILDING_PARAMS.processHeightBonus
+    : 0;
+  // Add name-based variation so buildings look like a real skyline
+  const hash = hashString(app.name || app.id);
+  const variation = (hash % 100) / 100 * BUILDING_PARAMS.heightVariation;
+  return base + processBonus + variation;
+};
+
+// Get a deterministic neon accent color per app (for windows/decorations)
+export const getAccentColor = (app) => {
+  const hash = hashString(app.name || app.id);
+  return CITY_COLORS.neonAccents[hash % CITY_COLORS.neonAccents.length];
 };
