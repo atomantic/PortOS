@@ -72,7 +72,11 @@ async function request(endpoint, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     const message = error.error || error.message || `HTTP ${response.status}`;
-    console.error(`❌ Moltbook API error: ${response.status} ${message}`);
+    if (response.status !== 404) {
+      console.error(`❌ Moltbook API error: ${response.status} ${message}`);
+    } else {
+      console.log(`📚 Moltbook API: 404 ${endpoint}`);
+    }
     const err = new Error(message);
     err.status = response.status;
     err.suspended = response.status === 403 && message.toLowerCase().includes('suspended');
