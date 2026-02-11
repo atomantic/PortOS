@@ -1,15 +1,9 @@
-import { useNavigate } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
 import CityScene from '../components/city/CityScene';
 import CityHud from '../components/city/CityHud';
 
 export default function CyberCity() {
-  const navigate = useNavigate();
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, loading, connected } = useCityData();
-
-  const handleBuildingClick = (app) => {
-    navigate('/apps');
-  };
 
   if (loading) {
     return (
@@ -26,7 +20,7 @@ export default function CyberCity() {
       <CityScene
         apps={apps}
         agentMap={agentMap}
-        onBuildingClick={handleBuildingClick}
+        onBuildingClick={null}
       />
       <CityHud
         cosStatus={cosStatus}
