@@ -5,7 +5,7 @@
 /* Geist Pixel font for CyberCity */
 @font-face {
   font-family: 'GeistPixelSquare';
-  src: url('/node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Square.woff2') format('woff2');
+  src: url('/fonts/GeistPixel-Square.woff2') format('woff2');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -13,7 +13,7 @@
 
 @font-face {
   font-family: 'GeistPixelGrid';
-  src: url('/node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Grid.woff2') format('woff2');
+  src: url('/fonts/GeistPixel-Grid.woff2') format('woff2');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
