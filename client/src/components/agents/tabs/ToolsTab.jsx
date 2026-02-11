@@ -132,18 +132,30 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishPost = async () => {
     if (!postTitle || !postContent) return;
     setPublishing(true);
-    await api.publishAgentPost(agentId, selectedAccountId, selectedSubmolt, postTitle, postContent);
+    const result = await api.publishAgentPost(agentId, selectedAccountId, selectedSubmolt, postTitle, postContent);
 
     if (activeDraftId) {
-      await api.deleteAgentDraft(agentId, activeDraftId).catch(() => {});
-      setActiveDraftId(null);
+      if (result?.verificationFailed) {
+        toast.error('Post verification failed — draft preserved for retry');
+      } else {
+        await api.updateAgentDraft(agentId, activeDraftId, {
+          status: 'published',
+          publishedPostId: result?.id || result?._id || result?.post_id || null,
+          publishedAt: new Date().toISOString()
+        }).catch(() => {});
+        setActiveDraftId(null);
+        toast.success('Post published');
+      }
       loadDrafts();
+    } else {
+      toast.success('Post published');
     }
 
-    setPostTitle('');
-    setPostContent('');
+    if (!result?.verificationFailed) {
+      setPostTitle('');
+      setPostContent('');
+    }
     setPublishing(false);
-    toast.success('Post published');
     api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
   };
 
@@ -175,20 +187,31 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishComment = async () => {
     if (!selectedPost || !commentContent) return;
     setPublishingComment(true);
-    await api.publishAgentComment(
+    const result = await api.publishAgentComment(
       agentId, selectedAccountId, selectedPost.id, commentContent, replyToId || undefined
     );
 
     if (activeDraftId) {
-      await api.deleteAgentDraft(agentId, activeDraftId).catch(() => {});
-      setActiveDraftId(null);
+      if (result?.verificationFailed) {
+        toast.error('Comment verification failed — draft preserved for retry');
+      } else {
+        await api.updateAgentDraft(agentId, activeDraftId, {
+          status: 'published',
+          publishedAt: new Date().toISOString()
+        }).catch(() => {});
+        setActiveDraftId(null);
+        toast.success('Comment published');
+      }
       loadDrafts();
+    } else {
+      toast.success('Comment published');
     }
 
-    setCommentContent('');
-    setReplyToId(null);
+    if (!result?.verificationFailed) {
+      setCommentContent('');
+      setReplyToId(null);
+    }
     setPublishingComment(false);
-    toast.success('Comment published');
     handleViewPost(selectedPost);
     api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
   };
@@ -564,50 +587,60 @@ export default function ToolsTab({ agentId, agent }) {
             {drafts.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg p-4">
                 <h3 className="font-semibold text-white mb-3">
-                  Drafts ({drafts.length})
+                  Drafts ({drafts.filter(d => d.status !== 'published').length})
+                  {drafts.some(d => d.status === 'published') && (
+                    <span className="text-xs text-gray-500 font-normal ml-2">
+                      +{drafts.filter(d => d.status === 'published').length} published
+                    </span>
+                  )}
                 </h3>
                 <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                  {drafts.map(draft => (
-                    <div
-                      key={draft.id}
-                      className={`p-3 border rounded transition-colors ${
-                        activeDraftId === draft.id
-                          ? 'border-port-accent bg-port-accent/10'
-                          : 'border-port-border hover:border-port-border/80'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleLoadDraft(draft)}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">
-                              {draft.type}
-                            </span>
-                            {draft.submolt && (
-                              <span className="text-xs text-gray-500">/{draft.submolt}</span>
-                            )}
-                          </div>
-                          <p className="text-sm text-white mt-1 truncate">
-                            {draft.title || draft.content?.substring(0, 80)}
-                          </p>
-                          {draft.postTitle && (
-                            <p className="text-xs text-gray-500 mt-0.5">
-                              re: {draft.postTitle}
+                  {drafts.map(draft => {
+                    const isPublished = draft.status === 'published';
+                    return (
+                      <div
+                        key={draft.id}
+                        className={`p-3 border rounded transition-colors ${
+                          isPublished
+                            ? 'border-port-success/30 bg-port-success/5 opacity-60'
+                            : activeDraftId === draft.id
+                              ? 'border-port-accent bg-port-accent/10'
+                              : 'border-port-border hover:border-port-border/80'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0 cursor-pointer" onClick={() => !isPublished && handleLoadDraft(draft)}>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${isPublished ? 'bg-port-success/20 text-port-success' : 'bg-port-accent/20 text-port-accent'}`}>
+                                {isPublished ? 'published' : draft.type}
+                              </span>
+                              {draft.submolt && (
+                                <span className="text-xs text-gray-500">/{draft.submolt}</span>
+                              )}
+                            </div>
+                            <p className="text-sm text-white mt-1 truncate">
+                              {draft.title || draft.content?.substring(0, 80)}
                             </p>
-                          )}
-                          <p className="text-[10px] text-gray-600 mt-1">
-                            {new Date(draft.createdAt).toLocaleString()}
-                          </p>
+                            {draft.postTitle && (
+                              <p className="text-xs text-gray-500 mt-0.5">
+                                re: {draft.postTitle}
+                              </p>
+                            )}
+                            <p className="text-[10px] text-gray-600 mt-1">
+                              {isPublished ? `Published ${new Date(draft.publishedAt || draft.updatedAt).toLocaleString()}` : new Date(draft.createdAt).toLocaleString()}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteDraft(draft.id)}
+                            className="text-gray-600 hover:text-port-error ml-2 shrink-0 text-sm"
+                            title="Delete draft"
+                          >
+                            x
+                          </button>
                         </div>
-                        <button
-                          onClick={() => handleDeleteDraft(draft.id)}
-                          className="text-gray-600 hover:text-port-error ml-2 shrink-0 text-sm"
-                          title="Delete draft"
-                        >
-                          x
-                        </button>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

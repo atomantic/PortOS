@@ -274,7 +274,10 @@ export const createDraftSchema = z.object({
 export const updateDraftSchema = z.object({
   title: z.string().max(300).optional().nullable(),
   content: z.string().min(1).max(10000).optional(),
-  submolt: z.string().max(100).optional().nullable()
+  submolt: z.string().max(100).optional().nullable(),
+  status: z.enum(['draft', 'published']).optional(),
+  publishedPostId: z.string().optional().nullable(),
+  publishedAt: z.string().optional().nullable()
 });
 
 /**

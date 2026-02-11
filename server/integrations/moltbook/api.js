@@ -55,7 +55,7 @@ async function handleVerification(data, apiKey, aiConfig) {
 /**
  * Make an API request to Moltbook
  */
-async function request(endpoint, options = {}) {
+async function request(endpoint, options = {}, aiConfig) {
   const url = `${API_BASE}${endpoint}`;
   const config = {
     headers: {
@@ -91,7 +91,7 @@ async function request(endpoint, options = {}) {
 
   // Auto-solve verification challenges embedded in responses
   const apiKey = config.headers?.['Authorization']?.replace('Bearer ', '');
-  if (apiKey) await handleVerification(data, apiKey);
+  if (apiKey) await handleVerification(data, apiKey, aiConfig);
 
   return data;
 }
@@ -99,14 +99,14 @@ async function request(endpoint, options = {}) {
 /**
  * Make an authenticated API request
  */
-async function authRequest(apiKey, endpoint, options = {}) {
+async function authRequest(apiKey, endpoint, options = {}, aiConfig) {
   return request(endpoint, {
     ...options,
     headers: {
       ...options.headers,
       'Authorization': `Bearer ${apiKey}`
     }
-  });
+  }, aiConfig);
 }
 
 // =============================================================================
@@ -172,7 +172,7 @@ export async function updateProfile(apiKey, updates) {
  * @param {string} content - Post content (markdown)
  * @returns {Object} Created post
  */
-export async function createPost(apiKey, submolt, title, content) {
+export async function createPost(apiKey, submolt, title, content, aiConfig) {
   // Check rate limit
   const rateCheck = checkRateLimit(apiKey, 'post');
   if (!rateCheck.allowed) {
@@ -182,7 +182,7 @@ export async function createPost(apiKey, submolt, title, content) {
   const result = await authRequest(apiKey, '/posts', {
     method: 'POST',
     body: JSON.stringify({ submolt, title, content })
-  });
+  }, aiConfig);
 
   recordAction(apiKey, 'post');
   const postId = result?.id || result?._id || result?.post_id;
@@ -238,7 +238,7 @@ export async function getPost(apiKey, postId) {
  * @param {string} postId - The post ID
  * @param {string} content - Comment content (markdown)
  */
-export async function createComment(apiKey, postId, content) {
+export async function createComment(apiKey, postId, content, aiConfig) {
   // Check rate limit
   const rateCheck = checkRateLimit(apiKey, 'comment');
   if (!rateCheck.allowed) {
@@ -248,7 +248,7 @@ export async function createComment(apiKey, postId, content) {
   const result = await authRequest(apiKey, `/posts/${postId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ content })
-  });
+  }, aiConfig);
 
   recordAction(apiKey, 'comment');
   console.log(`💬 Moltbook: Commented on post ${postId}`);
@@ -262,7 +262,7 @@ export async function createComment(apiKey, postId, content) {
  * @param {string} parentId - The parent comment ID
  * @param {string} content - Reply content (markdown)
  */
-export async function replyToComment(apiKey, postId, parentId, content) {
+export async function replyToComment(apiKey, postId, parentId, content, aiConfig) {
   // Check rate limit
   const rateCheck = checkRateLimit(apiKey, 'comment');
   if (!rateCheck.allowed) {
@@ -272,7 +272,7 @@ export async function replyToComment(apiKey, postId, parentId, content) {
   const result = await authRequest(apiKey, `/posts/${postId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ content, parentId })
-  });
+  }, aiConfig);
 
   recordAction(apiKey, 'comment');
   console.log(`↩️ Moltbook: Replied to comment ${parentId}`);
