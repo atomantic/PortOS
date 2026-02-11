@@ -18,6 +18,7 @@ export { default as StatCard } from './StatCard';
 export { default as StatusBubble } from './StatusBubble';
 export { default as EventLog } from './EventLog';
 export { default as QuickSummary } from './QuickSummary';
+export { default as ActionableInsightsBanner } from './ActionableInsightsBanner';
 
 // Tab Components
 export { default as TasksTab } from './tabs/TasksTab';

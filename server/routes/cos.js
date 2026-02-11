@@ -878,6 +878,119 @@ router.post('/productivity/recalculate', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+// GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
+// Surfaces the most important things to address right now across all CoS subsystems
+router.get('/actionable-insights', asyncHandler(async (req, res) => {
+  const [tasksData, learningSummary, healthCheck, notificationsModule] = await Promise.all([
+    cos.getAllTasks().catch(() => ({ user: null, cos: null })),
+    taskLearning.getLearningInsights().catch(() => null),
+    cos.runHealthCheck().catch(() => ({ issues: [] })),
+    import('../services/notifications.js')
+  ]);
+
+  const notificationsData = await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []);
+
+  const insights = [];
+
+  // 1. Pending approvals (highest priority)
+  const pendingApprovals = tasksData.cos?.awaitingApproval || [];
+  if (pendingApprovals.length > 0) {
+    insights.push({
+      type: 'approval',
+      priority: 'high',
+      icon: 'AlertCircle',
+      title: `${pendingApprovals.length} task${pendingApprovals.length > 1 ? 's' : ''} awaiting approval`,
+      description: pendingApprovals[0]?.description?.substring(0, 80) + (pendingApprovals[0]?.description?.length > 80 ? '...' : ''),
+      action: { label: 'Review', route: '/cos/tasks' },
+      count: pendingApprovals.length
+    });
+  }
+
+  // 2. Blocked tasks
+  const blockedUser = tasksData.user?.grouped?.blocked || [];
+  const blockedCos = tasksData.cos?.grouped?.blocked || [];
+  const blockedCount = blockedUser.length + blockedCos.length;
+  if (blockedCount > 0) {
+    const firstBlocked = blockedUser[0] || blockedCos[0];
+    insights.push({
+      type: 'blocked',
+      priority: 'high',
+      icon: 'XCircle',
+      title: `${blockedCount} blocked task${blockedCount > 1 ? 's' : ''}`,
+      description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80),
+      action: { label: 'Unblock', route: '/cos/tasks' },
+      count: blockedCount
+    });
+  }
+
+  // 3. Health issues
+  const healthIssues = healthCheck?.issues || [];
+  if (healthIssues.length > 0) {
+    const criticalIssues = healthIssues.filter(i => i.severity === 'critical');
+    insights.push({
+      type: 'health',
+      priority: criticalIssues.length > 0 ? 'critical' : 'medium',
+      icon: 'AlertTriangle',
+      title: `${healthIssues.length} system health issue${healthIssues.length > 1 ? 's' : ''}`,
+      description: healthIssues[0]?.message,
+      action: { label: 'Check Health', route: '/cos/health' },
+      count: healthIssues.length
+    });
+  }
+
+  // 4. Learning failures (skipped task types)
+  const skippedTypes = learningSummary?.skippedTypes || [];
+  if (skippedTypes.length > 0) {
+    insights.push({
+      type: 'learning',
+      priority: 'low',
+      icon: 'Brain',
+      title: `${skippedTypes.length} task type${skippedTypes.length > 1 ? 's' : ''} auto-skipped`,
+      description: `Due to low success rates: ${skippedTypes.slice(0, 2).map(t => t.type).join(', ')}`,
+      action: { label: 'View Learning', route: '/cos/learning' },
+      count: skippedTypes.length
+    });
+  }
+
+  // 5. Unread notifications (briefings, reviews, etc.)
+  const briefingNotifs = notificationsData.filter(n => n.type === 'briefing_ready');
+  if (briefingNotifs.length > 0) {
+    insights.push({
+      type: 'briefing',
+      priority: 'low',
+      icon: 'Newspaper',
+      title: 'New briefing available',
+      description: 'Your daily briefing is ready for review',
+      action: { label: 'Read Briefing', route: '/cos/briefing' },
+      count: 1
+    });
+  }
+
+  // 6. Pending user tasks (informational)
+  const pendingUserTasks = tasksData.user?.grouped?.pending || [];
+  if (pendingUserTasks.length > 0 && insights.length < 4) {
+    insights.push({
+      type: 'tasks',
+      priority: 'info',
+      icon: 'ListTodo',
+      title: `${pendingUserTasks.length} pending task${pendingUserTasks.length > 1 ? 's' : ''}`,
+      description: pendingUserTasks[0]?.description?.substring(0, 80),
+      action: { label: 'View Tasks', route: '/cos/tasks' },
+      count: pendingUserTasks.length
+    });
+  }
+
+  // Sort by priority
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  insights.sort((a, b) => (priorityOrder[a.priority] || 5) - (priorityOrder[b.priority] || 5));
+
+  res.json({
+    insights: insights.slice(0, 5), // Max 5 insights
+    hasActionableItems: insights.some(i => ['critical', 'high'].includes(i.priority)),
+    totalCount: insights.length
+  });
+}));
+
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
 // Combines today's activity, streak status, next job, and pending approvals into one efficient call
 router.get('/quick-summary', asyncHandler(async (req, res) => {

@@ -21,6 +21,7 @@ import {
   StatusBubble,
   EventLog,
   QuickSummary,
+  ActionableInsightsBanner,
   TasksTab,
   AgentsTab,
   JobsTab,
@@ -567,6 +568,9 @@ export default function ChiefOfStaff() {
             )}
           </button>
         </div>
+
+        {/* Actionable Insights - priority items requiring attention */}
+        {activeTab === 'tasks' && <ActionableInsightsBanner />}
 
         {/* Quick Summary - at-a-glance stats on tasks tab only */}
         {activeTab === 'tasks' && <QuickSummary />}
