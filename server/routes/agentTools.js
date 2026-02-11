@@ -204,7 +204,7 @@ router.post('/engage', asyncHandler(async (req, res) => {
       const rateCheck = checkRateLimit(client.apiKey, 'comment');
       if (!rateCheck.allowed) break;
 
-      const generated = await generateComment(agent, opportunity.post, opportunity.comments);
+      const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
       const result = await client.createComment(opportunity.post.id, generated.content);
 
       comments.push({
@@ -478,7 +478,7 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
       if (!suspended && replied.length < data.maxReplies) {
         const rateCheck = checkRateLimit(client.apiKey, 'comment');
         if (rateCheck.allowed) {
-          const generated = await generateReply(agent, post, comment);
+          const generated = await generateReply(agent, post, comment, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
           const replyResult = await client.replyToComment(postId, comment.id, generated.content).catch(e => {
             if (isAccountSuspended(e)) suspended = true;
             else console.log(`👀 Reply failed on post ${postId}: ${e.message}`);

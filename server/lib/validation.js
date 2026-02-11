@@ -29,6 +29,12 @@ export const agentAvatarSchema = z.object({
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional()
 }).optional();
 
+// Agent AI config (preferred provider/model for content generation)
+export const agentAiConfigSchema = z.object({
+  providerId: z.string().min(1).optional(),
+  model: z.string().min(1).optional()
+}).optional();
+
 // Full agent schema
 export const agentSchema = z.object({
   userId: z.string().min(1).max(100),
@@ -36,7 +42,8 @@ export const agentSchema = z.object({
   description: z.string().max(1000).optional().default(''),
   personality: agentPersonalitySchema,
   avatar: agentAvatarSchema,
-  enabled: z.boolean().default(true)
+  enabled: z.boolean().default(true),
+  aiConfig: agentAiConfigSchema
 });
 
 export const agentUpdateSchema = agentSchema.partial();

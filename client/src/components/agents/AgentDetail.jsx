@@ -65,7 +65,7 @@ export default function AgentDetail() {
       case 'overview':
         return <OverviewTab agentId={agentId} agent={agent} onAgentUpdate={fetchAgent} />;
       case 'tools':
-        return <ToolsTab agentId={agentId} />;
+        return <ToolsTab agentId={agentId} agent={agent} />;
       case 'published':
         return <PublishedTab agentId={agentId} />;
       case 'schedules':

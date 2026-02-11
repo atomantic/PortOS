@@ -74,7 +74,7 @@ async function executePost(client, agent, params) {
   // AI generate if content not provided
   if ((!title || !content) && aiGenerate !== false) {
     console.log(`🤖 AI generating post content for "${agent.name}"`);
-    const generated = await generatePost(agent, { submolt });
+    const generated = await generatePost(agent, { submolt }, agent.aiConfig?.providerId, agent.aiConfig?.model);
     title = generated.title;
     content = generated.content;
   }
@@ -116,7 +116,7 @@ async function executeComment(client, agent, params) {
     // AI generate comment if no content
     if (!content) {
       console.log(`🤖 AI generating comment for "${agent.name}" on post ${postId}`);
-      const generated = await generateComment(agent, pick.post, pick.comments);
+      const generated = await generateComment(agent, pick.post, pick.comments, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
       content = generated.content;
     }
   } else if (!content) {
@@ -129,14 +129,14 @@ async function executeComment(client, agent, params) {
     if (parentId) {
       const parent = comments.find(c => c.id === parentId);
       if (parent) {
-        const generated = await generateReply(agent, post, parent);
+        const generated = await generateReply(agent, post, parent, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
         content = generated.content;
       } else {
-        const generated = await generateComment(agent, post, comments);
+        const generated = await generateComment(agent, post, comments, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
         content = generated.content;
       }
     } else {
-      const generated = await generateComment(agent, post, comments);
+      const generated = await generateComment(agent, post, comments, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
       content = generated.content;
     }
   }
@@ -250,7 +250,7 @@ async function executeEngage(client, agent, params) {
       const rateCheck = checkRateLimit(client.apiKey, 'comment');
       if (!rateCheck.allowed) break;
 
-      const generated = await generateComment(agent, opportunity.post, opportunity.comments);
+      const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
       await client.createComment(opportunity.post.id, generated.content).catch(e => {
         if (isAccountSuspended(e)) suspended = true;
       });
@@ -342,7 +342,7 @@ async function executeMonitor(client, agent, schedule, params) {
       if (!suspended && replied.length < maxReplies) {
         const rateCheck = checkRateLimit(client.apiKey, 'comment');
         if (rateCheck.allowed) {
-          const generated = await generateReply(agent, post, comment);
+          const generated = await generateReply(agent, post, comment, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
           await client.replyToComment(postId, comment.id, generated.content).catch(e => {
             if (isAccountSuspended(e)) suspended = true;
           });

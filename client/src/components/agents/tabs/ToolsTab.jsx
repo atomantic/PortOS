@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 
-export default function ToolsTab({ agentId }) {
+export default function ToolsTab({ agentId, agent }) {
   const [accounts, setAccounts] = useState([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [rateLimits, setRateLimits] = useState(null);
@@ -111,7 +111,7 @@ export default function ToolsTab({ agentId }) {
   const handleGeneratePost = async () => {
     if (!agentId || !selectedAccountId) return;
     setGenerating(true);
-    const generated = await api.generateAgentPost(agentId, selectedAccountId, selectedSubmolt);
+    const generated = await api.generateAgentPost(agentId, selectedAccountId, selectedSubmolt, agent?.aiConfig?.providerId, agent?.aiConfig?.model);
     setPostTitle(generated.title);
     setPostContent(generated.content);
     setGenerating(false);
@@ -152,7 +152,8 @@ export default function ToolsTab({ agentId }) {
     if (!selectedPost) return;
     setGeneratingComment(true);
     const generated = await api.generateAgentComment(
-      agentId, selectedAccountId, selectedPost.id, replyToId || undefined
+      agentId, selectedAccountId, selectedPost.id, replyToId || undefined,
+      agent?.aiConfig?.providerId, agent?.aiConfig?.model
     );
     setCommentContent(generated.content);
     setGeneratingComment(false);

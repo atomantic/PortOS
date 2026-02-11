@@ -13,7 +13,7 @@
  */
 
 import { executeApiRun, createRun } from '../../services/runner.js';
-import { getActiveProvider } from '../../services/providers.js';
+import { getActiveProvider, getProviderById } from '../../services/providers.js';
 
 /**
  * Strip obfuscation noise from Moltbook challenge text
@@ -130,14 +130,20 @@ export function solveWithRegex(challengeText) {
 /**
  * Solve using AI interpretation
  */
-async function solveWithAI(challengeText) {
-  const provider = await getActiveProvider();
+async function solveWithAI(challengeText, aiConfig) {
+  let provider;
+  if (aiConfig?.providerId) {
+    provider = await getProviderById(aiConfig.providerId).catch(() => null);
+  }
+  if (!provider) {
+    provider = await getActiveProvider();
+  }
   if (!provider) {
     console.log(`🔐 No AI provider available for challenge solving`);
     return null;
   }
 
-  const model = provider.lightModel || provider.defaultModel || provider.models?.[0];
+  const model = aiConfig?.model || provider.lightModel || provider.defaultModel || provider.models?.[0];
   const prompt = `You are solving a verification challenge. The text below is obfuscated with random brackets, symbols, and doubled letters. Decode it, solve the math problem, and respond with ONLY the numeric answer with 2 decimal places (e.g., "47.00"). No explanation.
 
 Challenge text:
@@ -182,13 +188,15 @@ Answer:`;
 /**
  * Solve a Moltbook verification challenge
  * Prefers AI (handles obfuscation reliably), falls back to regex if no AI provider
+ * @param {string} challengeText - The obfuscated challenge text
+ * @param {{ providerId?: string, model?: string }} [aiConfig] - Optional AI provider config
  * @returns {string|null} Answer formatted with 2 decimal places, or null if unsolvable
  */
-export async function solveChallenge(challengeText) {
+export async function solveChallenge(challengeText, aiConfig) {
   console.log(`🔐 Solving challenge: "${challengeText.substring(0, 80)}..."`);
 
   // Try AI first — handles obfuscation much better than regex
-  const aiAnswer = await solveWithAI(challengeText).catch(err => {
+  const aiAnswer = await solveWithAI(challengeText, aiConfig).catch(err => {
     console.log(`🔐 AI solver error: ${err.message}`);
     return null;
   });

@@ -16,14 +16,14 @@ const API_BASE = 'https://www.moltbook.com/api/v1';
  * Handle a Moltbook verification challenge embedded in a response
  * Challenges are obfuscated math word problems that must be solved within 5 minutes.
  */
-async function handleVerification(data, apiKey) {
+async function handleVerification(data, apiKey, aiConfig) {
   if (!data?.verification_required || !data?.verification) return data;
 
   const { code, challenge, expires_at } = data.verification;
   console.log(`🔐 Moltbook verification required: code=${code}, expires=${expires_at}`);
   console.log(`🔐 Challenge: "${challenge.substring(0, 100)}..."`);
 
-  const answer = await solveChallenge(challenge);
+  const answer = await solveChallenge(challenge, aiConfig);
   if (!answer) {
     console.error(`❌ Could not solve Moltbook challenge — post will remain pending`);
     return data;

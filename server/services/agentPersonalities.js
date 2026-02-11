@@ -111,6 +111,7 @@ export async function createAgent(agentData) {
     },
     avatar: agentData.avatar || {},
     enabled: agentData.enabled !== false,
+    aiConfig: agentData.aiConfig || undefined,
     createdAt: now,
     updatedAt: now
   };
