@@ -451,15 +451,19 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' || location.pathname === '/city' ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' || location.pathname === '/city' ? (
-            <Outlet />
-          ) : (
-            <div className="max-w-7xl mx-auto">
-              <Outlet />
-            </div>
-          )}
-        </main>
+        {(() => {
+          const isFullWidth = location.pathname.startsWith('/cos') ||
+            location.pathname.startsWith('/brain') ||
+            location.pathname.startsWith('/digital-twin') ||
+            location.pathname.startsWith('/agents') ||
+            location.pathname === '/shell' ||
+            location.pathname === '/city';
+          return (
+            <main id="main-content" className={`flex-1 overflow-auto ${isFullWidth ? '' : 'p-4 md:p-6'}`}>
+              {isFullWidth ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
+            </main>
+          );
+        })()}
       </div>
     </div>
   );

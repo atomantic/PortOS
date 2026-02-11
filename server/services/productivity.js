@@ -5,16 +5,12 @@
  * insights about optimal working times.
  */
 
-import { writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
 import { cosEvents, getAgents } from './cos.js';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data/cos');
+const DATA_DIR = PATHS.cos;
 const PRODUCTIVITY_FILE = join(DATA_DIR, 'productivity.json');
 
 /**
@@ -45,9 +41,7 @@ const DEFAULT_PRODUCTIVITY = {
  * Ensure data directory exists
  */
 async function ensureDataDir() {
-  if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
-  }
+  await ensureDir(DATA_DIR);
 }
 
 /**

@@ -6,15 +6,13 @@ vi.mock('./cosEvents.js', () => ({
 }))
 
 vi.mock('../lib/fileUtils.js', () => ({
-  readJSONFile: vi.fn()
+  readJSONFile: vi.fn(),
+  ensureDir: vi.fn().mockResolvedValue(),
+  PATHS: { cos: '/mock/data/cos' }
 }))
 
-vi.mock('fs', () => ({
-  existsSync: vi.fn().mockReturnValue(true),
-  promises: {
-    writeFile: vi.fn().mockResolvedValue(),
-    mkdir: vi.fn().mockResolvedValue()
-  }
+vi.mock('fs/promises', () => ({
+  writeFile: vi.fn().mockResolvedValue()
 }))
 
 // Import after mocks
