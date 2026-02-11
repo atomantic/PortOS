@@ -53,6 +53,7 @@ export async function createDraft(agentId, draft) {
   const entry = {
     id: uuidv4(),
     type: draft.type, // 'post' or 'comment'
+    status: 'draft',
     title: draft.title || null,
     content: draft.content,
     submolt: draft.submolt || null,

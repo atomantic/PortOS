@@ -101,10 +101,12 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
 
   console.log(`🛠️ POST /api/agents/tools/publish-post agent=${data.agentId} submolt=${data.submolt}`);
 
-  const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
+  const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
+  client.aiConfig = agent.aiConfig;
   const result = await client.createPost(data.submolt, data.title, data.content);
   const post = result?.post || result;
   const postId = post?.id || post?._id || post?.post_id;
+  const verificationFailed = result?.verification_solved === false;
 
   await platformAccounts.recordActivity(data.accountId);
   await agentActivity.logActivity({
@@ -112,12 +114,12 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
     accountId: data.accountId,
     action: 'post',
     params: { submolt: data.submolt, title: data.title },
-    status: 'completed',
-    result: { type: 'post', postId, submolt: data.submolt, title: data.title },
+    status: verificationFailed ? 'verification_failed' : 'completed',
+    result: { type: 'post', postId, submolt: data.submolt, title: data.title, verificationFailed },
     timestamp: new Date().toISOString()
   });
 
-  res.json(post);
+  res.json({ ...post, verificationFailed });
 }));
 
 // POST /publish-comment - Publish a comment to Moltbook
@@ -129,7 +131,8 @@ router.post('/publish-comment', asyncHandler(async (req, res) => {
 
   console.log(`🛠️ POST /api/agents/tools/publish-comment agent=${data.agentId} post=${data.postId}`);
 
-  const { client } = await getClientAndAgent(data.accountId, data.agentId);
+  const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
+  client.aiConfig = agent.aiConfig;
 
   let result;
   if (data.parentId) {
@@ -138,18 +141,20 @@ router.post('/publish-comment', asyncHandler(async (req, res) => {
     result = await client.createComment(data.postId, data.content);
   }
 
+  const verificationFailed = result?.verification_solved === false;
+
   await platformAccounts.recordActivity(data.accountId);
   await agentActivity.logActivity({
     agentId: data.agentId,
     accountId: data.accountId,
     action: 'comment',
     params: { postId: data.postId, parentId: data.parentId },
-    status: 'completed',
-    result: { type: 'comment', commentId: result?.id || result?._id || result?.comment_id, postId: data.postId, isReply: !!data.parentId },
+    status: verificationFailed ? 'verification_failed' : 'completed',
+    result: { type: 'comment', commentId: result?.id || result?._id || result?.comment_id, postId: data.postId, isReply: !!data.parentId, verificationFailed },
     timestamp: new Date().toISOString()
   });
 
-  res.json(result);
+  res.json({ ...result, verificationFailed });
 }));
 
 // POST /engage - One-click autonomous engagement cycle

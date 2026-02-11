@@ -20,8 +20,8 @@ import { getActiveProvider, getProviderById } from '../../services/providers.js'
  * Removes: brackets, carets, braces, then collapses consecutive case-insensitive duplicate letters
  */
 export function cleanChallengeText(text) {
-  // Strip bracket/symbol noise
-  let cleaned = text.replace(/[[\]{}^]/g, '');
+  // Strip all injected noise — keep only letters, digits, spaces, commas, question marks, hyphens
+  let cleaned = text.replace(/[^a-zA-Z0-9\s,?'-]/g, '');
 
   // Collapse consecutive case-insensitive duplicate letters
   // e.g., "LoOoBbSsTtEeR" -> "LoBSTER" (lobster)
