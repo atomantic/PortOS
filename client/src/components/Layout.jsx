@@ -32,7 +32,8 @@ import {
   Upload,
   SquareTerminal,
   Globe,
-  Newspaper
+  Newspaper,
+  Building2
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -42,6 +43,7 @@ import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
+  { to: '/city', label: 'CyberCity', icon: Building2, single: true },
   { separator: true },
   { to: '/agents', label: 'Agents', icon: Users, single: true },
   {
@@ -449,8 +451,8 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' ? (
+        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' || location.pathname === '/city' ? '' : 'p-4 md:p-6'}`}>
+          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' || location.pathname === '/city' ? (
             <Outlet />
           ) : (
             <div className="max-w-7xl mx-auto">

@@ -25,6 +25,7 @@ const GitPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.Gi
 const UsagePage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.UsagePage })));
 const ProcessesPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.ProcessesPage })));
 const AgentsPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.AgentsPage })));
+const CyberCity = lazy(() => import('./pages/CyberCity'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
+          <Route path="city" element={<CyberCity />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />
