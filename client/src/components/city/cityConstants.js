@@ -1,5 +1,5 @@
-// Geist Pixel Square font URL for drei <Text> in 3D scene
-export const PIXEL_FONT_URL = '/node_modules/geist/dist/fonts/geist-pixel/GeistPixel-Square.woff2';
+// Geist Pixel Square font URL for drei <Text> in 3D scene (TTF required, troika doesn't support woff2)
+export const PIXEL_FONT_URL = '/fonts/GeistPixel-Square.ttf';
 
 export const CITY_COLORS = {
   ground: '#06b6d4',
