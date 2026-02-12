@@ -44,7 +44,7 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPos
       {/* Warehouse district label - pixel font */}
       {hasArchived && (
         <Text
-          position={[0, 0.5, warehouseMinZ - 2]}
+          position={[0, 1.5, warehouseMinZ - 2]}
           fontSize={0.8}
           color="#475569"
           anchorX="center"
