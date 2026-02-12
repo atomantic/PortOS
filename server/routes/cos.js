@@ -769,7 +769,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
 
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
-  const task = autonomousJobs.generateTaskFromJob(job);
+  const task = await autonomousJobs.generateTaskFromJob(job);
   const result = await cos.addTask({
     description: task.description,
     priority: task.priority,

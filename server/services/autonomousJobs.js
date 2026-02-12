@@ -14,14 +14,28 @@
  * - Custom user-defined jobs
  */
 
-import { writeFile } from 'fs/promises'
-import { join } from 'path'
+import { writeFile, readFile } from 'fs/promises'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 const DATA_DIR = PATHS.cos
 const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
+const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
+
+/**
+ * Map job IDs to their skill template filenames
+ */
+const JOB_SKILL_MAP = {
+  'job-daily-briefing': 'daily-briefing',
+  'job-git-maintenance': 'git-maintenance',
+  'job-brain-processing': 'brain-processing',
+  'job-project-review': 'project-review'
+}
 
 // Time constants
 const HOUR = 60 * 60 * 1000
@@ -409,14 +423,104 @@ async function toggleJob(jobId) {
 }
 
 /**
+ * Load a job skill template from disk
+ * @param {string} skillName - The skill template name (e.g., 'daily-briefing')
+ * @returns {Promise<string|null>} Template content or null if not found
+ */
+async function loadJobSkillTemplate(skillName) {
+  const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
+  const content = await readFile(filePath, 'utf-8').catch(() => null)
+  if (content) {
+    console.log(`🎯 Loaded job skill template: ${skillName}`)
+  }
+  return content
+}
+
+/**
+ * Save a job skill template to disk
+ * @param {string} skillName - The skill template name
+ * @param {string} content - The template content
+ */
+async function saveJobSkillTemplate(skillName, content) {
+  await ensureDir(JOBS_SKILLS_DIR)
+  const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
+  await writeFile(filePath, content)
+  console.log(`💾 Saved job skill template: ${skillName}`)
+}
+
+/**
+ * List all job skill templates
+ * @returns {Promise<Array>} Array of { name, jobId, hasTemplate }
+ */
+async function listJobSkillTemplates() {
+  const results = []
+  for (const [jobId, skillName] of Object.entries(JOB_SKILL_MAP)) {
+    const content = await loadJobSkillTemplate(skillName)
+    results.push({
+      name: skillName,
+      jobId,
+      hasTemplate: !!content
+    })
+  }
+  return results
+}
+
+/**
+ * Get the effective prompt for a job, using skill template if available
+ * Extracts the prompt from the skill template's structured format
+ * @param {Object} job - The job object
+ * @returns {Promise<string>} The effective prompt template
+ */
+async function getJobEffectivePrompt(job) {
+  const skillName = JOB_SKILL_MAP[job.id]
+  if (!skillName) return job.promptTemplate
+
+  const template = await loadJobSkillTemplate(skillName)
+  if (!template) return job.promptTemplate
+
+  // Extract structured sections from the skill template and build a prompt
+  // The skill template has: Prompt Template header, Steps, Expected Outputs, Success Criteria
+  const lines = template.split('\n')
+  const sections = { prompt: '', steps: '', expectedOutputs: '', successCriteria: '' }
+  let currentSection = null
+
+  for (const line of lines) {
+    if (line.startsWith('## Prompt Template')) { currentSection = 'prompt'; continue }
+    if (line.startsWith('## Steps')) { currentSection = 'steps'; continue }
+    if (line.startsWith('## Expected Outputs')) { currentSection = 'expectedOutputs'; continue }
+    if (line.startsWith('## Success Criteria')) { currentSection = 'successCriteria'; continue }
+    if (line.startsWith('## Job Metadata')) { currentSection = 'metadata'; continue }
+    if (line.startsWith('# ')) { currentSection = null; continue }
+    if (currentSection && currentSection !== 'metadata') {
+      sections[currentSection] += line + '\n'
+    }
+  }
+
+  // Build the effective prompt from structured sections
+  let prompt = sections.prompt.trim()
+  if (sections.steps.trim()) {
+    prompt += '\n\nTasks to perform:\n' + sections.steps.trim()
+  }
+  if (sections.expectedOutputs.trim()) {
+    prompt += '\n\nExpected outputs:\n' + sections.expectedOutputs.trim()
+  }
+  if (sections.successCriteria.trim()) {
+    prompt += '\n\nSuccess criteria:\n' + sections.successCriteria.trim()
+  }
+
+  return prompt
+}
+
+/**
  * Generate a CoS task from a due job
  * @param {Object} job - The job to generate a task for
- * @returns {Object} Task data suitable for cos.addTask()
+ * @returns {Promise<Object>} Task data suitable for cos.addTask()
  */
-function generateTaskFromJob(job) {
+async function generateTaskFromJob(job) {
+  const description = await getJobEffectivePrompt(job)
   return {
     id: `${job.id}-${Date.now().toString(36)}`,
-    description: job.promptTemplate,
+    description,
     priority: job.priority,
     metadata: {
       autonomousJob: true,
@@ -522,5 +626,10 @@ export {
   generateTaskFromJob,
   getJobStats,
   getNextDueJob,
-  INTERVAL_OPTIONS
+  INTERVAL_OPTIONS,
+  loadJobSkillTemplate,
+  saveJobSkillTemplate,
+  listJobSkillTemplates,
+  getJobEffectivePrompt,
+  JOB_SKILL_MAP
 }

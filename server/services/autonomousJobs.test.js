@@ -123,12 +123,11 @@ describe('autonomousJobs', () => {
   })
 
   describe('generateTaskFromJob', () => {
-    it('returns correct task structure with metadata', () => {
+    it('returns correct task structure with metadata', async () => {
       const job = mockJobsData.jobs[0]
-      const task = generateTaskFromJob(job)
+      const task = await generateTaskFromJob(job)
 
       expect(task).toMatchObject({
-        description: job.promptTemplate,
         priority: job.priority,
         metadata: {
           autonomousJob: true,
@@ -141,15 +140,16 @@ describe('autonomousJobs', () => {
         autoApprove: false
       })
       expect(task.id).toContain(job.id)
+      expect(task.description).toBeTruthy()
     })
 
-    it('autoApprove true when autonomyLevel is yolo', () => {
+    it('autoApprove true when autonomyLevel is yolo', async () => {
       const yoloJob = {
         ...mockJobsData.jobs[0],
         autonomyLevel: 'yolo'
       }
 
-      const task = generateTaskFromJob(yoloJob)
+      const task = await generateTaskFromJob(yoloJob)
 
       expect(task.autoApprove).toBe(true)
       expect(task.metadata.autonomyLevel).toBe('yolo')
