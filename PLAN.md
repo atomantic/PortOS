@@ -71,6 +71,7 @@ pm2 logs
 
 - [ ] **M7**: App Templates - Template management and app scaffolding from templates
 - [ ] **M34 P3,P5-P7**: Digital Twin - Behavioral feedback loop, multi-modal capture, advanced testing, personas
+- [ ] **M40**: Agent Skill System - Task-type-specific prompt templates with routing logic, negative examples, and embedded workflows for improved agent accuracy and reliability
 
 ---
 
@@ -110,6 +111,43 @@ Based on recent work and incomplete milestones:
 2. **Digital Twin P3: Behavioral Feedback Loop** - Add "sounds like me" response validation and adaptive weighting
 3. **Vision API Polish** - Continue refining LM Studio vision integration based on test results
 4. **Memory Consolidation** - Implement automatic memory consolidation for similar memories
+5. **M40: Agent Skill System** - See details below
+
+---
+
+## M40: Agent Skill System
+
+Inspired by [OpenAI Skills & Shell Tips](https://developers.openai.com/blog/skills-shell-tips), this milestone improves CoS agent accuracy and reliability through better task routing, prompt specificity, and context management.
+
+### P1: Task-Type-Specific Agent Prompts (Skill Templates)
+Currently all agents use the same generic `cos-agent-briefing.md` prompt template regardless of task type. Create specialized prompt templates per task category that include:
+- **Routing descriptions**: "Use when..." / "Don't use when..." sections that help the system match tasks to the right skill template
+- **Embedded examples**: Worked examples of successful completions for that task type (bug fix, feature, security audit, etc.)
+- **Task-specific guidelines**: E.g., security audit skills include OWASP checklist; feature skills include test requirements; refactor skills include before/after patterns
+
+**Implementation**:
+- Add a `data/prompts/skills/` directory with task-type templates (e.g., `bug-fix.md`, `feature.md`, `security-audit.md`, `refactor.md`, `documentation.md`, `mobile-responsive.md`)
+- Update `buildAgentPrompt()` in `subAgentSpawner.js` to select the appropriate skill template based on task type/description keywords
+- Each template loaded only when matched (avoids token inflation for unrelated tasks)
+
+### P2: Agent Context Compaction
+Long-running agents can hit context limits causing failures. Add proactive context management:
+- Pass `--max-turns` or equivalent context budget hints when spawning agents
+- Track agent output length and detect when agents are approaching context limits
+- Add compaction metadata to agent error analysis so retries can include "compact context" instructions
+- Update the agent briefing to include explicit output format constraints for verbose task types
+
+### P3: Negative Example Coverage for Task Routing
+Improve task-to-model routing accuracy by adding negative examples to the model selection logic:
+- Document which task types should NOT use light models (already partially done, but formalize it)
+- Add "anti-patterns" to task learning: when a task type fails with a specific model, record the negative signal
+- Surface routing accuracy metrics in the Learning tab so the user can see misroutes
+
+### P4: Deterministic Workflow Skills
+For recurring autonomous jobs (daily briefing, git maintenance, security audit, app improvement), encode the full workflow as a deterministic skill:
+- Each skill defines exact steps, expected outputs, and success criteria
+- Prevents prompt drift across runs (currently the same autonomous job prompt can produce different quality results)
+- Skills are versioned and editable via the Prompt Manager UI
 
 ---
 
