@@ -21,6 +21,16 @@ export const CITY_COLORS = {
   // Celestial colors
   planet: '#3b82f6',
   orbit: '#1e3a5f',
+  // Sky dome + sun colors
+  sky: {
+    zenith: '#050520',
+    midSky: '#1a0a2e',
+    horizonHigh: '#ff4060',
+    horizonLow: '#ff8040',
+    sunCore: '#ffaa44',
+    sunGlow: '#ff6080',
+    sunLight: '#ffccaa',
+  },
 };
 
 export const BOROUGH_PARAMS = {
