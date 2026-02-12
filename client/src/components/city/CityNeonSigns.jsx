@@ -39,10 +39,16 @@ function NeonSign({ position, rotation, text, color, fontSize = 0.4, flickerRate
 
   return (
     <group position={position} rotation={rotation}>
-      {/* Dark backing panel */}
+      {/* Dark backing panel (front face only) */}
       <mesh ref={backRef} position={[0, 0, -0.02]}>
         <planeGeometry args={[textWidth + 0.3, textHeight + 0.15]} />
-        <meshBasicMaterial color="#020208" transparent opacity={0.5} side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#020208" transparent opacity={0.5} />
+      </mesh>
+
+      {/* Back blocker to prevent mirrored text */}
+      <mesh position={[0, 0, -0.03]}>
+        <planeGeometry args={[textWidth + 0.3, textHeight + 0.15]} />
+        <meshBasicMaterial color="#020208" side={THREE.BackSide} />
       </mesh>
 
       {/* Neon text */}
@@ -58,14 +64,13 @@ function NeonSign({ position, rotation, text, color, fontSize = 0.4, flickerRate
       </Text>
 
       {/* Glow halo behind text */}
-      <mesh ref={glowRef} position={[0, 0, -0.03]}>
+      <mesh ref={glowRef} position={[0, 0, -0.04]}>
         <planeGeometry args={[textWidth + 0.8, textHeight + 0.6]} />
         <meshBasicMaterial
           color={color}
           transparent
           opacity={0.15}
           blending={THREE.AdditiveBlending}
-          side={THREE.DoubleSide}
         />
       </mesh>
 
@@ -145,11 +150,11 @@ export default function CityNeonSigns({ positions }) {
       phase: 1,
     });
 
-    // Right side signs
+    // Right side signs (facing outward)
     result.push({
       id: 'sign-right-1',
       position: [maxX + pad, 3.2, (minZ + maxZ) / 2 - 3],
-      rotation: [0, -Math.PI / 2, 0],
+      rotation: [0, Math.PI / 2, 0],
       text: signTexts[2],
       color: colors[4],
       fontSize: 0.6,
@@ -159,7 +164,7 @@ export default function CityNeonSigns({ positions }) {
     result.push({
       id: 'sign-right-2',
       position: [maxX + pad, 1.5, (minZ + maxZ) / 2 + 2],
-      rotation: [0, -Math.PI / 2, 0],
+      rotation: [0, Math.PI / 2, 0],
       text: signTexts[3],
       color: colors[5],
       fontSize: 0.3,
@@ -167,11 +172,11 @@ export default function CityNeonSigns({ positions }) {
       phase: 3,
     });
 
-    // Left side signs
+    // Left side signs (facing outward)
     result.push({
       id: 'sign-left-1',
       position: [minX - pad, 2.8, (minZ + maxZ) / 2],
-      rotation: [0, Math.PI / 2, 0],
+      rotation: [0, -Math.PI / 2, 0],
       text: signTexts[4],
       color: colors[2],
       fontSize: 0.35,
