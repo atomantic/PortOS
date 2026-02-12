@@ -11,6 +11,7 @@ import TestTab from '../components/digital-twin/tabs/TestTab';
 import EnrichTab from '../components/digital-twin/tabs/EnrichTab';
 import AccountsTab from '../components/digital-twin/tabs/AccountsTab';
 import InterviewTab from '../components/digital-twin/tabs/InterviewTab';
+import GenomeTab from '../components/digital-twin/tabs/GenomeTab';
 import ImportTab from '../components/digital-twin/tabs/ImportTab';
 import ExportTab from '../components/digital-twin/tabs/ExportTab';
 
@@ -55,6 +56,8 @@ export default function DigitalTwin() {
         return <EnrichTab onRefresh={fetchData} />;
       case 'accounts':
         return <AccountsTab />;
+      case 'genome':
+        return <GenomeTab />;
       case 'interview':
         return <InterviewTab onRefresh={fetchData} />;
       case 'import':
