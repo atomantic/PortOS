@@ -17,7 +17,12 @@ async function request(endpoint, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
     const errorMessage = error.error || `HTTP ${response.status}`;
-    toast.error(errorMessage);
+    // Platform unavailability is a warning, not an error
+    if (error.code === 'PLATFORM_UNAVAILABLE') {
+      toast(errorMessage, { icon: '⚠️' });
+    } else {
+      toast.error(errorMessage);
+    }
     throw new Error(errorMessage);
   }
 

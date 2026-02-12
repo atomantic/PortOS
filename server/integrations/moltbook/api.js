@@ -80,7 +80,18 @@ async function request(endpoint, options = {}, aiConfig) {
 
   console.log(`📚 Moltbook API: ${options.method || 'GET'} ${endpoint}`);
 
-  const response = await fetch(url, config);
+  let response;
+  const fetchResult = await fetch(url, config).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e }));
+
+  if (!fetchResult.ok) {
+    console.error(`❌ Moltbook API unreachable: ${fetchResult.error.message}`);
+    const err = new Error('Moltbook is currently unavailable');
+    err.status = 503;
+    err.code = 'PLATFORM_UNAVAILABLE';
+    throw err;
+  }
+
+  response = fetchResult.response;
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
@@ -101,7 +112,9 @@ async function request(endpoint, options = {}, aiConfig) {
     }
 
     const err = new Error(message);
-    err.status = response.status;
+    // Upstream 5xx → our 503 (platform unavailable), preserve 4xx as-is
+    err.status = response.status >= 500 ? 503 : response.status;
+    err.code = response.status >= 500 ? 'PLATFORM_UNAVAILABLE' : undefined;
     err.suspended = response.status === 403 && message.toLowerCase().includes('suspended');
     throw err;
   }
