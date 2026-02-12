@@ -54,7 +54,7 @@ export const CITY_COLORS = {
       sunCore: '#ffffee',
       sunGlow: '#ffffcc',
       sunLight: '#ffffff',
-      sunIntensity: 3.0,
+      sunIntensity: 4.5,
       sunScale: 0.7,
       isMoon: false,
       daylightFactor: 1.0,
