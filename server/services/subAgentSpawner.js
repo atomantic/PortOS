@@ -58,6 +58,68 @@ function extractTaskTypeKey(task) {
   return 'unknown';
 }
 
+const SKILLS_DIR = join(ROOT_DIR, 'data/prompts/skills');
+
+/**
+ * Skill template keyword matchers
+ * Each entry maps a skill template filename to its trigger keywords.
+ * Order matters — first match wins, so more specific patterns come first.
+ */
+const SKILL_MATCHERS = [
+  {
+    skill: 'security-audit',
+    keywords: ['security', 'audit', 'vulnerability', 'xss', 'injection', 'owasp', 'cve', 'penetration', 'hardening', 'sanitize', 'authorization']
+  },
+  {
+    skill: 'mobile-responsive',
+    keywords: ['mobile', 'responsive', 'tablet', 'breakpoint', 'viewport', 'touch', 'swipe', 'small screen', 'media query', 'mobile-friendly', 'adaptive']
+  },
+  {
+    skill: 'bug-fix',
+    keywords: ['fix', 'bug', 'broken', 'error', 'crash', 'issue', 'not working', 'fails', 'regression', 'defect']
+  },
+  {
+    skill: 'refactor',
+    keywords: ['refactor', 'reorganize', 'restructure', 'clean up', 'simplify', 'extract', 'consolidate', 'decouple', 'modularize']
+  },
+  {
+    skill: 'documentation',
+    keywords: ['document', 'documentation', 'docs', 'readme', 'jsdoc', 'api docs', 'guide', 'tutorial', 'changelog']
+  },
+  {
+    skill: 'feature',
+    keywords: ['add', 'create', 'implement', 'build', 'new', 'feature', 'support', 'enable', 'integrate', 'endpoint', 'page', 'component']
+  }
+];
+
+/**
+ * Detect the best matching skill template for a task based on description keywords
+ * @param {Object} task - Task object with description
+ * @returns {string|null} Skill template name or null if no match
+ */
+function detectSkillTemplate(task) {
+  const desc = (task?.description || '').toLowerCase();
+  for (const matcher of SKILL_MATCHERS) {
+    if (matcher.keywords.some(kw => desc.includes(kw))) {
+      return matcher.skill;
+    }
+  }
+  return null;
+}
+
+/**
+ * Load a skill template from disk if it exists
+ * @param {string} skillName - Name of the skill template file (without .md)
+ * @returns {Promise<string|null>} Template content or null
+ */
+async function loadSkillTemplate(skillName) {
+  const templatePath = join(SKILLS_DIR, `${skillName}.md`);
+  if (!existsSync(templatePath)) return null;
+  const content = await readFile(templatePath, 'utf-8');
+  console.log(`🎯 Loaded skill template: ${skillName}`);
+  return content;
+}
+
 /**
  * Select optimal model for a task based on complexity analysis and historical performance
  * User can override by specifying Model: and/or Provider: in task metadata
@@ -253,6 +315,9 @@ async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis
     metadata.errorDetails = errorInfo.details || metadata.error;
     metadata.errorCategory = errorInfo.category || 'unknown';
     metadata.suggestedFix = errorInfo.suggestedFix || null;
+    if (errorInfo.compaction) {
+      metadata.compaction = errorInfo.compaction;
+    }
   }
 
   await writeFile(metaPath, JSON.stringify(metadata, null, 2));
@@ -475,18 +540,39 @@ const ERROR_PATTERNS = [
     pattern: /context.?length|max.?tokens|token.?limit|context.?window/i,
     category: 'context-length',
     actionable: true,
-    extract: () => ({
+    extract: (match, output) => ({
       message: 'Context length exceeded',
-      suggestedFix: 'Task is too large for the context window. Break into smaller subtasks or use a model with larger context.'
+      suggestedFix: 'Task is too large for the context window. Break into smaller subtasks or use a model with larger context.',
+      compaction: {
+        needed: true,
+        reason: 'context-limit',
+        outputSize: Buffer.byteLength(output || ''),
+        retryHints: [
+          'Summarize intermediate findings concisely instead of reproducing full file contents',
+          'Use targeted reads (offset/limit) instead of reading entire files',
+          'Avoid listing full directory trees — only reference files you modify',
+          'Keep your Task Summary under 30 lines'
+        ]
+      }
     })
   },
   {
     pattern: /output.?length|max.?output|response.?too.?long/i,
     category: 'output-length',
     actionable: false,
-    extract: () => ({
+    extract: (match, output) => ({
       message: 'Output length exceeded',
-      suggestedFix: 'Agent response exceeded output limit. Task may need to be scoped down.'
+      suggestedFix: 'Agent response exceeded output limit. Task may need to be scoped down.',
+      compaction: {
+        needed: true,
+        reason: 'output-limit',
+        outputSize: Buffer.byteLength(output || ''),
+        retryHints: [
+          'Limit output to changed files and a brief summary only',
+          'Do not echo file contents back — just reference file paths and line numbers',
+          'Combine related changes into single descriptions'
+        ]
+      }
     })
   },
 
@@ -839,13 +925,18 @@ async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
   emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} (${lastErrorCategory})`, {
     taskId: task.id, failureCount, maxRetries: MAX_TASK_RETRIES, category: lastErrorCategory
   });
+
+  // Propagate compaction hints to task metadata for retry prompt injection
+  const compaction = errorAnalysis?.compaction || null;
+
   return {
     status: 'pending',
     metadata: {
       ...task.metadata,
       failureCount,
       lastFailureAt: new Date().toISOString(),
-      lastErrorCategory
+      lastErrorCategory,
+      ...(compaction && { compaction })
     }
   };
 }
@@ -2011,6 +2102,32 @@ async function getClaudeMdContext(workspaceDir) {
  * @param {string} workspaceDir - Working directory (may be a worktree)
  * @param {Object|null} worktreeInfo - Worktree details if using a worktree ({ worktreePath, branchName })
  */
+/**
+ * Build a compaction instruction section for retries after context-limit failures.
+ * Provides explicit guidance to the agent on reducing output verbosity.
+ */
+function buildCompactionSection(task) {
+  const compaction = task.metadata?.compaction;
+  if (!compaction?.needed) return '';
+
+  const hints = compaction.retryHints || [];
+  const reason = compaction.reason === 'output-limit' ? 'output length limit' : 'context window limit';
+  const prevOutputKB = compaction.outputSize ? Math.round(compaction.outputSize / 1024) : 'unknown';
+
+  return `
+## Context Compaction Required
+
+**WARNING**: A previous attempt at this task failed because the agent exceeded the ${reason}.
+Previous output size: ~${prevOutputKB} KB. You MUST keep your output compact to avoid the same failure.
+
+**Mandatory output constraints**:
+${hints.map(h => `- ${h}`).join('\n')}
+- Do NOT reproduce entire file contents in your output
+- Reference files by path and line number instead of quoting them
+- Limit exploratory reads — plan your approach first, then make targeted changes
+`;
+}
+
 async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null) {
   // Get relevant memories for context injection
   const memorySection = await getMemorySection(task, {
@@ -2034,6 +2151,9 @@ async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null)
     return null;
   });
 
+  // Build context compaction section if task is retrying after a context-limit failure
+  const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
+
   // Build worktree context section if applicable
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
@@ -2044,6 +2164,15 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 **Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
+  // Detect and load task-type-specific skill template (only when matched)
+  const matchedSkill = detectSkillTemplate(task);
+  const skillSection = matchedSkill
+    ? await loadSkillTemplate(matchedSkill).catch(err => {
+        console.log(`⚠️ Skill template load failed for ${matchedSkill}: ${err.message}`);
+        return null;
+      })
+    : null;
+
   // Try to use the prompt template system
   const promptData = await buildPrompt('cos-agent-briefing', {
     task,
@@ -2052,6 +2181,8 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
     claudeMdSection,
     digitalTwinSection,
     worktreeSection,
+    compactionSection,
+    skillSection,
     soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
     timestamp: new Date().toISOString()
   }).catch(() => null);
@@ -2078,6 +2209,8 @@ ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}
+${compactionSection}
+${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}
 ## Instructions
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task

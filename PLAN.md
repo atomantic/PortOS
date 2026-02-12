@@ -130,12 +130,12 @@ Currently all agents use the same generic `cos-agent-briefing.md` prompt templat
 - Update `buildAgentPrompt()` in `subAgentSpawner.js` to select the appropriate skill template based on task type/description keywords
 - Each template loaded only when matched (avoids token inflation for unrelated tasks)
 
-### P2: Agent Context Compaction
+### P2: Agent Context Compaction ✅
 Long-running agents can hit context limits causing failures. Add proactive context management:
 - Pass `--max-turns` or equivalent context budget hints when spawning agents
 - Track agent output length and detect when agents are approaching context limits
-- Add compaction metadata to agent error analysis so retries can include "compact context" instructions
-- Update the agent briefing to include explicit output format constraints for verbose task types
+- ✅ Add compaction metadata to agent error analysis so retries can include "compact context" instructions
+- ✅ Update the agent briefing to include explicit output format constraints for verbose task types
 
 ### P3: Negative Example Coverage for Task Routing
 Improve task-to-model routing accuracy by adding negative examples to the model selection logic:
