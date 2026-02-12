@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import CityActivityLog from './CityActivityLog';
 import CityAgentBar from './CityAgentBar';
 
@@ -94,6 +95,8 @@ function HealthBar({ value, max, color }) {
 }
 
 export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, productivityData }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [time, setTime] = useState(new Date());
   const [uptimeSeconds, setUptimeSeconds] = useState(0);
   const [scanLine, setScanLine] = useState(0);
@@ -282,12 +285,25 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
       {/* Bottom: Agent status bar */}
       <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
 
-      {/* Bottom-left corner decoration */}
-      <div className="absolute bottom-16 left-3 pointer-events-none">
-        <div className="font-pixel text-[8px] text-cyan-500/15 tracking-widest leading-tight">
-          {'>'} SYS.INIT<br/>
-          {'>'} NET.LINK<br/>
-          {'>'} HUD.READY
+      {/* Bottom-left: Settings gear + corner decoration */}
+      <div className="absolute bottom-16 left-3">
+        <button
+          onClick={() => navigate(location.pathname === '/city/settings' ? '/city' : '/city/settings')}
+          className="pointer-events-auto mb-2 relative bg-black/80 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-2.5 py-1.5 hover:border-cyan-400/60 transition-all group"
+        >
+          <HudCorner position="tl" />
+          <HudCorner position="br" />
+          <svg className="w-3.5 h-3.5 text-cyan-500/60 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 4px rgba(6,182,212,0.3))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+        <div className="pointer-events-none">
+          <div className="font-pixel text-[8px] text-cyan-500/15 tracking-widest leading-tight">
+            {'>'} SYS.INIT<br/>
+            {'>'} NET.LINK<br/>
+            {'>'} HUD.READY
+          </div>
         </div>
       </div>
     </div>

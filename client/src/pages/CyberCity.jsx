@@ -1,15 +1,23 @@
 import { useCallback, useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
+import useCityAudio from '../hooks/useCityAudio';
 import * as api from '../services/api';
 import CityScene from '../components/city/CityScene';
 import CityHud from '../components/city/CityHud';
 import CityScanlines from '../components/city/CityScanlines';
+import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
+import CitySettingsPanel from '../components/city/CitySettingsPanel';
 
-export default function CyberCity() {
+function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, loading, connected } = useCityData();
+  const { settings } = useCitySettingsContext();
+  const { playSfx } = useCityAudio(settings);
   const navigate = useNavigate();
+  const location = useLocation();
   const [productivityData, setProductivityData] = useState(null);
+
+  const showSettings = location.pathname === '/city/settings';
 
   // Fetch productivity data for HUD vitals and billboards
   useEffect(() => {
@@ -44,6 +52,8 @@ export default function CyberCity() {
         onBuildingClick={handleBuildingClick}
         cosStatus={cosStatus}
         productivityData={productivityData}
+        settings={settings}
+        playSfx={playSfx}
       />
       <CityHud
         cosStatus={cosStatus}
@@ -54,7 +64,16 @@ export default function CyberCity() {
         apps={apps}
         productivityData={productivityData}
       />
-      <CityScanlines />
+      <CityScanlines settings={settings} />
+      {showSettings && <CitySettingsPanel />}
     </div>
+  );
+}
+
+export default function CyberCity() {
+  return (
+    <CitySettingsProvider>
+      <CyberCityInner />
+    </CitySettingsProvider>
   );
 }

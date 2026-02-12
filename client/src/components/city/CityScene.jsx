@@ -20,7 +20,7 @@ import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
 import CityEffects from './CityEffects';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData, settings, playSfx }) {
   const [positions, setPositions] = useState(null);
 
   const handlePositionsReady = useCallback((pos) => {
@@ -30,27 +30,30 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
   const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online').length;
   const totalCount = apps.filter(a => !a.archived).length;
 
+  const dpr = settings?.dpr || [1, 1.5];
+
   return (
     <Canvas
       camera={{ position: [0, 25, 45], fov: 50 }}
-      dpr={[1, 1.5]}
+      dpr={dpr}
       shadows={false}
       style={{ background: '#030308' }}
       gl={{ antialias: true }}
     >
-      <fog attach="fog" args={['#030308', 30, 130]} />
+      <fogExp2 attach="fog" args={['#030308', 0.018]} />
       <CityLights />
       <CityStarfield />
-      <CityShootingStars />
+      <CityShootingStars playSfx={playSfx} />
       <CityCelestial />
       <CitySkyline />
-      <CityGround />
+      <CityGround settings={settings} />
       <CityRoads positions={positions} />
       <BuildingCluster
         apps={apps}
         agentMap={agentMap}
         onBuildingClick={onBuildingClick}
         onPositionsReady={handlePositionsReady}
+        playSfx={playSfx}
       />
       <CityDataStreams positions={positions} />
       <CityTraffic positions={positions} />
@@ -62,11 +65,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       />
       <CityVolumetricLights positions={positions} />
       <CityNeonSigns positions={positions} />
-      <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} />
+      <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
       <CityDataRain />
       <CityEmbers />
-      <CityParticles />
-      <CityEffects />
+      <CityParticles settings={settings} />
+      <CityEffects settings={settings} />
       <OrbitControls
         maxPolarAngle={Math.PI / 2.2}
         minDistance={5}

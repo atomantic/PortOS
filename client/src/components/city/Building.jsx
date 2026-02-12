@@ -267,9 +267,10 @@ function NeonEdgeStrip({ position, height, color, delay }) {
   );
 }
 
-export default function Building({ app, position, agentCount, onClick }) {
+export default function Building({ app, position, agentCount, onClick, playSfx }) {
   const meshRef = useRef();
   const glowRef = useRef();
+  const haloRef = useRef();
   const [hovered, setHovered] = useState(false);
 
   const height = getBuildingHeight(app);
@@ -312,6 +313,13 @@ export default function Building({ app, position, agentCount, onClick }) {
     if (glowRef.current) {
       glowRef.current.material.opacity = 0.25 + (isOnline ? Math.sin(t * 1.5) * 0.1 : 0) + (hovered ? 0.2 : 0);
     }
+
+    // Glow halo wireframe pulse
+    if (haloRef.current) {
+      haloRef.current.material.opacity = hovered
+        ? 0.15 + Math.sin(t * 8) * 0.1
+        : 0.05 + Math.sin(t * 1.5 + seed) * 0.03;
+    }
   });
 
   return (
@@ -320,8 +328,8 @@ export default function Building({ app, position, agentCount, onClick }) {
       <mesh
         ref={meshRef}
         position={[0, height / 2, 0]}
-        onClick={onClick}
-        onPointerEnter={() => setHovered(true)}
+        onClick={() => { playSfx?.('buildingClick'); onClick?.(); }}
+        onPointerEnter={() => { setHovered(true); playSfx?.('buildingHover'); }}
         onPointerLeave={() => setHovered(false)}
       >
         <boxGeometry args={[width, height, depth]} />
@@ -344,15 +352,37 @@ export default function Building({ app, position, agentCount, onClick }) {
         />
       </lineSegments>
 
-      {/* Neon accent strip at building top */}
+      {/* Reflective glass roof cap on online buildings */}
       <mesh position={[0, height + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[width + 0.1, depth + 0.1]} />
-        <meshBasicMaterial
-          color={edgeColor}
-          transparent
-          opacity={app.archived ? 0.2 : 0.5}
-        />
+        {isOnline ? (
+          <meshPhysicalMaterial
+            color={edgeColor}
+            roughness={0.1}
+            metalness={0.8}
+            transparent
+            opacity={0.7}
+          />
+        ) : (
+          <meshBasicMaterial
+            color={edgeColor}
+            transparent
+            opacity={app.archived ? 0.2 : 0.5}
+          />
+        )}
       </mesh>
+
+      {/* Glow halo wireframe - slightly larger than building */}
+      {!app.archived && (
+        <lineSegments ref={haloRef} position={[0, height / 2, 0]}>
+          <edgesGeometry args={[new THREE.BoxGeometry(width + 0.15, height + 0.15, depth + 0.15)]} />
+          <lineBasicMaterial
+            color={accentColor}
+            transparent
+            opacity={0.05}
+          />
+        </lineSegments>
+      )}
 
       {/* Vertical neon edge strips on corners */}
       {!app.archived && (

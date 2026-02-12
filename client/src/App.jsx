@@ -64,6 +64,7 @@ export default function App() {
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="city" element={<CyberCity />} />
+          <Route path="city/settings" element={<CyberCity />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />

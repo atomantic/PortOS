@@ -34,7 +34,7 @@ const RAIN_FRAG = `
 `;
 
 // Lightning flash - brief bright flash across the scene
-function LightningFlash({ active }) {
+function LightningFlash({ active, playSfx }) {
   const lightRef = useRef();
   const flashState = useRef({ nextFlash: 0, intensity: 0, flickerCount: 0 });
 
@@ -51,6 +51,7 @@ function LightningFlash({ active }) {
       state.intensity = 2.0 + Math.random() * 3.0;
       state.flickerCount = 2 + Math.floor(Math.random() * 3);
       state.nextFlash = t + 8 + Math.random() * 12;
+      playSfx?.('lightning');
     }
 
     if (state.intensity > 0) {
@@ -78,7 +79,7 @@ function LightningFlash({ active }) {
   );
 }
 
-export default function CityWeather({ stoppedCount = 0, totalCount = 1 }) {
+export default function CityWeather({ stoppedCount = 0, totalCount = 1, playSfx }) {
   const pointsRef = useRef();
   const matRef = useRef();
 
@@ -132,7 +133,7 @@ export default function CityWeather({ stoppedCount = 0, totalCount = 1 }) {
           depthWrite={false}
         />
       </points>
-      {showLightning && <LightningFlash active={showLightning} />}
+      {showLightning && <LightningFlash active={showLightning} playSfx={playSfx} />}
     </group>
   );
 }

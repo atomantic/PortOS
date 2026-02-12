@@ -25,7 +25,7 @@ const TRAIL_FRAG = `
 `;
 
 // A single shooting star with glowing head and fading trail
-function ShootingStar({ index }) {
+function ShootingStar({ index, playSfx }) {
   const groupRef = useRef();
   const headRef = useRef();
   const trailRef = useRef();
@@ -69,6 +69,7 @@ function ShootingStar({ index }) {
         s.active = true;
         s.progress = 0;
         s.speed = 0.6 + Math.random() * 0.8;
+        playSfx?.('shootingStar');
         s.length = 6 + Math.random() * 6;
 
         // Random start position in upper sky hemisphere
@@ -184,13 +185,13 @@ function ShootingStar({ index }) {
   );
 }
 
-export default function CityShootingStars() {
+export default function CityShootingStars({ playSfx }) {
   return (
     <group>
       {/* 3 potential shooting stars, staggered spawn times */}
-      <ShootingStar index={0} />
-      <ShootingStar index={1} />
-      <ShootingStar index={2} />
+      <ShootingStar index={0} playSfx={playSfx} />
+      <ShootingStar index={1} playSfx={playSfx} />
+      <ShootingStar index={2} playSfx={playSfx} />
     </group>
   );
 }

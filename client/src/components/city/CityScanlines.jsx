@@ -1,16 +1,44 @@
 import { useState, useEffect } from 'react';
 
 // CSS-based CRT scanline + vignette overlay for cyberpunk atmosphere
-export default function CityScanlines() {
+export default function CityScanlines({ settings }) {
   const [flicker, setFlicker] = useState(1);
+  const enabled = settings?.scanlineOverlay ?? true;
 
   // Random subtle brightness flicker like a CRT monitor
   useEffect(() => {
+    if (!enabled) return;
     const interval = setInterval(() => {
       setFlicker(0.97 + Math.random() * 0.03);
     }, 150);
     return () => clearInterval(interval);
-  }, []);
+  }, [enabled]);
+
+  if (!enabled) {
+    // Still render vignette and edge glow even when scanlines are off
+    return (
+      <>
+        <div
+          className="absolute inset-0 pointer-events-none z-10"
+          style={{
+            background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.5) 100%)',
+          }}
+        />
+        <div
+          className="absolute top-0 left-0 right-0 h-px pointer-events-none z-10"
+          style={{
+            background: 'linear-gradient(90deg, transparent, rgba(6,182,212,0.15) 30%, rgba(6,182,212,0.3) 50%, rgba(6,182,212,0.15) 70%, transparent)',
+          }}
+        />
+        <div
+          className="absolute bottom-0 left-0 right-0 h-px pointer-events-none z-10"
+          style={{
+            background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15) 30%, rgba(139,92,246,0.3) 50%, rgba(139,92,246,0.15) 70%, transparent)',
+          }}
+        />
+      </>
+    );
+  }
 
   return (
     <>

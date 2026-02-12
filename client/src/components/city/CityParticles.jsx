@@ -1,11 +1,14 @@
 import { Sparkles } from '@react-three/drei';
 
-export default function CityParticles() {
+export default function CityParticles({ settings }) {
+  const density = settings?.particleDensity ?? 1.0;
+  const scale = (base) => Math.max(1, Math.round(base * density));
+
   return (
     <>
       {/* Cyan ambient sparkles - main atmosphere */}
       <Sparkles
-        count={120}
+        count={scale(120)}
         scale={[50, 20, 50]}
         size={1.8}
         speed={0.3}
@@ -14,7 +17,7 @@ export default function CityParticles() {
       />
       {/* Pink/magenta secondary sparkles */}
       <Sparkles
-        count={50}
+        count={scale(50)}
         scale={[40, 15, 40]}
         size={1.2}
         speed={0.25}
@@ -23,7 +26,7 @@ export default function CityParticles() {
       />
       {/* Purple deep sparkles */}
       <Sparkles
-        count={35}
+        count={scale(35)}
         scale={[45, 15, 45]}
         size={1}
         speed={0.2}
@@ -32,7 +35,7 @@ export default function CityParticles() {
       />
       {/* Orange warm dust near ground */}
       <Sparkles
-        count={25}
+        count={scale(25)}
         scale={[35, 5, 35]}
         size={0.8}
         speed={0.15}
@@ -42,7 +45,7 @@ export default function CityParticles() {
       />
       {/* Blue high-altitude sparkles */}
       <Sparkles
-        count={30}
+        count={scale(30)}
         scale={[50, 8, 50]}
         size={0.6}
         speed={0.1}
