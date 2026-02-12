@@ -29,10 +29,19 @@ export const agentAvatarSchema = z.object({
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional()
 }).optional();
 
-// Agent AI config (preferred provider/model for content generation)
-export const agentAiConfigSchema = z.object({
+// Per-function AI provider/model override
+const aiFunctionConfigSchema = z.object({
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional()
+});
+
+// Agent AI config (preferred provider/model, with optional per-function overrides)
+export const agentAiConfigSchema = z.object({
+  providerId: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  content: aiFunctionConfigSchema.optional(),
+  engagement: aiFunctionConfigSchema.optional(),
+  challenge: aiFunctionConfigSchema.optional()
 }).optional();
 
 // Full agent schema

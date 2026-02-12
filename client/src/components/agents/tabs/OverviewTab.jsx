@@ -76,8 +76,10 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const selectedProvider = providers.find(p => p.id === selectedProviderId);
   const availableModels = selectedProvider?.models || [];
-  const aiConfigProvider = providers.find(p => p.id === formData?.aiConfig?.providerId);
-  const aiConfigModels = aiConfigProvider?.models || [];
+  const getModelsForProvider = (providerId) => {
+    const p = providers.find(pr => pr.id === providerId);
+    return p?.models || [];
+  };
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -119,9 +121,24 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     toast.success(`Generated: ${generated.name || 'personality'}`);
   };
 
+  const buildAiConfig = (config) => {
+    if (!config) return undefined;
+    const cleaned = {};
+    if (config.providerId) cleaned.providerId = config.providerId;
+    if (config.model) cleaned.model = config.model;
+    const fnKeys = ['content', 'engagement', 'challenge'];
+    for (const key of fnKeys) {
+      if (config[key]?.providerId) {
+        cleaned[key] = { providerId: config[key].providerId };
+        if (config[key].model) cleaned[key].model = config[key].model;
+      }
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
-    const aiConfig = formData.aiConfig?.providerId ? formData.aiConfig : undefined;
+    const aiConfig = buildAiConfig(formData.aiConfig);
     const submitData = {
       ...formData,
       personality: {
@@ -372,68 +389,84 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
         </form>
       </div>
 
-      {/* Default AI Provider Section */}
+      {/* Per-Function AI Provider Section */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
           <Cpu size={16} className="text-port-accent" />
-          <h3 className="text-md font-semibold text-white">Default AI Provider</h3>
+          <h3 className="text-md font-semibold text-white">AI Providers</h3>
         </div>
         <p className="text-xs text-gray-500 mb-3">
-          Choose which AI provider and model this agent uses for content generation (posts, comments, replies). Leave as "System Default" to use the globally active provider.
+          Choose AI providers for each function. "System Default" uses the globally active provider.
         </p>
-        <div className="flex items-end gap-3">
-          <div className="flex-1">
-            <label className="block text-xs text-gray-400 mb-1">Provider</label>
-            <select
-              value={formData.aiConfig?.providerId || ''}
-              onChange={(e) => setFormData(prev => ({
-                ...prev,
-                aiConfig: { ...prev.aiConfig, providerId: e.target.value || undefined, model: undefined }
-              }))}
-              className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-            >
-              <option value="">System Default</option>
-              {providers.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex-1">
-            <label className="block text-xs text-gray-400 mb-1">Model</label>
-            <select
-              value={formData.aiConfig?.model || ''}
-              onChange={(e) => setFormData(prev => ({
-                ...prev,
-                aiConfig: { ...prev.aiConfig, model: e.target.value || undefined }
-              }))}
-              disabled={!formData.aiConfig?.providerId}
-              className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
-            >
-              <option value="">Default</option>
-              {aiConfigModels.map(m => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              const aiConfig = formData.aiConfig?.providerId ? formData.aiConfig : undefined;
-              await api.updateAgentPersonality(agentId, { aiConfig });
-              toast.success(aiConfig ? 'AI provider saved' : 'Reset to system default');
-              onAgentUpdate?.();
-            }}
-            className="px-4 py-1.5 bg-port-success text-white rounded hover:bg-port-success/80 text-sm whitespace-nowrap"
-          >
-            Save
-          </button>
+        <div className="space-y-3">
+          {[
+            { key: 'content', label: 'Content Generation', desc: 'Posts, comments, replies' },
+            { key: 'engagement', label: 'Engagement', desc: 'Autonomous voting & commenting' },
+            { key: 'challenge', label: 'Challenge Solving', desc: 'Verification challenges' }
+          ].map(({ key, label, desc }) => {
+            const fnConfig = formData.aiConfig?.[key] || {};
+            const fnModels = getModelsForProvider(fnConfig.providerId);
+            return (
+              <div key={key} className="flex items-end gap-3">
+                <div className="w-40 shrink-0 pb-1">
+                  <div className="text-sm text-white">{label}</div>
+                  <div className="text-[10px] text-gray-500">{desc}</div>
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs text-gray-400 mb-1">Provider</label>
+                  <select
+                    value={fnConfig.providerId || ''}
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
+                      aiConfig: {
+                        ...prev.aiConfig,
+                        [key]: { ...prev.aiConfig?.[key], providerId: e.target.value || undefined, model: undefined }
+                      }
+                    }))}
+                    className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+                  >
+                    <option value="">System Default</option>
+                    {providers.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs text-gray-400 mb-1">Model</label>
+                  <select
+                    value={fnConfig.model || ''}
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
+                      aiConfig: {
+                        ...prev.aiConfig,
+                        [key]: { ...prev.aiConfig?.[key], model: e.target.value || undefined }
+                      }
+                    }))}
+                    disabled={!fnConfig.providerId}
+                    className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
+                  >
+                    <option value="">Default</option>
+                    {fnModels.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            );
+          })}
         </div>
-        {formData.aiConfig?.providerId && (
-          <p className="text-xs text-port-accent mt-2">
-            Using: {aiConfigProvider?.name || formData.aiConfig.providerId}
-            {formData.aiConfig.model && ` / ${formData.aiConfig.model}`}
-          </p>
-        )}
+        <button
+          type="button"
+          onClick={async () => {
+            const aiConfig = buildAiConfig(formData.aiConfig);
+            await api.updateAgentPersonality(agentId, { aiConfig });
+            toast.success(aiConfig ? 'AI providers saved' : 'Reset to system defaults');
+            onAgentUpdate?.();
+          }}
+          className="mt-3 px-4 py-1.5 bg-port-success text-white rounded hover:bg-port-success/80 text-sm"
+        >
+          Save AI Config
+        </button>
       </div>
 
       {/* Accounts Section */}

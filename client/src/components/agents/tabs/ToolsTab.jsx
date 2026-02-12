@@ -111,7 +111,8 @@ export default function ToolsTab({ agentId, agent }) {
   const handleGeneratePost = async () => {
     if (!agentId || !selectedAccountId) return;
     setGenerating(true);
-    const generated = await api.generateAgentPost(agentId, selectedAccountId, selectedSubmolt, agent?.aiConfig?.providerId, agent?.aiConfig?.model);
+    const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
+    const generated = await api.generateAgentPost(agentId, selectedAccountId, selectedSubmolt, contentConfig?.providerId, contentConfig?.model);
     setPostTitle(generated.title);
     setPostContent(generated.content);
     setGenerating(false);
@@ -163,9 +164,10 @@ export default function ToolsTab({ agentId, agent }) {
   const handleGenerateComment = async () => {
     if (!selectedPost) return;
     setGeneratingComment(true);
+    const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
     const generated = await api.generateAgentComment(
       agentId, selectedAccountId, selectedPost.id, replyToId || undefined,
-      agent?.aiConfig?.providerId, agent?.aiConfig?.model
+      contentConfig?.providerId, contentConfig?.model
     );
     setCommentContent(generated.content);
     setGeneratingComment(false);

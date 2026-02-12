@@ -102,7 +102,7 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
   console.log(`🛠️ POST /api/agents/tools/publish-post agent=${data.agentId} submolt=${data.submolt}`);
 
   const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
-  client.aiConfig = agent.aiConfig;
+  client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
   const result = await client.createPost(data.submolt, data.title, data.content);
   const post = result?.post || result;
   const postId = post?.id || post?._id || post?.post_id;
@@ -132,7 +132,7 @@ router.post('/publish-comment', asyncHandler(async (req, res) => {
   console.log(`🛠️ POST /api/agents/tools/publish-comment agent=${data.agentId} post=${data.postId}`);
 
   const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
-  client.aiConfig = agent.aiConfig;
+  client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
 
   let result;
   if (data.parentId) {
@@ -209,7 +209,8 @@ router.post('/engage', asyncHandler(async (req, res) => {
       const rateCheck = checkRateLimit(client.apiKey, 'comment');
       if (!rateCheck.allowed) break;
 
-      const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
+      const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+      const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, engagementConfig?.providerId, engagementConfig?.model);
       const result = await client.createComment(opportunity.post.id, generated.content);
 
       comments.push({
@@ -483,7 +484,8 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
       if (!suspended && replied.length < data.maxReplies) {
         const rateCheck = checkRateLimit(client.apiKey, 'comment');
         if (rateCheck.allowed) {
-          const generated = await generateReply(agent, post, comment, null, agent.aiConfig?.providerId, agent.aiConfig?.model);
+          const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+          const generated = await generateReply(agent, post, comment, null, engagementConfig?.providerId, engagementConfig?.model);
           const replyResult = await client.replyToComment(postId, comment.id, generated.content).catch(e => {
             if (isAccountSuspended(e)) suspended = true;
             else console.log(`👀 Reply failed on post ${postId}: ${e.message}`);
