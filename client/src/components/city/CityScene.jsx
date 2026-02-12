@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
 import CityGround from './CityGround';
 import CityLights from './CityLights';
 import CityParticles from './CityParticles';
