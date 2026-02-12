@@ -13,6 +13,11 @@ import CityRoads from './CityRoads';
 import CityWeather from './CityWeather';
 import CityBillboards from './CityBillboards';
 import CityShootingStars from './CityShootingStars';
+import CityVolumetricLights from './CityVolumetricLights';
+import CitySkyline from './CitySkyline';
+import CityDataRain from './CityDataRain';
+import CityNeonSigns from './CityNeonSigns';
+import CityEmbers from './CityEmbers';
 
 export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData }) {
   const [positions, setPositions] = useState(null);
@@ -36,6 +41,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityStarfield />
       <CityShootingStars />
       <CityCelestial />
+      <CitySkyline />
       <CityGround />
       <CityRoads positions={positions} />
       <BuildingCluster
@@ -52,12 +58,16 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         cosStatus={cosStatus}
         productivityData={productivityData}
       />
+      <CityVolumetricLights positions={positions} />
+      <CityNeonSigns positions={positions} />
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} />
+      <CityDataRain />
+      <CityEmbers />
       <CityParticles />
       <OrbitControls
         maxPolarAngle={Math.PI / 2.2}
         minDistance={5}
-        maxDistance={60}
+        maxDistance={80}
         enableDamping
         dampingFactor={0.05}
       />

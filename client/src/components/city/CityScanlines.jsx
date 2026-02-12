@@ -1,48 +1,54 @@
-import { useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 // CSS-based CRT scanline + vignette overlay for cyberpunk atmosphere
 export default function CityScanlines() {
-  const canvasRef = useRef(null);
+  const [flicker, setFlicker] = useState(1);
 
+  // Random subtle brightness flicker like a CRT monitor
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    canvas.width = 4;
-    canvas.height = 4;
-
-    // Draw a tiny 4x4 scanline pattern (repeating)
-    ctx.clearRect(0, 0, 4, 4);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.06)';
-    ctx.fillRect(0, 0, 4, 1);
-    ctx.fillRect(0, 2, 4, 1);
+    const interval = setInterval(() => {
+      setFlicker(0.97 + Math.random() * 0.03);
+    }, 150);
+    return () => clearInterval(interval);
   }, []);
 
   return (
     <>
-      {/* Scanline pattern (generated from hidden canvas) */}
-      <canvas ref={canvasRef} className="hidden" />
       {/* Scanline overlay */}
       <div
         className="absolute inset-0 pointer-events-none z-10"
         style={{
-          backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.04) 0px, rgba(0,0,0,0.04) 1px, transparent 1px, transparent 3px)',
+          backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.05) 0px, rgba(0,0,0,0.05) 1px, transparent 1px, transparent 3px)',
           backgroundSize: '100% 3px',
           mixBlendMode: 'multiply',
+          opacity: flicker,
         }}
       />
-      {/* Vignette effect */}
+      {/* Vignette effect - stronger */}
       <div
         className="absolute inset-0 pointer-events-none z-10"
         style={{
-          background: 'radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%)',
+          background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.5) 100%)',
         }}
       />
-      {/* Subtle chromatic aberration glow at edges */}
+      {/* Chromatic aberration glow at edges */}
       <div
-        className="absolute inset-0 pointer-events-none z-10 opacity-[0.015]"
+        className="absolute inset-0 pointer-events-none z-10 opacity-[0.025]"
         style={{
-          boxShadow: 'inset 0 0 100px 20px rgba(6, 182, 212, 0.3), inset 0 0 60px 10px rgba(139, 92, 246, 0.2)',
+          boxShadow: 'inset 0 0 120px 30px rgba(6, 182, 212, 0.4), inset 0 0 80px 15px rgba(139, 92, 246, 0.3), inset 0 0 40px 10px rgba(236, 72, 153, 0.15)',
+        }}
+      />
+      {/* Edge glow lines - top and bottom neon strips */}
+      <div
+        className="absolute top-0 left-0 right-0 h-px pointer-events-none z-10"
+        style={{
+          background: 'linear-gradient(90deg, transparent, rgba(6,182,212,0.15) 30%, rgba(6,182,212,0.3) 50%, rgba(6,182,212,0.15) 70%, transparent)',
+        }}
+      />
+      <div
+        className="absolute bottom-0 left-0 right-0 h-px pointer-events-none z-10"
+        style={{
+          background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15) 30%, rgba(139,92,246,0.3) 50%, rgba(139,92,246,0.15) 70%, transparent)',
         }}
       />
     </>

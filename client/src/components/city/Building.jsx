@@ -112,12 +112,15 @@ const createWindowTexture = (accentColor, width, height, seed) => {
   for (let r = 1; r < rowCount - 1; r++) {
     for (let c = 1; c < cols - 1; c++) {
       if (r % 3 === 0 || c % 3 === 0) continue;
-      if (rand() > 0.6) {
+      if (rand() > 0.5) {
         const bright = rand();
-        if (bright > 0.8) {
-          ctx.fillStyle = accentColor + '50';
-        } else if (bright > 0.4) {
-          ctx.fillStyle = accentColor + '25';
+        if (bright > 0.85) {
+          // Bright window - full accent
+          ctx.fillStyle = accentColor + '70';
+        } else if (bright > 0.6) {
+          ctx.fillStyle = accentColor + '40';
+        } else if (bright > 0.3) {
+          ctx.fillStyle = accentColor + '20';
         } else {
           ctx.fillStyle = '#0a0f1e';
         }
@@ -140,11 +143,20 @@ const createWindowTexture = (accentColor, width, height, seed) => {
         ctx.fillStyle = accentColor;
         ctx.fillRect((startCol + c) * px, (startRow + r) * px, px, px);
         // Slight inner highlight for pixel art depth
-        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
         ctx.fillRect((startCol + c) * px + 1, (startRow + r) * px + 1, px - 3, px - 3);
       }
     }
   }
+
+  // Draw vertical neon accent strips on edges of the face
+  ctx.fillStyle = accentColor + '30';
+  ctx.fillRect(0, 0, 2, canvas.height);
+  ctx.fillRect(canvas.width - 2, 0, 2, canvas.height);
+
+  // Horizontal accent line at top
+  ctx.fillStyle = accentColor + '60';
+  ctx.fillRect(0, 0, canvas.width, 2);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.NearestFilter;
@@ -153,6 +165,107 @@ const createWindowTexture = (accentColor, width, height, seed) => {
   texture.wrapT = THREE.RepeatWrapping;
   return texture;
 };
+
+// Rooftop antenna component
+function RooftopAntenna({ height, color, accentColor, seed, width }) {
+  const antennaRef = useRef();
+  const blinkRef = useRef();
+  const type = seed % 4;
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+    if (blinkRef.current) {
+      // Blinking light on antenna tip
+      blinkRef.current.material.opacity = (Math.sin(t * 4 + seed) > 0.3) ? 0.9 : 0.1;
+    }
+    if (antennaRef.current && type === 2) {
+      // Slow rotation for dish type
+      antennaRef.current.rotation.y = t * 0.3 + seed;
+    }
+  });
+
+  const antennaHeight = 0.6 + (seed % 30) / 30 * 0.8;
+
+  return (
+    <group position={[0, height, 0]}>
+      {/* Main antenna mast */}
+      <mesh position={[0, antennaHeight / 2, 0]}>
+        <cylinderGeometry args={[0.015, 0.025, antennaHeight, 4]} />
+        <meshBasicMaterial color={color} transparent opacity={0.7} />
+      </mesh>
+
+      {/* Blinking tip light */}
+      <mesh ref={blinkRef} position={[0, antennaHeight + 0.05, 0]}>
+        <sphereGeometry args={[0.04, 6, 6]} />
+        <meshBasicMaterial
+          color={seed % 2 === 0 ? '#ef4444' : accentColor}
+          transparent
+          opacity={0.9}
+        />
+      </mesh>
+      <pointLight
+        position={[0, antennaHeight + 0.05, 0]}
+        color={seed % 2 === 0 ? '#ef4444' : accentColor}
+        intensity={0.15}
+        distance={3}
+        decay={2}
+      />
+
+      {/* Type-specific details */}
+      {type === 1 && (
+        // Dish antenna
+        <group ref={antennaRef} position={[0, antennaHeight * 0.7, 0]}>
+          <mesh rotation={[0.3, 0, 0]}>
+            <ringGeometry args={[0.05, 0.18, 8]} />
+            <meshBasicMaterial color={accentColor} transparent opacity={0.4} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      )}
+      {type === 2 && (
+        // Array of small elements
+        <group ref={antennaRef} position={[0, antennaHeight * 0.6, 0]}>
+          {[0, 1, 2].map(i => (
+            <mesh key={i} position={[0, i * 0.12, 0]} rotation={[Math.PI / 2, 0, (i * Math.PI) / 3]}>
+              <planeGeometry args={[0.2, 0.03]} />
+              <meshBasicMaterial color={accentColor} transparent opacity={0.5} side={THREE.DoubleSide} />
+            </mesh>
+          ))}
+        </group>
+      )}
+      {type === 3 && (
+        // Cross-bar antenna
+        <>
+          <mesh position={[0, antennaHeight * 0.75, 0]}>
+            <boxGeometry args={[0.3, 0.015, 0.015]} />
+            <meshBasicMaterial color={color} transparent opacity={0.6} />
+          </mesh>
+          <mesh position={[0, antennaHeight * 0.55, 0]}>
+            <boxGeometry args={[0.2, 0.015, 0.015]} />
+            <meshBasicMaterial color={color} transparent opacity={0.5} />
+          </mesh>
+        </>
+      )}
+    </group>
+  );
+}
+
+// Vertical neon strip on building edge
+function NeonEdgeStrip({ position, height, color, delay }) {
+  const ref = useRef();
+
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.getElapsedTime();
+    ref.current.material.opacity = 0.3 + Math.sin(t * 1.2 + delay) * 0.2;
+  });
+
+  return (
+    <mesh ref={ref} position={position}>
+      <boxGeometry args={[0.03, height, 0.03]} />
+      <meshBasicMaterial color={color} transparent opacity={0.4} />
+    </mesh>
+  );
+}
 
 export default function Building({ app, position, agentCount, onClick }) {
   const meshRef = useRef();
@@ -191,13 +304,13 @@ export default function Building({ app, position, agentCount, onClick }) {
     if (!meshRef.current) return;
     const t = clock.getElapsedTime();
 
-    const baseIntensity = isOnline ? 0.2 : 0.05;
-    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.08 : 0;
-    const hoverBoost = hovered ? 0.25 : 0;
+    const baseIntensity = isOnline ? 0.25 : 0.08;
+    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.1 : 0;
+    const hoverBoost = hovered ? 0.3 : 0;
     meshRef.current.material.emissiveIntensity = baseIntensity + pulse + hoverBoost;
 
     if (glowRef.current) {
-      glowRef.current.material.opacity = 0.2 + (isOnline ? Math.sin(t * 1.5) * 0.08 : 0) + (hovered ? 0.15 : 0);
+      glowRef.current.material.opacity = 0.25 + (isOnline ? Math.sin(t * 1.5) * 0.1 : 0) + (hovered ? 0.2 : 0);
     }
   });
 
@@ -215,7 +328,7 @@ export default function Building({ app, position, agentCount, onClick }) {
         <meshStandardMaterial
           color={CITY_COLORS.buildingBody}
           emissive={edgeColor}
-          emissiveIntensity={0.1}
+          emissiveIntensity={0.15}
           map={windowTexture}
           transparent
           opacity={app.archived ? 0.75 : 0.95}
@@ -237,9 +350,19 @@ export default function Building({ app, position, agentCount, onClick }) {
         <meshBasicMaterial
           color={edgeColor}
           transparent
-          opacity={app.archived ? 0.2 : 0.4}
+          opacity={app.archived ? 0.2 : 0.5}
         />
       </mesh>
+
+      {/* Vertical neon edge strips on corners */}
+      {!app.archived && (
+        <>
+          <NeonEdgeStrip position={[width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={0} />
+          <NeonEdgeStrip position={[-width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={1} />
+          <NeonEdgeStrip position={[width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={2} />
+          <NeonEdgeStrip position={[-width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={3} />
+        </>
+      )}
 
       {/* Building name on front face - pixel font */}
       <Text
@@ -282,13 +405,13 @@ export default function Building({ app, position, agentCount, onClick }) {
         {displayName}
       </Text>
 
-      {/* Base glow circle */}
+      {/* Base glow circle - wider and brighter */}
       <mesh ref={glowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-        <circleGeometry args={[1.5, 32]} />
+        <circleGeometry args={[1.8, 32]} />
         <meshBasicMaterial
           color={edgeColor}
           transparent
-          opacity={0.2}
+          opacity={0.25}
           side={THREE.DoubleSide}
         />
       </mesh>
@@ -305,6 +428,17 @@ export default function Building({ app, position, agentCount, onClick }) {
             <meshBasicMaterial color={accentColor} transparent opacity={0.5} />
           </mesh>
         </>
+      )}
+
+      {/* Rooftop antenna */}
+      {!app.archived && (
+        <RooftopAntenna
+          height={height}
+          color={edgeColor}
+          accentColor={accentColor}
+          seed={seed}
+          width={width}
+        />
       )}
 
       {/* Floating hologram above building */}
