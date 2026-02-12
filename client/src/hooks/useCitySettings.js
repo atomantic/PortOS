@@ -8,6 +8,8 @@ const QUALITY_PRESETS = {
     reflectionsEnabled: false, chromaticAberration: false,
     filmGrain: false, colorGrading: false,
     particleDensity: 0.5, scanlineOverlay: false,
+    ambientBrightness: 1.0, fogDensity: 0.008,
+    neonBrightness: 1.0,
     dpr: [1, 1],
   },
   medium: {
@@ -15,6 +17,8 @@ const QUALITY_PRESETS = {
     reflectionsEnabled: true, chromaticAberration: false,
     filmGrain: false, colorGrading: true,
     particleDensity: 0.75, scanlineOverlay: true,
+    ambientBrightness: 1.0, fogDensity: 0.01,
+    neonBrightness: 1.0,
     dpr: [1, 1.25],
   },
   high: {
@@ -22,6 +26,8 @@ const QUALITY_PRESETS = {
     reflectionsEnabled: true, chromaticAberration: true,
     filmGrain: true, colorGrading: true,
     particleDensity: 1.0, scanlineOverlay: true,
+    ambientBrightness: 1.2, fogDensity: 0.008,
+    neonBrightness: 1.2,
     dpr: [1, 1.5],
   },
   ultra: {
@@ -29,6 +35,8 @@ const QUALITY_PRESETS = {
     reflectionsEnabled: true, chromaticAberration: true,
     filmGrain: true, colorGrading: true,
     particleDensity: 1.5, scanlineOverlay: true,
+    ambientBrightness: 1.5, fogDensity: 0.006,
+    neonBrightness: 1.5,
     dpr: [1, 2],
   },
 };

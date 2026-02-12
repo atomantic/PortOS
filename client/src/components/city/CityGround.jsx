@@ -35,7 +35,7 @@ function RollingFog() {
   useFrame(({ clock }) => {
     if (!ref.current) return;
     const t = clock.getElapsedTime();
-    ref.current.material.opacity = 0.012 + Math.sin(t * 0.15) * 0.008;
+    ref.current.material.opacity = 0.025 + Math.sin(t * 0.15) * 0.012;
     ref.current.position.z = Math.sin(t * 0.05) * 3;
   });
 
@@ -81,9 +81,9 @@ export default function CityGround({ settings }) {
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
           <planeGeometry args={[120, 120]} />
           <meshStandardMaterial
-            color="#050510"
-            metalness={0.9}
-            roughness={0.15}
+            color="#0a0a20"
+            metalness={0.85}
+            roughness={0.2}
             side={THREE.DoubleSide}
           />
         </mesh>
@@ -97,8 +97,8 @@ export default function CityGround({ settings }) {
         sectionColor={CITY_COLORS.ground}
         cellThickness={0.4}
         sectionThickness={1}
-        fadeDistance={50}
-        fadeStrength={1}
+        fadeDistance={70}
+        fadeStrength={0.8}
         position={[0, -0.01, 0]}
       />
 
@@ -113,7 +113,7 @@ export default function CityGround({ settings }) {
         <meshBasicMaterial
           color="#06b6d4"
           transparent
-          opacity={0.015}
+          opacity={0.03}
           blending={THREE.AdditiveBlending}
           side={THREE.DoubleSide}
         />

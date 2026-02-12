@@ -4,7 +4,7 @@ import { computeCityLayout } from './cityLayout';
 import { DISTRICT_PARAMS, PIXEL_FONT_URL } from './cityConstants';
 import Borough from './Borough';
 
-export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady, playSfx }) {
+export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady, playSfx, settings }) {
   const positions = useMemo(() => computeCityLayout(apps), [apps]);
 
   // Notify parent when positions change (for data streams, roads, traffic)
@@ -36,6 +36,7 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPos
             agentMap={agentMap}
             onBuildingClick={onBuildingClick}
             playSfx={playSfx}
+            neonBrightness={settings?.neonBrightness ?? 1.2}
           />
         );
       })}

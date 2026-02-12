@@ -112,24 +112,24 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       {/* Billboard background panel (front face only) */}
       <mesh>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial color="#020208" transparent opacity={0.7} />
+        <meshBasicMaterial color="#080820" transparent opacity={0.85} />
       </mesh>
 
       {/* Solid back blocker to prevent mirrored text bleed-through */}
       <mesh position={[0, 0, -0.01]}>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial color="#020208" side={THREE.BackSide} />
+        <meshBasicMaterial color="#080820" side={THREE.BackSide} />
       </mesh>
 
       {/* Neon border frame */}
       <mesh ref={borderRef} geometry={borderGeom} position={[0, 0, 0.01]}>
-        <meshBasicMaterial color={color} transparent opacity={0.2} />
+        <meshBasicMaterial color={color} transparent opacity={0.4} />
       </mesh>
 
       {/* Top label */}
       <Text
         position={[0, height / 2 - 0.28, 0.02]}
-        fontSize={0.15}
+        fontSize={0.18}
         color={color}
         anchorX="center"
         anchorY="middle"
@@ -143,20 +143,20 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       <Text
         ref={textRef}
         position={[0, -0.05, 0.02]}
-        fontSize={0.22}
-        color="#ffffff"
+        fontSize={0.26}
+        color="#e0e8ff"
         anchorX="center"
         anchorY="middle"
         font={PIXEL_FONT_URL}
-        maxWidth={width - 0.6}
+        maxWidth={width - 0.5}
       >
         {displayText.current}
       </Text>
 
       {/* Accent line under label */}
       <mesh position={[0, height / 2 - 0.45, 0.01]}>
-        <planeGeometry args={[width - 0.4, 0.02]} />
-        <meshBasicMaterial color={color} transparent opacity={0.4} />
+        <planeGeometry args={[width - 0.3, 0.025]} />
+        <meshBasicMaterial color={color} transparent opacity={0.6} />
       </mesh>
 
       {/* Holographic scan line overlay */}
@@ -178,11 +178,11 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
 
       {/* Glow halo behind billboard */}
       <mesh ref={glowRef} position={[0, 0, -0.05]}>
-        <planeGeometry args={[width + 1.2, height + 0.8]} />
+        <planeGeometry args={[width + 1.5, height + 1.0]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={0.1}
+          opacity={0.18}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />

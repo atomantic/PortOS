@@ -54,26 +54,27 @@ function Searchlight() {
   );
 }
 
-export default function CityLights() {
+export default function CityLights({ settings }) {
+  const b = settings?.ambientBrightness ?? 1.2;
   return (
     <>
-      <ambientLight intensity={0.18} color="#1a1a3a" />
+      <ambientLight intensity={0.18 * b} color="#1a1a3a" />
       {/* Main overhead cyan */}
-      <pointLight position={[0, 30, 0]} intensity={1.2} color="#06b6d4" distance={100} />
+      <pointLight position={[0, 30, 0]} intensity={1.2 * b} color="#06b6d4" distance={100} />
       {/* Secondary overhead fill - broad white/blue */}
-      <pointLight position={[0, 20, 10]} intensity={0.5} color="#4488cc" distance={90} />
+      <pointLight position={[0, 20, 10]} intensity={0.5 * b} color="#4488cc" distance={90} />
       {/* Magenta accent from left - animated color shift */}
-      <AnimatedLight position={[-20, 12, -15]} baseColor="#ec4899" intensity={0.7} distance={60} speed={0.3} shiftRange={0.15} />
+      <AnimatedLight position={[-20, 12, -15]} baseColor="#ec4899" intensity={0.7 * b} distance={60} speed={0.3} shiftRange={0.15} />
       {/* Blue accent from right - animated shift */}
-      <AnimatedLight position={[20, 12, 15]} baseColor="#3b82f6" intensity={0.7} distance={60} speed={0.4} shiftRange={0.12} />
+      <AnimatedLight position={[20, 12, 15]} baseColor="#3b82f6" intensity={0.7 * b} distance={60} speed={0.4} shiftRange={0.12} />
       {/* Purple from behind - more presence */}
-      <pointLight position={[0, 15, -25]} intensity={0.5} color="#8b5cf6" distance={60} />
+      <pointLight position={[0, 15, -25]} intensity={0.5 * b} color="#8b5cf6" distance={60} />
       {/* Warm orange ground level accent */}
-      <pointLight position={[10, 3, 5]} intensity={0.35} color="#f97316" distance={35} />
+      <pointLight position={[10, 3, 5]} intensity={0.35 * b} color="#f97316" distance={35} />
       {/* Additional green accent - ground level from opposite side */}
-      <pointLight position={[-12, 3, 8]} intensity={0.2} color="#22c55e" distance={25} />
+      <pointLight position={[-12, 3, 8]} intensity={0.2 * b} color="#22c55e" distance={25} />
       {/* Red warning accent from below-right */}
-      <pointLight position={[15, 2, -10]} intensity={0.15} color="#f43f5e" distance={22} />
+      <pointLight position={[15, 2, -10]} intensity={0.15 * b} color="#f43f5e" distance={22} />
       {/* Sweeping searchlight */}
       <Searchlight />
     </>

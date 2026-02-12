@@ -33,12 +33,15 @@ function SettingToggle({ label, value, onChange }) {
   );
 }
 
-function SettingSlider({ label, value, onChange, min = 0, max = 1, step = 0.05 }) {
+function SettingSlider({ label, value, onChange, min = 0, max = 1, step = 0.05, format }) {
+  const displayValue = format
+    ? format(value)
+    : `${Math.round(value * 100)}%`;
   return (
     <div className="py-1">
       <div className="flex items-center justify-between mb-1">
         <span className="font-pixel text-[10px] text-gray-400 tracking-wide">{label}</span>
-        <span className="font-pixel text-[9px] text-cyan-400/60">{Math.round(value * 100)}%</span>
+        <span className="font-pixel text-[9px] text-cyan-400/60">{displayValue}</span>
       </div>
       <input
         type="range"
@@ -185,6 +188,38 @@ export default function CitySettingsPanel() {
               min={0.25}
               max={2}
               step={0.25}
+            />
+          </div>
+
+          {/* Scene Lighting */}
+          <div>
+            <div className="font-pixel text-[9px] text-cyan-500/60 tracking-wider mb-1">SCENE LIGHTING</div>
+            <SettingSlider
+              label="AMBIENT BRIGHTNESS"
+              value={settings.ambientBrightness}
+              onChange={(v) => updateSetting('ambientBrightness', v)}
+              min={0.5}
+              max={2.5}
+              step={0.1}
+              format={(v) => `${v.toFixed(1)}x`}
+            />
+            <SettingSlider
+              label="NEON BRIGHTNESS"
+              value={settings.neonBrightness}
+              onChange={(v) => updateSetting('neonBrightness', v)}
+              min={0.5}
+              max={2.5}
+              step={0.1}
+              format={(v) => `${v.toFixed(1)}x`}
+            />
+            <SettingSlider
+              label="FOG DENSITY"
+              value={settings.fogDensity}
+              onChange={(v) => updateSetting('fogDensity', v)}
+              min={0}
+              max={0.03}
+              step={0.001}
+              format={(v) => v === 0 ? 'OFF' : v.toFixed(3)}
             />
           </div>
 

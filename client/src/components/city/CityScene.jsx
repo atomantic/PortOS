@@ -40,8 +40,8 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       style={{ background: '#030308' }}
       gl={{ antialias: true }}
     >
-      <fogExp2 attach="fog" args={['#030308', 0.01]} />
-      <CityLights />
+      <fogExp2 attach="fog" args={['#030308', settings?.fogDensity ?? 0.008]} />
+      <CityLights settings={settings} />
       <CityStarfield />
       <CityShootingStars playSfx={playSfx} />
       <CityCelestial />
@@ -54,6 +54,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         onBuildingClick={onBuildingClick}
         onPositionsReady={handlePositionsReady}
         playSfx={playSfx}
+        settings={settings}
       />
       <CityDataStreams positions={positions} />
       <CityTraffic positions={positions} />

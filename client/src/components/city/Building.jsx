@@ -267,7 +267,7 @@ function NeonEdgeStrip({ position, height, color, delay }) {
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx }) {
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2 }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
@@ -305,9 +305,10 @@ export default function Building({ app, position, agentCount, onClick, playSfx }
     if (!meshRef.current) return;
     const t = clock.getElapsedTime();
 
-    const baseIntensity = isOnline ? 0.5 : 0.2;
-    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.15 : 0;
-    const hoverBoost = hovered ? 0.4 : 0;
+    const nb = neonBrightness;
+    const baseIntensity = (isOnline ? 0.5 : 0.2) * nb;
+    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.15 * nb : 0;
+    const hoverBoost = hovered ? 0.4 * nb : 0;
     meshRef.current.material.emissiveIntensity = baseIntensity + pulse + hoverBoost;
 
     if (glowRef.current) {
@@ -336,7 +337,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx }
         <meshStandardMaterial
           color={CITY_COLORS.buildingBody}
           emissive={edgeColor}
-          emissiveIntensity={0.35}
+          emissiveIntensity={0.35 * neonBrightness}
           map={windowTexture}
           transparent
           opacity={app.archived ? 0.75 : 0.95}
