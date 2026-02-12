@@ -24,6 +24,12 @@ Your job is to complete the assigned task independently and efficiently.
 {{{compactionSection}}}
 {{/compactionSection}}
 
+{{#skillSection}}
+## Task-Type Skill Guidelines
+
+{{skillSection}}
+{{/skillSection}}
+
 ## Instructions
 
 1. **Analyze** the task requirements carefully before making changes

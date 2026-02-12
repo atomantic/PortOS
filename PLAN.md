@@ -119,16 +119,18 @@ Based on recent work and incomplete milestones:
 
 Inspired by [OpenAI Skills & Shell Tips](https://developers.openai.com/blog/skills-shell-tips), this milestone improves CoS agent accuracy and reliability through better task routing, prompt specificity, and context management.
 
-### P1: Task-Type-Specific Agent Prompts (Skill Templates)
-Currently all agents use the same generic `cos-agent-briefing.md` prompt template regardless of task type. Create specialized prompt templates per task category that include:
-- **Routing descriptions**: "Use when..." / "Don't use when..." sections that help the system match tasks to the right skill template
-- **Embedded examples**: Worked examples of successful completions for that task type (bug fix, feature, security audit, etc.)
-- **Task-specific guidelines**: E.g., security audit skills include OWASP checklist; feature skills include test requirements; refactor skills include before/after patterns
+### P1: Task-Type-Specific Agent Prompts (Skill Templates) ✅
+Created specialized prompt templates per task category with routing, examples, and guidelines:
+- **Routing descriptions**: "Use when..." / "Don't use when..." sections in each skill template
+- **Embedded examples**: Worked examples of successful completions for each task type
+- **Task-specific guidelines**: Security audit includes OWASP checklist; feature includes validation/convention requirements; refactor emphasizes behavior preservation
 
-**Implementation**:
-- Add a `data/prompts/skills/` directory with task-type templates (e.g., `bug-fix.md`, `feature.md`, `security-audit.md`, `refactor.md`, `documentation.md`, `mobile-responsive.md`)
-- Update `buildAgentPrompt()` in `subAgentSpawner.js` to select the appropriate skill template based on task type/description keywords
-- Each template loaded only when matched (avoids token inflation for unrelated tasks)
+**Implemented**:
+- Added `data/prompts/skills/` directory with 6 task-type templates: `bug-fix.md`, `feature.md`, `security-audit.md`, `refactor.md`, `documentation.md`, `mobile-responsive.md`
+- Added `detectSkillTemplate()` and `loadSkillTemplate()` in `subAgentSpawner.js` with keyword-based matching (ordered by specificity — security/mobile before generic bug-fix/feature)
+- Updated `buildAgentPrompt()` to inject matched skill template into both the Mustache template system and the fallback template
+- Updated `cos-agent-briefing.md` with `{{#skillSection}}` conditional block
+- Templates only loaded when matched to avoid token inflation
 
 ### P2: Agent Context Compaction ✅
 Long-running agents can hit context limits causing failures. Add proactive context management:
