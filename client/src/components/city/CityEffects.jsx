@@ -129,8 +129,8 @@ export default function CityEffects({ settings }) {
       const bloomPass = new UnrealBloomPass(
         new THREE.Vector2(size.width, size.height),
         bloomStrength,
-        0.8,
-        0.25
+        0.4,  // radius — tighter glow around emissive elements
+        0.45  // threshold — only genuinely bright/emissive surfaces bloom
       );
       composer.addPass(bloomPass);
     }

@@ -61,11 +61,13 @@ export default function CityGround({ settings }) {
   const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
   const groundColorTarget = useRef(new THREE.Color(preset.groundColor ?? '#0a0a20'));
   groundColorTarget.current.set(preset.groundColor ?? '#0a0a20');
+  const targetRoughness = preset.groundRoughness ?? 0.7;
 
   useFrame((_, delta) => {
     if (!groundMatRef.current) return;
     const lf = Math.min(1, delta * 3);
     groundMatRef.current.color.lerp(groundColorTarget.current, lf);
+    groundMatRef.current.roughness += (targetRoughness - groundMatRef.current.roughness) * lf;
   });
 
   const puddles = useMemo(() => {
