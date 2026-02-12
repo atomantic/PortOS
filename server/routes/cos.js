@@ -397,6 +397,12 @@ router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/cos/learning/routing - Get routing accuracy metrics (task type × model tier)
+router.get('/learning/routing', asyncHandler(async (req, res) => {
+  const routing = await taskLearning.getRoutingAccuracy();
+  res.json(routing);
+}));
+
 // GET /api/cos/learning/performance - Get performance summary
 router.get('/learning/performance', asyncHandler(async (req, res) => {
   const summary = await taskLearning.getPerformanceSummary();

@@ -34,6 +34,10 @@ const DEFAULT_LEARNING_DATA = {
   // Metrics by error category
   errorPatterns: {},
 
+  // Routing accuracy: taskType → modelTier → { succeeded, failed }
+  // Records which model tiers work/fail for each task type
+  routingAccuracy: {},
+
   // Overall stats
   totals: {
     completed: 0,
@@ -190,6 +194,20 @@ export async function recordTaskCompletion(agent, task) {
   }
   tierMetrics.totalDurationMs += duration;
   tierMetrics.avgDurationMs = Math.round(tierMetrics.totalDurationMs / tierMetrics.completed);
+
+  // Track routing accuracy: taskType × modelTier cross-reference
+  if (!data.routingAccuracy) data.routingAccuracy = {};
+  if (!data.routingAccuracy[taskType]) data.routingAccuracy[taskType] = {};
+  if (!data.routingAccuracy[taskType][modelTier]) {
+    data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
+  }
+  const routing = data.routingAccuracy[taskType][modelTier];
+  if (success) {
+    routing.succeeded++;
+  } else {
+    routing.failed++;
+  }
+  routing.lastAttempt = new Date().toISOString();
 
   // Track error patterns
   if (!success && errorCategory) {
@@ -390,6 +408,8 @@ export async function getTaskTypePriorityMultiplier(taskType) {
 
 /**
  * Suggest model tier based on historical performance for a task type
+ * Enhanced with negative signal awareness: avoids tiers that consistently fail
+ * and prefers tiers with proven success for the task type
  */
 export async function suggestModelTier(taskType) {
   const data = await loadLearningData();
@@ -399,7 +419,41 @@ export async function suggestModelTier(taskType) {
     return null; // Not enough data to suggest
   }
 
-  // If success rate is low, suggest heavier model
+  // Check routing accuracy for tier-specific signals
+  const routingData = data.routingAccuracy?.[taskType];
+  if (routingData) {
+    // Find tiers with enough data and their success rates
+    const tierResults = Object.entries(routingData)
+      .filter(([, r]) => (r.succeeded + r.failed) >= 3)
+      .map(([tier, r]) => {
+        const total = r.succeeded + r.failed;
+        return { tier, successRate: Math.round((r.succeeded / total) * 100), total };
+      })
+      .sort((a, b) => b.successRate - a.successRate);
+
+    // If a lighter tier has high success, no need to upgrade
+    const bestTier = tierResults[0];
+    if (bestTier && bestTier.successRate >= 80) {
+      return {
+        suggested: bestTier.tier,
+        reason: `${taskType} has ${bestTier.successRate}% success with ${bestTier.tier} tier`,
+        avoidTiers: tierResults.filter(t => t.successRate < 40).map(t => t.tier)
+      };
+    }
+
+    // If current default tier is failing, find a better one
+    const failingTiers = tierResults.filter(t => t.successRate < 40);
+    if (failingTiers.length > 0) {
+      const successfulTier = tierResults.find(t => t.successRate >= 60);
+      return {
+        suggested: successfulTier?.tier || 'heavy',
+        reason: `${taskType} fails with ${failingTiers.map(t => t.tier).join(', ')} (${failingTiers.map(t => `${t.successRate}%`).join(', ')})`,
+        avoidTiers: failingTiers.map(t => t.tier)
+      };
+    }
+  }
+
+  // Fallback: if overall success rate is low, suggest heavier model
   if (metrics.successRate < 60) {
     return {
       suggested: 'heavy',
@@ -408,6 +462,85 @@ export async function suggestModelTier(taskType) {
   }
 
   return null; // Current selection is working fine
+}
+
+/**
+ * Get routing accuracy metrics showing which model tiers succeed/fail for each task type
+ * Returns a matrix suitable for display in the Learning tab UI
+ */
+export async function getRoutingAccuracy() {
+  const data = await loadLearningData();
+  const routingData = data.routingAccuracy || {};
+
+  const matrix = [];
+  const tierSummary = {};
+
+  for (const [taskType, tiers] of Object.entries(routingData)) {
+    const taskEntry = { taskType, tiers: [] };
+
+    for (const [tier, counts] of Object.entries(tiers)) {
+      const total = counts.succeeded + counts.failed;
+      if (total === 0) continue;
+
+      const successRate = Math.round((counts.succeeded / total) * 100);
+      taskEntry.tiers.push({
+        tier,
+        succeeded: counts.succeeded,
+        failed: counts.failed,
+        total,
+        successRate,
+        lastAttempt: counts.lastAttempt
+      });
+
+      // Aggregate tier summary
+      if (!tierSummary[tier]) {
+        tierSummary[tier] = { succeeded: 0, failed: 0, taskTypes: 0, misroutes: 0 };
+      }
+      tierSummary[tier].succeeded += counts.succeeded;
+      tierSummary[tier].failed += counts.failed;
+      tierSummary[tier].taskTypes++;
+      if (successRate < 40 && total >= 3) {
+        tierSummary[tier].misroutes++;
+      }
+    }
+
+    // Sort tiers by success rate descending
+    taskEntry.tiers.sort((a, b) => b.successRate - a.successRate);
+    if (taskEntry.tiers.length > 0) {
+      matrix.push(taskEntry);
+    }
+  }
+
+  // Calculate tier-level success rates
+  const tierOverview = Object.entries(tierSummary).map(([tier, s]) => {
+    const total = s.succeeded + s.failed;
+    return {
+      tier,
+      successRate: total > 0 ? Math.round((s.succeeded / total) * 100) : 0,
+      total,
+      taskTypes: s.taskTypes,
+      misroutes: s.misroutes
+    };
+  }).sort((a, b) => b.successRate - a.successRate);
+
+  // Identify misroutes: task+tier combos with <40% success and 3+ attempts
+  const misroutes = [];
+  for (const entry of matrix) {
+    for (const tier of entry.tiers) {
+      if (tier.successRate < 40 && tier.total >= 3) {
+        misroutes.push({
+          taskType: entry.taskType,
+          tier: tier.tier,
+          successRate: tier.successRate,
+          failed: tier.failed,
+          total: tier.total
+        });
+      }
+    }
+  }
+  misroutes.sort((a, b) => a.successRate - b.successRate);
+
+  return { matrix, tierOverview, misroutes, totalMisroutes: misroutes.length };
 }
 
 /**
@@ -762,6 +895,11 @@ export async function resetTaskTypeLearning(taskType) {
     if (pattern.count <= 0) {
       delete data.errorPatterns[category];
     }
+  }
+
+  // Clean up routing accuracy data for this task type
+  if (data.routingAccuracy) {
+    delete data.routingAccuracy[taskType];
   }
 
   // Remove the task type entry

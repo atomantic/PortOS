@@ -139,11 +139,12 @@ Long-running agents can hit context limits causing failures. Add proactive conte
 - ✅ Add compaction metadata to agent error analysis so retries can include "compact context" instructions
 - ✅ Update the agent briefing to include explicit output format constraints for verbose task types
 
-### P3: Negative Example Coverage for Task Routing
+### P3: Negative Example Coverage for Task Routing ✅
 Improve task-to-model routing accuracy by adding negative examples to the model selection logic:
-- Document which task types should NOT use light models (already partially done, but formalize it)
-- Add "anti-patterns" to task learning: when a task type fails with a specific model, record the negative signal
-- Surface routing accuracy metrics in the Learning tab so the user can see misroutes
+- ✅ Document which task types should NOT use light models (already partially done, but formalize it)
+- ✅ Add "anti-patterns" to task learning: when a task type fails with a specific model, record the negative signal via `routingAccuracy` cross-reference (taskType × modelTier)
+- ✅ Surface routing accuracy metrics in the Learning tab so the user can see misroutes
+- ✅ Enhanced `suggestModelTier()` to use negative signal data for smarter tier avoidance
 
 ### P4: Deterministic Workflow Skills
 For recurring autonomous jobs (daily briefing, git maintenance, security audit, app improvement), encode the full workflow as a deterministic skill:
