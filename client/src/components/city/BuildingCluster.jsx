@@ -1,12 +1,17 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { Text } from '@react-three/drei';
 import { computeCityLayout } from './cityLayout';
 import { getBuildingHeight, DISTRICT_PARAMS, PIXEL_FONT_URL } from './cityConstants';
 import Building from './Building';
 import AgentEntity from './AgentEntity';
 
-export default function BuildingCluster({ apps, agentMap, onBuildingClick }) {
+export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady }) {
   const positions = useMemo(() => computeCityLayout(apps), [apps]);
+
+  // Notify parent when positions change (for data streams, roads, traffic)
+  useEffect(() => {
+    onPositionsReady?.(positions);
+  }, [positions, onPositionsReady]);
 
   const hasArchived = apps.some(a => a.archived);
 
