@@ -532,6 +532,7 @@ export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
 export const getCosQuickSummary = () => request('/cos/quick-summary');
+export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
 export const getCosActionableInsights = () => request('/cos/actionable-insights');
 
 // Task Schedule (Configurable Intervals)

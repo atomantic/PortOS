@@ -997,6 +997,13 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/cos/recent-tasks - Get recent completed tasks for dashboard widget
+router.get('/recent-tasks', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 10;
+  const recentTasks = await cos.getRecentTasks(limit);
+  res.json(recentTasks);
+}));
+
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
 // Combines today's activity, streak status, next job, and pending approvals into one efficient call
 router.get('/quick-summary', asyncHandler(async (req, res) => {

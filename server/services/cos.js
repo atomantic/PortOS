@@ -2535,6 +2535,71 @@ export async function getTodayActivity() {
 }
 
 /**
+ * Get recent completed tasks across all days
+ * @param {number} limit - Maximum number of tasks to return (default: 10)
+ * @returns {Object} Recent tasks with metadata
+ */
+export async function getRecentTasks(limit = 10) {
+  const state = await loadState();
+
+  // Get all completed agents, sorted by completion time (newest first)
+  const completedAgents = Object.values(state.agents)
+    .filter(a => a.status === 'completed' && a.completedAt)
+    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+    .slice(0, limit);
+
+  // Transform to compact task summaries
+  const tasks = completedAgents.map(a => ({
+    id: a.id,
+    taskId: a.taskId,
+    description: a.metadata?.taskDescription?.substring(0, 120) || a.taskId,
+    taskType: a.metadata?.analysisType || a.metadata?.taskType || 'task',
+    app: a.metadata?.app || null,
+    success: a.result?.success || false,
+    duration: a.result?.duration || 0,
+    durationFormatted: formatDuration(a.result?.duration || 0),
+    completedAt: a.completedAt,
+    // Add relative time (e.g., "2h ago", "yesterday")
+    completedRelative: formatRelativeTime(a.completedAt)
+  }));
+
+  // Calculate summary stats
+  const successCount = tasks.filter(t => t.success).length;
+  const failCount = tasks.filter(t => !t.success).length;
+
+  return {
+    tasks,
+    summary: {
+      total: tasks.length,
+      succeeded: successCount,
+      failed: failCount,
+      successRate: tasks.length > 0 ? Math.round((successCount / tasks.length) * 100) : 0
+    }
+  };
+}
+
+/**
+ * Format a timestamp as relative time (e.g., "2h ago", "yesterday")
+ * @param {string} timestamp - ISO timestamp
+ * @returns {string} Relative time string
+ */
+function formatRelativeTime(timestamp) {
+  const now = new Date();
+  const then = new Date(timestamp);
+  const diffMs = now - then;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
  * Clear completed agents from state (keep in files)
  */
 export async function clearCompletedAgents() {
