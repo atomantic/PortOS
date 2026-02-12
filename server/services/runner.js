@@ -23,6 +23,32 @@ export async function createRun(options) {
 }
 
 /**
+ * Build CLI args based on provider type.
+ * Each CLI provider has different conventions for stdin input and model selection.
+ */
+function buildCliArgs(provider) {
+  const providerId = provider?.id || '';
+
+  // Codex CLI: `codex exec -` reads prompt from stdin, --model for model
+  if (providerId === 'codex') {
+    const args = [...(provider.args || []), 'exec'];
+    if (provider.defaultModel) {
+      args.push('--model', provider.defaultModel);
+    }
+    args.push('-'); // stdin marker
+    return args;
+  }
+
+  // Gemini CLI: prompt is piped via stdin directly
+  if (providerId === 'gemini-cli') {
+    return [...(provider.args || [])];
+  }
+
+  // Default (Claude Code CLI): -p - means "read prompt from stdin"
+  return [...(provider.args || []), '-p', '-'];
+}
+
+/**
  * Override executeCliRun to fix shell security issue
  * This removes 'shell: true' which causes DEP0190 warning and potential security issues
  */
@@ -38,8 +64,8 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   const startTime = Date.now();
   let output = '';
 
-  // Build command with args - prompt passed via stdin to avoid argv limits
-  const args = [...(provider.args || []), '-p', '-'];
+  // Build provider-specific args for stdin-based prompt delivery
+  const args = buildCliArgs(provider);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
   const childProcess = spawn(provider.command, args, {
