@@ -7,10 +7,23 @@
  * API Base: https://www.moltbook.com/api/v1
  */
 
-import { checkRateLimit, recordAction } from './rateLimits.js';
+import { checkRateLimit, recordAction, syncFromExternal } from './rateLimits.js';
 import { solveChallenge } from './challengeSolver.js';
 
 const API_BASE = 'https://www.moltbook.com/api/v1';
+
+/**
+ * Infer the rate-limited action type from a Moltbook API endpoint
+ */
+function inferActionFromEndpoint(endpoint, method) {
+  if (method !== 'POST') return null;
+  if (endpoint === '/posts') return 'post';
+  if (/^\/posts\/[^/]+\/comments$/.test(endpoint)) return 'comment';
+  if (/^\/posts\/[^/]+\/vote$/.test(endpoint)) return 'vote';
+  if (/^\/comments\/[^/]+\/upvote$/.test(endpoint)) return 'vote';
+  if (/^\/agents\/[^/]+\/follow$/.test(endpoint)) return 'follow';
+  return null;
+}
 
 /**
  * Handle a Moltbook verification challenge embedded in a response
@@ -77,6 +90,16 @@ async function request(endpoint, options = {}, aiConfig) {
     } else {
       console.log(`📚 Moltbook API: 404 ${endpoint}`);
     }
+    // Sync local rate limit state when platform enforces a cooldown
+    if (response.status === 429) {
+      const apiKey = config.headers?.['Authorization']?.replace('Bearer ', '');
+      const action = inferActionFromEndpoint(endpoint, options.method);
+      if (apiKey && action) {
+        syncFromExternal(apiKey, action);
+        console.log(`⏱️ Synced ${action} rate limit from 429 response`);
+      }
+    }
+
     const err = new Error(message);
     err.status = response.status;
     err.suspended = response.status === 403 && message.toLowerCase().includes('suspended');

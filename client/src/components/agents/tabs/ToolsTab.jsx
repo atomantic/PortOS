@@ -41,9 +41,17 @@ export default function ToolsTab({ agentId, agent }) {
   const [drafts, setDrafts] = useState([]);
   const [activeDraftId, setActiveDraftId] = useState(null);
 
+  // Cooldown timer state
+  const [cooldownEnds, setCooldownEnds] = useState({});
+  const [, setTick] = useState(0);
+
   const fetchInitial = useCallback(async () => {
     const accountsData = await api.getPlatformAccounts(agentId);
-    setAccounts(accountsData.filter(a => a.status === 'active'));
+    const active = accountsData.filter(a => a.status === 'active');
+    setAccounts(active);
+    if (active.length === 1 && !selectedAccountId) {
+      setSelectedAccountId(active[0].id);
+    }
     setLoading(false);
   }, [agentId]);
 
@@ -63,6 +71,37 @@ export default function ToolsTab({ agentId, agent }) {
       setSubmolts(Array.isArray(list) ? list : []);
     }).catch(() => {});
   }, [selectedAccountId]);
+
+  // Calculate cooldown end timestamps from rate limit data
+  useEffect(() => {
+    if (!rateLimits) { setCooldownEnds({}); return; }
+    const ends = {};
+    const now = Date.now();
+    for (const [action, rl] of Object.entries(rateLimits)) {
+      if (rl.cooldownRemainingMs > 0) {
+        ends[action] = now + rl.cooldownRemainingMs;
+      }
+    }
+    setCooldownEnds(ends);
+  }, [rateLimits]);
+
+  // Tick cooldown timer every second while any cooldown is active
+  useEffect(() => {
+    const hasActive = Object.values(cooldownEnds).some(end => end > Date.now());
+    if (!hasActive) return;
+    let refetched = false;
+    const interval = setInterval(() => {
+      const stillActive = Object.values(cooldownEnds).some(end => end > Date.now());
+      setTick(t => t + 1);
+      if (!stillActive && !refetched) {
+        refetched = true;
+        if (selectedAccountId) {
+          api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+        }
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [cooldownEnds, selectedAccountId]);
 
   const loadDrafts = useCallback(async () => {
     if (!agentId) return;
@@ -133,7 +172,13 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishPost = async () => {
     if (!postTitle || !postContent) return;
     setPublishing(true);
-    const result = await api.publishAgentPost(agentId, selectedAccountId, selectedSubmolt, postTitle, postContent);
+    const result = await api.publishAgentPost(agentId, selectedAccountId, selectedSubmolt, postTitle, postContent).catch(() => null);
+
+    if (!result) {
+      setPublishing(false);
+      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+      return;
+    }
 
     if (activeDraftId) {
       if (result?.verificationFailed) {
@@ -191,7 +236,13 @@ export default function ToolsTab({ agentId, agent }) {
     setPublishingComment(true);
     const result = await api.publishAgentComment(
       agentId, selectedAccountId, selectedPost.id, commentContent, replyToId || undefined
-    );
+    ).catch(() => null);
+
+    if (!result) {
+      setPublishingComment(false);
+      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+      return;
+    }
 
     if (activeDraftId) {
       if (result?.verificationFailed) {
@@ -273,6 +324,18 @@ export default function ToolsTab({ agentId, agent }) {
     toast.success('Draft deleted');
   };
 
+  const getCooldownMs = (action) => {
+    const end = cooldownEnds[action];
+    return end ? Math.max(0, end - Date.now()) : 0;
+  };
+
+  const formatCooldown = (ms) => {
+    const totalSeconds = Math.ceil(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   if (loading) {
     return <div className="p-4 text-gray-400">Loading tools...</div>;
   }
@@ -301,15 +364,19 @@ export default function ToolsTab({ agentId, agent }) {
         {rateLimits && (
           <div className="flex gap-3 ml-auto">
             {Object.entries(rateLimits).map(([action, rl]) => {
+              const cooldownMs = getCooldownMs(action);
+              const isCooling = cooldownMs > 0;
               const pct = rl.remaining / rl.maxPerDay;
-              const colorClass = pct === 0
-                ? 'bg-port-error/20 text-port-error'
-                : pct < 0.25
-                  ? 'bg-port-warning/20 text-port-warning'
-                  : 'bg-port-success/20 text-port-success';
+              const colorClass = isCooling
+                ? 'bg-port-warning/20 text-port-warning animate-pulse'
+                : pct === 0
+                  ? 'bg-port-error/20 text-port-error'
+                  : pct < 0.25
+                    ? 'bg-port-warning/20 text-port-warning'
+                    : 'bg-port-success/20 text-port-success';
               return (
-                <div key={action} className={`text-xs px-2 py-1 rounded ${colorClass}`} title={`${rl.remaining} of ${rl.maxPerDay} ${action}s remaining today`}>
-                  {action}: {rl.remaining} left
+                <div key={action} className={`text-xs px-2 py-1 rounded ${colorClass}`} title={`${rl.remaining} of ${rl.maxPerDay} ${action}s remaining today${isCooling ? ` — cooldown: ${formatCooldown(cooldownMs)}` : ''}`}>
+                  {isCooling ? `${action}: ${formatCooldown(cooldownMs)}` : `${action}: ${rl.remaining} left`}
                 </div>
               );
             })}
@@ -575,10 +642,11 @@ export default function ToolsTab({ agentId, agent }) {
                     </button>
                     <button
                       onClick={handlePublishPost}
-                      disabled={publishing}
+                      disabled={publishing || getCooldownMs('post') > 0}
                       className="px-4 py-1 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
+                      title={getCooldownMs('post') > 0 ? `Post cooldown: ${formatCooldown(getCooldownMs('post'))}` : ''}
                     >
-                      {publishing ? 'Publishing...' : 'Publish'}
+                      {publishing ? 'Publishing...' : getCooldownMs('post') > 0 ? `Wait ${formatCooldown(getCooldownMs('post'))}` : 'Publish'}
                     </button>
                   </>
                 )}
