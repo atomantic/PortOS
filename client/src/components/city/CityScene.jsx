@@ -19,6 +19,7 @@ import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
 import CityEffects from './CityEffects';
+import CitySky from './CitySky';
 
 export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData, settings, playSfx }) {
   const [positions, setPositions] = useState(null);
@@ -38,9 +39,9 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       dpr={dpr}
       shadows={false}
       style={{ background: '#030308' }}
-      gl={{ antialias: true }}
+      gl={{ antialias: true, logarithmicDepthBuffer: false }}
     >
-      <fogExp2 attach="fog" args={['#030308', settings?.fogDensity ?? 0.008]} />
+      <CitySky settings={settings} />
       <CityLights settings={settings} />
       <CityStarfield />
       <CityShootingStars playSfx={playSfx} />

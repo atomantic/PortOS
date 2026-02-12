@@ -18,6 +18,9 @@ logs/
 *.log
 npm-debug.log*
 
+# Screenshots
+*.png
+
 # OS files
 .DS_Store
 Thumbs.db

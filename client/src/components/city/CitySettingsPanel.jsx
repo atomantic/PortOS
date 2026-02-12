@@ -213,7 +213,7 @@ export default function CitySettingsPanel() {
               format={(v) => `${v.toFixed(1)}x`}
             />
             <SettingSlider
-              label="FOG DENSITY"
+              label="FOG"
               value={settings.fogDensity}
               onChange={(v) => updateSetting('fogDensity', v)}
               min={0}
