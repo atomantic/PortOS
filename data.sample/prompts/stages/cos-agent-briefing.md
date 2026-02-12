@@ -20,6 +20,10 @@ Your job is to complete the assigned task independently and efficiently.
 {{task.metadata.app}}
 {{/task.metadata.app}}
 
+{{#compactionSection}}
+{{{compactionSection}}}
+{{/compactionSection}}
+
 ## Instructions
 
 1. **Analyze** the task requirements carefully before making changes
@@ -43,6 +47,14 @@ Your job is to complete the assigned task independently and efficiently.
 - The current time is {{timestamp}}
 
 ## Output Format
+
+Keep your output concise throughout execution. Avoid reproducing full file contents — reference files by path and line number instead.
+
+**Task-type-specific constraints**:
+- **Documentation/changelog tasks**: Summarize changes concisely. Do not echo the full document — list sections modified and key additions only.
+- **Large refactors**: List only changed files with a one-line description per file. Do not reproduce before/after code blocks.
+- **Security audits**: Report findings as a compact table (file, line, severity, description). Skip files with no issues.
+- **Bug fixes**: State the root cause, the fix, and affected files. Do not narrate your entire debugging process.
 
 At the end of your work, provide a summary in this format:
 
