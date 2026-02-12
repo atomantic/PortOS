@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AppTile from '../components/AppTile';
+import CosDashboardWidget from '../components/CosDashboardWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -84,6 +85,11 @@ export default function Dashboard() {
           {error}
         </div>
       )}
+
+      {/* CoS Status Widget */}
+      <div className="mb-6">
+        <CosDashboardWidget />
+      </div>
 
       {/* App Grid */}
       {apps.length === 0 ? (
