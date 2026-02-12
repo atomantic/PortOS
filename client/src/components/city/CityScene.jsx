@@ -10,13 +10,19 @@ import BuildingCluster from './BuildingCluster';
 import CityDataStreams from './CityDataStreams';
 import CityTraffic from './CityTraffic';
 import CityRoads from './CityRoads';
+import CityWeather from './CityWeather';
+import CityBillboards from './CityBillboards';
+import CityShootingStars from './CityShootingStars';
 
-export default function CityScene({ apps, agentMap, onBuildingClick }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData }) {
   const [positions, setPositions] = useState(null);
 
   const handlePositionsReady = useCallback((pos) => {
     setPositions(pos);
   }, []);
+
+  const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online').length;
+  const totalCount = apps.filter(a => !a.archived).length;
 
   return (
     <Canvas
@@ -28,6 +34,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick }) {
     >
       <CityLights />
       <CityStarfield />
+      <CityShootingStars />
       <CityCelestial />
       <CityGround />
       <CityRoads positions={positions} />
@@ -39,6 +46,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick }) {
       />
       <CityDataStreams positions={positions} />
       <CityTraffic positions={positions} />
+      <CityBillboards
+        positions={positions}
+        apps={apps}
+        cosStatus={cosStatus}
+        productivityData={productivityData}
+      />
+      <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} />
       <CityParticles />
       <OrbitControls
         maxPolarAngle={Math.PI / 2.2}
