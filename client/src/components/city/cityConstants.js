@@ -3,8 +3,6 @@ export const PIXEL_FONT_URL = '/fonts/GeistPixel-Square.ttf';
 
 export const CITY_COLORS = {
   ground: '#06b6d4',
-  fog: '#050510',
-  sky: '#030308',
   ambient: '#0d0d2b',
   building: {
     online: '#06b6d4',
@@ -21,15 +19,66 @@ export const CITY_COLORS = {
   // Celestial colors
   planet: '#3b82f6',
   orbit: '#1e3a5f',
-  // Sky dome + sun colors
-  sky: {
-    zenith: '#050520',
-    midSky: '#1a0a2e',
-    horizonHigh: '#ff4060',
-    horizonLow: '#ff8040',
-    sunCore: '#ffaa44',
-    sunGlow: '#ff6080',
-    sunLight: '#ffccaa',
+  // Time-of-day presets (used by CitySky + CityLights)
+  // hour: 0-24 mapped to sun arc. Sun traces east(6h) → overhead(12h) → west(18h) → below(0h)
+  // daylightFactor: multiplier for scene ambient/point lights (bright day, dim night)
+  timeOfDay: {
+    sunrise: {
+      hour: 6,
+      zenith: '#0a0a30',
+      midSky: '#1a1040',
+      horizonHigh: '#ff6050',
+      horizonLow: '#ffaa40',
+      sunCore: '#ff8844',
+      sunGlow: '#ff6060',
+      sunLight: '#ffccaa',
+      sunIntensity: 0.5,
+      sunScale: 1.0,
+      isMoon: false,
+      daylightFactor: 0.6,
+    },
+    noon: {
+      hour: 12,
+      zenith: '#182848',
+      midSky: '#2a3d6a',
+      horizonHigh: '#506888',
+      horizonLow: '#7090a8',
+      sunCore: '#ffffdd',
+      sunGlow: '#ffffbb',
+      sunLight: '#eeeeff',
+      sunIntensity: 1.0,
+      sunScale: 0.7,
+      isMoon: false,
+      daylightFactor: 1.8,
+    },
+    sunset: {
+      hour: 18,
+      zenith: '#050520',
+      midSky: '#1a0a2e',
+      horizonHigh: '#ff4060',
+      horizonLow: '#ff8040',
+      sunCore: '#ffaa44',
+      sunGlow: '#ff6080',
+      sunLight: '#ffccaa',
+      sunIntensity: 0.6,
+      sunScale: 1.0,
+      isMoon: false,
+      daylightFactor: 0.6,
+    },
+    midnight: {
+      hour: 0,
+      zenith: '#020208',
+      midSky: '#040412',
+      horizonHigh: '#08081a',
+      horizonLow: '#0a0a22',
+      sunCore: '#ccccee',
+      sunGlow: '#8888bb',
+      sunLight: '#334466',
+      sunIntensity: 0.12,
+      sunScale: 0.6,
+      isMoon: true,
+      daylightFactor: 0.3,
+    },
   },
 };
 

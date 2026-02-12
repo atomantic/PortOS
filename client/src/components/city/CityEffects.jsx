@@ -106,58 +106,9 @@ const ColorGradingShader = {
   `,
 };
 
-// Depth-based fog shader -- blends distant pixels toward fog color
-const DepthFogShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    tDepth: { value: null },
-    uFogColor: { value: new THREE.Color(0x06101a) },
-    uFogNear: { value: 20.0 },
-    uFogFar: { value: 120.0 },
-    uCameraNear: { value: 0.1 },
-    uCameraFar: { value: 2000.0 },
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform sampler2D tDiffuse;
-    uniform sampler2D tDepth;
-    uniform vec3 uFogColor;
-    uniform float uFogNear;
-    uniform float uFogFar;
-    uniform float uCameraNear;
-    uniform float uCameraFar;
-    varying vec2 vUv;
-
-    float toLinearDepth(float ndcDepth, float near, float far) {
-      float viewZ = (near * far) / ((far - near) * ndcDepth - far);
-      return -viewZ;
-    }
-
-    void main() {
-      vec4 color = texture2D(tDiffuse, vUv);
-      float rawDepth = texture2D(tDepth, vUv).x;
-
-      float linearDepth = toLinearDepth(rawDepth, uCameraNear, uCameraFar);
-
-      // Fog factor: 0 = no fog, capped at 0.85 so sky/distant objects stay visible
-      float fogFactor = smoothstep(uFogNear, uFogFar, linearDepth) * 0.85;
-
-      color.rgb = mix(color.rgb, uFogColor, fogFactor);
-      gl_FragColor = color;
-    }
-  `,
-};
-
 export default function CityEffects({ settings }) {
   const composerRef = useRef();
   const grainPassRef = useRef();
-  const fogPassRef = useRef();
   const { gl, scene, camera, size } = useThree();
 
   const bloomEnabled = settings?.bloomEnabled ?? true;
@@ -165,23 +116,9 @@ export default function CityEffects({ settings }) {
   const chromaticAberration = settings?.chromaticAberration ?? true;
   const filmGrain = settings?.filmGrain ?? true;
   const colorGrading = settings?.colorGrading ?? true;
-  const fogDensity = settings?.fogDensity ?? 0.008;
-
-  // Enable depth texture on the renderer's render target
-  useEffect(() => {
-    gl.getContext();
-  }, [gl]);
 
   useEffect(() => {
-    // Create render target with depth texture for fog shader
-    const renderTarget = new THREE.WebGLRenderTarget(size.width, size.height, {
-      depthTexture: new THREE.DepthTexture(),
-      depthBuffer: true,
-    });
-    renderTarget.depthTexture.format = THREE.DepthFormat;
-    renderTarget.depthTexture.type = THREE.UnsignedShortType;
-
-    const composer = new EffectComposer(gl, renderTarget);
+    const composer = new EffectComposer(gl);
     composer.setSize(size.width, size.height);
     composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
@@ -196,24 +133,6 @@ export default function CityEffects({ settings }) {
         0.25
       );
       composer.addPass(bloomPass);
-    }
-
-    // Depth fog pass (after bloom, before color grading)
-    if (fogDensity > 0) {
-      const dfPass = new ShaderPass(DepthFogShader);
-      dfPass.uniforms.tDepth.value = renderTarget.depthTexture;
-      dfPass.uniforms.uCameraNear.value = camera.near;
-      dfPass.uniforms.uCameraFar.value = camera.far;
-      // Map fogDensity (0-0.03) to fog range: higher density = closer fog
-      // At default 0.008: near=80, far=300. At max 0.03: near=30, far=150
-      const fogNear = Math.max(20, 100 - fogDensity * 2500);
-      const fogFar = Math.max(100, 400 - fogDensity * 8000);
-      dfPass.uniforms.uFogNear.value = fogNear;
-      dfPass.uniforms.uFogFar.value = fogFar;
-      fogPassRef.current = dfPass;
-      composer.addPass(dfPass);
-    } else {
-      fogPassRef.current = null;
     }
 
     if (colorGrading) {
@@ -239,10 +158,8 @@ export default function CityEffects({ settings }) {
 
     return () => {
       composer.dispose();
-      renderTarget.dispose();
-      renderTarget.depthTexture.dispose();
     };
-  }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, chromaticAberration, filmGrain, colorGrading, fogDensity]);
+  }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, chromaticAberration, filmGrain, colorGrading]);
 
   useFrame(({ clock }) => {
     if (grainPassRef.current) {

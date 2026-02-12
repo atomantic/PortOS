@@ -212,15 +212,24 @@ export default function CitySettingsPanel() {
               step={0.1}
               format={(v) => `${v.toFixed(1)}x`}
             />
-            <SettingSlider
-              label="FOG"
-              value={settings.fogDensity}
-              onChange={(v) => updateSetting('fogDensity', v)}
-              min={0}
-              max={0.03}
-              step={0.001}
-              format={(v) => v === 0 ? 'OFF' : v.toFixed(3)}
-            />
+            <div className="py-1">
+              <div className="font-pixel text-[10px] text-gray-400 tracking-wide mb-1.5">TIME OF DAY</div>
+              <div className="grid grid-cols-4 gap-1">
+                {['sunrise', 'noon', 'sunset', 'midnight'].map(tod => (
+                  <button
+                    key={tod}
+                    onClick={() => updateSetting('timeOfDay', tod)}
+                    className={`font-pixel text-[8px] py-1.5 rounded border transition-all tracking-wide ${
+                      settings.timeOfDay === tod
+                        ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                        : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600'
+                    }`}
+                  >
+                    {tod.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Reset */}

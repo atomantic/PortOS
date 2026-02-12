@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { CITY_COLORS } from './cityConstants';
 
 // Animated accent light that slowly shifts color, with reactive brightness
 function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef }) {
@@ -75,9 +76,11 @@ function ReactivePointLight({ position, baseIntensity, color, distance, brightne
 }
 
 export default function CityLights({ settings }) {
-  // Store brightness in a ref so useFrame callbacks always see current value
-  const brightnessRef = useRef(settings?.ambientBrightness ?? 1.2);
-  brightnessRef.current = settings?.ambientBrightness ?? 1.2;
+  // Combine ambient brightness slider with time-of-day daylight factor
+  const timeOfDay = settings?.timeOfDay ?? 'sunset';
+  const daylightFactor = CITY_COLORS.timeOfDay[timeOfDay]?.daylightFactor ?? 0.6;
+  const brightnessRef = useRef((settings?.ambientBrightness ?? 1.2) * daylightFactor);
+  brightnessRef.current = (settings?.ambientBrightness ?? 1.2) * daylightFactor;
 
   const ambientRef = useRef();
   useFrame(() => {

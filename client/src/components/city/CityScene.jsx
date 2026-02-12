@@ -39,7 +39,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       dpr={dpr}
       shadows={false}
       style={{ background: '#030308' }}
-      gl={{ antialias: true, logarithmicDepthBuffer: false }}
+      gl={{ antialias: true }}
     >
       <CitySky settings={settings} />
       <CityLights settings={settings} />
