@@ -146,11 +146,13 @@ Improve task-to-model routing accuracy by adding negative examples to the model 
 - ✅ Surface routing accuracy metrics in the Learning tab so the user can see misroutes
 - ✅ Enhanced `suggestModelTier()` to use negative signal data for smarter tier avoidance
 
-### P4: Deterministic Workflow Skills
+### P4: Deterministic Workflow Skills ✅
 For recurring autonomous jobs (daily briefing, git maintenance, security audit, app improvement), encode the full workflow as a deterministic skill:
-- Each skill defines exact steps, expected outputs, and success criteria
-- Prevents prompt drift across runs (currently the same autonomous job prompt can produce different quality results)
-- Skills are versioned and editable via the Prompt Manager UI
+- ✅ Each skill defines exact steps, expected outputs, and success criteria in `data/prompts/skills/jobs/`
+- ✅ Prevents prompt drift across runs — jobs now load structured skill templates instead of inline prompt strings
+- ✅ Skills are versioned and editable via the Prompt Manager UI (Job Skills tab)
+- ✅ `generateTaskFromJob()` builds effective prompts from skill template sections (Steps, Expected Outputs, Success Criteria)
+- ✅ API routes added: GET/PUT `/api/prompts/skills/jobs/:name`, preview via GET `/api/prompts/skills/jobs/:name/preview`
 
 ---
 

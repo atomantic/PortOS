@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye } from 'lucide-react';
+import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -37,6 +37,13 @@ export default function PromptManager() {
     template: ''
   });
 
+  // Job skills
+  const [jobSkills, setJobSkills] = useState([]);
+  const [selectedJobSkill, setSelectedJobSkill] = useState(null);
+  const [jobSkillContent, setJobSkillContent] = useState('');
+  const [jobSkillMeta, setJobSkillMeta] = useState({});
+  const [jobSkillPreview, setJobSkillPreview] = useState('');
+
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -45,12 +52,14 @@ export default function PromptManager() {
 
   const loadData = async () => {
     setLoading(true);
-    const [stagesRes, varsRes] = await Promise.all([
+    const [stagesRes, varsRes, jobSkillsRes] = await Promise.all([
       fetch('/api/prompts').then(r => r.json()),
-      fetch('/api/prompts/variables').then(r => r.json())
+      fetch('/api/prompts/variables').then(r => r.json()),
+      fetch('/api/prompts/skills/jobs').then(r => r.json()).catch(() => ({ skills: [] }))
     ]);
     setStages(stagesRes.stages || {});
     setVariables(varsRes.variables || {});
+    setJobSkills(jobSkillsRes.skills || []);
     setLoading(false);
   };
 
@@ -199,6 +208,30 @@ export default function PromptManager() {
     }
   };
 
+  // Job skill functions
+  const loadJobSkill = async (name) => {
+    setSelectedJobSkill(name);
+    setJobSkillPreview('');
+    const res = await fetch(`/api/prompts/skills/jobs/${name}`).then(r => r.json());
+    setJobSkillContent(res.content || '');
+    setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
+  };
+
+  const saveJobSkill = async () => {
+    setSaving(true);
+    await fetch(`/api/prompts/skills/jobs/${selectedJobSkill}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: jobSkillContent })
+    });
+    setSaving(false);
+  };
+
+  const previewJobSkill = async () => {
+    const res = await fetch(`/api/prompts/skills/jobs/${selectedJobSkill}/preview`).then(r => r.json());
+    setJobSkillPreview(res.preview || '');
+  };
+
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>;
   }
@@ -237,6 +270,14 @@ export default function PromptManager() {
           }`}
         >
           <Variable size={16} /> Variables
+        </button>
+        <button
+          onClick={() => setTab('job-skills')}
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
+            tab === 'job-skills' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
+          }`}
+        >
+          <Briefcase size={16} /> Job Skills
         </button>
       </div>
 
@@ -488,6 +529,107 @@ export default function PromptManager() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Job Skills Tab */}
+      {tab === 'job-skills' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Job Skill List */}
+          <div className="bg-port-card border border-port-border rounded-xl p-4">
+            <div className="mb-3">
+              <h3 className="text-sm font-medium text-gray-400">Autonomous Job Skills</h3>
+              <p className="text-xs text-gray-500 mt-1">Versioned prompt templates for recurring jobs</p>
+            </div>
+            <div className="space-y-1">
+              {jobSkills.map((skill) => (
+                <button
+                  key={skill.name}
+                  onClick={() => loadJobSkill(skill.name)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
+                    selectedJobSkill === skill.name
+                      ? 'bg-port-accent/20 text-port-accent'
+                      : 'text-gray-300 hover:bg-port-border'
+                  }`}
+                >
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">{skill.name}</span>
+                    {skill.hasTemplate && (
+                      <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-port-success/20 text-port-success rounded uppercase font-semibold">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500">{skill.jobId}</div>
+                </button>
+              ))}
+              {jobSkills.length === 0 && (
+                <div className="text-sm text-gray-500 px-3 py-2">No job skill templates found</div>
+              )}
+            </div>
+          </div>
+
+          {/* Job Skill Editor */}
+          <div className="lg:col-span-2 space-y-4">
+            {selectedJobSkill ? (
+              <>
+                <div className="bg-port-card border border-port-border rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-lg font-medium text-white">{jobSkillMeta.jobName || selectedJobSkill}</h3>
+                      <div className="flex gap-3 text-xs text-gray-500 mt-1">
+                        {jobSkillMeta.category && <span>Category: {jobSkillMeta.category}</span>}
+                        {jobSkillMeta.interval && <span>Interval: {jobSkillMeta.interval}</span>}
+                        {jobSkillMeta.jobId && <span>ID: {jobSkillMeta.jobId}</span>}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={previewJobSkill}
+                        className="flex items-center gap-1 px-3 py-1 text-sm bg-port-border hover:bg-port-border/80 text-white rounded"
+                      >
+                        <Eye size={14} /> Preview
+                      </button>
+                      <button
+                        onClick={saveJobSkill}
+                        disabled={saving}
+                        className="flex items-center gap-1 px-3 py-1 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
+                      >
+                        <Save size={14} /> Save
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Skill Template (Markdown)</label>
+                    <textarea
+                      value={jobSkillContent}
+                      onChange={(e) => setJobSkillContent(e.target.value)}
+                      className="w-full h-96 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Sections: ## Prompt Template, ## Steps, ## Expected Outputs, ## Success Criteria
+                    </p>
+                  </div>
+                </div>
+
+                {/* Preview Panel */}
+                {jobSkillPreview && (
+                  <div className="bg-port-card border border-port-border rounded-xl p-4">
+                    <h4 className="text-sm font-medium text-gray-400 mb-2">Effective Prompt Preview</h4>
+                    <pre className="text-sm text-gray-300 whitespace-pre-wrap bg-port-bg p-3 rounded max-h-64 overflow-auto">
+                      {jobSkillPreview}
+                    </pre>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
+                <p>Select a job skill to edit its prompt template</p>
+                <p className="text-xs mt-2">These templates define how recurring autonomous jobs execute</p>
+              </div>
+            )}
           </div>
         </div>
       )}

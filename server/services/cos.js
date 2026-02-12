@@ -670,7 +670,7 @@ export async function evaluateTasks() {
 
     for (const job of dueJobs) {
       if (tasksToSpawn.length >= availableSlots) break;
-      const task = generateTaskFromJob(job);
+      const task = await generateTaskFromJob(job);
       tasksToSpawn.push(task);
       emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
         jobId: job.id,
