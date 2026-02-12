@@ -4,14 +4,15 @@ import * as THREE from 'three';
 import { CITY_COLORS } from './cityConstants';
 
 // Animated accent light that slowly shifts color, with reactive brightness
-function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef }) {
+function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef, neonScaleRef }) {
   const ref = useRef();
 
   useFrame(({ clock }) => {
     if (!ref.current) return;
     const b = brightnessRef.current;
+    const ns = neonScaleRef?.current ?? 1;
     const t = clock.getElapsedTime();
-    ref.current.intensity = (baseIntensity + Math.sin(t * speed) * baseIntensity * shiftRange) * b;
+    ref.current.intensity = (baseIntensity + Math.sin(t * speed) * baseIntensity * shiftRange) * b * ns;
   });
 
   return (
@@ -26,7 +27,7 @@ function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRang
 }
 
 // Sweeping searchlight effect with reactive brightness
-function Searchlight({ brightnessRef }) {
+function Searchlight({ brightnessRef, neonScaleRef }) {
   const ref = useRef();
 
   useFrame(({ clock }) => {
@@ -36,7 +37,8 @@ function Searchlight({ brightnessRef }) {
     const radius = 25;
     ref.current.position.x = Math.cos(angle) * radius;
     ref.current.position.z = Math.sin(angle) * radius;
-    ref.current.intensity = 0.6 * brightnessRef.current;
+    const ns = neonScaleRef?.current ?? 1;
+    ref.current.intensity = 0.6 * brightnessRef.current * ns;
     ref.current.target.position.set(0, 0, 0);
     ref.current.target.updateMatrixWorld();
   });
@@ -57,12 +59,13 @@ function Searchlight({ brightnessRef }) {
 }
 
 // Static point light that updates intensity every frame from brightness ref
-function ReactivePointLight({ position, baseIntensity, color, distance, brightnessRef }) {
+function ReactivePointLight({ position, baseIntensity, color, distance, brightnessRef, neonScaleRef }) {
   const ref = useRef();
 
   useFrame(() => {
     if (!ref.current) return;
-    ref.current.intensity = baseIntensity * brightnessRef.current;
+    const ns = neonScaleRef?.current ?? 1;
+    ref.current.intensity = baseIntensity * brightnessRef.current * ns;
   });
 
   return (
@@ -77,12 +80,15 @@ function ReactivePointLight({ position, baseIntensity, color, distance, brightne
 }
 
 export default function CityLights({ settings }) {
-  // Neon point lights only scale with ambient brightness slider (not daylight factor)
   const brightnessRef = useRef(settings?.ambientBrightness ?? 1.2);
   brightnessRef.current = settings?.ambientBrightness ?? 1.2;
 
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
   const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+
+  // Neon scale: dim neon point lights during daytime (30% at noon, 100% at night)
+  const neonScaleRef = useRef(1);
+  const targetNeonScale = 1.0 - (preset.daylightFactor ?? 0) * 0.7;
 
   // Hemisphere light refs — provides natural sky fill (like Unreal Engine's Sky Light)
   const hemiRef = useRef();
@@ -102,6 +108,9 @@ export default function CityLights({ settings }) {
 
   useFrame((_, delta) => {
     const lf = Math.min(1, delta * 3);
+
+    // Lerp neon scale
+    neonScaleRef.current += (targetNeonScale - neonScaleRef.current) * lf;
 
     // Hemisphere light — main daytime fill
     if (hemiRef.current) {
@@ -123,23 +132,23 @@ export default function CityLights({ settings }) {
       <hemisphereLight ref={hemiRef} color="#1a1a3a" groundColor="#0a0a20" intensity={0.3} />
       <ambientLight ref={ambientRef} intensity={0.18} color="#1a1a3a" />
       {/* Main overhead cyan */}
-      <ReactivePointLight position={[0, 30, 0]} baseIntensity={1.2} color="#06b6d4" distance={100} brightnessRef={brightnessRef} />
+      <ReactivePointLight position={[0, 30, 0]} baseIntensity={1.2} color="#06b6d4" distance={100} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Secondary overhead fill - broad white/blue */}
-      <ReactivePointLight position={[0, 20, 10]} baseIntensity={0.5} color="#4488cc" distance={90} brightnessRef={brightnessRef} />
+      <ReactivePointLight position={[0, 20, 10]} baseIntensity={0.5} color="#4488cc" distance={90} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Magenta accent from left - animated color shift */}
-      <AnimatedLight position={[-20, 12, -15]} baseColor="#ec4899" baseIntensity={0.7} distance={60} speed={0.3} shiftRange={0.15} brightnessRef={brightnessRef} />
+      <AnimatedLight position={[-20, 12, -15]} baseColor="#ec4899" baseIntensity={0.7} distance={60} speed={0.3} shiftRange={0.15} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Blue accent from right - animated shift */}
-      <AnimatedLight position={[20, 12, 15]} baseColor="#3b82f6" baseIntensity={0.7} distance={60} speed={0.4} shiftRange={0.12} brightnessRef={brightnessRef} />
+      <AnimatedLight position={[20, 12, 15]} baseColor="#3b82f6" baseIntensity={0.7} distance={60} speed={0.4} shiftRange={0.12} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Purple from behind - more presence */}
-      <ReactivePointLight position={[0, 15, -25]} baseIntensity={0.5} color="#8b5cf6" distance={60} brightnessRef={brightnessRef} />
+      <ReactivePointLight position={[0, 15, -25]} baseIntensity={0.5} color="#8b5cf6" distance={60} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Warm orange ground level accent */}
-      <ReactivePointLight position={[10, 3, 5]} baseIntensity={0.35} color="#f97316" distance={35} brightnessRef={brightnessRef} />
+      <ReactivePointLight position={[10, 3, 5]} baseIntensity={0.35} color="#f97316" distance={35} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Additional green accent - ground level from opposite side */}
-      <ReactivePointLight position={[-12, 3, 8]} baseIntensity={0.2} color="#22c55e" distance={25} brightnessRef={brightnessRef} />
+      <ReactivePointLight position={[-12, 3, 8]} baseIntensity={0.2} color="#22c55e" distance={25} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Red warning accent from below-right */}
-      <ReactivePointLight position={[15, 2, -10]} baseIntensity={0.15} color="#f43f5e" distance={22} brightnessRef={brightnessRef} />
+      <ReactivePointLight position={[15, 2, -10]} baseIntensity={0.15} color="#f43f5e" distance={22} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Sweeping searchlight */}
-      <Searchlight brightnessRef={brightnessRef} />
+      <Searchlight brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
     </>
   );
 }

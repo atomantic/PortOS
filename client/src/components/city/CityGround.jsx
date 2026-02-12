@@ -55,6 +55,18 @@ function RollingFog() {
 
 export default function CityGround({ settings }) {
   const reflectionsEnabled = settings?.reflectionsEnabled ?? true;
+  const groundMatRef = useRef();
+
+  const timeOfDay = settings?.timeOfDay ?? 'sunset';
+  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const groundColorTarget = useRef(new THREE.Color(preset.groundColor ?? '#0a0a20'));
+  groundColorTarget.current.set(preset.groundColor ?? '#0a0a20');
+
+  useFrame((_, delta) => {
+    if (!groundMatRef.current) return;
+    const lf = Math.min(1, delta * 3);
+    groundMatRef.current.color.lerp(groundColorTarget.current, lf);
+  });
 
   const puddles = useMemo(() => {
     const result = [];
@@ -81,6 +93,7 @@ export default function CityGround({ settings }) {
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
           <planeGeometry args={[120, 120]} />
           <meshStandardMaterial
+            ref={groundMatRef}
             color="#0a0a20"
             metalness={0.4}
             roughness={0.7}
