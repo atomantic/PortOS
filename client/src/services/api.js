@@ -974,6 +974,34 @@ export const deleteSocialAccount = (id) => request(`/digital-twin/social-account
   method: 'DELETE'
 });
 
+// Digital Twin - Genome
+export const getGenomeSummary = () => request('/digital-twin/genome');
+export const uploadGenomeFile = (content, filename) => request('/digital-twin/genome/upload', {
+  method: 'POST',
+  body: JSON.stringify({ content, filename })
+});
+export const scanGenomeMarkers = () => request('/digital-twin/genome/scan', { method: 'POST' });
+export const searchGenomeSNP = (rsid) => request('/digital-twin/genome/search', {
+  method: 'POST',
+  body: JSON.stringify({ rsid })
+});
+export const saveGenomeMarker = (data) => request('/digital-twin/genome/markers', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateGenomeMarkerNotes = (id, notes) => request(`/digital-twin/genome/markers/${id}/notes`, {
+  method: 'PUT',
+  body: JSON.stringify({ notes })
+});
+export const deleteGenomeMarker = (id) => request(`/digital-twin/genome/markers/${id}`, { method: 'DELETE' });
+export const deleteGenomeData = () => request('/digital-twin/genome', { method: 'DELETE' });
+
+// Digital Twin - Genome ClinVar
+export const getClinvarStatus = () => request('/digital-twin/genome/clinvar/status');
+export const syncClinvar = () => request('/digital-twin/genome/clinvar/sync', { method: 'POST' });
+export const scanClinvar = () => request('/digital-twin/genome/clinvar/scan', { method: 'POST' });
+export const deleteClinvar = () => request('/digital-twin/genome/clinvar', { method: 'DELETE' });
+
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
 export const getBrowserConfig = () => request('/browser/config');
