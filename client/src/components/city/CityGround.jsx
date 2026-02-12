@@ -82,8 +82,8 @@ export default function CityGround({ settings }) {
           <planeGeometry args={[120, 120]} />
           <meshStandardMaterial
             color="#0a0a20"
-            metalness={0.85}
-            roughness={0.2}
+            metalness={0.4}
+            roughness={0.7}
             side={THREE.DoubleSide}
           />
         </mesh>

@@ -145,8 +145,8 @@ const DepthFogShader = {
 
       float linearDepth = toLinearDepth(rawDepth, uCameraNear, uCameraFar);
 
-      // Fog factor: 0 = no fog, 1 = full fog
-      float fogFactor = smoothstep(uFogNear, uFogFar, linearDepth);
+      // Fog factor: 0 = no fog, capped at 0.85 so sky/distant objects stay visible
+      float fogFactor = smoothstep(uFogNear, uFogFar, linearDepth) * 0.85;
 
       color.rgb = mix(color.rgb, uFogColor, fogFactor);
       gl_FragColor = color;
@@ -205,8 +205,9 @@ export default function CityEffects({ settings }) {
       dfPass.uniforms.uCameraNear.value = camera.near;
       dfPass.uniforms.uCameraFar.value = camera.far;
       // Map fogDensity (0-0.03) to fog range: higher density = closer fog
-      const fogNear = Math.max(5, 60 - fogDensity * 2000);
-      const fogFar = Math.max(30, 200 - fogDensity * 4000);
+      // At default 0.008: near=80, far=300. At max 0.03: near=30, far=150
+      const fogNear = Math.max(20, 100 - fogDensity * 2500);
+      const fogFar = Math.max(100, 400 - fogDensity * 8000);
       dfPass.uniforms.uFogNear.value = fogNear;
       dfPass.uniforms.uFogFar.value = fogFar;
       fogPassRef.current = dfPass;
