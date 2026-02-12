@@ -66,6 +66,7 @@ pm2 logs
 - [x] **M37**: Autonomous Jobs - Recurring scheduled jobs that the CoS executes proactively using digital twin identity
 - [x] **M38**: Agent Tools - AI content generation, feed browsing, and autonomous engagement for Moltbook agents
 - [x] **M39**: Agent-Centric Drill-Down - Redesigned Agents section with agent-first hierarchy, deep-linkable URLs, and scoped sub-tabs
+- [x] **M41**: CyberCity Immersive Overhaul - Procedural synthwave audio, enhanced post-processing (chromatic aberration, film grain, color grading), reflective wet-street ground, settings system, and atmosphere enhancements
 
 ### Planned
 
