@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
+import * as THREE from 'three';
 import { CITY_COLORS } from './cityConstants';
 
 // Animated accent light that slowly shifts color, with reactive brightness
@@ -78,14 +79,19 @@ function ReactivePointLight({ position, baseIntensity, color, distance, brightne
 export default function CityLights({ settings }) {
   // Combine ambient brightness slider with time-of-day daylight factor
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
-  const daylightFactor = CITY_COLORS.timeOfDay[timeOfDay]?.daylightFactor ?? 0.6;
-  const brightnessRef = useRef((settings?.ambientBrightness ?? 1.2) * daylightFactor);
-  brightnessRef.current = (settings?.ambientBrightness ?? 1.2) * daylightFactor;
+  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const brightnessRef = useRef((settings?.ambientBrightness ?? 1.2) * preset.daylightFactor);
+  brightnessRef.current = (settings?.ambientBrightness ?? 1.2) * preset.daylightFactor;
+
+  const ambientColorTarget = useRef(new THREE.Color(preset.ambientColor));
+  ambientColorTarget.current.set(preset.ambientColor);
 
   const ambientRef = useRef();
-  useFrame(() => {
+  useFrame((_, delta) => {
     if (!ambientRef.current) return;
     ambientRef.current.intensity = 0.18 * brightnessRef.current;
+    // Smoothly lerp ambient color toward target
+    ambientRef.current.color.lerp(ambientColorTarget.current, Math.min(1, delta * 3));
   });
 
   return (
