@@ -38,6 +38,12 @@ async function checkCdp() {
 }
 
 async function launchBrowser() {
+  // Reuse existing Chrome if CDP is already reachable (e.g. after PM2 restart)
+  if (await checkCdp()) {
+    console.log(`♻️ Existing Chrome CDP found at ${CDP_HOST}:${CDP_PORT}, reusing`);
+    return;
+  }
+
   const config = await loadConfig();
   headlessMode = config.headless !== false;
   const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
@@ -85,7 +91,7 @@ async function launchBrowser() {
 // Health check server
 const healthServer = createServer(async (req, res) => {
   if (req.url === '/health') {
-    const connected = chromeProcess && !chromeProcess.killed && await checkCdp();
+    const connected = await checkCdp();
     const status = connected ? 'healthy' : 'unhealthy';
     res.writeHead(connected ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
