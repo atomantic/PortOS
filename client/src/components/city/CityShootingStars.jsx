@@ -1,6 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { CITY_COLORS } from './cityConstants';
 
 // Vertex shader for shooting star trail
 const TRAIL_VERT = `
@@ -25,7 +26,7 @@ const TRAIL_FRAG = `
 `;
 
 // A single shooting star with glowing head and fading trail
-function ShootingStar({ index, playSfx }) {
+function ShootingStar({ index, playSfx, daylightRef }) {
   const groupRef = useRef();
   const headRef = useRef();
   const trailRef = useRef();
@@ -63,8 +64,12 @@ function ShootingStar({ index, playSfx }) {
     const t = clock.getElapsedTime();
     const s = state.current;
 
+    const daylight = daylightRef?.current ?? 0;
+    const nightFactor = 1 - daylight;
+
     if (!s.active) {
-      if (t > s.nextSpawn) {
+      // Block spawning when daylight > 0.5
+      if (t > s.nextSpawn && daylight <= 0.5) {
         // Spawn a new shooting star
         s.active = true;
         s.progress = 0;
@@ -112,11 +117,11 @@ function ShootingStar({ index, playSfx }) {
     const headY = s.startPos[1] + s.direction[1] * totalDist * s.progress;
     const headZ = s.startPos[2] + s.direction[2] * totalDist * s.progress;
 
-    // Update head glow
+    // Update head glow (scale opacity by nightFactor)
     if (headRef.current) {
       headRef.current.visible = true;
       headRef.current.position.set(headX, headY, headZ);
-      headRef.current.material.opacity = Math.min(1, (1 - s.progress) * 2);
+      headRef.current.material.opacity = Math.min(1, (1 - s.progress) * 2) * nightFactor;
     }
 
     // Update trail geometry
@@ -134,7 +139,7 @@ function ShootingStar({ index, playSfx }) {
 
     if (matRef.current) {
       matRef.current.uniforms.uColor.value.set(s.color[0], s.color[1], s.color[2]);
-      matRef.current.uniforms.uOpacity.value = Math.min(1, (1 - s.progress) * 2.5);
+      matRef.current.uniforms.uOpacity.value = Math.min(1, (1 - s.progress) * 2.5) * nightFactor;
     }
   });
 
@@ -185,13 +190,23 @@ function ShootingStar({ index, playSfx }) {
   );
 }
 
-export default function CityShootingStars({ playSfx }) {
+export default function CityShootingStars({ playSfx, settings }) {
+  const daylightRef = useRef(0);
+  const timeOfDay = settings?.timeOfDay ?? 'sunset';
+  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const targetDaylight = preset.daylightFactor ?? 0;
+
+  useFrame((_, delta) => {
+    const lf = Math.min(1, delta * 3);
+    daylightRef.current += (targetDaylight - daylightRef.current) * lf;
+  });
+
   return (
     <group>
       {/* 3 potential shooting stars, staggered spawn times */}
-      <ShootingStar index={0} playSfx={playSfx} />
-      <ShootingStar index={1} playSfx={playSfx} />
-      <ShootingStar index={2} playSfx={playSfx} />
+      <ShootingStar index={0} playSfx={playSfx} daylightRef={daylightRef} />
+      <ShootingStar index={1} playSfx={playSfx} daylightRef={daylightRef} />
+      <ShootingStar index={2} playSfx={playSfx} daylightRef={daylightRef} />
     </group>
   );
 }

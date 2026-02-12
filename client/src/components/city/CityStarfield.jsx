@@ -1,6 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { CITY_COLORS } from './cityConstants';
 
 const STAR_VERT = `
   attribute float size;
@@ -22,6 +23,7 @@ const STAR_FRAG = `
   varying float vPhase;
   varying vec3 vColor;
   uniform float uTime;
+  uniform float uDaylight;
   void main() {
     // Soft circular point
     float d = length(gl_PointCoord - vec2(0.5));
@@ -29,13 +31,16 @@ const STAR_FRAG = `
     float alpha = smoothstep(0.5, 0.15, d);
     // Twinkle: slow shimmer unique per star
     float twinkle = 0.7 + 0.3 * sin(uTime * (0.4 + vPhase * 0.6) + vPhase * 6.2831);
-    gl_FragColor = vec4(vColor, alpha * twinkle);
+    // Fade out during daytime
+    float nightFactor = 1.0 - uDaylight;
+    gl_FragColor = vec4(vColor, alpha * twinkle * nightFactor);
   }
 `;
 
-export default function CityStarfield() {
+export default function CityStarfield({ settings }) {
   const pointsRef = useRef();
   const matRef = useRef();
+  const daylightRef = useRef(0);
 
   const { positions, sizes, phases, colors } = useMemo(() => {
     const count = 1500;
@@ -77,11 +82,19 @@ export default function CityStarfield() {
     return { positions: pos, sizes: sz, phases: ph, colors: col };
   }, []);
 
-  useFrame(({ clock }) => {
+  const timeOfDay = settings?.timeOfDay ?? 'sunset';
+  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const targetDaylight = preset.daylightFactor ?? 0;
+
+  useFrame(({ clock }, delta) => {
     if (!pointsRef.current) return;
     pointsRef.current.rotation.y = clock.getElapsedTime() * 0.003;
+    // Lerp daylight uniform toward target
+    const lf = Math.min(1, delta * 3);
+    daylightRef.current += (targetDaylight - daylightRef.current) * lf;
     if (matRef.current) {
       matRef.current.uniforms.uTime.value = clock.getElapsedTime();
+      matRef.current.uniforms.uDaylight.value = daylightRef.current;
     }
   });
 
@@ -97,7 +110,7 @@ export default function CityStarfield() {
         ref={matRef}
         vertexShader={STAR_VERT}
         fragmentShader={STAR_FRAG}
-        uniforms={{ uTime: { value: 0 } }}
+        uniforms={{ uTime: { value: 0 }, uDaylight: { value: 0 } }}
         transparent
         blending={THREE.AdditiveBlending}
         depthWrite={false}
