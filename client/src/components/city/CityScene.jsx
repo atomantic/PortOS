@@ -9,7 +9,7 @@ import CityCelestial from './CityCelestial';
 import BuildingCluster from './BuildingCluster';
 import CityDataStreams from './CityDataStreams';
 import CityTraffic from './CityTraffic';
-import CityRoads from './CityRoads';
+
 import CityWeather from './CityWeather';
 import CityBillboards from './CityBillboards';
 import CityShootingStars from './CityShootingStars';
@@ -48,7 +48,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityCelestial settings={settings} />
       <CitySkyline />
       <CityGround settings={settings} />
-      <CityRoads positions={positions} />
+
       <BuildingCluster
         apps={apps}
         agentMap={agentMap}
