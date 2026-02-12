@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
 import CityGround from './CityGround';
 import CityLights from './CityLights';
 import CityParticles from './CityParticles';
@@ -18,6 +19,7 @@ import CitySkyline from './CitySkyline';
 import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
+import CityEffects from './CityEffects';
 
 export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData }) {
   const [positions, setPositions] = useState(null);
@@ -37,6 +39,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       style={{ background: '#030308' }}
       gl={{ antialias: true }}
     >
+      <fog attach="fog" args={['#030308', 30, 90]} />
       <CityLights />
       <CityStarfield />
       <CityShootingStars />
@@ -64,6 +67,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityDataRain />
       <CityEmbers />
       <CityParticles />
+      <CityEffects />
       <OrbitControls
         maxPolarAngle={Math.PI / 2.2}
         minDistance={5}

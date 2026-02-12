@@ -4,15 +4,52 @@ import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { CITY_COLORS, PIXEL_FONT_URL } from './cityConstants';
 
+// Holographic scan line shader for billboard overlay
+const SCAN_VERT = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SCAN_FRAG = `
+  uniform float uTime;
+  uniform vec3 uColor;
+  varying vec2 vUv;
+  void main() {
+    // Horizontal scan lines
+    float scanLine = step(0.5, fract(vUv.y * 40.0));
+    float scanAlpha = scanLine * 0.04;
+
+    // Moving scan beam
+    float beam = smoothstep(0.0, 0.02, abs(vUv.y - fract(uTime * 0.15)));
+    beam = 1.0 - beam;
+    scanAlpha += beam * 0.12;
+
+    // Edge vignette
+    float edgeX = smoothstep(0.0, 0.05, vUv.x) * smoothstep(1.0, 0.95, vUv.x);
+    float edgeY = smoothstep(0.0, 0.05, vUv.y) * smoothstep(1.0, 0.95, vUv.y);
+    float edge = 1.0 - edgeX * edgeY;
+    scanAlpha += edge * 0.08;
+
+    gl_FragColor = vec4(uColor, scanAlpha);
+  }
+`;
+
 // A single floating holographic billboard that cycles through messages
 function Billboard({ position, rotation, messages, color, width = 3.5, height = 1.8, speed = 0.08 }) {
   const groupRef = useRef();
   const borderRef = useRef();
   const textRef = useRef();
+  const scanRef = useRef();
+  const glowRef = useRef();
   const stateRef = useRef({ index: 0, lastSwitch: 0 });
 
   const displayText = useRef(messages[0]?.text || '');
   const displayLabel = useRef(messages[0]?.label || '');
+
+  const colorVec = useMemo(() => new THREE.Color(color), [color]);
 
   useFrame(({ clock }) => {
     if (!groupRef.current) return;
@@ -26,6 +63,16 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       borderRef.current.material.opacity = 0.15 + Math.sin(t * 1.5) * 0.08;
     }
 
+    // Scan line animation
+    if (scanRef.current) {
+      scanRef.current.uniforms.uTime.value = t;
+    }
+
+    // Glow pulse
+    if (glowRef.current) {
+      glowRef.current.material.opacity = 0.1 + Math.sin(t * 0.8 + position[0]) * 0.05;
+    }
+
     // Cycle through messages every ~6 seconds
     const state = stateRef.current;
     if (t - state.lastSwitch > 6) {
@@ -33,7 +80,6 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       state.lastSwitch = t;
       displayText.current = messages[state.index]?.text || '';
       displayLabel.current = messages[state.index]?.label || '';
-      // Force text update via key change won't work here, so we update ref
       if (textRef.current) {
         textRef.current.text = displayText.current;
       }
@@ -63,15 +109,21 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
 
   return (
     <group ref={groupRef} position={position} rotation={rotation}>
-      {/* Billboard background panel */}
+      {/* Billboard background panel (front face only) */}
       <mesh>
         <planeGeometry args={[width, height]} />
-        <meshBasicMaterial color="#020208" transparent opacity={0.7} side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#020208" transparent opacity={0.7} />
+      </mesh>
+
+      {/* Solid back blocker to prevent mirrored text bleed-through */}
+      <mesh position={[0, 0, -0.01]}>
+        <planeGeometry args={[width, height]} />
+        <meshBasicMaterial color="#020208" side={THREE.BackSide} />
       </mesh>
 
       {/* Neon border frame */}
       <mesh ref={borderRef} geometry={borderGeom} position={[0, 0, 0.01]}>
-        <meshBasicMaterial color={color} transparent opacity={0.2} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={color} transparent opacity={0.2} />
       </mesh>
 
       {/* Top label */}
@@ -105,6 +157,35 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
       <mesh position={[0, height / 2 - 0.45, 0.01]}>
         <planeGeometry args={[width - 0.4, 0.02]} />
         <meshBasicMaterial color={color} transparent opacity={0.4} />
+      </mesh>
+
+      {/* Holographic scan line overlay */}
+      <mesh position={[0, 0, 0.03]}>
+        <planeGeometry args={[width, height]} />
+        <shaderMaterial
+          ref={scanRef}
+          vertexShader={SCAN_VERT}
+          fragmentShader={SCAN_FRAG}
+          uniforms={{
+            uTime: { value: 0 },
+            uColor: { value: colorVec },
+          }}
+          transparent
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+
+      {/* Glow halo behind billboard */}
+      <mesh ref={glowRef} position={[0, 0, -0.05]}>
+        <planeGeometry args={[width + 1.2, height + 0.8]} />
+        <meshBasicMaterial
+          color={color}
+          transparent
+          opacity={0.1}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
       </mesh>
 
       {/* Support pole / projector beam */}
@@ -181,20 +262,20 @@ export default function CityBillboards({ positions, apps, cosStatus, productivit
     const billboards = [];
     const pad = 4;
 
-    // Billboard 1 - Left side facing inward
+    // Billboard 1 - Left side facing outward (toward viewers)
     billboards.push({
       id: 'bb-left',
       position: [minX - pad, 6, (minZ + maxZ) / 2],
-      rotation: [0, Math.PI / 2, 0],
+      rotation: [0, -Math.PI / 2, 0],
       messages: systemMessages,
       color: colors[0],
     });
 
-    // Billboard 2 - Right side facing inward
+    // Billboard 2 - Right side facing outward (toward viewers)
     billboards.push({
       id: 'bb-right',
       position: [maxX + pad, 7.5, (minZ + maxZ) / 2],
-      rotation: [0, -Math.PI / 2, 0],
+      rotation: [0, Math.PI / 2, 0],
       messages: activityMessages,
       color: colors[1],
     });
