@@ -77,25 +77,50 @@ function ReactivePointLight({ position, baseIntensity, color, distance, brightne
 }
 
 export default function CityLights({ settings }) {
-  // Combine ambient brightness slider with time-of-day daylight factor
+  // Neon point lights only scale with ambient brightness slider (not daylight factor)
+  const brightnessRef = useRef(settings?.ambientBrightness ?? 1.2);
+  brightnessRef.current = settings?.ambientBrightness ?? 1.2;
+
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
   const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
-  const brightnessRef = useRef((settings?.ambientBrightness ?? 1.2) * preset.daylightFactor);
-  brightnessRef.current = (settings?.ambientBrightness ?? 1.2) * preset.daylightFactor;
 
+  // Hemisphere light refs — provides natural sky fill (like Unreal Engine's Sky Light)
+  const hemiRef = useRef();
+  const hemiSkyTarget = useRef(new THREE.Color(preset.hemiSkyColor));
+  const hemiGroundTarget = useRef(new THREE.Color(preset.hemiGroundColor));
+  hemiSkyTarget.current.set(preset.hemiSkyColor);
+  hemiGroundTarget.current.set(preset.hemiGroundColor);
+  const hemiIntensityTarget = useRef(preset.hemiIntensity);
+  hemiIntensityTarget.current = preset.hemiIntensity * brightnessRef.current;
+
+  // Ambient light refs
+  const ambientRef = useRef();
   const ambientColorTarget = useRef(new THREE.Color(preset.ambientColor));
   ambientColorTarget.current.set(preset.ambientColor);
+  const ambientIntensityTarget = useRef(preset.ambientIntensity);
+  ambientIntensityTarget.current = preset.ambientIntensity * brightnessRef.current;
 
-  const ambientRef = useRef();
   useFrame((_, delta) => {
-    if (!ambientRef.current) return;
-    ambientRef.current.intensity = 0.18 * brightnessRef.current;
-    // Smoothly lerp ambient color toward target
-    ambientRef.current.color.lerp(ambientColorTarget.current, Math.min(1, delta * 3));
+    const lf = Math.min(1, delta * 3);
+
+    // Hemisphere light — main daytime fill
+    if (hemiRef.current) {
+      hemiRef.current.color.lerp(hemiSkyTarget.current, lf);
+      hemiRef.current.groundColor.lerp(hemiGroundTarget.current, lf);
+      hemiRef.current.intensity += (hemiIntensityTarget.current - hemiRef.current.intensity) * lf;
+    }
+
+    // Ambient light
+    if (ambientRef.current) {
+      ambientRef.current.color.lerp(ambientColorTarget.current, lf);
+      ambientRef.current.intensity += (ambientIntensityTarget.current - ambientRef.current.intensity) * lf;
+    }
   });
 
   return (
     <>
+      {/* Hemisphere sky light — like Unreal Engine's Sky Light, illuminates all geometry from sky/ground */}
+      <hemisphereLight ref={hemiRef} color="#1a1a3a" groundColor="#0a0a20" intensity={0.3} />
       <ambientLight ref={ambientRef} intensity={0.18} color="#1a1a3a" />
       {/* Main overhead cyan */}
       <ReactivePointLight position={[0, 30, 0]} baseIntensity={1.2} color="#06b6d4" distance={100} brightnessRef={brightnessRef} />

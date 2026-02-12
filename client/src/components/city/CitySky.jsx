@@ -120,7 +120,6 @@ const getPresetColors = (name) => {
       sunIntensity: p.sunIntensity,
       sunScale: p.sunScale,
       isMoon: p.isMoon,
-      daylightFactor: p.daylightFactor,
     };
   }
   return presetColors[name];
