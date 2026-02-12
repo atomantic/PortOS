@@ -37,20 +37,20 @@ function RoadSegment({ start, end, color, offset = 0 }) {
         position={[midX, 0.005, midZ]}
         rotation={[-Math.PI / 2, 0, angle]}
       >
-        <planeGeometry args={[length, 0.3]} />
+        <planeGeometry args={[length, 0.6]} />
         <meshBasicMaterial color="#0a0a1a" transparent opacity={0.6} side={THREE.DoubleSide} />
       </mesh>
 
       {/* Road edge lines */}
       <mesh
-        position={[midX, 0.01, midZ + Math.cos(angle) * 0.15]}
+        position={[midX, 0.01, midZ + Math.cos(angle) * 0.3]}
         rotation={[-Math.PI / 2, 0, angle]}
       >
         <planeGeometry args={[length, 0.02]} />
         <meshBasicMaterial color={color} transparent opacity={0.3} side={THREE.DoubleSide} />
       </mesh>
       <mesh
-        position={[midX, 0.01, midZ - Math.cos(angle) * 0.15]}
+        position={[midX, 0.01, midZ - Math.cos(angle) * 0.3]}
         rotation={[-Math.PI / 2, 0, angle]}
       >
         <planeGeometry args={[length, 0.02]} />
@@ -93,7 +93,7 @@ export default function CityRoads({ positions }) {
       maxZ = Math.max(maxZ, p.z);
     });
 
-    const pad = spacing / 2 + 0.5;
+    const pad = spacing / 2 + 1.5;
 
     // Horizontal roads between rows
     rows.forEach((z, i) => {

@@ -1,9 +1,8 @@
 import { useMemo, useEffect } from 'react';
 import { Text } from '@react-three/drei';
 import { computeCityLayout } from './cityLayout';
-import { getBuildingHeight, DISTRICT_PARAMS, PIXEL_FONT_URL } from './cityConstants';
-import Building from './Building';
-import AgentEntity from './AgentEntity';
+import { DISTRICT_PARAMS, PIXEL_FONT_URL } from './cityConstants';
+import Borough from './Borough';
 
 export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady }) {
   const positions = useMemo(() => computeCityLayout(apps), [apps]);
@@ -29,27 +28,14 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPos
         const pos = positions.get(app.id);
         if (!pos) return null;
 
-        const agentData = agentMap.get(app.id);
-        const agents = agentData?.agents || [];
-        const height = getBuildingHeight(app);
-
         return (
-          <group key={app.id}>
-            <Building
-              app={app}
-              position={pos}
-              agentCount={agents.length}
-              onClick={() => onBuildingClick?.(app)}
-            />
-            {agents.map((agent, i) => (
-              <AgentEntity
-                key={agent.agentId || i}
-                agent={agent}
-                position={[pos.x, height + 1.5 + i * 1.0, pos.z]}
-                index={i}
-              />
-            ))}
-          </group>
+          <Borough
+            key={app.id}
+            app={app}
+            position={pos}
+            agentMap={agentMap}
+            onBuildingClick={onBuildingClick}
+          />
         );
       })}
 

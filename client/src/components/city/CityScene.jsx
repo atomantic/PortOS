@@ -32,13 +32,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
 
   return (
     <Canvas
-      camera={{ position: [0, 18, 30], fov: 50 }}
+      camera={{ position: [0, 25, 45], fov: 50 }}
       dpr={[1, 1.5]}
       shadows={false}
       style={{ background: '#030308' }}
       gl={{ antialias: true }}
     >
-      <fog attach="fog" args={['#030308', 30, 90]} />
+      <fog attach="fog" args={['#030308', 30, 130]} />
       <CityLights />
       <CityStarfield />
       <CityShootingStars />
@@ -70,7 +70,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <OrbitControls
         maxPolarAngle={Math.PI / 2.2}
         minDistance={5}
-        maxDistance={80}
+        maxDistance={120}
         enableDamping
         dampingFactor={0.05}
       />

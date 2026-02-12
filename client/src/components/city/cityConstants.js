@@ -23,10 +23,21 @@ export const CITY_COLORS = {
   orbit: '#1e3a5f',
 };
 
+export const BOROUGH_PARAMS = {
+  processRingRadius: 3.0,    // Distance of process buildings from center
+  processMinHeight: 1.5,
+  processMaxHeight: 3.5,
+};
+
+export const PROCESS_BUILDING_PARAMS = {
+  width: 0.8,
+  depth: 0.8,
+};
+
 export const BUILDING_PARAMS = {
   width: 2.0,
   depth: 2.0,
-  spacing: 4.0,
+  spacing: 12.0,
   heights: {
     online: 5,
     stopped: 2.5,
