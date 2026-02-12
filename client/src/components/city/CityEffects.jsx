@@ -96,11 +96,11 @@ const ColorGradingShader = {
       float shadowWeight = smoothstep(0.0, 0.3, lum) * (1.0 - smoothstep(0.0, 0.4, lum));
       float midWeight = smoothstep(0.2, 0.5, lum) * (1.0 - smoothstep(0.5, 0.8, lum));
       float highWeight = smoothstep(0.6, 1.0, lum);
-      color.rgb = mix(color.rgb, color.rgb * shadowTint * 3.0, shadowWeight * 0.25);
+      color.rgb = mix(color.rgb, color.rgb * shadowTint * 3.0, shadowWeight * 0.12);
       color.rgb = mix(color.rgb, color.rgb * midTint * 1.4, midWeight * 0.15);
       color.rgb = mix(color.rgb, color.rgb * highTint, highWeight * 0.1);
-      // Slight contrast boost
-      color.rgb = (color.rgb - 0.5) * 1.08 + 0.5;
+      // Slight brightness lift for dark areas
+      color.rgb = color.rgb * 1.1 + 0.015;
       gl_FragColor = color;
     }
   `,

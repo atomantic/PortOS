@@ -256,13 +256,13 @@ function NeonEdgeStrip({ position, height, color, delay }) {
   useFrame(({ clock }) => {
     if (!ref.current) return;
     const t = clock.getElapsedTime();
-    ref.current.material.opacity = 0.3 + Math.sin(t * 1.2 + delay) * 0.2;
+    ref.current.material.opacity = 0.5 + Math.sin(t * 1.2 + delay) * 0.25;
   });
 
   return (
     <mesh ref={ref} position={position}>
       <boxGeometry args={[0.03, height, 0.03]} />
-      <meshBasicMaterial color={color} transparent opacity={0.4} />
+      <meshBasicMaterial color={color} transparent opacity={0.6} />
     </mesh>
   );
 }
@@ -305,13 +305,13 @@ export default function Building({ app, position, agentCount, onClick, playSfx }
     if (!meshRef.current) return;
     const t = clock.getElapsedTime();
 
-    const baseIntensity = isOnline ? 0.25 : 0.08;
-    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.1 : 0;
-    const hoverBoost = hovered ? 0.3 : 0;
+    const baseIntensity = isOnline ? 0.5 : 0.2;
+    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.15 : 0;
+    const hoverBoost = hovered ? 0.4 : 0;
     meshRef.current.material.emissiveIntensity = baseIntensity + pulse + hoverBoost;
 
     if (glowRef.current) {
-      glowRef.current.material.opacity = 0.25 + (isOnline ? Math.sin(t * 1.5) * 0.1 : 0) + (hovered ? 0.2 : 0);
+      glowRef.current.material.opacity = 0.35 + (isOnline ? Math.sin(t * 1.5) * 0.12 : 0) + (hovered ? 0.25 : 0);
     }
 
     // Glow halo wireframe pulse
@@ -336,7 +336,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx }
         <meshStandardMaterial
           color={CITY_COLORS.buildingBody}
           emissive={edgeColor}
-          emissiveIntensity={0.15}
+          emissiveIntensity={0.35}
           map={windowTexture}
           transparent
           opacity={app.archived ? 0.75 : 0.95}

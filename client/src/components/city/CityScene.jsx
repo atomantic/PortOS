@@ -40,7 +40,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       style={{ background: '#030308' }}
       gl={{ antialias: true }}
     >
-      <fogExp2 attach="fog" args={['#030308', 0.018]} />
+      <fogExp2 attach="fog" args={['#030308', 0.01]} />
       <CityLights />
       <CityStarfield />
       <CityShootingStars playSfx={playSfx} />
