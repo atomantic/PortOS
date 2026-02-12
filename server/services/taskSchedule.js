@@ -22,6 +22,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
 import { readJSONFile } from '../lib/fileUtils.js';
+import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,6 +43,75 @@ export const INTERVAL_TYPES = {
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
+
+/**
+ * Get learning-adjusted interval for a task type
+ *
+ * Applies adaptive multipliers based on historical task performance:
+ * - High success (>90%): Run 30% more often (multiplier 0.7)
+ * - Good success (75-89%): Run 15% more often (multiplier 0.85)
+ * - Moderate success (50-74%): Normal interval (multiplier 1.0)
+ * - Low success (30-49%): Run 50% less often (multiplier 1.5)
+ * - Very low (<30% with 5+ attempts): Run 100% less often (multiplier 2.0)
+ *
+ * This makes CoS more efficient by focusing on high-performing tasks
+ * while reducing wasted cycles on consistently failing ones.
+ *
+ * @param {string} taskType - Task type (e.g., 'ui-bugs', 'security')
+ * @param {string} category - 'selfImprovement' or 'appImprovement'
+ * @param {number} baseIntervalMs - Base interval in milliseconds
+ * @returns {Object} Adjusted interval info
+ */
+async function getPerformanceAdjustedInterval(taskType, category, baseIntervalMs) {
+  const taskTypeKey = category === 'selfImprovement'
+    ? `self-improve:${taskType}`
+    : `app-improve:${taskType}`;
+
+  const cooldownInfo = await getAdaptiveCooldownMultiplier(taskTypeKey).catch(() => ({
+    multiplier: 1.0,
+    reason: 'error-fallback',
+    skip: false,
+    successRate: null,
+    completed: 0
+  }));
+
+  // Don't adjust if insufficient data
+  if (cooldownInfo.reason === 'insufficient-data' || cooldownInfo.reason === 'error-fallback') {
+    return {
+      adjustedIntervalMs: baseIntervalMs,
+      multiplier: 1.0,
+      reason: cooldownInfo.reason,
+      successRate: null,
+      dataPoints: cooldownInfo.completed || 0,
+      adjusted: false
+    };
+  }
+
+  const adjustedIntervalMs = Math.round(baseIntervalMs * cooldownInfo.multiplier);
+
+  // Log significant adjustments
+  if (cooldownInfo.multiplier !== 1.0) {
+    const direction = cooldownInfo.multiplier < 1 ? 'decreased' : 'increased';
+    const percentage = Math.abs(Math.round((1 - cooldownInfo.multiplier) * 100));
+    emitLog('debug', `Learning: ${taskType} interval ${direction} by ${percentage}% (${cooldownInfo.successRate}% success rate)`, {
+      taskType,
+      multiplier: cooldownInfo.multiplier,
+      successRate: cooldownInfo.successRate,
+      dataPoints: cooldownInfo.completed
+    }, '📊 TaskSchedule');
+  }
+
+  return {
+    adjustedIntervalMs,
+    multiplier: cooldownInfo.multiplier,
+    reason: cooldownInfo.reason,
+    successRate: cooldownInfo.successRate,
+    dataPoints: cooldownInfo.completed,
+    skip: cooldownInfo.skip,
+    adjusted: cooldownInfo.multiplier !== 1.0,
+    recommendation: cooldownInfo.recommendation
+  };
+}
 
 // Default prompts for self-improvement task types
 const DEFAULT_SELF_IMPROVEMENT_PROMPTS = {
@@ -774,6 +844,14 @@ export async function getExecutionHistory(taskType) {
 
 /**
  * Check if a self-improvement task type should run based on its interval
+ *
+ * Enhanced with learning-based interval adjustment:
+ * - High-performing tasks (>90% success) run more frequently
+ * - Low-performing tasks (<50% success) run less frequently
+ * - Very low performers (<30% with 5+ attempts) are significantly delayed
+ *
+ * The adjustment applies to daily, weekly, and custom intervals.
+ * Rotation tasks are not adjusted (they run in sequence regardless).
  */
 export async function shouldRunSelfImprovementTask(taskType) {
   const schedule = await loadSchedule();
@@ -788,32 +866,59 @@ export async function shouldRunSelfImprovementTask(taskType) {
   const lastRun = execution.lastRun ? new Date(execution.lastRun).getTime() : 0;
   const timeSinceLastRun = now - lastRun;
 
+  // Helper to build result with learning info
+  const buildResult = (shouldRun, reason, baseIntervalMs, extra = {}) => {
+    const result = { shouldRun, reason, ...extra };
+
+    // Add learning adjustment info if we adjusted the interval
+    if (extra.learningAdjustment && extra.learningAdjustment.adjusted) {
+      result.learningApplied = true;
+      result.successRate = extra.learningAdjustment.successRate;
+      result.adjustmentMultiplier = extra.learningAdjustment.multiplier;
+      result.dataPoints = extra.learningAdjustment.dataPoints;
+    }
+
+    return result;
+  };
+
   switch (interval.type) {
     case INTERVAL_TYPES.ROTATION:
-      // Always eligible in rotation
+      // Rotation tasks always eligible (learning adjustment happens in getNextSelfImprovementTaskType)
       return { shouldRun: true, reason: 'rotation' };
 
-    case INTERVAL_TYPES.DAILY:
-      if (timeSinceLastRun >= DAY) {
-        return { shouldRun: true, reason: 'daily-due' };
-      }
-      return {
-        shouldRun: false,
-        reason: 'daily-cooldown',
-        nextRunIn: DAY - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + DAY).toISOString()
-      };
+    case INTERVAL_TYPES.DAILY: {
+      // Apply learning-based interval adjustment
+      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'selfImprovement', DAY);
+      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
 
-    case INTERVAL_TYPES.WEEKLY:
-      if (timeSinceLastRun >= WEEK) {
-        return { shouldRun: true, reason: 'weekly-due' };
+      if (timeSinceLastRun >= adjustedInterval) {
+        return buildResult(true, learningAdjustment.adjusted ? 'daily-due-adjusted' : 'daily-due', DAY, { learningAdjustment });
       }
-      return {
-        shouldRun: false,
-        reason: 'weekly-cooldown',
-        nextRunIn: WEEK - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + WEEK).toISOString()
-      };
+      return buildResult(false, learningAdjustment.adjusted ? 'daily-cooldown-adjusted' : 'daily-cooldown', DAY, {
+        learningAdjustment,
+        nextRunIn: adjustedInterval - timeSinceLastRun,
+        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+        baseIntervalMs: DAY,
+        adjustedIntervalMs: adjustedInterval
+      });
+    }
+
+    case INTERVAL_TYPES.WEEKLY: {
+      // Apply learning-based interval adjustment
+      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'selfImprovement', WEEK);
+      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
+
+      if (timeSinceLastRun >= adjustedInterval) {
+        return buildResult(true, learningAdjustment.adjusted ? 'weekly-due-adjusted' : 'weekly-due', WEEK, { learningAdjustment });
+      }
+      return buildResult(false, learningAdjustment.adjusted ? 'weekly-cooldown-adjusted' : 'weekly-cooldown', WEEK, {
+        learningAdjustment,
+        nextRunIn: adjustedInterval - timeSinceLastRun,
+        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+        baseIntervalMs: WEEK,
+        adjustedIntervalMs: adjustedInterval
+      });
+    }
 
     case INTERVAL_TYPES.ONCE:
       if (execution.count === 0) {
@@ -824,17 +929,23 @@ export async function shouldRunSelfImprovementTask(taskType) {
     case INTERVAL_TYPES.ON_DEMAND:
       return { shouldRun: false, reason: 'on-demand-only' };
 
-    case INTERVAL_TYPES.CUSTOM:
-      const customInterval = interval.intervalMs || DAY;
-      if (timeSinceLastRun >= customInterval) {
-        return { shouldRun: true, reason: 'custom-due' };
+    case INTERVAL_TYPES.CUSTOM: {
+      const baseInterval = interval.intervalMs || DAY;
+      // Apply learning-based interval adjustment
+      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'selfImprovement', baseInterval);
+      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
+
+      if (timeSinceLastRun >= adjustedInterval) {
+        return buildResult(true, learningAdjustment.adjusted ? 'custom-due-adjusted' : 'custom-due', baseInterval, { learningAdjustment });
       }
-      return {
-        shouldRun: false,
-        reason: 'custom-cooldown',
-        nextRunIn: customInterval - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + customInterval).toISOString()
-      };
+      return buildResult(false, learningAdjustment.adjusted ? 'custom-cooldown-adjusted' : 'custom-cooldown', baseInterval, {
+        learningAdjustment,
+        nextRunIn: adjustedInterval - timeSinceLastRun,
+        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+        baseIntervalMs: baseInterval,
+        adjustedIntervalMs: adjustedInterval
+      });
+    }
 
     default:
       return { shouldRun: true, reason: 'unknown-default-rotation' };
@@ -843,6 +954,8 @@ export async function shouldRunSelfImprovementTask(taskType) {
 
 /**
  * Check if an app improvement task type should run for a specific app
+ *
+ * Enhanced with learning-based interval adjustment (same as self-improvement).
  */
 export async function shouldRunAppImprovementTask(taskType, appId) {
   const schedule = await loadSchedule();
@@ -859,31 +972,53 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
   const lastRun = appExecution.lastRun ? new Date(appExecution.lastRun).getTime() : 0;
   const timeSinceLastRun = now - lastRun;
 
+  // Helper to build result with learning info
+  const buildResult = (shouldRun, reason, baseIntervalMs, extra = {}) => {
+    const result = { shouldRun, reason, ...extra };
+    if (extra.learningAdjustment && extra.learningAdjustment.adjusted) {
+      result.learningApplied = true;
+      result.successRate = extra.learningAdjustment.successRate;
+      result.adjustmentMultiplier = extra.learningAdjustment.multiplier;
+      result.dataPoints = extra.learningAdjustment.dataPoints;
+    }
+    return result;
+  };
+
   switch (interval.type) {
     case INTERVAL_TYPES.ROTATION:
       return { shouldRun: true, reason: 'rotation' };
 
-    case INTERVAL_TYPES.DAILY:
-      if (timeSinceLastRun >= DAY) {
-        return { shouldRun: true, reason: 'daily-due' };
-      }
-      return {
-        shouldRun: false,
-        reason: 'daily-cooldown',
-        nextRunIn: DAY - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + DAY).toISOString()
-      };
+    case INTERVAL_TYPES.DAILY: {
+      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'appImprovement', DAY);
+      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
 
-    case INTERVAL_TYPES.WEEKLY:
-      if (timeSinceLastRun >= WEEK) {
-        return { shouldRun: true, reason: 'weekly-due' };
+      if (timeSinceLastRun >= adjustedInterval) {
+        return buildResult(true, learningAdjustment.adjusted ? 'daily-due-adjusted' : 'daily-due', DAY, { learningAdjustment });
       }
-      return {
-        shouldRun: false,
-        reason: 'weekly-cooldown',
-        nextRunIn: WEEK - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + WEEK).toISOString()
-      };
+      return buildResult(false, learningAdjustment.adjusted ? 'daily-cooldown-adjusted' : 'daily-cooldown', DAY, {
+        learningAdjustment,
+        nextRunIn: adjustedInterval - timeSinceLastRun,
+        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+        baseIntervalMs: DAY,
+        adjustedIntervalMs: adjustedInterval
+      });
+    }
+
+    case INTERVAL_TYPES.WEEKLY: {
+      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'appImprovement', WEEK);
+      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
+
+      if (timeSinceLastRun >= adjustedInterval) {
+        return buildResult(true, learningAdjustment.adjusted ? 'weekly-due-adjusted' : 'weekly-due', WEEK, { learningAdjustment });
+      }
+      return buildResult(false, learningAdjustment.adjusted ? 'weekly-cooldown-adjusted' : 'weekly-cooldown', WEEK, {
+        learningAdjustment,
+        nextRunIn: adjustedInterval - timeSinceLastRun,
+        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+        baseIntervalMs: WEEK,
+        adjustedIntervalMs: adjustedInterval
+      });
+    }
 
     case INTERVAL_TYPES.ONCE:
       if (appExecution.count === 0) {
@@ -894,17 +1029,22 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
     case INTERVAL_TYPES.ON_DEMAND:
       return { shouldRun: false, reason: 'on-demand-only' };
 
-    case INTERVAL_TYPES.CUSTOM:
-      const customInterval = interval.intervalMs || DAY;
-      if (timeSinceLastRun >= customInterval) {
-        return { shouldRun: true, reason: 'custom-due' };
+    case INTERVAL_TYPES.CUSTOM: {
+      const baseInterval = interval.intervalMs || DAY;
+      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'appImprovement', baseInterval);
+      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
+
+      if (timeSinceLastRun >= adjustedInterval) {
+        return buildResult(true, learningAdjustment.adjusted ? 'custom-due-adjusted' : 'custom-due', baseInterval, { learningAdjustment });
       }
-      return {
-        shouldRun: false,
-        reason: 'custom-cooldown',
-        nextRunIn: customInterval - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + customInterval).toISOString()
-      };
+      return buildResult(false, learningAdjustment.adjusted ? 'custom-cooldown-adjusted' : 'custom-cooldown', baseInterval, {
+        learningAdjustment,
+        nextRunIn: adjustedInterval - timeSinceLastRun,
+        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+        baseIntervalMs: baseInterval,
+        adjustedIntervalMs: adjustedInterval
+      });
+    }
 
     default:
       return { shouldRun: true, reason: 'unknown-default-rotation' };
@@ -1137,6 +1277,8 @@ export async function clearOnDemandRequest(requestId) {
 
 /**
  * Get full schedule status for UI display
+ *
+ * Enhanced to include learning-based interval adjustments.
  */
 export async function getScheduleStatus() {
   const schedule = await loadSchedule();
@@ -1145,7 +1287,8 @@ export async function getScheduleStatus() {
     selfImprovement: {},
     appImprovement: {},
     templates: schedule.templates,
-    onDemandRequests: schedule.onDemandRequests || []
+    onDemandRequests: schedule.onDemandRequests || [],
+    learningAdjustmentsActive: 0 // Count of task types with active learning adjustments
   };
 
   // Add execution status to each self-improvement task type
@@ -1153,24 +1296,54 @@ export async function getScheduleStatus() {
     const check = await shouldRunSelfImprovementTask(taskType);
     const execution = schedule.executions[`self-improve:${taskType}`] || { lastRun: null, count: 0 };
 
+    // Get learning adjustment info
+    const baseInterval = interval.type === 'daily' ? DAY : interval.type === 'weekly' ? WEEK : (interval.intervalMs || DAY);
+    const learningInfo = await getPerformanceAdjustedInterval(taskType, 'selfImprovement', baseInterval);
+
     status.selfImprovement[taskType] = {
       ...interval,
       lastRun: execution.lastRun,
       runCount: execution.count,
-      status: check
+      status: check,
+      // Learning adjustment fields
+      learningAdjusted: learningInfo.adjusted,
+      learningMultiplier: learningInfo.multiplier,
+      successRate: learningInfo.successRate,
+      dataPoints: learningInfo.dataPoints,
+      adjustedIntervalMs: learningInfo.adjustedIntervalMs,
+      recommendation: learningInfo.recommendation
     };
+
+    if (learningInfo.adjusted) {
+      status.learningAdjustmentsActive++;
+    }
   }
 
   // Add execution status to each app improvement task type
   for (const [taskType, interval] of Object.entries(schedule.appImprovement)) {
     const execution = schedule.executions[`app-improve:${taskType}`] || { lastRun: null, count: 0, perApp: {} };
 
+    // Get learning adjustment info
+    const baseInterval = interval.type === 'daily' ? DAY : interval.type === 'weekly' ? WEEK : (interval.intervalMs || DAY);
+    const learningInfo = await getPerformanceAdjustedInterval(taskType, 'appImprovement', baseInterval);
+
     status.appImprovement[taskType] = {
       ...interval,
       globalLastRun: execution.lastRun,
       globalRunCount: execution.count,
-      perAppCount: Object.keys(execution.perApp).length
+      perAppCount: Object.keys(execution.perApp).length,
+      // Learning adjustment fields
+      learningAdjusted: learningInfo.adjusted,
+      learningMultiplier: learningInfo.multiplier,
+      successRate: learningInfo.successRate,
+      dataPoints: learningInfo.dataPoints,
+      adjustedIntervalMs: learningInfo.adjustedIntervalMs,
+      recommendation: learningInfo.recommendation
     };
+
+    if (learningInfo.adjusted) {
+      status.learningAdjustmentsActive++;
+    }
   }
 
   return status;
