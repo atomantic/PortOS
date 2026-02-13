@@ -26,19 +26,19 @@ const STATUS_BADGE = {
 };
 
 const COLOR_MAP = {
-  purple: 'border-purple-500/30 bg-purple-500/5',
-  rose: 'border-rose-500/30 bg-rose-500/5',
-  red: 'border-red-500/30 bg-red-500/5',
-  blue: 'border-blue-500/30 bg-blue-500/5',
-  emerald: 'border-emerald-500/30 bg-emerald-500/5',
-  amber: 'border-amber-500/30 bg-amber-500/5',
-  green: 'border-green-500/30 bg-green-500/5',
-  orange: 'border-orange-500/30 bg-orange-500/5',
-  indigo: 'border-indigo-500/30 bg-indigo-500/5',
-  cyan: 'border-cyan-500/30 bg-cyan-500/5',
-  violet: 'border-violet-500/30 bg-violet-500/5',
-  sky: 'border-sky-500/30 bg-sky-500/5',
-  yellow: 'border-yellow-500/30 bg-yellow-500/5'
+  purple: 'border-purple-500/40 bg-purple-950/40',
+  rose: 'border-rose-500/40 bg-rose-950/40',
+  red: 'border-red-500/40 bg-red-950/40',
+  blue: 'border-blue-500/40 bg-blue-950/40',
+  emerald: 'border-emerald-500/40 bg-emerald-950/40',
+  amber: 'border-amber-500/40 bg-amber-950/40',
+  green: 'border-green-500/40 bg-green-950/40',
+  orange: 'border-orange-500/40 bg-orange-950/40',
+  indigo: 'border-indigo-500/40 bg-indigo-950/40',
+  cyan: 'border-cyan-500/40 bg-cyan-950/40',
+  violet: 'border-violet-500/40 bg-violet-950/40',
+  sky: 'border-sky-500/40 bg-sky-950/40',
+  yellow: 'border-yellow-500/40 bg-yellow-950/40'
 };
 
 export default function GenomeCategoryCard({ category, label, emoji, color, markers, onEditNotes, onDeleteMarker }) {
@@ -61,7 +61,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
       >
         <div className="flex items-center gap-2">
           <span className="text-lg leading-none">{emoji}</span>
-          <span className="font-medium text-white text-sm">{label}</span>
+          <span className="font-medium text-gray-200 text-sm">{label}</span>
           <span className="text-xs text-gray-500">({markers.length})</span>
         </div>
         <div className="flex items-center gap-3">
@@ -101,7 +101,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dot}`} />
-                          <span className="text-xs font-medium text-white truncate">{marker.name}</span>
+                          <span className="text-xs font-medium text-gray-200 truncate">{marker.name}</span>
                         </div>
                         <div className="flex items-center gap-2 mt-1 ml-3.5">
                           <span className="text-[10px] text-gray-500 font-mono">{marker.gene}</span>
@@ -109,7 +109,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
                         </div>
                       </div>
                       {marker.genotype && (
-                        <span className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-[10px] font-mono text-white flex-shrink-0">
+                        <span className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-[10px] font-mono text-gray-300 flex-shrink-0">
                           {marker.genotype}
                         </span>
                       )}
@@ -125,7 +125,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
                           {STATUS_LABEL[marker.status] || marker.status}
                         </span>
                         {marker.genotype && (
-                          <span className="px-2 py-0.5 rounded bg-port-card border border-port-border text-xs font-mono text-white">
+                          <span className="px-2 py-0.5 rounded bg-port-card border border-port-border text-xs font-mono text-gray-300">
                             {marker.genotype}
                           </span>
                         )}
@@ -157,7 +157,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
                           onChange={(e) => onEditNotes(marker.id, e.target.value)}
                           placeholder="Add personal notes..."
                           rows={2}
-                          className="w-full mt-1 p-2 bg-port-card border border-port-border rounded text-sm text-white placeholder-gray-600 resize-none focus:outline-none focus:border-port-accent"
+                          className="w-full mt-1 p-2 bg-port-card border border-port-border rounded text-sm text-gray-300 placeholder-gray-600 resize-none focus:outline-none focus:border-port-accent"
                         />
                       </div>
 
