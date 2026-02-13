@@ -660,6 +660,24 @@ export async function retryClassification(inboxLogId, providerOverride, modelOve
 }
 
 /**
+ * Mark inbox entry as done
+ */
+export async function markInboxDone(inboxLogId) {
+  const inboxLog = await storage.getInboxLogById(inboxLogId);
+  if (!inboxLog) {
+    return null;
+  }
+
+  const updated = await storage.updateInboxLog(inboxLogId, {
+    status: 'done',
+    doneAt: new Date().toISOString()
+  });
+
+  console.log(`🧠 Marked inbox entry done: ${inboxLogId}`);
+  return updated;
+}
+
+/**
  * Update inbox entry (edit captured text)
  */
 export async function updateInboxEntry(inboxLogId, updates) {

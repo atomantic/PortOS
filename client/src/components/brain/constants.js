@@ -53,6 +53,7 @@ export const STATUS_COLORS = {
   filed: 'bg-port-success/20 text-port-success border-port-success/30',
   needs_review: 'bg-port-warning/20 text-port-warning border-port-warning/30',
   corrected: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  done: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   error: 'bg-port-error/20 text-port-error border-port-error/30'
 };
 

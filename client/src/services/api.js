@@ -715,6 +715,7 @@ export const updateBrainInboxEntry = (id, capturedText) => request(`/brain/inbox
   body: JSON.stringify({ capturedText })
 });
 export const deleteBrainInboxEntry = (id) => request(`/brain/inbox/${id}`, { method: 'DELETE' });
+export const markBrainInboxDone = (id) => request(`/brain/inbox/${id}/done`, { method: 'POST' });
 
 // Brain - People
 export const getBrainPeople = () => request('/brain/people');

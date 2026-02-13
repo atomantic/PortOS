@@ -10,7 +10,7 @@ export const projectStatusEnum = z.enum(['active', 'waiting', 'blocked', 'someda
 export const adminStatusEnum = z.enum(['open', 'waiting', 'done']);
 
 // Inbox log status enum
-export const inboxStatusEnum = z.enum(['classifying', 'filed', 'needs_review', 'corrected', 'error']);
+export const inboxStatusEnum = z.enum(['classifying', 'filed', 'needs_review', 'corrected', 'done', 'error']);
 
 // AI configuration schema
 export const aiConfigSchema = z.object({
