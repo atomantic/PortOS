@@ -752,6 +752,40 @@ export const CURATED_MARKERS = [
       { genotypes: ['A/A'], status: 'beneficial' }
     ]
   },
+  {
+    rsid: 'rs35333999',
+    gene: 'PER2',
+    name: 'Period Circadian Clock 2',
+    category: 'sleep',
+    description: 'PER2 is a core circadian clock gene that drives the negative feedback loop controlling ~24-hour rhythms. Variants affect morning/evening preference and sleep timing. PER2 mutations cause Familial Advanced Sleep Phase Syndrome (FASPS) in severe cases.',
+    implications: {
+      beneficial: 'C/C — standard PER2 function. Normal circadian period length.',
+      typical: 'C/T — mildly shifted circadian timing. May trend toward earlier or later sleep phase depending on other clock genes.',
+      concern: 'T/T — altered PER2 function. More pronounced chronotype shift. May benefit from timed light exposure and consistent sleep-wake scheduling.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs2287161',
+    gene: 'CRY1',
+    name: 'Cryptochrome Circadian Clock 1',
+    category: 'sleep',
+    description: 'CRY1 is a key repressor in the circadian feedback loop. A gain-of-function variant lengthens the circadian period, strongly associated with Delayed Sleep Phase Disorder (DSPD). Carriers naturally drift toward later sleep-wake times.',
+    implications: {
+      beneficial: 'C/C — standard CRY1 function. Normal circadian period (~24 hours).',
+      typical: 'C/G — one variant allele. Mildly extended circadian period. Slight evening tendency.',
+      concern: 'G/G — extended circadian period. Strong evening chronotype and delayed sleep onset. Associated with DSPD. Timed morning light exposure and evening light restriction are particularly effective.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/G', 'G/C'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
 
   // === ATHLETIC PERFORMANCE ===
   {
