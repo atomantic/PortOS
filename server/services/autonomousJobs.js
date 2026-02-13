@@ -33,6 +33,7 @@ const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
 const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
   'job-git-maintenance': 'git-maintenance',
+  'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-processing': 'brain-processing',
   'job-project-review': 'project-review'
 }
@@ -69,6 +70,40 @@ Tasks to perform:
 Focus on practical, actionable maintenance. Don't make changes directly — create CoS tasks for anything that needs doing.
 
 Report a summary of the repository health status when done.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-github-repo-maintenance',
+    name: 'GitHub Repo Maintenance',
+    description: 'Audit all GitHub repos for stale dependencies, security alerts, missing CI/README/license, and repos with no recent commits.',
+    category: 'github-maintenance',
+    interval: 'weekly',
+    intervalMs: WEEK,
+    enabled: false,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] GitHub Repo Maintenance
+
+You are acting as my Chief of Staff, performing automated maintenance checks across all my GitHub repositories.
+
+My GitHub username is: atomantic
+
+Use the \`gh\` CLI to query GitHub.
+
+Tasks to perform:
+1. List all non-archived repos via gh repo list
+2. Check for stale repos (no commits in 90+ days)
+3. Check for Dependabot/security alerts per repo
+4. Flag repos missing CI, README, or license
+5. Generate a maintenance report grouped by severity
+6. Create CoS tasks for actionable maintenance items
+
+Focus on actionable findings. Don't make changes directly — create CoS tasks for anything that needs doing.
+
+Save the report via the CoS report system.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
