@@ -33,6 +33,7 @@ export const TABS = [
   { id: 'documents', label: 'Documents', icon: FileText },
   { id: 'test', label: 'Test', icon: CheckCircle },
   { id: 'enrich', label: 'Enrich', icon: Sparkles },
+  { id: 'taste', label: 'Taste', icon: Palette },
   { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'interview', label: 'Interview', icon: MessageSquare },

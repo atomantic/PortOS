@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import * as digitalTwinService from '../services/digital-twin.js';
+import * as tasteService from '../services/taste-questionnaire.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validate } from '../lib/validation.js';
 import {
@@ -33,7 +34,10 @@ import {
   updateTraitsInputSchema,
   calculateConfidenceInputSchema,
   importDataInputSchema,
-  analyzeAssessmentInputSchema
+  analyzeAssessmentInputSchema,
+  tasteAnswerInputSchema,
+  tasteSummaryInputSchema,
+  tasteSectionEnum
 } from '../lib/digitalTwinValidation.js';
 
 const router = Router();
@@ -637,6 +641,123 @@ router.post('/import/save', asyncHandler(async (req, res) => {
 
   const document = await digitalTwinService.saveImportAsDocument(source, suggestedDoc);
   res.json({ document, message: 'Document saved successfully' });
+}));
+
+// =============================================================================
+// TASTE QUESTIONNAIRE
+// =============================================================================
+
+/**
+ * GET /api/digital-twin/taste
+ * Get taste profile status and progress
+ */
+router.get('/taste', asyncHandler(async (req, res) => {
+  const profile = await tasteService.getTasteProfile();
+  res.json(profile);
+}));
+
+/**
+ * GET /api/digital-twin/taste/sections
+ * Get available taste sections with question definitions
+ */
+router.get('/taste/sections', asyncHandler(async (req, res) => {
+  const sections = Object.entries(tasteService.TASTE_SECTIONS).map(([id, config]) => ({
+    id,
+    label: config.label,
+    description: config.description,
+    icon: config.icon,
+    color: config.color,
+    questionCount: config.questions.length
+  }));
+  res.json(sections);
+}));
+
+/**
+ * GET /api/digital-twin/taste/:section/next
+ * Get the next question for a taste section
+ */
+router.get('/taste/:section/next', asyncHandler(async (req, res) => {
+  const parsed = tasteSectionEnum.safeParse(req.params.section);
+  if (!parsed.success) {
+    throw new ServerError(`Invalid taste section: ${req.params.section}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
+  }
+  const question = await tasteService.getNextQuestion(parsed.data);
+  res.json(question);
+}));
+
+/**
+ * POST /api/digital-twin/taste/answer
+ * Submit an answer for a taste question
+ */
+router.post('/taste/answer', asyncHandler(async (req, res) => {
+  const validation = validate(tasteAnswerInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+  const { section, questionId, answer } = validation.data;
+  const result = await tasteService.submitAnswer(section, questionId, answer);
+  res.json(result);
+}));
+
+/**
+ * GET /api/digital-twin/taste/:section/responses
+ * Get all responses for a taste section
+ */
+router.get('/taste/:section/responses', asyncHandler(async (req, res) => {
+  const parsed = tasteSectionEnum.safeParse(req.params.section);
+  if (!parsed.success) {
+    throw new ServerError(`Invalid taste section: ${req.params.section}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
+  }
+  const responses = await tasteService.getSectionResponses(parsed.data);
+  res.json(responses);
+}));
+
+/**
+ * POST /api/digital-twin/taste/summary
+ * Generate a taste profile summary (section or overall)
+ */
+router.post('/taste/summary', asyncHandler(async (req, res) => {
+  const validation = validate(tasteSummaryInputSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+  const { section, providerId, model } = validation.data;
+
+  const result = section
+    ? await tasteService.generateSectionSummary(section, providerId, model)
+    : await tasteService.generateOverallSummary(providerId, model);
+
+  res.json(result);
+}));
+
+/**
+ * DELETE /api/digital-twin/taste/:section
+ * Reset a taste section
+ */
+router.delete('/taste/:section', asyncHandler(async (req, res) => {
+  const parsed = tasteSectionEnum.safeParse(req.params.section);
+  if (!parsed.success) {
+    throw new ServerError(`Invalid taste section: ${req.params.section}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR'
+    });
+  }
+  const result = await tasteService.resetSection(parsed.data);
+  res.json(result);
 }));
 
 export default router;
