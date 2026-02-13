@@ -6,6 +6,7 @@ import {
 import { unzipSync, strFromU8 } from 'fflate';
 import * as api from '../../../services/api';
 import GenomeCategoryCard from '../GenomeCategoryCard';
+import EpigeneticTracker from '../EpigeneticTracker';
 
 const CATEGORY_META = {
   longevity:          { emoji: '\u2728', label: 'Longevity',            color: 'purple' },
@@ -18,6 +19,7 @@ const CATEGORY_META = {
   inflammation:       { emoji: '\u{1F525}', label: 'Inflammation',         color: 'orange' },
   tumor_suppression:  { emoji: '\u{1F9EC}', label: 'Tumor Suppression',    color: 'indigo' },
   cognitive:          { emoji: '\u{1F9E0}', label: 'Cognitive',            color: 'cyan' },
+  cognitive_decline:  { emoji: '\u{1F9D3}', label: 'Cognitive Decline & Dementia Risk', color: 'rose' },
   sleep:              { emoji: '\u{1F319}', label: 'Sleep & Circadian',    color: 'violet' },
   athletic:           { emoji: '\u{1F4AA}', label: 'Athletic Performance', color: 'sky' },
   skin:               { emoji: '\u2600\uFE0F', label: 'Skin & UV Response',   color: 'yellow' }
@@ -325,7 +327,7 @@ export default function GenomeTab() {
   }
 
   // Sort categories by a defined order
-  const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'iron', 'methylation', 'nutrient', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'skin'];
+  const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'cognitive_decline', 'iron', 'methylation', 'nutrient', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'skin'];
   const sortedCategories = Object.keys(grouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);
     const bi = categoryOrder.indexOf(b);
@@ -441,9 +443,16 @@ export default function GenomeTab() {
       {markers.length === 0 && (
         <div className="text-center py-8 text-gray-500">
           <Dna className="w-10 h-10 mx-auto mb-3 opacity-50" />
-          <p>No markers saved yet. Click "Scan Known Markers" to analyze your genome against 30 curated health markers.</p>
+          <p>No markers saved yet. Click "Scan Known Markers" to analyze your genome against curated health markers.</p>
         </div>
       )}
+
+      {/* Epigenetic Lifestyle Tracking */}
+      <div className="border-t border-port-border pt-6">
+        <EpigeneticTracker
+          markerCategories={[...new Set(markers.map(m => m.category).filter(Boolean))]}
+        />
+      </div>
 
       {/* ClinVar Database section */}
       <div className="border-t border-port-border pt-6 space-y-4">

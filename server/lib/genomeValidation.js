@@ -27,3 +27,29 @@ export const genomeSaveMarkerSchema = z.object({
 export const genomeUpdateNotesSchema = z.object({
   notes: z.string().max(5000)
 });
+
+// === Epigenetic Lifestyle Tracking ===
+
+export const epigeneticAddInterventionSchema = z.object({
+  id: z.string().min(1).max(100).optional(),
+  name: z.string().min(1).max(200),
+  category: z.enum(['supplement', 'lifestyle', 'custom']).default('custom'),
+  dosage: z.string().max(200).optional().default(''),
+  frequency: z.enum(['daily', 'weekly', 'as_needed']).default('daily'),
+  trackingUnit: z.string().min(1).max(50).default('dose'),
+  notes: z.string().max(5000).optional().default('')
+});
+
+export const epigeneticLogEntrySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD format').optional(),
+  amount: z.number().min(0),
+  notes: z.string().max(2000).optional().default('')
+});
+
+export const epigeneticUpdateInterventionSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  dosage: z.string().max(200).optional(),
+  frequency: z.enum(['daily', 'weekly', 'as_needed']).optional(),
+  notes: z.string().max(5000).optional(),
+  active: z.boolean().optional()
+});

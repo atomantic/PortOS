@@ -1,13 +1,17 @@
 import { Router } from 'express';
 import * as genomeService from '../services/genome.js';
 import * as clinvarService from '../services/clinvar.js';
+import * as epigeneticService from '../services/epigenetic.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validate } from '../lib/validation.js';
 import {
   genomeUploadSchema,
   genomeSearchSchema,
   genomeSaveMarkerSchema,
-  genomeUpdateNotesSchema
+  genomeUpdateNotesSchema,
+  epigeneticAddInterventionSchema,
+  epigeneticLogEntrySchema,
+  epigeneticUpdateInterventionSchema
 } from '../lib/genomeValidation.js';
 
 const router = Router();
@@ -169,6 +173,100 @@ router.post('/clinvar/scan', asyncHandler(async (req, res) => {
 // DELETE /api/digital-twin/genome/clinvar — Delete ClinVar data
 router.delete('/clinvar', asyncHandler(async (req, res) => {
   await clinvarService.deleteClinvar();
+  res.status(204).end();
+}));
+
+// === Epigenetic Lifestyle Tracking Routes ===
+
+// GET /api/digital-twin/genome/epigenetic — Get tracked interventions
+router.get('/epigenetic', asyncHandler(async (req, res) => {
+  const data = await epigeneticService.getInterventions();
+  res.json(data);
+}));
+
+// GET /api/digital-twin/genome/epigenetic/recommendations — Get curated recommendations
+router.get('/epigenetic/recommendations', asyncHandler(async (req, res) => {
+  const categories = req.query.categories ? req.query.categories.split(',') : [];
+  const recommendations = epigeneticService.getRecommendations(categories);
+  res.json({ recommendations });
+}));
+
+// GET /api/digital-twin/genome/epigenetic/compliance — Get compliance summary
+router.get('/epigenetic/compliance', asyncHandler(async (req, res) => {
+  const days = parseInt(req.query.days) || 30;
+  const summary = await epigeneticService.getComplianceSummary(days);
+  res.json(summary);
+}));
+
+// POST /api/digital-twin/genome/epigenetic — Add intervention
+router.post('/epigenetic', asyncHandler(async (req, res) => {
+  const validation = validate(epigeneticAddInterventionSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const result = await epigeneticService.addIntervention(validation.data);
+  res.status(201).json(result);
+}));
+
+// POST /api/digital-twin/genome/epigenetic/:id/log — Log daily entry
+router.post('/epigenetic/:id/log', asyncHandler(async (req, res) => {
+  const validation = validate(epigeneticLogEntrySchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const result = await epigeneticService.logEntry(req.params.id, validation.data);
+  if (result.error) {
+    throw new ServerError(result.error, {
+      status: 404,
+      code: 'INTERVENTION_NOT_FOUND'
+    });
+  }
+
+  res.status(201).json(result);
+}));
+
+// PUT /api/digital-twin/genome/epigenetic/:id — Update intervention
+router.put('/epigenetic/:id', asyncHandler(async (req, res) => {
+  const validation = validate(epigeneticUpdateInterventionSchema, req.body);
+  if (!validation.success) {
+    throw new ServerError('Validation failed', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      context: { details: validation.errors }
+    });
+  }
+
+  const result = await epigeneticService.updateIntervention(req.params.id, validation.data);
+  if (result.error) {
+    throw new ServerError(result.error, {
+      status: 404,
+      code: 'INTERVENTION_NOT_FOUND'
+    });
+  }
+
+  res.json(result);
+}));
+
+// DELETE /api/digital-twin/genome/epigenetic/:id — Delete intervention
+router.delete('/epigenetic/:id', asyncHandler(async (req, res) => {
+  const result = await epigeneticService.deleteIntervention(req.params.id);
+  if (result.error) {
+    throw new ServerError(result.error, {
+      status: 404,
+      code: 'INTERVENTION_NOT_FOUND'
+    });
+  }
+
   res.status(204).end();
 }));
 
