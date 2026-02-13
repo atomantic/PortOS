@@ -22,7 +22,19 @@ const CATEGORY_META = {
   cognitive_decline:  { emoji: '\u{1F9D3}', label: 'Cognitive Decline & Dementia Risk', color: 'rose' },
   sleep:              { emoji: '\u{1F319}', label: 'Sleep & Circadian',    color: 'violet' },
   athletic:           { emoji: '\u{1F4AA}', label: 'Athletic Performance', color: 'sky' },
-  skin:               { emoji: '\u2600\uFE0F', label: 'Skin & UV Response',   color: 'yellow' }
+  skin:               { emoji: '\u2600\uFE0F', label: 'Skin & UV Response',   color: 'yellow' },
+  diabetes:           { emoji: '\u{1FA78}', label: 'Blood Sugar & Diabetes', color: 'amber' },
+  gut_health:         { emoji: '\u{1F966}', label: 'Gut Health & Digestion', color: 'lime' },
+  autoimmune:         { emoji: '\u{1F6E1}\uFE0F', label: 'Autoimmune Risk',       color: 'pink' },
+  thyroid:            { emoji: '\u{1F9EA}', label: 'Thyroid & Hormones',   color: 'teal' },
+  eye_health:         { emoji: '\u{1F441}\uFE0F', label: 'Eye Health',            color: 'sky' },
+  mental_health:      { emoji: '\u{1F9E0}', label: 'Mental Health',         color: 'violet' },
+  bone_health:        { emoji: '\u{1F9B4}', label: 'Bone Health',           color: 'stone' },
+  pharmacogenomics:   { emoji: '\u{1F48A}', label: 'Pharmacogenomics',     color: 'fuchsia' },
+  cancer_risk:        { emoji: '\u{1F9EC}', label: 'Cancer Predisposition', color: 'red' },
+  hair:               { emoji: '\u2702\uFE0F', label: 'Hair Loss',             color: 'zinc' },
+  hearing:            { emoji: '\u{1F442}', label: 'Hearing',              color: 'slate' },
+  pain:               { emoji: '\u26A1',  label: 'Pain Sensitivity',     color: 'orange' }
 };
 
 const STAR_LABELS = ['No criteria', 'Single submitter', 'Multiple submitters', 'Expert panel', 'Practice guideline'];
@@ -327,7 +339,7 @@ export default function GenomeTab() {
   }
 
   // Sort categories by a defined order
-  const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'cognitive_decline', 'iron', 'methylation', 'nutrient', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'skin'];
+  const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'cancer_risk', 'cognitive_decline', 'mental_health', 'iron', 'methylation', 'nutrient', 'diabetes', 'gut_health', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'autoimmune', 'thyroid', 'bone_health', 'skin', 'eye_health', 'pharmacogenomics', 'hair', 'hearing', 'pain'];
   const sortedCategories = Object.keys(grouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);
     const bi = categoryOrder.indexOf(b);
