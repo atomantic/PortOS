@@ -1026,6 +1026,28 @@ export const syncClinvar = () => request('/digital-twin/genome/clinvar/sync', { 
 export const scanClinvar = () => request('/digital-twin/genome/clinvar/scan', { method: 'POST' });
 export const deleteClinvar = () => request('/digital-twin/genome/clinvar', { method: 'DELETE' });
 
+// Digital Twin - Epigenetic Lifestyle Tracking
+export const getEpigeneticInterventions = () => request('/digital-twin/genome/epigenetic');
+export const getEpigeneticRecommendations = (categories = []) =>
+  request(`/digital-twin/genome/epigenetic/recommendations${categories.length ? `?categories=${categories.join(',')}` : ''}`);
+export const getEpigeneticCompliance = (days = 30) =>
+  request(`/digital-twin/genome/epigenetic/compliance?days=${days}`);
+export const addEpigeneticIntervention = (data) => request('/digital-twin/genome/epigenetic', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const logEpigeneticEntry = (id, entry) => request(`/digital-twin/genome/epigenetic/${id}/log`, {
+  method: 'POST',
+  body: JSON.stringify(entry)
+});
+export const updateEpigeneticIntervention = (id, updates) => request(`/digital-twin/genome/epigenetic/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(updates)
+});
+export const deleteEpigeneticIntervention = (id) => request(`/digital-twin/genome/epigenetic/${id}`, {
+  method: 'DELETE'
+});
+
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
 export const getBrowserConfig = () => request('/browser/config');

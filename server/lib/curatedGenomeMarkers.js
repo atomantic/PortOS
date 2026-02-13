@@ -14,6 +14,7 @@ export const MARKER_CATEGORIES = {
   inflammation: { label: 'Inflammation', icon: 'Flame', color: 'orange' },
   tumor_suppression: { label: 'Tumor Suppression', icon: 'ShieldCheck', color: 'indigo' },
   cognitive: { label: 'Cognitive', icon: 'Brain', color: 'cyan' },
+  cognitive_decline: { label: 'Cognitive Decline & Dementia Risk', icon: 'BrainCog', color: 'rose' },
   sleep: { label: 'Sleep & Circadian', icon: 'Moon', color: 'violet' },
   athletic: { label: 'Athletic Performance', icon: 'Dumbbell', color: 'sky' },
   skin: { label: 'Skin & UV Response', icon: 'Sun', color: 'yellow' }
@@ -525,6 +526,195 @@ export const CURATED_MARKERS = [
       { genotypes: ['G/G'], status: 'beneficial' },
       { genotypes: ['A/G', 'G/A'], status: 'typical' },
       { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+
+  // === COGNITIVE DECLINE & DEMENTIA RISK ===
+  {
+    rsid: 'rs429358',
+    gene: 'APOE',
+    name: 'APOE ε4 Alzheimer\'s Risk (rs429358)',
+    category: 'cognitive_decline',
+    description: 'APOE ε4 is the strongest common genetic risk factor for late-onset Alzheimer\'s disease. The ε4 allele (T→C at rs429358) impairs amyloid-beta clearance. One copy increases risk ~3x; two copies increase risk ~12x. APOE genotype is determined by the combination of rs429358 and rs7412.',
+    implications: {
+      beneficial: 'T/T — no ε4 allele at this position. Lower baseline Alzheimer\'s risk from APOE.',
+      concern: 'C/T — one ε4 allele. ~3x increased Alzheimer\'s risk. Prioritize neuroprotective lifestyle (exercise, sleep, omega-3, creatine).',
+      major_concern: 'C/C — two ε4 alleles (ε4/ε4). ~12x increased Alzheimer\'s risk. Aggressive neuroprotective strategy strongly recommended. Consider early cognitive monitoring.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'concern' },
+      { genotypes: ['C/C'], status: 'major_concern' }
+    ]
+  },
+  {
+    rsid: 'rs7412',
+    gene: 'APOE',
+    name: 'APOE ε2 Protective Variant (rs7412)',
+    category: 'cognitive_decline',
+    description: 'APOE ε2 is the protective counterpart to ε4. The ε2 allele (C→T at rs7412) is associated with better amyloid clearance and ~40% reduced Alzheimer\'s risk. ε2/ε2 carriers have the lowest risk; ε2/ε3 carriers still benefit.',
+    implications: {
+      beneficial: 'T/T — ε2/ε2. Strongest APOE-mediated neuroprotection. Significantly reduced Alzheimer\'s risk.',
+      typical: 'C/T — one ε2 allele. ~40% reduced Alzheimer\'s risk compared to ε3/ε3.',
+      concern: 'C/C — no ε2 allele. Standard risk (modified by rs429358 ε4 status).'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3865444',
+    gene: 'CD33',
+    name: 'CD33 Microglial Clearance',
+    category: 'cognitive_decline',
+    description: 'CD33 is expressed on microglia and regulates amyloid-beta phagocytosis. The A allele reduces CD33 surface expression, enhancing microglial clearance of amyloid plaques. Replicated across multiple GWAS for Alzheimer\'s risk.',
+    implications: {
+      beneficial: 'A/A — reduced CD33 expression. Enhanced microglial amyloid clearance. Lower Alzheimer\'s risk.',
+      typical: 'A/C — intermediate CD33 levels. Moderate clearance capacity.',
+      concern: 'C/C — higher CD33 expression. Reduced amyloid clearance by microglia.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/C', 'C/A'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3764650',
+    gene: 'ABCA7',
+    name: 'ABCA7 Lipid Transport & Amyloid',
+    category: 'cognitive_decline',
+    description: 'ABCA7 is involved in lipid transport and amyloid precursor protein processing. Loss-of-function variants increase Alzheimer\'s risk ~1.8x, particularly in African-ancestry populations where the effect is stronger.',
+    implications: {
+      beneficial: 'G/G — normal ABCA7 function. Standard lipid transport and amyloid processing.',
+      typical: 'G/T — one risk allele. Mildly elevated Alzheimer\'s risk.',
+      concern: 'T/T — reduced ABCA7 function. ~1.8x increased Alzheimer\'s risk.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['G/T', 'T/G'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs6656401',
+    gene: 'CR1',
+    name: 'Complement Receptor 1 (Neuroinflammation)',
+    category: 'cognitive_decline',
+    description: 'CR1 encodes complement receptor 1, part of the innate immune system. The A allele is associated with increased amyloid-beta deposition and neuroinflammation, contributing to Alzheimer\'s risk (~1.2x per allele).',
+    implications: {
+      beneficial: 'G/G — standard CR1 expression. Normal complement-mediated clearance.',
+      typical: 'A/G — one risk allele. Slightly elevated neuroinflammation risk.',
+      concern: 'A/A — elevated CR1 risk. Associated with increased amyloid burden and neuroinflammation.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs11136000',
+    gene: 'CLU',
+    name: 'Clusterin (Apolipoprotein J)',
+    category: 'cognitive_decline',
+    description: 'CLU (clusterin/apolipoprotein J) is a chaperone protein that binds amyloid-beta and facilitates its clearance across the blood-brain barrier. The T allele is protective, associated with better amyloid clearance.',
+    implications: {
+      beneficial: 'T/T — protective genotype. Enhanced clusterin-mediated amyloid clearance.',
+      typical: 'C/T — intermediate effect. Standard clusterin function.',
+      concern: 'C/C — reduced clusterin efficiency. Mildly elevated amyloid accumulation risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs744373',
+    gene: 'BIN1',
+    name: 'BIN1 Tau & Synaptic Function',
+    category: 'cognitive_decline',
+    description: 'BIN1 (bridging integrator 1) is the second strongest Alzheimer\'s risk locus after APOE. It\'s involved in tau pathology, synaptic vesicle recycling, and endocytosis. The C allele increases risk ~1.2x per copy.',
+    implications: {
+      beneficial: 'T/T — lower BIN1-mediated Alzheimer\'s risk. Normal synaptic function.',
+      typical: 'C/T — one risk allele. Slightly elevated risk.',
+      concern: 'C/C — elevated BIN1 risk. Associated with increased tau pathology and synaptic dysfunction.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs9349407',
+    gene: 'PICALM',
+    name: 'PICALM Endocytic Clearance',
+    category: 'cognitive_decline',
+    description: 'PICALM mediates clathrin-mediated endocytosis and amyloid-beta clearance across the blood-brain barrier. Variants affect the efficiency of cellular waste removal in the brain.',
+    implications: {
+      beneficial: 'C/C — efficient PICALM function. Better endocytic clearance of amyloid.',
+      typical: 'C/G — intermediate clearance capacity.',
+      concern: 'G/G — reduced PICALM efficiency. Impaired endocytic amyloid clearance.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/G', 'G/C'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3851179',
+    gene: 'PICALM',
+    name: 'PICALM Protective Variant',
+    category: 'cognitive_decline',
+    description: 'This PICALM variant is independently protective against Alzheimer\'s. The A allele enhances autophagy and tau clearance, reducing accumulation of toxic protein aggregates.',
+    implications: {
+      beneficial: 'A/A — enhanced autophagy and tau clearance. Protective against Alzheimer\'s.',
+      typical: 'A/G — intermediate protective effect.',
+      concern: 'G/G — standard PICALM autophagy function. No additional protection.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs10948363',
+    gene: 'CD2AP',
+    name: 'CD2AP Blood-Brain Barrier Integrity',
+    category: 'cognitive_decline',
+    description: 'CD2AP maintains blood-brain barrier integrity and supports synaptic function. Variants are associated with Alzheimer\'s risk through impaired BBB function and increased neuroinflammation.',
+    implications: {
+      beneficial: 'A/A — normal CD2AP function. Intact blood-brain barrier support.',
+      typical: 'A/G — intermediate BBB risk.',
+      concern: 'G/G — reduced CD2AP function. Associated with BBB dysfunction and elevated Alzheimer\'s risk.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs983392',
+    gene: 'MS4A6A',
+    name: 'MS4A6A Microglial Activation',
+    category: 'cognitive_decline',
+    description: 'MS4A6A is part of the membrane-spanning 4A gene cluster expressed in myeloid cells. Variants affect microglial activation patterns and soluble TREM2 levels, both relevant to Alzheimer\'s neuroinflammation.',
+    implications: {
+      beneficial: 'A/A — protective microglial activation pattern. Higher soluble TREM2.',
+      typical: 'A/G — intermediate microglial function.',
+      concern: 'G/G — altered microglial activation. Lower soluble TREM2 associated with increased neuroinflammation.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
     ]
   },
 
