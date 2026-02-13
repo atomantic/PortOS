@@ -422,21 +422,24 @@ export default function GenomeTab() {
       {sortedCategories.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-lg font-semibold text-white">Curated Markers</h3>
-          {sortedCategories.map(cat => {
-            const meta = CATEGORY_META[cat] || { emoji: '\u{1F9EC}', label: cat, color: 'blue' };
-            return (
-              <GenomeCategoryCard
-                key={cat}
-                category={cat}
-                label={meta.label}
-                emoji={meta.emoji}
-                color={meta.color}
-                markers={grouped[cat]}
-                onEditNotes={handleNotesChange}
-                onDeleteMarker={handleDeleteMarker}
-              />
-            );
-          })}
+          <div className="columns-1 md:columns-2 xl:columns-3 2xl:columns-4 gap-4 [column-fill:balance]">
+            {sortedCategories.map(cat => {
+              const meta = CATEGORY_META[cat] || { emoji: '\u{1F9EC}', label: cat, color: 'blue' };
+              return (
+                <div key={cat} className="break-inside-avoid mb-4">
+                  <GenomeCategoryCard
+                    category={cat}
+                    label={meta.label}
+                    emoji={meta.emoji}
+                    color={meta.color}
+                    markers={grouped[cat]}
+                    onEditNotes={handleNotesChange}
+                    onDeleteMarker={handleDeleteMarker}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
