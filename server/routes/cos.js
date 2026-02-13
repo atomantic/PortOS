@@ -884,6 +884,13 @@ router.post('/productivity/recalculate', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+// GET /api/cos/productivity/trends - Get daily task completion trends for charting
+router.get('/productivity/trends', asyncHandler(async (req, res) => {
+  const days = parseInt(req.query.days) || 30;
+  const trends = await productivity.getDailyTrends(days);
+  res.json(trends);
+}));
+
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {

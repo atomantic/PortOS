@@ -31,6 +31,9 @@ const DEFAULT_PRODUCTIVITY = {
   dailyPatterns: {
     // Aggregated by day of week (0-6): { tasks, successes, failures, avgDuration }
   },
+  dailyHistory: {
+    // Indexed by YYYY-MM-DD: { tasks, successes, failures, successRate }
+  },
   milestones: [
     // { type, value, achievedAt, description }
   ],
@@ -129,6 +132,7 @@ export async function recalculateProductivity() {
   // Initialize patterns
   const hourlyPatterns = {};
   const dailyPatterns = {};
+  const dailyHistory = {};
 
   // Track dates with activity for streak calculation
   const activeDates = new Set();
@@ -155,7 +159,7 @@ export async function recalculateProductivity() {
     else hourlyPatterns[hour].failures++;
     hourlyPatterns[hour].totalDuration += duration;
 
-    // Daily patterns
+    // Daily patterns (by day of week)
     if (!dailyPatterns[dayOfWeek]) {
       dailyPatterns[dayOfWeek] = { tasks: 0, successes: 0, failures: 0, totalDuration: 0 };
     }
@@ -163,6 +167,20 @@ export async function recalculateProductivity() {
     if (success) dailyPatterns[dayOfWeek].successes++;
     else dailyPatterns[dayOfWeek].failures++;
     dailyPatterns[dayOfWeek].totalDuration += duration;
+
+    // Daily history (by date)
+    if (!dailyHistory[dateStr]) {
+      dailyHistory[dateStr] = { tasks: 0, successes: 0, failures: 0 };
+    }
+    dailyHistory[dateStr].tasks++;
+    if (success) dailyHistory[dateStr].successes++;
+    else dailyHistory[dateStr].failures++;
+  }
+
+  // Calculate success rates for daily history
+  for (const date of Object.keys(dailyHistory)) {
+    const h = dailyHistory[date];
+    h.successRate = h.tasks > 0 ? Math.round((h.successes / h.tasks) * 100) : 0;
   }
 
   // Calculate average durations
@@ -280,6 +298,7 @@ export async function recalculateProductivity() {
     },
     hourlyPatterns,
     dailyPatterns,
+    dailyHistory,
     milestones,
     totals: {
       totalTasks,
@@ -398,5 +417,86 @@ export async function getProductivitySummary() {
     lastActive: data.streaks?.lastActiveDate || null,
     totalDays: data.totals?.activeDays || 0,
     recentMilestone: data.milestones?.[data.milestones.length - 1] || null
+  };
+}
+
+/**
+ * Get daily task trends for visualization
+ * Returns last N days of task completion data with trend analysis
+ */
+export async function getDailyTrends(days = 30) {
+  const data = await loadProductivity();
+  const dailyHistory = data.dailyHistory || {};
+
+  // Generate date range for last N days
+  const today = new Date();
+  const dateRange = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    dateRange.push(getDateString(d));
+  }
+
+  // Build trend data for each day
+  const trendData = dateRange.map(date => {
+    const dayData = dailyHistory[date] || { tasks: 0, successes: 0, failures: 0, successRate: 0 };
+    return {
+      date,
+      dateShort: date.slice(5), // MM-DD
+      ...dayData
+    };
+  });
+
+  // Calculate rolling averages and trends
+  const windowSize = 7;
+  const withAverages = trendData.map((day, idx) => {
+    const window = trendData.slice(Math.max(0, idx - windowSize + 1), idx + 1);
+    const avgTasks = window.reduce((sum, d) => sum + d.tasks, 0) / window.length;
+    const avgSuccessRate = window.reduce((sum, d) => sum + d.successRate, 0) / window.length;
+    return {
+      ...day,
+      rollingAvgTasks: Math.round(avgTasks * 10) / 10,
+      rollingAvgSuccessRate: Math.round(avgSuccessRate)
+    };
+  });
+
+  // Calculate overall trend direction
+  const recentDays = withAverages.slice(-7);
+  const olderDays = withAverages.slice(-14, -7);
+
+  const recentTotal = recentDays.reduce((sum, d) => sum + d.tasks, 0);
+  const olderTotal = olderDays.reduce((sum, d) => sum + d.tasks, 0);
+  const recentAvgRate = recentDays.reduce((sum, d) => sum + d.successRate, 0) / (recentDays.length || 1);
+  const olderAvgRate = olderDays.reduce((sum, d) => sum + d.successRate, 0) / (olderDays.length || 1);
+
+  let volumeTrend = 'stable';
+  if (recentTotal > olderTotal * 1.2) volumeTrend = 'increasing';
+  else if (recentTotal < olderTotal * 0.8) volumeTrend = 'decreasing';
+
+  let successTrend = 'stable';
+  if (recentAvgRate > olderAvgRate + 10) successTrend = 'improving';
+  else if (recentAvgRate < olderAvgRate - 10) successTrend = 'declining';
+
+  // Summary stats
+  const activeDaysInRange = trendData.filter(d => d.tasks > 0).length;
+  const totalTasksInRange = trendData.reduce((sum, d) => sum + d.tasks, 0);
+  const avgTasksPerActiveDay = activeDaysInRange > 0
+    ? Math.round(totalTasksInRange / activeDaysInRange * 10) / 10
+    : 0;
+
+  return {
+    data: withAverages,
+    summary: {
+      days,
+      activeDays: activeDaysInRange,
+      totalTasks: totalTasksInRange,
+      avgTasksPerActiveDay,
+      avgSuccessRate: Math.round(
+        trendData.filter(d => d.tasks > 0).reduce((sum, d) => sum + d.successRate, 0) /
+        (activeDaysInRange || 1)
+      ),
+      volumeTrend,
+      successTrend
+    }
   };
 }

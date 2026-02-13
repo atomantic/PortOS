@@ -16,6 +16,7 @@ import {
   Award
 } from 'lucide-react';
 import * as api from '../../../services/api';
+import DailyTrendsChart from '../DailyTrendsChart';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const FULL_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -196,6 +197,9 @@ export default function ProductivityTab() {
               </div>
             )}
           </div>
+
+          {/* Daily Task Trends Chart */}
+          <DailyTrendsChart days={30} initialExpanded={true} />
 
           {/* AI Insights */}
           {data.insights?.length > 0 && (

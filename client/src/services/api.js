@@ -536,6 +536,7 @@ export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?we
 export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
+export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
 export const getCosQuickSummary = () => request('/cos/quick-summary');
 export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
 export const getCosActionableInsights = () => request('/cos/actionable-insights');
