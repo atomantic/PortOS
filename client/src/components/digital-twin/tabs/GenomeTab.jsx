@@ -340,40 +340,9 @@ export default function GenomeTab() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="SNPs" value={summary.snpCount?.toLocaleString()} />
         <StatCard label="Build" value={summary.build} />
-        <StatCard label="Markers" value={summary.markerCount || 0} />
+        <StatCard label="Markers" value={summary.markerCount || 0} statusCounts={summary.statusCounts} />
         <StatCard label="Uploaded" value={summary.uploadedAt ? new Date(summary.uploadedAt).toLocaleDateString() : 'N/A'} />
       </div>
-
-      {/* Status summary */}
-      {summary.statusCounts && (
-        <div className="flex flex-wrap gap-2 text-sm">
-          {summary.statusCounts.beneficial > 0 && (
-            <span className="px-2 py-1 rounded bg-green-500/10 text-green-400 border border-green-500/20">
-              {summary.statusCounts.beneficial} beneficial
-            </span>
-          )}
-          {summary.statusCounts.typical > 0 && (
-            <span className="px-2 py-1 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-              {summary.statusCounts.typical} typical
-            </span>
-          )}
-          {summary.statusCounts.concern > 0 && (
-            <span className="px-2 py-1 rounded bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-              {summary.statusCounts.concern} concern
-            </span>
-          )}
-          {summary.statusCounts.major_concern > 0 && (
-            <span className="px-2 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/20">
-              {summary.statusCounts.major_concern} major concern
-            </span>
-          )}
-          {summary.statusCounts.not_found > 0 && (
-            <span className="px-2 py-1 rounded bg-gray-500/10 text-gray-400 border border-gray-500/20">
-              {summary.statusCounts.not_found} not found
-            </span>
-          )}
-        </div>
-      )}
 
       {/* Actions row */}
       <div className="flex flex-wrap gap-2">
@@ -727,11 +696,30 @@ export default function GenomeTab() {
   );
 }
 
-function StatCard({ label, value }) {
+function StatCard({ label, value, statusCounts }) {
   return (
     <div className="p-3 rounded bg-port-card border border-port-border">
       <div className="text-xs text-gray-500 uppercase">{label}</div>
       <div className="text-lg font-bold text-white mt-1">{value}</div>
+      {statusCounts && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {statusCounts.beneficial > 0 && (
+            <span className="text-[10px] text-green-400">{statusCounts.beneficial} beneficial</span>
+          )}
+          {statusCounts.typical > 0 && (
+            <span className="text-[10px] text-blue-400">{statusCounts.typical} typical</span>
+          )}
+          {statusCounts.concern > 0 && (
+            <span className="text-[10px] text-yellow-400">{statusCounts.concern} concern</span>
+          )}
+          {statusCounts.major_concern > 0 && (
+            <span className="text-[10px] text-red-400">{statusCounts.major_concern} major</span>
+          )}
+          {statusCounts.not_found > 0 && (
+            <span className="text-[10px] text-gray-500">{statusCounts.not_found} not found</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
