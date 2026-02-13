@@ -57,30 +57,29 @@ function isWeeklyReviewTime(settings, now) {
  * Check if daily digest was missed (should have run today but didn't)
  */
 function isDailyDigestMissed(settings, now) {
-  if (!settings.lastDailyDigest) return false;
-
-  const lastRun = new Date(settings.lastDailyDigest);
   const { hours, minutes } = parseTime(settings.dailyDigestTime);
 
   // Create target time for today
   const todayTarget = new Date(now);
   todayTarget.setHours(hours, minutes, 0, 0);
 
-  // If current time is past today's target and last run was before today
-  if (now > todayTarget) {
-    const lastRunDate = lastRun.toDateString();
-    const todayDate = now.toDateString();
-    return lastRunDate !== todayDate;
-  }
+  // Only consider catch-up if we're past today's target time
+  if (now <= todayTarget) return false;
 
-  return false;
+  // Never run before — catch up now
+  if (!settings.lastDailyDigest) return true;
+
+  // Last run was before today — catch up
+  const lastRun = new Date(settings.lastDailyDigest);
+  return lastRun.toDateString() !== now.toDateString();
 }
 
 /**
  * Check if weekly review was missed
  */
 function isWeeklyReviewMissed(settings, now) {
-  if (!settings.lastWeeklyReview) return false;
+  // Never run before — catch up now
+  if (!settings.lastWeeklyReview) return true;
 
   const lastRun = new Date(settings.lastWeeklyReview);
   const daysSinceLastRun = Math.floor((now - lastRun) / (24 * 60 * 60 * 1000));
