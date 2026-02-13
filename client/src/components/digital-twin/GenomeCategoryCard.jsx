@@ -77,7 +77,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
       {/* Marker grid */}
       {expanded && (
         <div className="border-t border-port-border/50 p-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {markers.map(marker => {
               const isExpanded = expandedMarker === marker.id;
               const badge = STATUS_BADGE[marker.status] || STATUS_BADGE.not_found;
@@ -88,7 +88,7 @@ export default function GenomeCategoryCard({ category, label, emoji, color, mark
                   key={marker.id}
                   className={`rounded-md border transition-colors ${
                     isExpanded
-                      ? 'border-port-accent/40 bg-port-bg/60 col-span-1 sm:col-span-2 lg:col-span-3'
+                      ? 'border-port-accent/40 bg-port-bg/60 col-span-1 sm:col-span-2'
                       : 'border-port-border/40 bg-port-card/50 hover:border-port-border'
                   }`}
                 >
