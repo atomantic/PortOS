@@ -535,11 +535,11 @@ export const CURATED_MARKERS = [
     gene: 'APOE',
     name: 'APOE ε4 Alzheimer\'s Risk (rs429358)',
     category: 'cognitive_decline',
-    description: 'APOE ε4 is the strongest common genetic risk factor for late-onset Alzheimer\'s disease. The ε4 allele (T→C at rs429358) impairs amyloid-beta clearance. One copy increases risk ~3x; two copies increase risk ~12x. APOE genotype is determined by the combination of rs429358 and rs7412.',
+    description: 'APOE ε4 is the strongest common genetic risk factor for late-onset Alzheimer\'s disease. The ε4 allele (T→C at rs429358) impairs amyloid-beta clearance and reduces cerebral glucose metabolism. One copy increases risk ~3x; two copies increase risk ~12x. This SNP combines with rs7412 (ε2) to determine your full APOE haplotype (ε2/ε3/ε4) — see the composite APOE Haplotype marker for combined interpretation.',
     implications: {
-      beneficial: 'T/T — no ε4 allele at this position. Lower baseline Alzheimer\'s risk from APOE.',
-      concern: 'C/T — one ε4 allele. ~3x increased Alzheimer\'s risk. Prioritize neuroprotective lifestyle (exercise, sleep, omega-3, creatine).',
-      major_concern: 'C/C — two ε4 alleles (ε4/ε4). ~12x increased Alzheimer\'s risk. Aggressive neuroprotective strategy strongly recommended. Consider early cognitive monitoring.'
+      beneficial: 'T/T — no ε4 allele. Lower baseline Alzheimer\'s risk from APOE. Check rs7412 for possible ε2 protective status.',
+      concern: 'C/T — one ε4 allele. ~3x increased Alzheimer\'s risk. Prioritize neuroprotective lifestyle: regular cardiovascular exercise, sleep optimization (7-9 hrs), omega-3/DHA (1-2g daily), Mediterranean diet, creatine monohydrate (5g daily for brain energy), and cognitive engagement. Check rs7412 — if also C/T, you may carry the ε2/ε4 combination.',
+      major_concern: 'C/C — two ε4 alleles (ε4/ε4). ~12x increased Alzheimer\'s risk. Earliest average onset among APOE genotypes. Aggressive neuroprotective strategy strongly recommended: cardiovascular exercise (150+ min/week), sleep optimization, omega-3/DHA, Mediterranean diet, blood pressure management, metabolic health monitoring, creatine supplementation, and regular cognitive screening starting mid-40s.'
     },
     rules: [
       { genotypes: ['T/T'], status: 'beneficial' },
@@ -552,11 +552,11 @@ export const CURATED_MARKERS = [
     gene: 'APOE',
     name: 'APOE ε2 Protective Variant (rs7412)',
     category: 'cognitive_decline',
-    description: 'APOE ε2 is the protective counterpart to ε4. The ε2 allele (C→T at rs7412) is associated with better amyloid clearance and ~40% reduced Alzheimer\'s risk. ε2/ε2 carriers have the lowest risk; ε2/ε3 carriers still benefit.',
+    description: 'APOE ε2 is the protective counterpart to ε4. The ε2 allele (C→T at rs7412) is associated with enhanced amyloid-beta clearance and ~40% reduced Alzheimer\'s risk. This SNP combines with rs429358 (ε4) to determine your full APOE haplotype — see the composite APOE Haplotype marker for combined interpretation.',
     implications: {
-      beneficial: 'T/T — ε2/ε2. Strongest APOE-mediated neuroprotection. Significantly reduced Alzheimer\'s risk.',
-      typical: 'C/T — one ε2 allele. ~40% reduced Alzheimer\'s risk compared to ε3/ε3.',
-      concern: 'C/C — no ε2 allele. Standard risk (modified by rs429358 ε4 status).'
+      beneficial: 'T/T — ε2/ε2. Strongest APOE-mediated neuroprotection. Significantly reduced Alzheimer\'s risk (~0.6x baseline). Note: rare association with type III hyperlipoproteinemia — monitor lipid panel.',
+      typical: 'C/T — one ε2 allele. ~40% reduced Alzheimer\'s risk compared to ε3/ε3. Check rs429358 — if also C/T, you carry ε2/ε4 (mixed risk/protection).',
+      concern: 'C/C — no ε2 protective allele. Alzheimer\'s risk determined primarily by rs429358 ε4 status.'
     },
     rules: [
       { genotypes: ['T/T'], status: 'beneficial' },
@@ -857,4 +857,81 @@ export function classifyGenotype(marker, genotype) {
   }
   // If genotype doesn't match any known rule, return typical as fallback
   return 'typical';
+}
+
+/**
+ * Resolve composite APOE haplotype from rs429358 (ε4) and rs7412 (ε2).
+ *
+ * APOE alleles are defined by two SNPs on chromosome 19:
+ *   ε2: rs429358=T, rs7412=T
+ *   ε3: rs429358=T, rs7412=C  (reference/common)
+ *   ε4: rs429358=C, rs7412=C
+ *
+ * The six diploid genotypes and their Alzheimer's risk relative to ε3/ε3:
+ *   ε2/ε2 (T/T + T/T) — ~0.6x risk, ~0.7% of population
+ *   ε2/ε3 (T/T + C/T) — ~0.6x risk, ~11% of population
+ *   ε3/ε3 (T/T + C/C) — 1x baseline, ~60% of population
+ *   ε2/ε4 (C/T + C/T) — ~2.6x risk, ~2.6% of population
+ *   ε3/ε4 (C/T + C/C) — ~3.2x risk, ~21% of population
+ *   ε4/ε4 (C/C + C/C) — ~12x risk, ~2.3% of population
+ */
+export function resolveApoeHaplotype(rs429358raw, rs7412raw) {
+  const rs429358 = formatGenotype(rs429358raw);
+  const rs7412 = formatGenotype(rs7412raw);
+  if (!rs429358 || !rs7412) return null;
+
+  // Normalize allele order so C/T and T/C both become C/T
+  const normalize = (gt) => {
+    const [a, b] = gt.split('/');
+    return [a, b].sort().join('/');
+  };
+
+  const key = `${normalize(rs429358)}|${normalize(rs7412)}`;
+
+  const HAPLOTYPE_MAP = {
+    'T/T|T/T': {
+      haplotype: 'ε2/ε2',
+      frequency: '~0.7%',
+      riskMultiplier: '~0.6x',
+      status: 'beneficial',
+      implication: 'APOE ε2/ε2 — rarest genotype with strongest Alzheimer\'s protection. Both alleles are the neuroprotective ε2 variant. ~0.6x baseline Alzheimer\'s risk. Enhanced amyloid-beta clearance. Note: slightly elevated risk for type III hyperlipoproteinemia — monitor lipid panel periodically.'
+    },
+    'T/T|C/T': {
+      haplotype: 'ε2/ε3',
+      frequency: '~11%',
+      riskMultiplier: '~0.6x',
+      status: 'beneficial',
+      implication: 'APOE ε2/ε3 — one protective ε2 allele with the common ε3. ~0.6x Alzheimer\'s risk compared to ε3/ε3 baseline. Favorable amyloid-beta clearance profile. No specific interventions required beyond general brain health.'
+    },
+    'T/T|C/C': {
+      haplotype: 'ε3/ε3',
+      frequency: '~60%',
+      riskMultiplier: '1x (baseline)',
+      status: 'typical',
+      implication: 'APOE ε3/ε3 — most common genotype and the reference baseline. Neither increased risk from ε4 nor additional protection from ε2. Standard age-related Alzheimer\'s risk. General neuroprotective habits (exercise, sleep, diet) remain beneficial for everyone.'
+    },
+    'C/T|C/T': {
+      haplotype: 'ε2/ε4',
+      frequency: '~2.6%',
+      riskMultiplier: '~2.6x',
+      status: 'concern',
+      implication: 'APOE ε2/ε4 — one risk allele (ε4) and one protective allele (ε2). The ε4 risk partially dominates; overall ~2.6x Alzheimer\'s risk. The ε2 provides some attenuation but does not fully cancel ε4 effects. Recommended: regular cardiovascular exercise, omega-3/DHA supplementation, Mediterranean diet, sleep optimization, and periodic cognitive monitoring.'
+    },
+    'C/T|C/C': {
+      haplotype: 'ε3/ε4',
+      frequency: '~21%',
+      riskMultiplier: '~3.2x',
+      status: 'concern',
+      implication: 'APOE ε3/ε4 — one ε4 risk allele with the common ε3. ~3.2x Alzheimer\'s risk vs baseline. Impaired amyloid-beta clearance. Prioritize neuroprotective lifestyle: cardiovascular exercise (150+ min/week), sleep optimization (7-9 hrs), omega-3/DHA (1-2g daily), Mediterranean diet, cognitive engagement, stress management, creatine monohydrate (5g daily), and metabolic health monitoring.'
+    },
+    'C/C|C/C': {
+      haplotype: 'ε4/ε4',
+      frequency: '~2.3%',
+      riskMultiplier: '~12x',
+      status: 'major_concern',
+      implication: 'APOE ε4/ε4 — two ε4 risk alleles. ~12x Alzheimer\'s risk vs baseline. Earliest average age of onset among APOE genotypes. Significantly impaired amyloid-beta clearance and cerebral glucose metabolism. Aggressive neuroprotective strategy strongly recommended: regular cardiovascular exercise (150+ min/week), sleep optimization, omega-3/DHA supplementation (2g+ daily), Mediterranean diet, blood pressure and metabolic health management, creatine monohydrate (5g daily), cognitive engagement, and regular cognitive screening starting mid-40s. Consider consulting a genetic counselor.'
+    }
+  };
+
+  return HAPLOTYPE_MAP[key] || null;
 }

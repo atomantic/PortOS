@@ -2,7 +2,7 @@ import { readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
-import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype } from '../lib/curatedGenomeMarkers.js';
+import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
 const GENOME_DIR = PATHS.digitalTwin;
 const RAW_FILE = join(GENOME_DIR, 'genome-raw.txt');
@@ -206,6 +206,37 @@ export async function scanCuratedMarkers() {
 
     meta.savedMarkers[id] = savedMarker;
     results.push({ id, ...savedMarker });
+  }
+
+  // Resolve composite APOE haplotype from rs429358 (ε4) + rs7412 (ε2)
+  const rs429358snp = index.get('rs429358');
+  const rs7412snp = index.get('rs7412');
+  if (rs429358snp && rs7412snp) {
+    const apoeResult = resolveApoeHaplotype(rs429358snp.genotype, rs7412snp.genotype);
+    if (apoeResult) {
+      const existingApoe = Object.entries(meta.savedMarkers || {}).find(([, m]) => m.rsid === 'apoe_haplotype');
+      const apoeId = existingApoe ? existingApoe[0] : randomUUID();
+
+      const apoeMarker = {
+        rsid: 'apoe_haplotype',
+        genotype: apoeResult.haplotype,
+        chromosome: '19',
+        position: '',
+        status: apoeResult.status,
+        category: 'cognitive_decline',
+        gene: 'APOE',
+        name: `APOE Haplotype: ${apoeResult.haplotype}`,
+        description: `Composite APOE genotype determined from rs429358 (ε4) and rs7412 (ε2). Population frequency: ${apoeResult.frequency}. Alzheimer's risk: ${apoeResult.riskMultiplier} vs ε3/ε3 baseline.`,
+        implications: apoeResult.implication,
+        notes: existingApoe ? existingApoe[1].notes : '',
+        references: existingApoe ? existingApoe[1].references : [],
+        savedAt: existingApoe ? existingApoe[1].savedAt : new Date().toISOString()
+      };
+
+      meta.savedMarkers[apoeId] = apoeMarker;
+      results.push({ id: apoeId, ...apoeMarker });
+      console.log(`🧬 APOE haplotype resolved: ${apoeResult.haplotype} (${apoeResult.riskMultiplier} risk)`);
+    }
   }
 
   meta.lastScanAt = new Date().toISOString();
