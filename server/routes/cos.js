@@ -729,14 +729,14 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 
 // POST /api/cos/jobs - Create a new autonomous job
 router.post('/jobs', asyncHandler(async (req, res) => {
-  const { name, description, category, interval, intervalMs, enabled, priority, autonomyLevel, promptTemplate } = req.body;
+  const { name, description, category, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate } = req.body;
 
   if (!name || !promptTemplate) {
     throw new ServerError('name and promptTemplate are required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   const job = await autonomousJobs.createJob({
-    name, description, category, interval, intervalMs,
+    name, description, category, interval, intervalMs, scheduledTime,
     enabled, priority, autonomyLevel, promptTemplate
   });
   res.json({ success: true, job });

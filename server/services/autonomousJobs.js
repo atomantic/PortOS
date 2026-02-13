@@ -109,6 +109,7 @@ Focus on surfacing actionable insights. Don't just classify — think about what
     category: 'daily-briefing',
     interval: 'daily',
     intervalMs: DAY,
+    scheduledTime: '05:00',
     enabled: false,
     priority: 'LOW',
     autonomyLevel: 'assistant',
@@ -261,6 +262,22 @@ async function getEnabledJobs() {
 }
 
 /**
+ * Check if the current time has passed a job's scheduledTime today.
+ * scheduledTime is "HH:MM" in local time (e.g., "05:00").
+ * Returns true if no scheduledTime is set, or if current local time >= scheduledTime.
+ * @param {string|null} scheduledTime - "HH:MM" or null/undefined
+ * @returns {boolean}
+ */
+function isScheduledTimeMet(scheduledTime) {
+  if (!scheduledTime) return true
+  const [hours, minutes] = scheduledTime.split(':').map(Number)
+  const now = new Date()
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+  const targetMinutes = hours * 60 + minutes
+  return nowMinutes >= targetMinutes
+}
+
+/**
  * Get jobs that are due to run
  * @returns {Promise<Array>} Due jobs with reason
  */
@@ -274,6 +291,9 @@ async function getDueJobs() {
     const timeSinceLastRun = now - lastRun
 
     if (timeSinceLastRun >= job.intervalMs) {
+      // If job has a scheduledTime, only mark due if we've passed that time today
+      if (!isScheduledTimeMet(job.scheduledTime)) continue
+
       due.push({
         ...job,
         reason: job.lastRun ? `${job.interval}-due` : 'never-run',
@@ -304,6 +324,7 @@ async function createJob(jobData) {
     category: jobData.category || 'custom',
     interval: jobData.interval || 'weekly',
     intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
+    scheduledTime: jobData.scheduledTime || null,
     enabled: jobData.enabled !== undefined ? jobData.enabled : false,
     priority: jobData.priority || 'MEDIUM',
     autonomyLevel: jobData.autonomyLevel || 'manager',
@@ -336,7 +357,7 @@ async function updateJob(jobId, updates) {
 
   const updatableFields = [
     'name', 'description', 'category', 'interval', 'intervalMs',
-    'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
+    'scheduledTime', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
   ]
 
   for (const field of updatableFields) {
@@ -567,15 +588,29 @@ async function getNextDueJob() {
 
   for (const job of enabledJobs) {
     const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
-    const nextDue = lastRun + job.intervalMs
+    let nextDue = lastRun + job.intervalMs
+
+    // If job has scheduledTime, adjust nextDue to that time of day
+    if (job.scheduledTime) {
+      const [hours, minutes] = job.scheduledTime.split(':').map(Number)
+      const nextDueDate = new Date(nextDue)
+      nextDueDate.setHours(hours, minutes, 0, 0)
+      // If the scheduled time already passed on the interval-due date, it's fine
+      // If not, the job waits until that time
+      if (nextDueDate.getTime() > nextDue) {
+        nextDue = nextDueDate.getTime()
+      }
+    }
 
     if (nextDue < earliestTime) {
       earliestTime = nextDue
+      const isDue = Date.now() >= nextDue && isScheduledTimeMet(job.scheduledTime)
       earliest = {
         jobId: job.id,
         jobName: job.name,
         nextDueAt: new Date(nextDue).toISOString(),
-        isDue: Date.now() >= nextDue
+        scheduledTime: job.scheduledTime || null,
+        isDue
       }
     }
   }
@@ -626,6 +661,7 @@ export {
   generateTaskFromJob,
   getJobStats,
   getNextDueJob,
+  isScheduledTimeMet,
   INTERVAL_OPTIONS,
   loadJobSkillTemplate,
   saveJobSkillTemplate,
