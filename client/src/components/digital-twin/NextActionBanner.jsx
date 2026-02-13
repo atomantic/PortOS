@@ -7,7 +7,9 @@ import {
   RefreshCw,
   ArrowRight,
   CheckCircle,
-  MessageSquare
+  MessageSquare,
+  Copy,
+  Check
 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from 'react-hot-toast';
@@ -33,6 +35,21 @@ function getUrgencyBadge(confidence) {
   return { text: 'Suggested', cls: 'text-yellow-400 bg-yellow-500/20' };
 }
 
+function buildContinuationPrompt(dimension, gap) {
+  const label = DIMENSION_LABELS[dimension] || dimension;
+  const questions = gap?.suggestedQuestions || [];
+  const questionLines = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+
+  return `I'm building a digital twin personality profile and need to strengthen the "${label}" dimension. My current coverage is weak here.
+
+Please interview me with deep, specific questions about the following aspects:
+${questionLines}
+
+For each topic, ask follow-up questions to get concrete examples, not just abstract statements. I want specifics: real situations, actual preferences, and behavioral patterns — not generalities.
+
+After the interview, summarize your findings in a structured format I can paste back into my profile system.`;
+}
+
 export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const navigate = useNavigate();
   const [question, setQuestion] = useState(null);
@@ -41,6 +58,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
+  const [copied, setCopied] = useState(false);
 
   const [currentGapIdx, setCurrentGapIdx] = useState(0);
 
@@ -203,28 +221,50 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   }
 
   // Mode 2: Gaps exist - inline question or navigate prompt
-  // If all Q&A gaps are exhausted (activeGap is null), show completion
+  // If all Q&A gaps are exhausted (activeGap is null), show continuation prompt for weakest dimension
   if (!activeGap) {
+    const weakestGap = gaps[0];
+    const weakestLabel = DIMENSION_LABELS[weakestGap?.dimension] || weakestGap?.dimension;
+    const prompt = weakestGap ? buildContinuationPrompt(weakestGap.dimension, weakestGap) : null;
+
     return (
-      <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-5">
+      <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-lg p-5">
         <div className="flex items-start gap-3">
-          <CheckCircle className="w-5 h-5 text-green-400 mt-0.5 flex-shrink-0" />
+          <MessageSquare className="w-5 h-5 text-purple-400 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
-            <h3 className="text-white font-medium mb-1">Enrichment questions complete</h3>
+            <h3 className="text-white font-medium mb-1">Deepen: {weakestLabel}</h3>
             <p className="text-sm text-gray-400 mb-3">
-              All available enrichment questions have been answered. Run an interview or behavioral tests to strengthen remaining dimensions.
+              All enrichment questions answered. Copy this prompt into ChatGPT or Claude to explore <span className="text-white font-medium">{weakestLabel}</span> further:
             </p>
-            <div className="flex items-center gap-2">
+            {prompt && (
+              <div className="relative mb-3">
+                <pre className="text-xs text-gray-300 bg-port-bg border border-port-border rounded-lg p-3 pr-10 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                  {prompt}
+                </pre>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(prompt);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
+                  title="Copy prompt"
+                >
+                  {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
               <button
                 onClick={() => navigate('/digital-twin/interview')}
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 flex items-center gap-2"
               >
-                Run Interview
+                Import Results
                 <ArrowRight size={14} />
               </button>
               <button
                 onClick={() => navigate('/digital-twin/test')}
-                className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-500 flex items-center gap-2"
+                className="px-4 py-2 bg-port-card text-white rounded-lg text-sm border border-port-border hover:border-port-accent flex items-center gap-2"
               >
                 Run Tests
                 <ArrowRight size={14} />
@@ -335,15 +375,36 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
               )}
             </>
           ) : (
-            <p className="text-sm text-gray-400">
-              All questions for this dimension have been answered.{' '}
-              <button
-                onClick={() => navigate('/digital-twin/interview')}
-                className="text-port-accent hover:text-white"
-              >
-                Run an interview
-              </button>{' '}to strengthen it further.
-            </p>
+            <div>
+              <p className="text-sm text-gray-400 mb-3">
+                All enrichment questions answered. Copy this prompt into ChatGPT or Claude to dig deeper into <span className="text-white font-medium">{dimensionLabel}</span>:
+              </p>
+              <div className="relative">
+                <pre className="text-xs text-gray-300 bg-port-bg border border-port-border rounded-lg p-3 pr-10 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                  {buildContinuationPrompt(activeGap.dimension, activeGap)}
+                </pre>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(buildContinuationPrompt(activeGap.dimension, activeGap));
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
+                  title="Copy prompt"
+                >
+                  {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Paste the AI's summary back via{' '}
+                <button
+                  onClick={() => navigate('/digital-twin/interview')}
+                  className="text-port-accent hover:text-white"
+                >
+                  Interview Import
+                </button>
+              </p>
+            </div>
           )}
         </div>
       </div>
