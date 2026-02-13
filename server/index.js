@@ -46,6 +46,7 @@ import { errorEvents } from './lib/errorHandler.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
+import { startBrainScheduler } from './services/brainScheduler.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -206,6 +207,9 @@ initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
 agentActionExecutor.init();
+
+// Initialize brain scheduler for daily digests and weekly reviews
+startBrainScheduler();
 
 // 404 handler
 app.use((req, res) => {
