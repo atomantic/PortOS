@@ -38,7 +38,14 @@ const COLOR_MAP = {
   cyan: 'border-cyan-500/40 bg-cyan-950/40',
   violet: 'border-violet-500/40 bg-violet-950/40',
   sky: 'border-sky-500/40 bg-sky-950/40',
-  yellow: 'border-yellow-500/40 bg-yellow-950/40'
+  yellow: 'border-yellow-500/40 bg-yellow-950/40',
+  teal: 'border-teal-500/40 bg-teal-950/40',
+  pink: 'border-pink-500/40 bg-pink-950/40',
+  fuchsia: 'border-fuchsia-500/40 bg-fuchsia-950/40',
+  lime: 'border-lime-500/40 bg-lime-950/40',
+  slate: 'border-slate-500/40 bg-slate-950/40',
+  stone: 'border-stone-500/40 bg-stone-950/40',
+  zinc: 'border-zinc-500/40 bg-zinc-950/40'
 };
 
 export default function GenomeCategoryCard({ category, label, emoji, color, markers, onEditNotes, onDeleteMarker }) {
