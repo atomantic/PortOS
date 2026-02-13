@@ -66,6 +66,69 @@
       "provider": "lmstudio",
       "returnsJson": true,
       "variables": []
+    },
+    "soul-contradiction-detector": {
+      "name": "Soul Contradiction Detector",
+      "description": "Analyze soul documents for internal contradictions and inconsistencies",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "soul-enrichment": {
+      "name": "Soul Enrichment",
+      "description": "Generate follow-up questions to enrich soul documents",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "soul-enrichment-process": {
+      "name": "Soul Enrichment Processor",
+      "description": "Process enrichment answers for inclusion in soul documents",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "soul-test-generator": {
+      "name": "Soul Test Generator",
+      "description": "Generate behavioral tests from soul content",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "soul-test-scorer": {
+      "name": "Soul Test Scorer",
+      "description": "Score AI responses against expected soul behavioral patterns",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "soul-writing-analyzer": {
+      "name": "Soul Writing Analyzer",
+      "description": "Extract communication patterns from writing samples",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "twin-trait-extractor": {
+      "name": "Twin Trait Extractor",
+      "description": "Extract quantitative personality traits from twin documents",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "twin-confidence-analyzer": {
+      "name": "Twin Confidence Analyzer",
+      "description": "Analyze completeness and confidence of twin personality definition",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "twin-import-analyzer": {
+      "name": "Twin Import Analyzer",
+      "description": "Extract personality insights from imported external data",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }
