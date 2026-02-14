@@ -31,7 +31,13 @@ const CATEGORY_META = {
   mental_health:      { emoji: '\u{1F9E0}', label: 'Mental Health',         color: 'violet' },
   bone_health:        { emoji: '\u{1F9B4}', label: 'Bone Health',           color: 'stone' },
   pharmacogenomics:   { emoji: '\u{1F48A}', label: 'Pharmacogenomics',     color: 'fuchsia' },
-  cancer_risk:        { emoji: '\u{1F9EC}', label: 'Cancer Predisposition', color: 'red' },
+  cancer_breast:      { emoji: '\u{1F397}\uFE0F', label: 'Breast & Ovarian Cancer', color: 'pink' },
+  cancer_prostate:    { emoji: '\u{1F6E1}\uFE0F', label: 'Prostate Cancer',       color: 'blue' },
+  cancer_colorectal:  { emoji: '\u{1F9EC}', label: 'Colorectal Cancer',    color: 'amber' },
+  cancer_lung:        { emoji: '\u{1FAC1}', label: 'Lung Cancer',           color: 'slate' },
+  cancer_melanoma:    { emoji: '\u2600\uFE0F', label: 'Melanoma Risk',         color: 'stone' },
+  cancer_bladder:     { emoji: '\u{1F9EC}', label: 'Bladder Cancer',       color: 'zinc' },
+  cancer_digestive:   { emoji: '\u{1F9EC}', label: 'Digestive Cancer',     color: 'lime' },
   hair:               { emoji: '\u2702\uFE0F', label: 'Hair Loss',             color: 'zinc' },
   hearing:            { emoji: '\u{1F442}', label: 'Hearing',              color: 'slate' },
   pain:               { emoji: '\u26A1',  label: 'Pain Sensitivity',     color: 'orange' }
@@ -339,7 +345,7 @@ export default function GenomeTab() {
   }
 
   // Sort categories by a defined order
-  const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'cancer_risk', 'cognitive_decline', 'mental_health', 'iron', 'methylation', 'nutrient', 'diabetes', 'gut_health', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'autoimmune', 'thyroid', 'bone_health', 'skin', 'eye_health', 'pharmacogenomics', 'hair', 'hearing', 'pain'];
+  const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'cancer_breast', 'cancer_prostate', 'cancer_colorectal', 'cancer_lung', 'cancer_melanoma', 'cancer_bladder', 'cancer_digestive', 'cognitive_decline', 'mental_health', 'iron', 'methylation', 'nutrient', 'diabetes', 'gut_health', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'autoimmune', 'thyroid', 'bone_health', 'skin', 'eye_health', 'pharmacogenomics', 'hair', 'hearing', 'pain'];
   const sortedCategories = Object.keys(grouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);
     const bi = categoryOrder.indexOf(b);
