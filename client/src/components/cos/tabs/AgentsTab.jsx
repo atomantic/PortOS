@@ -150,7 +150,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
           )}
           <div className="space-y-2">
             {(searchQuery ? filteredCompletedAgents : filteredCompletedAgents.slice(0, 15)).map(agent => (
-              <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} />
+              <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} onFeedbackChange={onRefresh} />
             ))}
             {!searchQuery && completedAgents.length > 15 && (
               <div className="text-center text-sm text-gray-500 py-2">

@@ -458,6 +458,11 @@ export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 
 export const getCosAgentStats = (id) => request(`/cos/agents/${id}/stats`);
 export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
 export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
+export const submitCosAgentFeedback = (id, feedback) => request(`/cos/agents/${id}/feedback`, {
+  method: 'POST',
+  body: JSON.stringify(feedback)
+});
+export const getCosFeedbackStats = () => request('/cos/feedback/stats');
 export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');
 export const getCosReport = (date) => request(`/cos/reports/${date}`);

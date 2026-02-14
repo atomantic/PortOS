@@ -247,6 +247,27 @@ router.delete('/agents/:id', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// POST /api/cos/agents/:id/feedback - Submit feedback for completed agent
+router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
+  const { rating, comment } = req.body;
+
+  if (rating === undefined || !['positive', 'negative', 'neutral'].includes(rating)) {
+    throw new ServerError('rating must be positive, negative, or neutral', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await cos.submitAgentFeedback(req.params.id, { rating, comment });
+  if (result?.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
+// GET /api/cos/feedback/stats - Get feedback statistics
+router.get('/feedback/stats', asyncHandler(async (req, res) => {
+  const stats = await cos.getFeedbackStats();
+  res.json(stats);
+}));
+
 // GET /api/cos/reports - List all reports
 router.get('/reports', asyncHandler(async (req, res) => {
   const reports = await cos.listReports();
