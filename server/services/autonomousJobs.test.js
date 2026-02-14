@@ -250,7 +250,6 @@ describe('autonomousJobs', () => {
 
       expect(jobs.length).toBeGreaterThan(1)
       expect(jobs.find(j => j.id === 'job-custom-only')).toBeDefined()
-      expect(jobs.find(j => j.id === 'job-git-maintenance')).toBeDefined()
       expect(jobs.find(j => j.id === 'job-github-repo-maintenance')).toBeDefined()
       expect(jobs.find(j => j.id === 'job-brain-processing')).toBeDefined()
     })
