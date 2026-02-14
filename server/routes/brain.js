@@ -137,6 +137,18 @@ router.post('/inbox/:id/retry', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * POST /api/brain/inbox/:id/done
+ * Mark an inbox entry as done
+ */
+router.post('/inbox/:id/done', asyncHandler(async (req, res) => {
+  const result = await brainService.markInboxDone(req.params.id);
+  if (!result) {
+    throw new ServerError('Inbox entry not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
+/**
  * PUT /api/brain/inbox/:id
  * Update an inbox entry (edit captured text)
  */

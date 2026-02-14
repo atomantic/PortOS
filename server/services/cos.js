@@ -21,6 +21,7 @@ import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedu
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
 import { formatDuration } from '../lib/fileUtils.js';
+import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
@@ -669,7 +670,7 @@ export async function evaluateTasks() {
 
     for (const job of dueJobs) {
       if (tasksToSpawn.length >= availableSlots) break;
-      const task = generateTaskFromJob(job);
+      const task = await generateTaskFromJob(job);
       tasksToSpawn.push(task);
       emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
         jobId: job.id,
@@ -2423,6 +2424,45 @@ export async function listReports() {
 }
 
 /**
+ * List all briefings (markdown files in reports dir)
+ */
+export async function listBriefings() {
+  await ensureDirectories();
+
+  const files = await readdir(REPORTS_DIR);
+  return files
+    .filter(f => f.endsWith('-briefing.md'))
+    .map(f => {
+      const date = f.replace('-briefing.md', '');
+      return { date, filename: f };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+/**
+ * Get a briefing by date
+ */
+export async function getBriefing(date) {
+  const briefingFile = join(REPORTS_DIR, `${date}-briefing.md`);
+
+  if (!existsSync(briefingFile)) {
+    return null;
+  }
+
+  const content = await readFile(briefingFile, 'utf-8');
+  return { date, content };
+}
+
+/**
+ * Get the latest briefing
+ */
+export async function getLatestBriefing() {
+  const briefings = await listBriefings();
+  if (briefings.length === 0) return null;
+  return getBriefing(briefings[0].date);
+}
+
+/**
  * Get today's activity summary
  * Returns completed tasks, success rate, time worked, and top accomplishments
  */
@@ -2492,6 +2532,71 @@ export async function getTodayActivity() {
     isRunning: daemonRunning,
     isPaused: state.paused
   };
+}
+
+/**
+ * Get recent completed tasks across all days
+ * @param {number} limit - Maximum number of tasks to return (default: 10)
+ * @returns {Object} Recent tasks with metadata
+ */
+export async function getRecentTasks(limit = 10) {
+  const state = await loadState();
+
+  // Get all completed agents, sorted by completion time (newest first)
+  const completedAgents = Object.values(state.agents)
+    .filter(a => a.status === 'completed' && a.completedAt)
+    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+    .slice(0, limit);
+
+  // Transform to compact task summaries
+  const tasks = completedAgents.map(a => ({
+    id: a.id,
+    taskId: a.taskId,
+    description: a.metadata?.taskDescription?.substring(0, 120) || a.taskId,
+    taskType: a.metadata?.analysisType || a.metadata?.taskType || 'task',
+    app: a.metadata?.app || null,
+    success: a.result?.success || false,
+    duration: a.result?.duration || 0,
+    durationFormatted: formatDuration(a.result?.duration || 0),
+    completedAt: a.completedAt,
+    // Add relative time (e.g., "2h ago", "yesterday")
+    completedRelative: formatRelativeTime(a.completedAt)
+  }));
+
+  // Calculate summary stats
+  const successCount = tasks.filter(t => t.success).length;
+  const failCount = tasks.filter(t => !t.success).length;
+
+  return {
+    tasks,
+    summary: {
+      total: tasks.length,
+      succeeded: successCount,
+      failed: failCount,
+      successRate: tasks.length > 0 ? Math.round((successCount / tasks.length) * 100) : 0
+    }
+  };
+}
+
+/**
+ * Format a timestamp as relative time (e.g., "2h ago", "yesterday")
+ * @param {string} timestamp - ISO timestamp
+ * @returns {string} Relative time string
+ */
+function formatRelativeTime(timestamp) {
+  const now = new Date();
+  const then = new Date(timestamp);
+  const diffMs = now - then;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 /**
@@ -2840,8 +2945,21 @@ async function init() {
   await ensureDirectories();
 
   // When an agent completes, immediately try to dequeue the next pending task
-  cosEvents.on('agent:completed', () => {
+  cosEvents.on('agent:completed', (agent) => {
     setImmediate(() => dequeueNextTask());
+
+    // Create notification when a daily briefing completes
+    if (agent?.metadata?.jobId === 'job-daily-briefing' && agent?.result?.success) {
+      const today = new Date().toISOString().split('T')[0];
+      addNotification({
+        type: NOTIFICATION_TYPES.BRIEFING_READY,
+        title: 'Daily Briefing Ready',
+        description: `Your daily briefing for ${today} is ready for review.`,
+        priority: 'low',
+        link: '/cos/briefing',
+        metadata: { date: today, agentId: agent.id }
+      }).catch(err => console.error(`❌ Failed to create briefing notification: ${err.message}`));
+    }
   });
 
   // Record autonomous job execution only after the agent actually spawns

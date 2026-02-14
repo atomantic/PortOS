@@ -8,7 +8,7 @@ import Templates from './pages/Templates';
 import PromptManager from './pages/PromptManager';
 import ChiefOfStaff from './pages/ChiefOfStaff';
 import Brain from './pages/Brain';
-import Media from './pages/Media';
+import Security from './pages/Security';
 import DigitalTwin from './pages/DigitalTwin';
 import Agents from './pages/Agents';
 import Uploads from './pages/Uploads';
@@ -25,6 +25,7 @@ const GitPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.Gi
 const UsagePage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.UsagePage })));
 const ProcessesPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.ProcessesPage })));
 const AgentsPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.AgentsPage })));
+const CyberCity = lazy(() => import('./pages/CyberCity'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -58,12 +59,15 @@ export default function App() {
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
           <Route path="apps/create" element={<CreateApp />} />
           <Route path="templates" element={<Templates />} />
-          <Route path="media" element={<Media />} />
+          <Route path="security" element={<Security />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
-          <Route path="agents" element={<Navigate to="/agents/personalities" replace />} />
-          <Route path="agents/:tab" element={<Agents />} />
+          <Route path="city" element={<CyberCity />} />
+          <Route path="city/settings" element={<CyberCity />} />
+          <Route path="agents" element={<Agents />} />
+          <Route path="agents/:agentId" element={<Agents />} />
+          <Route path="agents/:agentId/:tab" element={<Agents />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

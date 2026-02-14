@@ -2,15 +2,14 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import { ACTION_TYPES, SCHEDULE_TYPES, CRON_PRESETS, INTERVAL_PRESETS } from '../constants';
 
-export default function SchedulesTab({ onRefresh }) {
+export default function SchedulesTab({ agentId }) {
   const [schedules, setSchedules] = useState([]);
-  const [agents, setAgents] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
-    agentId: '',
+    agentId: agentId,
     accountId: '',
     action: { type: 'heartbeat', params: {} },
     schedule: { type: 'interval', intervalMs: 4 * 60 * 60 * 1000 },
@@ -20,18 +19,16 @@ export default function SchedulesTab({ onRefresh }) {
   const [runningId, setRunningId] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [schedulesData, agentsData, accountsData, statsData] = await Promise.all([
-      api.getAutomationSchedules(),
-      api.getAgentPersonalities(),
-      api.getPlatformAccounts(),
+    const [schedulesData, accountsData, statsData] = await Promise.all([
+      api.getAutomationSchedules(agentId),
+      api.getPlatformAccounts(agentId),
       api.getScheduleStats()
     ]);
     setSchedules(schedulesData);
-    setAgents(agentsData);
     setAccounts(accountsData);
     setStats(statsData);
     setLoading(false);
-  }, []);
+  }, [agentId]);
 
   useEffect(() => {
     fetchData();
@@ -39,7 +36,7 @@ export default function SchedulesTab({ onRefresh }) {
 
   const resetForm = () => {
     setFormData({
-      agentId: '',
+      agentId: agentId,
       accountId: '',
       action: { type: 'heartbeat', params: {} },
       schedule: { type: 'interval', intervalMs: 4 * 60 * 60 * 1000 },
@@ -47,14 +44,6 @@ export default function SchedulesTab({ onRefresh }) {
       enabled: true
     });
     setShowForm(false);
-  };
-
-  const handleAgentChange = (agentId) => {
-    setFormData(prev => ({
-      ...prev,
-      agentId,
-      accountId: '' // Reset account when agent changes
-    }));
   };
 
   const handleScheduleTypeChange = (type) => {
@@ -74,13 +63,11 @@ export default function SchedulesTab({ onRefresh }) {
     await api.createAutomationSchedule(formData);
     resetForm();
     fetchData();
-    onRefresh?.();
   };
 
   const handleDelete = async (id) => {
     await api.deleteAutomationSchedule(id);
     fetchData();
-    onRefresh?.();
   };
 
   const handleToggle = async (id, enabled) => {
@@ -95,17 +82,12 @@ export default function SchedulesTab({ onRefresh }) {
     fetchData();
   };
 
-  const getAgentName = (agentId) => {
-    const agent = agents.find(a => a.id === agentId);
-    return agent?.name || 'Unknown';
-  };
-
   const getAccountName = (accountId) => {
     const account = accounts.find(a => a.id === accountId);
     return account?.credentials?.username || 'Unknown';
   };
 
-  const filteredAccounts = accounts.filter(a => a.agentId === formData.agentId);
+  const filteredAccounts = accounts.filter(a => a.status === 'active');
 
   const formatSchedule = (schedule) => {
     if (schedule.type === 'cron') {
@@ -135,20 +117,20 @@ export default function SchedulesTab({ onRefresh }) {
           <h2 className="text-lg font-semibold text-white">Automation Schedules</h2>
           {stats && (
             <p className="text-sm text-gray-400">
-              {stats.enabled} enabled / {stats.total} total • {stats.totalRuns} runs
+              {schedules.filter(s => s.enabled).length} enabled / {schedules.length} total
             </p>
           )}
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
           className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80"
-          disabled={accounts.filter(a => a.status === 'active').length === 0}
+          disabled={filteredAccounts.length === 0}
         >
           {showForm ? 'Cancel' : '+ New Schedule'}
         </button>
       </div>
 
-      {accounts.filter(a => a.status === 'active').length === 0 && (
+      {filteredAccounts.length === 0 && (
         <div className="mb-4 p-4 bg-port-warning/20 border border-port-warning/50 rounded text-port-warning">
           You need at least one active platform account to create schedules.
         </div>
@@ -160,41 +142,21 @@ export default function SchedulesTab({ onRefresh }) {
 
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Agent</label>
-              <select
-                value={formData.agentId}
-                onChange={(e) => handleAgentChange(e.target.value)}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                required
-              >
-                <option value="">Select agent...</option>
-                {agents.map(agent => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.avatar?.emoji} {agent.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
               <label className="block text-sm text-gray-400 mb-1">Account</label>
               <select
                 value={formData.accountId}
                 onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 required
-                disabled={!formData.agentId}
               >
                 <option value="">Select account...</option>
-                {filteredAccounts.filter(a => a.status === 'active').map(account => (
+                {filteredAccounts.map(account => (
                   <option key={account.id} value={account.id}>
                     {account.credentials.username}
                   </option>
                 ))}
               </select>
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm text-gray-400 mb-1">Action Type</label>
               <select
@@ -212,20 +174,21 @@ export default function SchedulesTab({ onRefresh }) {
                 {ACTION_TYPES.find(a => a.value === formData.action.type)?.description}
               </p>
             </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Schedule Type</label>
-              <select
-                value={formData.schedule.type}
-                onChange={(e) => handleScheduleTypeChange(e.target.value)}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              >
-                {SCHEDULE_TYPES.map(type => (
-                  <option key={type.value} value={type.value}>
-                    {type.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-1">Schedule Type</label>
+            <select
+              value={formData.schedule.type}
+              onChange={(e) => handleScheduleTypeChange(e.target.value)}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+            >
+              {SCHEDULE_TYPES.map(type => (
+                <option key={type.value} value={type.value}>
+                  {type.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           {formData.schedule.type === 'cron' && (
@@ -366,7 +329,7 @@ export default function SchedulesTab({ onRefresh }) {
                       )}
                     </div>
                     <p className="text-sm text-gray-400">
-                      {getAgentName(schedule.agentId)} → {getAccountName(schedule.accountId)}
+                      {getAccountName(schedule.accountId)}
                     </p>
                     <p className="text-sm text-gray-500 mt-1">
                       {formatSchedule(schedule.schedule)} • Max {schedule.rateLimit?.maxPerDay || '∞'}/day

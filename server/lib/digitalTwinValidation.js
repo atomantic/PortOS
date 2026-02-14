@@ -399,3 +399,21 @@ export const importAnalysisResultSchema = z.object({
   })).optional(),
   rawSummary: z.string().optional()
 });
+
+// --- Taste Questionnaire Schemas ---
+
+export const tasteSectionEnum = z.enum([
+  'movies', 'music', 'visual_art', 'architecture', 'food'
+]);
+
+export const tasteAnswerInputSchema = z.object({
+  section: tasteSectionEnum,
+  questionId: z.string().min(1),
+  answer: z.string().min(1).max(10000)
+});
+
+export const tasteSummaryInputSchema = z.object({
+  section: tasteSectionEnum.optional(),
+  providerId: z.string().min(1),
+  model: z.string().min(1)
+});

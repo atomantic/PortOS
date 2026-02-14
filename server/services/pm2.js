@@ -259,7 +259,13 @@ export async function startFromEcosystem(cwd, processNames = []) {
       args.push('--only', processNames.join(','));
     }
 
-    const child = spawn('pm2', args, { cwd, shell: false });
+    // Strip PortOS env vars so child ecosystem configs don't inherit them
+    // e.g., process.env.PORT || 4420 would resolve to PortOS's 5554 otherwise
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.PORT;
+    delete cleanEnv.HOST;
+
+    const child = spawn('pm2', args, { cwd, shell: false, env: cleanEnv });
     let stdout = '';
     let stderr = '';
 

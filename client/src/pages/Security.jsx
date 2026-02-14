@@ -4,7 +4,7 @@ import api from '../services/api';
 
 const MEDIA_CONSTRAINTS_KEY = 'portos-media-constraints';
 
-export default function Media() {
+export default function Security() {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -246,8 +246,8 @@ export default function Media() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-white">Server Media Devices</h2>
-          <p className="text-gray-500">Access camera and microphone from the PortOS server</p>
+          <h2 className="text-2xl font-bold text-white">Security</h2>
+          <p className="text-gray-500">Turn your PortOS host into a remote security camera and microphone, accessible from your phone over Tailscale</p>
         </div>
         <div className="flex items-center gap-2">
           <button

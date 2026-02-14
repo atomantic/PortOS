@@ -5,54 +5,53 @@ PortOS is a monorepo application with a React frontend and Express.js backend, m
 ## System Diagram
 
 ```
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│                                      PortOS                                       │
-├───────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                   │
-│  ┌────────────────────┐          ┌──────────────────────────────────────────┐     │
-│  │   React Client     │          │            Express Server                │     │
-│  │    (port 5555)     │          │             (port 5554)                  │     │
-│  │                    │   HTTP   │                                          │     │
-│  │  ┌──────────────┐  │◄────────►│  ┌──────────┐    ┌──────────────────┐   │     │
-│  │  │    Pages     │  │          │  │  Routes  │────│    Services      │   │     │
-│  │  └──────────────┘  │          │  └──────────┘    └──────────────────┘   │     │
-│  │        │           │ Socket.IO │       │                │               │     │
-│  │  ┌──────────────┐  │◄─────────┤       │          ┌─────▼──────┐        │     │
-│  │  │  Components  │  │          │       │          │  PM2 API   │        │     │
-│  │  └──────────────┘  │          │       │          └────────────┘        │     │
-│  │        │           │          │       │                │               │     │
-│  │  ┌──────────────┐  │          │       │          ┌─────▼──────┐        │     │
-│  │  │  api.js      │  │          │       │          │ JSON Files │        │     │
-│  │  │  socket.js   │  │          │       │          │  (data/)   │        │     │
-│  │  └──────────────┘  │          │       │          └────────────┘        │     │
-│  └────────────────────┘          └───────┼──────────────────────────────┘     │
-│                                          │                                     │
-│  ┌───────────────────────────────────────┼───────────────────────────────────┐ │
-│  │                    PM2-Managed Satellite Services                          │ │
-│  │                                                                           │ │
-│  │  ┌─────────────────────┐  ┌────────────────────┐  ┌────────────────────┐  │ │
-│  │  │ Chief of Staff      │  │ portos-browser     │  │ portos-autofixer   │  │ │
-│  │  │ portos-cos :5558    │  │ CDP :5556          │  │ daemon :5559       │  │ │
-│  │  │                     │  │ health :5557       │  │ UI :5560           │  │ │
-│  │  │ Task Watcher        │  │                    │  │                    │  │ │
-│  │  │ CoS Evaluation      │  │ Persistent         │  │ PM2 crash monitor  │  │ │
-│  │  │ Sub-Agent Spawner   │  │ Chromium instance  │  │ (polls every 15m)  │  │ │
-│  │  │ (Claude CLI) ──────►├──► CDP WebSocket for  │  │ Claude CLI         │  │ │
-│  │  │                     │  │ web automation     │  │ auto-fix           │  │ │
-│  │  └─────────────────────┘  └────────────────────┘  │ Reads apps.json   │  │ │
-│  │                                                    │ Session history    │  │ │
-│  │                                                    └────────────────────┘  │ │
-│  └───────────────────────────────────────────────────────────────────────────┘ │
-│                                                                                 │
-└───────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                                      PortOS                                         │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│  ┌────────────────────┐             ┌──────────────────────────────────────┐        │
+│  │  React Client      │             │        Express Server                │        │
+│  │  (port 5555)       │    HTTP     │        (port 5554)                   │        │
+│  │                    │ <---------> │                                      │        │
+│  │  ┌──────────────┐  │             │  ┌──────────┐  ┌──────────────────┐  │        │
+│  │  │    Pages     │  │             │  │  Routes  │──│    Services      │  │        │
+│  │  └──────────────┘  │             │  └──────────┘  └──────────────────┘  │        │
+│  │       |            │  Socket.IO  │       |              |               │        │
+│  │  ┌──────────────┐  │ <---------- │       |         ┌────v─────────┐     │        │
+│  │  │  Components  │  │             │       |         │   PM2 API    │     │        │
+│  │  └──────────────┘  │             │       |         └──────────────┘     │        │
+│  │       |            │             │       |              |               │        │
+│  │  ┌──────────────┐  │             │       |         ┌────v─────────┐     │        │
+│  │  │  api.js      │  │             │       |         │  JSON Files  │     │        │
+│  │  │  socket.js   │  │             │       |         │   (data/)    │     │        │
+│  │  └──────────────┘  │             │       |         └──────────────┘     │        │
+│  └────────────────────┘             └──────────────────────────────────────┘        │
+│                                                                                     │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐  │
+│  │                    PM2-Managed Satellite Services                             │  │
+│  │                                                                               │  │
+│  │  ┌─────────────────────┐  ┌────────────────────┐  ┌────────────────────────┐  │  │
+│  │  │ Chief of Staff      │  │ portos-browser     │  │ portos-autofixer       │  │  │
+│  │  │ portos-cos :5558    │  │ CDP :5556          │  │ daemon :5559           │  │  │
+│  │  │                     │  │ health :5557       │  │ UI :5560               │  │  │
+│  │  │ Task Watcher        │  │                    │  │                        │  │  │
+│  │  │ CoS Evaluation      │  │ Persistent         │  │ PM2 crash monitor      │  │  │
+│  │  │ Sub-Agent Spawner   │  │ Chromium instance  │  │ (polls every 15m)      │  │  │
+│  │  │ (Claude CLI) -------|->│ CDP WebSocket for  │  │ Claude CLI auto-fix    │  │  │
+│  │  │                     │  │ web automation     │  │ Reads apps.json        │  │  │
+│  │  └─────────────────────┘  └────────────────────┘  │ Session history        │  │  │
+│  │                                                   └────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 
 Communication paths:
-  Client ◄──HTTP/Socket.IO──► Server ──PM2 API──► all satellite processes
-  Server ──browserService──► portos-browser (CDP :5556, health :5557)
-  Server ──apps.json──► portos-autofixer reads registered apps to monitor
-  CoS agents ──CDP WebSocket──► portos-browser for web automation tasks
-  portos-autofixer ──pm2 jlist──► detects crashed processes ──Claude CLI──► auto-fix
-  portos-autofixer-ui ──reads──► data/autofixer/sessions/ for fix history
+  Client <--HTTP/Socket.IO--> Server --PM2 API--> all satellite processes
+  Server --browserService--> portos-browser (CDP :5556, health :5557)
+  Server --apps.json--> portos-autofixer reads registered apps to monitor
+  CoS agents --CDP WebSocket--> portos-browser for web automation tasks
+  portos-autofixer --pm2 jlist--> detects crashed processes --Claude CLI--> auto-fix
+  portos-autofixer-ui --reads--> data/autofixer/sessions/ for fix history
 ```
 
 ## Directory Structure

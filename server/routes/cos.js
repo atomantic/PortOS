@@ -12,6 +12,7 @@ import * as taskSchedule from '../services/taskSchedule.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
+import * as productivity from '../services/productivity.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -274,6 +275,27 @@ router.post('/reports/generate', asyncHandler(async (req, res) => {
   res.json(report);
 }));
 
+// GET /api/cos/briefings - List all briefings
+router.get('/briefings', asyncHandler(async (req, res) => {
+  const briefings = await cos.listBriefings();
+  res.json({ briefings });
+}));
+
+// GET /api/cos/briefings/latest - Get latest briefing
+router.get('/briefings/latest', asyncHandler(async (req, res) => {
+  const briefing = await cos.getLatestBriefing();
+  res.json(briefing);
+}));
+
+// GET /api/cos/briefings/:date - Get briefing by date
+router.get('/briefings/:date', asyncHandler(async (req, res) => {
+  const briefing = await cos.getBriefing(req.params.date);
+  if (!briefing) {
+    throw new ServerError('Briefing not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(briefing);
+}));
+
 // GET /api/cos/scripts - List generated scripts
 router.get('/scripts', asyncHandler(async (req, res) => {
   const scripts = await cos.listScripts();
@@ -375,9 +397,21 @@ router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/cos/learning/routing - Get routing accuracy metrics (task type × model tier)
+router.get('/learning/routing', asyncHandler(async (req, res) => {
+  const routing = await taskLearning.getRoutingAccuracy();
+  res.json(routing);
+}));
+
 // GET /api/cos/learning/performance - Get performance summary
 router.get('/learning/performance', asyncHandler(async (req, res) => {
   const summary = await taskLearning.getPerformanceSummary();
+  res.json(summary);
+}));
+
+// GET /api/cos/learning/summary - Get lightweight learning health summary for dashboard
+router.get('/learning/summary', asyncHandler(async (req, res) => {
+  const summary = await taskLearning.getLearningSummary();
   res.json(summary);
 }));
 
@@ -695,14 +729,14 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 
 // POST /api/cos/jobs - Create a new autonomous job
 router.post('/jobs', asyncHandler(async (req, res) => {
-  const { name, description, category, interval, intervalMs, enabled, priority, autonomyLevel, promptTemplate } = req.body;
+  const { name, description, category, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate } = req.body;
 
   if (!name || !promptTemplate) {
     throw new ServerError('name and promptTemplate are required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   const job = await autonomousJobs.createJob({
-    name, description, category, interval, intervalMs,
+    name, description, category, interval, intervalMs, scheduledTime,
     enabled, priority, autonomyLevel, promptTemplate
   });
   res.json({ success: true, job });
@@ -735,7 +769,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
 
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
-  const task = autonomousJobs.generateTaskFromJob(job);
+  const task = await autonomousJobs.generateTaskFromJob(job);
   const result = await cos.addTask({
     description: task.description,
     priority: task.priority,
@@ -826,6 +860,200 @@ router.delete('/templates/:id', asyncHandler(async (req, res) => {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
   res.json(result);
+}));
+
+// ============================================================
+// Productivity & Streaks Routes
+// ============================================================
+
+// GET /api/cos/productivity - Get productivity insights and streaks
+router.get('/productivity', asyncHandler(async (req, res) => {
+  const insights = await productivity.getProductivityInsights();
+  res.json(insights);
+}));
+
+// GET /api/cos/productivity/summary - Get quick summary for dashboard
+router.get('/productivity/summary', asyncHandler(async (req, res) => {
+  const summary = await productivity.getProductivitySummary();
+  res.json(summary);
+}));
+
+// POST /api/cos/productivity/recalculate - Force recalculation from history
+router.post('/productivity/recalculate', asyncHandler(async (req, res) => {
+  const data = await productivity.recalculateProductivity();
+  res.json({ success: true, data });
+}));
+
+// GET /api/cos/productivity/trends - Get daily task completion trends for charting
+router.get('/productivity/trends', asyncHandler(async (req, res) => {
+  const days = parseInt(req.query.days) || 30;
+  const trends = await productivity.getDailyTrends(days);
+  res.json(trends);
+}));
+
+// GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
+// Surfaces the most important things to address right now across all CoS subsystems
+router.get('/actionable-insights', asyncHandler(async (req, res) => {
+  const [tasksData, learningSummary, healthCheck, notificationsModule] = await Promise.all([
+    cos.getAllTasks().catch(() => ({ user: null, cos: null })),
+    taskLearning.getLearningInsights().catch(() => null),
+    cos.runHealthCheck().catch(() => ({ issues: [] })),
+    import('../services/notifications.js')
+  ]);
+
+  const notificationsData = await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []);
+
+  const insights = [];
+
+  // 1. Pending approvals (highest priority)
+  const pendingApprovals = tasksData.cos?.awaitingApproval || [];
+  if (pendingApprovals.length > 0) {
+    insights.push({
+      type: 'approval',
+      priority: 'high',
+      icon: 'AlertCircle',
+      title: `${pendingApprovals.length} task${pendingApprovals.length > 1 ? 's' : ''} awaiting approval`,
+      description: pendingApprovals[0]?.description?.substring(0, 80) + (pendingApprovals[0]?.description?.length > 80 ? '...' : ''),
+      action: { label: 'Review', route: '/cos/tasks' },
+      count: pendingApprovals.length
+    });
+  }
+
+  // 2. Blocked tasks
+  const blockedUser = tasksData.user?.grouped?.blocked || [];
+  const blockedCos = tasksData.cos?.grouped?.blocked || [];
+  const blockedCount = blockedUser.length + blockedCos.length;
+  if (blockedCount > 0) {
+    const firstBlocked = blockedUser[0] || blockedCos[0];
+    insights.push({
+      type: 'blocked',
+      priority: 'high',
+      icon: 'XCircle',
+      title: `${blockedCount} blocked task${blockedCount > 1 ? 's' : ''}`,
+      description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80),
+      action: { label: 'Unblock', route: '/cos/tasks' },
+      count: blockedCount
+    });
+  }
+
+  // 3. Health issues
+  const healthIssues = healthCheck?.issues || [];
+  if (healthIssues.length > 0) {
+    const criticalIssues = healthIssues.filter(i => i.severity === 'critical');
+    insights.push({
+      type: 'health',
+      priority: criticalIssues.length > 0 ? 'critical' : 'medium',
+      icon: 'AlertTriangle',
+      title: `${healthIssues.length} system health issue${healthIssues.length > 1 ? 's' : ''}`,
+      description: healthIssues[0]?.message,
+      action: { label: 'Check Health', route: '/cos/health' },
+      count: healthIssues.length
+    });
+  }
+
+  // 4. Learning failures (skipped task types)
+  const skippedTypes = learningSummary?.skippedTypes || [];
+  if (skippedTypes.length > 0) {
+    insights.push({
+      type: 'learning',
+      priority: 'low',
+      icon: 'Brain',
+      title: `${skippedTypes.length} task type${skippedTypes.length > 1 ? 's' : ''} auto-skipped`,
+      description: `Due to low success rates: ${skippedTypes.slice(0, 2).map(t => t.type).join(', ')}`,
+      action: { label: 'View Learning', route: '/cos/learning' },
+      count: skippedTypes.length
+    });
+  }
+
+  // 5. Unread notifications (briefings, reviews, etc.)
+  const briefingNotifs = notificationsData.filter(n => n.type === 'briefing_ready');
+  if (briefingNotifs.length > 0) {
+    insights.push({
+      type: 'briefing',
+      priority: 'low',
+      icon: 'Newspaper',
+      title: 'New briefing available',
+      description: 'Your daily briefing is ready for review',
+      action: { label: 'Read Briefing', route: '/cos/briefing' },
+      count: 1
+    });
+  }
+
+  // 6. Pending user tasks (informational)
+  const pendingUserTasks = tasksData.user?.grouped?.pending || [];
+  if (pendingUserTasks.length > 0 && insights.length < 4) {
+    insights.push({
+      type: 'tasks',
+      priority: 'info',
+      icon: 'ListTodo',
+      title: `${pendingUserTasks.length} pending task${pendingUserTasks.length > 1 ? 's' : ''}`,
+      description: pendingUserTasks[0]?.description?.substring(0, 80),
+      action: { label: 'View Tasks', route: '/cos/tasks' },
+      count: pendingUserTasks.length
+    });
+  }
+
+  // Sort by priority
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  insights.sort((a, b) => (priorityOrder[a.priority] || 5) - (priorityOrder[b.priority] || 5));
+
+  res.json({
+    insights: insights.slice(0, 5), // Max 5 insights
+    hasActionableItems: insights.some(i => ['critical', 'high'].includes(i.priority)),
+    totalCount: insights.length
+  });
+}));
+
+// GET /api/cos/recent-tasks - Get recent completed tasks for dashboard widget
+router.get('/recent-tasks', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 10;
+  const recentTasks = await cos.getRecentTasks(limit);
+  res.json(recentTasks);
+}));
+
+// GET /api/cos/quick-summary - Get at-a-glance dashboard summary
+// Combines today's activity, streak status, next job, and pending approvals into one efficient call
+router.get('/quick-summary', asyncHandler(async (req, res) => {
+  const [todayActivity, productivityData, tasksData, jobStats] = await Promise.all([
+    cos.getTodayActivity(),
+    productivity.getProductivitySummary(),
+    cos.getAllTasks(),
+    autonomousJobs.getJobStats()
+  ]);
+
+  // Count pending approvals from system tasks
+  const pendingApprovals = tasksData.cos?.awaitingApproval?.length || 0;
+
+  // Count pending user tasks
+  const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
+
+  res.json({
+    today: {
+      completed: todayActivity.stats.completed,
+      succeeded: todayActivity.stats.succeeded,
+      failed: todayActivity.stats.failed,
+      running: todayActivity.stats.running,
+      successRate: todayActivity.stats.successRate,
+      timeWorked: todayActivity.time.combined
+    },
+    streak: {
+      current: productivityData.currentStreak,
+      longest: productivityData.longestStreak,
+      weekly: productivityData.weeklyStreak,
+      lastActive: productivityData.lastActive
+    },
+    nextJob: jobStats.nextDue,
+    queue: {
+      pendingApprovals,
+      pendingUserTasks,
+      total: pendingApprovals + pendingUserTasks
+    },
+    status: {
+      running: todayActivity.isRunning,
+      paused: todayActivity.isPaused,
+      lastEvaluation: todayActivity.lastEvaluation
+    }
+  });
 }));
 
 export default router;

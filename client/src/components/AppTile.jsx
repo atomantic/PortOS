@@ -35,15 +35,26 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
   const isOnline = app.overallStatus === 'online';
 
   return (
-    <article className="bg-port-card border border-port-border rounded-xl p-5 hover:border-port-accent/50 transition-colors" aria-labelledby={`app-title-${app.id}`}>
+    <article className={`border rounded-xl p-5 transition-colors ${
+      app.archived
+        ? 'bg-port-card/50 border-port-border/50 opacity-60'
+        : 'bg-port-card border-port-border hover:border-port-accent/50'
+    }`} aria-labelledby={`app-title-${app.id}`}>
       {/* Header */}
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-lg bg-port-border flex items-center justify-center text-port-accent" aria-hidden="true">
+          <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+            app.archived ? 'bg-port-border/50 text-gray-500' : 'bg-port-border text-port-accent'
+          }`} aria-hidden="true">
             <AppIcon icon={app.icon || 'package'} size={28} />
           </div>
           <div>
-            <h3 id={`app-title-${app.id}`} className="font-semibold text-white">{app.name}</h3>
+            <div className="flex items-center gap-2">
+              <h3 id={`app-title-${app.id}`} className={`font-semibold ${app.archived ? 'text-gray-500' : 'text-white'}`}>{app.name}</h3>
+              {app.archived && (
+                <span className="px-1.5 py-0.5 bg-gray-600/30 text-gray-500 text-xs rounded">Archived</span>
+              )}
+            </div>
             <p className="text-sm text-gray-500">{app.type}</p>
           </div>
         </div>

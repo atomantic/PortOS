@@ -18,6 +18,13 @@ export function useErrorNotifications() {
 
     // Handle error notifications from server
     const handleError = (error) => {
+      // Platform unavailability is a warning, not an error
+      if (error.code === 'PLATFORM_UNAVAILABLE') {
+        toast(error.message, { duration: 5000, icon: '⚠️' });
+        console.warn(`[${error.code}] ${error.message}`, error.context);
+        return;
+      }
+
       const toastOptions = {
         duration: error.severity === 'critical' ? 10000 : 5000,
         icon: error.severity === 'critical' ? '💥' : '❌'

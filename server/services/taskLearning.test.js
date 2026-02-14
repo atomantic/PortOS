@@ -32,7 +32,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 import { readFile, writeFile } from 'fs/promises';
-import { resetTaskTypeLearning, getSkippedTaskTypes } from './taskLearning.js';
+import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier } from './taskLearning.js';
 
 const makeLearningData = (overrides = {}) => ({
   version: 1,
@@ -236,5 +236,228 @@ describe('TaskLearning - getSkippedTaskTypes', () => {
     const skipped = await getSkippedTaskTypes();
 
     expect(skipped).toHaveLength(0);
+  });
+
+  it('should clean up routingAccuracy data when resetting a task type', async () => {
+    let savedData;
+    writeFile.mockImplementation(async (_path, content) => {
+      savedData = JSON.parse(content);
+    });
+
+    const data = makeLearningData({
+      routingAccuracy: {
+        'self-improve:ui': {
+          heavy: { succeeded: 2, failed: 8, lastAttempt: '2026-01-25T00:00:00.000Z' },
+          medium: { succeeded: 0, failed: 5, lastAttempt: '2026-01-24T00:00:00.000Z' }
+        },
+        'user-task': {
+          heavy: { succeeded: 10, failed: 2, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    await resetTaskTypeLearning('self-improve:ui');
+
+    expect(savedData.routingAccuracy['self-improve:ui']).toBeUndefined();
+    expect(savedData.routingAccuracy['user-task']).toBeDefined();
+  });
+});
+
+describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
+  let savedData;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    savedData = null;
+    writeFile.mockImplementation(async (_path, content) => {
+      savedData = JSON.parse(content);
+    });
+  });
+
+  it('should record routing accuracy for successful task', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    const agent = {
+      metadata: { modelTier: 'heavy', taskDescription: 'Fix some UI bugs' },
+      result: { success: true, duration: 60000 }
+    };
+    const task = { description: 'Fix some UI bugs', taskType: 'user', metadata: {} };
+
+    await recordTaskCompletion(agent, task);
+
+    expect(savedData.routingAccuracy).toBeDefined();
+    expect(savedData.routingAccuracy['user-task']).toBeDefined();
+    expect(savedData.routingAccuracy['user-task']['heavy']).toBeDefined();
+    expect(savedData.routingAccuracy['user-task']['heavy'].succeeded).toBe(1);
+    expect(savedData.routingAccuracy['user-task']['heavy'].failed).toBe(0);
+  });
+
+  it('should record routing accuracy for failed task', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    const agent = {
+      metadata: { modelTier: 'light', taskDescription: 'Fix UI' },
+      result: { success: false, duration: 30000 }
+    };
+    const task = { description: 'Fix UI', taskType: 'user', metadata: {} };
+
+    await recordTaskCompletion(agent, task);
+
+    expect(savedData.routingAccuracy['user-task']['light'].succeeded).toBe(0);
+    expect(savedData.routingAccuracy['user-task']['light'].failed).toBe(1);
+    expect(savedData.routingAccuracy['user-task']['light'].lastAttempt).toBeDefined();
+  });
+
+  it('should accumulate routing accuracy across multiple completions', async () => {
+    let currentData = JSON.stringify(makeLearningData());
+    readFile.mockImplementation(async () => currentData);
+    writeFile.mockImplementation(async (_path, content) => {
+      currentData = content;
+      savedData = JSON.parse(content);
+    });
+
+    const makeAgent = (tier, success) => ({
+      metadata: { modelTier: tier, taskDescription: 'Test task' },
+      result: { success, duration: 30000 }
+    });
+    const task = { description: 'Test task', taskType: 'user', metadata: {} };
+
+    await recordTaskCompletion(makeAgent('medium', true), task);
+    await recordTaskCompletion(makeAgent('medium', true), task);
+    await recordTaskCompletion(makeAgent('medium', false), task);
+
+    expect(savedData.routingAccuracy['user-task']['medium'].succeeded).toBe(2);
+    expect(savedData.routingAccuracy['user-task']['medium'].failed).toBe(1);
+  });
+});
+
+describe('TaskLearning - getRoutingAccuracy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should return routing accuracy matrix with misroutes', async () => {
+    const data = makeLearningData({
+      routingAccuracy: {
+        'self-improve:ui': {
+          light: { succeeded: 1, failed: 9, lastAttempt: '2026-01-25T00:00:00.000Z' },
+          heavy: { succeeded: 8, failed: 2, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        },
+        'user-task': {
+          medium: { succeeded: 15, failed: 3, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await getRoutingAccuracy();
+
+    expect(result.matrix).toHaveLength(2);
+    expect(result.totalMisroutes).toBe(1); // self-improve:ui on light (10% success, 10 attempts)
+
+    // Check misroutes
+    expect(result.misroutes).toHaveLength(1);
+    expect(result.misroutes[0].taskType).toBe('self-improve:ui');
+    expect(result.misroutes[0].tier).toBe('light');
+    expect(result.misroutes[0].successRate).toBe(10);
+
+    // Check tier overview
+    expect(result.tierOverview.length).toBeGreaterThan(0);
+  });
+
+  it('should return empty results when no routing data exists', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    const result = await getRoutingAccuracy();
+
+    expect(result.matrix).toHaveLength(0);
+    expect(result.misroutes).toHaveLength(0);
+    expect(result.totalMisroutes).toBe(0);
+  });
+
+  it('should sort matrix tiers by success rate descending', async () => {
+    const data = makeLearningData({
+      routingAccuracy: {
+        'user-task': {
+          light: { succeeded: 1, failed: 4, lastAttempt: '2026-01-25T00:00:00.000Z' },
+          medium: { succeeded: 3, failed: 2, lastAttempt: '2026-01-25T00:00:00.000Z' },
+          heavy: { succeeded: 9, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await getRoutingAccuracy();
+
+    const tiers = result.matrix[0].tiers;
+    expect(tiers[0].tier).toBe('heavy');   // 90%
+    expect(tiers[1].tier).toBe('medium');  // 60%
+    expect(tiers[2].tier).toBe('light');   // 20%
+  });
+});
+
+describe('TaskLearning - suggestModelTier with routing signals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should suggest avoiding failing tiers', async () => {
+    const data = makeLearningData({
+      byTaskType: {
+        'self-improve:ui': {
+          completed: 20, succeeded: 8, failed: 12,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 40
+        }
+      },
+      routingAccuracy: {
+        'self-improve:ui': {
+          light: { succeeded: 1, failed: 9, lastAttempt: '2026-01-25T00:00:00.000Z' },
+          heavy: { succeeded: 7, failed: 3, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('self-improve:ui');
+
+    expect(result).not.toBeNull();
+    expect(result.avoidTiers).toContain('light');
+  });
+
+  it('should suggest best performing tier when available', async () => {
+    const data = makeLearningData({
+      byTaskType: {
+        'user-task': {
+          completed: 15, succeeded: 12, failed: 3,
+          totalDurationMs: 1500000, avgDurationMs: 100000,
+          successRate: 80
+        }
+      },
+      routingAccuracy: {
+        'user-task': {
+          medium: { succeeded: 9, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' },
+          heavy: { succeeded: 3, failed: 2, lastAttempt: '2026-01-25T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('user-task');
+
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBe('medium'); // 90% success vs heavy at 60%
+  });
+
+  it('should return null when insufficient data', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({
+      byTaskType: {
+        'new-task': { completed: 2, succeeded: 1, failed: 1, successRate: 50 }
+      }
+    })));
+
+    const result = await suggestModelTier('new-task');
+    expect(result).toBeNull();
   });
 });

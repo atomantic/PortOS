@@ -406,6 +406,7 @@ export async function getInboxLogCounts() {
     filed: 0,
     needs_review: 0,
     corrected: 0,
+    done: 0,
     error: 0
   };
 

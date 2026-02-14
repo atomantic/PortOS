@@ -173,9 +173,7 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
         process.cwd(),
         [],
         (data) => {
-          if (data?.text) {
-            responseText += data.text;
-          }
+          responseText += typeof data === 'string' ? data : (data?.text || '');
         },
         (result) => {
           if (result?.error) {

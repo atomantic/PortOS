@@ -17,7 +17,12 @@ async function request(endpoint, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
     const errorMessage = error.error || `HTTP ${response.status}`;
-    toast.error(errorMessage);
+    // Platform unavailability is a warning, not an error
+    if (error.code === 'PLATFORM_UNAVAILABLE') {
+      toast(errorMessage, { icon: '⚠️' });
+    } else {
+      toast.error(errorMessage);
+    }
     throw new Error(errorMessage);
   }
 
@@ -205,6 +210,18 @@ export const createCommit = (path, message) => request('/git/commit', {
   method: 'POST',
   body: JSON.stringify({ path, message })
 });
+export const updateBranches = (path) => request('/git/update-branches', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});
+export const getBranchComparison = (path, base, head) => request('/git/branch-comparison', {
+  method: 'POST',
+  body: JSON.stringify({ path, base, head })
+});
+export const pushBranch = (path, branch) => request('/git/push', {
+  method: 'POST',
+  body: JSON.stringify({ path, branch })
+});
 
 // Usage
 export const getUsage = () => request('/usage');
@@ -315,6 +332,63 @@ export const toggleAutomationSchedule = (id, enabled) => request(`/agents/schedu
 });
 export const runAutomationScheduleNow = (id) => request(`/agents/schedules/${id}/run`, { method: 'POST' });
 
+// Agent Tools
+export const generateAgentPost = (agentId, accountId, submolt, providerId, model) => request('/agents/tools/generate-post', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, submolt, providerId, model })
+});
+export const generateAgentComment = (agentId, accountId, postId, parentId, providerId, model) => request('/agents/tools/generate-comment', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, postId, parentId, providerId, model })
+});
+export const publishAgentPost = (agentId, accountId, submolt, title, content) => request('/agents/tools/publish-post', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, submolt, title, content })
+});
+export const publishAgentComment = (agentId, accountId, postId, content, parentId) => request('/agents/tools/publish-comment', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, postId, content, parentId })
+});
+export const engageAgent = (agentId, accountId, maxComments, maxVotes) => request('/agents/tools/engage', {
+  method: 'POST',
+  body: JSON.stringify({ agentId, accountId, maxComments, maxVotes })
+});
+export const getAgentFeed = (accountId, sort, limit) => {
+  const params = new URLSearchParams({ accountId });
+  if (sort) params.set('sort', sort);
+  if (limit) params.set('limit', limit);
+  return request(`/agents/tools/feed?${params}`);
+};
+export const getAgentRelevantPosts = (agentId, accountId, maxResults) => {
+  const params = new URLSearchParams({ agentId, accountId });
+  if (maxResults) params.set('maxResults', maxResults);
+  return request(`/agents/tools/relevant-posts?${params}`);
+};
+export const getAgentSubmolts = (accountId) => request(`/agents/tools/submolts?accountId=${accountId}`);
+export const getAgentPost = (accountId, postId) => request(`/agents/tools/post/${postId}?accountId=${accountId}`);
+export const getAgentRateLimits = (accountId) => request(`/agents/tools/rate-limits?accountId=${accountId}`);
+export const getAgentPublished = (agentId, accountId, days = 7) =>
+  request(`/agents/tools/published?agentId=${agentId}&accountId=${accountId}&days=${days}`);
+export const checkAgentPosts = (agentId, accountId, days, maxReplies, maxUpvotes) =>
+  request('/agents/tools/check-posts', {
+    method: 'POST',
+    body: JSON.stringify({ agentId, accountId, days, maxReplies, maxUpvotes })
+  });
+
+// Agent Drafts
+export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
+export const createAgentDraft = (data) => request('/agents/tools/drafts', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateAgentDraft = (agentId, draftId, data) => request(`/agents/tools/drafts/${draftId}?agentId=${agentId}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteAgentDraft = (agentId, draftId) => request(`/agents/tools/drafts/${draftId}?agentId=${agentId}`, {
+  method: 'DELETE'
+});
+
 // Agent Activity
 export const getAgentActivities = (limit = 50, agentIds = null, action = null) => {
   const params = new URLSearchParams();
@@ -388,6 +462,11 @@ export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');
 export const getCosReport = (date) => request(`/cos/reports/${date}`);
 
+// CoS Briefings
+export const getCosBriefings = () => request('/cos/briefings');
+export const getCosLatestBriefing = () => request('/cos/briefings/latest');
+export const getCosBriefing = (date) => request(`/cos/briefings/${date}`);
+
 // CoS Activity
 export const getCosTodayActivity = () => request('/cos/activity/today');
 
@@ -396,6 +475,8 @@ export const getCosLearning = () => request('/cos/learning');
 export const getCosLearningDurations = () => request('/cos/learning/durations');
 export const getCosLearningSkipped = () => request('/cos/learning/skipped');
 export const getCosLearningPerformance = () => request('/cos/learning/performance');
+export const getCosLearningRouting = () => request('/cos/learning/routing');
+export const getCosLearningSummary = () => request('/cos/learning/summary');
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
@@ -450,6 +531,15 @@ export const generateCosDigest = (weekId = null) => request('/cos/digest/generat
   body: JSON.stringify({ weekId })
 });
 export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?week1=${week1}&week2=${week2}`);
+
+// Productivity & Streaks
+export const getCosProductivity = () => request('/cos/productivity');
+export const getCosProductivitySummary = () => request('/cos/productivity/summary');
+export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
+export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
+export const getCosQuickSummary = () => request('/cos/quick-summary');
+export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
+export const getCosActionableInsights = () => request('/cos/actionable-insights');
 
 // Task Schedule (Configurable Intervals)
 export const getCosSchedule = () => request('/cos/schedule');
@@ -625,6 +715,7 @@ export const updateBrainInboxEntry = (id, capturedText) => request(`/brain/inbox
   body: JSON.stringify({ capturedText })
 });
 export const deleteBrainInboxEntry = (id) => request(`/brain/inbox/${id}`, { method: 'DELETE' });
+export const markBrainInboxDone = (id) => request(`/brain/inbox/${id}/done`, { method: 'POST' });
 
 // Brain - People
 export const getBrainPeople = () => request('/brain/people');
@@ -861,6 +952,23 @@ export const saveDigitalTwinImport = (source, suggestedDoc) => request('/digital
   body: JSON.stringify({ source, suggestedDoc })
 });
 
+// Digital Twin - Taste Questionnaire
+export const getTasteProfile = () => request('/digital-twin/taste');
+export const getTasteSections = () => request('/digital-twin/taste/sections');
+export const getTasteNextQuestion = (section) => request(`/digital-twin/taste/${section}/next`);
+export const submitTasteAnswer = (section, questionId, answer) => request('/digital-twin/taste/answer', {
+  method: 'POST',
+  body: JSON.stringify({ section, questionId, answer })
+});
+export const getTasteSectionResponses = (section) => request(`/digital-twin/taste/${section}/responses`);
+export const generateTasteSummary = (providerId, model, section) => request('/digital-twin/taste/summary', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model, ...(section ? { section } : {}) })
+});
+export const resetTasteSection = (section) => request(`/digital-twin/taste/${section}`, {
+  method: 'DELETE'
+});
+
 // Digital Twin - Assessment Analyzer
 export const analyzeAssessment = (content, providerId, model) =>
   request('/digital-twin/interview/analyze', {
@@ -892,6 +1000,56 @@ export const deleteSocialAccount = (id) => request(`/digital-twin/social-account
   method: 'DELETE'
 });
 
+// Digital Twin - Genome
+export const getGenomeSummary = () => request('/digital-twin/genome');
+export const uploadGenomeFile = (content, filename) => request('/digital-twin/genome/upload', {
+  method: 'POST',
+  body: JSON.stringify({ content, filename })
+});
+export const scanGenomeMarkers = () => request('/digital-twin/genome/scan', { method: 'POST' });
+export const searchGenomeSNP = (rsid) => request('/digital-twin/genome/search', {
+  method: 'POST',
+  body: JSON.stringify({ rsid })
+});
+export const saveGenomeMarker = (data) => request('/digital-twin/genome/markers', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateGenomeMarkerNotes = (id, notes) => request(`/digital-twin/genome/markers/${id}/notes`, {
+  method: 'PUT',
+  body: JSON.stringify({ notes })
+});
+export const deleteGenomeMarker = (id) => request(`/digital-twin/genome/markers/${id}`, { method: 'DELETE' });
+export const deleteGenomeData = () => request('/digital-twin/genome', { method: 'DELETE' });
+
+// Digital Twin - Genome ClinVar
+export const getClinvarStatus = () => request('/digital-twin/genome/clinvar/status');
+export const syncClinvar = () => request('/digital-twin/genome/clinvar/sync', { method: 'POST' });
+export const scanClinvar = () => request('/digital-twin/genome/clinvar/scan', { method: 'POST' });
+export const deleteClinvar = () => request('/digital-twin/genome/clinvar', { method: 'DELETE' });
+
+// Digital Twin - Epigenetic Lifestyle Tracking
+export const getEpigeneticInterventions = () => request('/digital-twin/genome/epigenetic');
+export const getEpigeneticRecommendations = (categories = []) =>
+  request(`/digital-twin/genome/epigenetic/recommendations${categories.length ? `?categories=${categories.join(',')}` : ''}`);
+export const getEpigeneticCompliance = (days = 30) =>
+  request(`/digital-twin/genome/epigenetic/compliance?days=${days}`);
+export const addEpigeneticIntervention = (data) => request('/digital-twin/genome/epigenetic', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const logEpigeneticEntry = (id, entry) => request(`/digital-twin/genome/epigenetic/${id}/log`, {
+  method: 'POST',
+  body: JSON.stringify(entry)
+});
+export const updateEpigeneticIntervention = (id, updates) => request(`/digital-twin/genome/epigenetic/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(updates)
+});
+export const deleteEpigeneticIntervention = (id) => request(`/digital-twin/genome/epigenetic/${id}`, {
+  method: 'DELETE'
+});
+
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
 export const getBrowserConfig = () => request('/browser/config');
@@ -907,6 +1065,10 @@ export const getBrowserProcess = () => request('/browser/process');
 export const getBrowserPages = () => request('/browser/pages');
 export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
+export const navigateBrowser = (url) => request('/browser/navigate', {
+  method: 'POST',
+  body: JSON.stringify({ url })
+});
 
 // Default export for simplified imports
 export default {

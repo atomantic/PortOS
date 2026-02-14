@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1a1a1a"/>
+      <stop offset="100%" stop-color="#0f0f0f"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Subtle glow behind portal -->
+  <circle cx="256" cy="256" r="160" fill="url(#glow)"/>
+
+  <!-- Outer portal ring (dashed) -->
+  <circle cx="256" cy="256" r="170" stroke="#3b82f6" stroke-width="16" stroke-dasharray="35 18" opacity="0.5"/>
+
+  <!-- Inner portal ring -->
+  <circle cx="256" cy="256" r="102" stroke="#3b82f6" stroke-width="16"/>
+
+  <!-- Center dot - the "port" -->
+  <circle cx="256" cy="256" r="34" fill="#3b82f6"/>
+
+  <!-- Connection lines extending outward -->
+  <line x1="256" y1="154" x2="256" y2="70" stroke="#3b82f6" stroke-width="16" stroke-linecap="round"/>
+  <line x1="256" y1="358" x2="256" y2="442" stroke="#3b82f6" stroke-width="16" stroke-linecap="round"/>
+  <line x1="154" y1="256" x2="70" y2="256" stroke="#3b82f6" stroke-width="16" stroke-linecap="round"/>
+  <line x1="358" y1="256" x2="442" y2="256" stroke="#3b82f6" stroke-width="16" stroke-linecap="round"/>
+</svg>

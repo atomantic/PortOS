@@ -23,6 +23,7 @@ import agentPersonalitiesRoutes from './routes/agentPersonalities.js';
 import platformAccountsRoutes from './routes/platformAccounts.js';
 import automationSchedulesRoutes from './routes/automationSchedules.js';
 import agentActivityRoutes from './routes/agentActivity.js';
+import agentToolsRoutes from './routes/agentTools.js';
 import cosRoutes from './routes/cos.js';
 import scriptsRoutes from './routes/scripts.js';
 import memoryRoutes from './routes/memory.js';
@@ -30,6 +31,7 @@ import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
 import mediaRoutes from './routes/media.js';
+import genomeRoutes from './routes/genome.js';
 import digitalTwinRoutes from './routes/digital-twin.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
@@ -44,6 +46,7 @@ import { errorEvents } from './lib/errorHandler.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
+import { startBrainScheduler } from './services/brainScheduler.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -76,6 +79,43 @@ initSocket(io);
 const DATA_DIR = join(__dirname, '..', 'data');
 const DATA_SAMPLE_DIR = join(__dirname, '..', 'data.sample');
 
+// Lifecycle hooks shared between AI Toolkit and PortOS runner shim
+const aiToolkitHooks = {
+  onRunCreated: (metadata) => {
+    recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
+      console.error(`❌ Failed to record usage session: ${err.message}`);
+    });
+  },
+  onRunCompleted: (metadata, output) => {
+    const estimatedTokens = Math.ceil(output.length / 4);
+    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+      console.error(`❌ Failed to record usage: ${err.message}`);
+    });
+  },
+  onRunFailed: (metadata, error, output) => {
+    const errorMessage = error?.message ?? String(error);
+    errorEvents.emit('error', {
+      code: 'AI_PROVIDER_EXECUTION_FAILED',
+      message: `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
+      severity: 'error',
+      canAutoFix: true,
+      timestamp: Date.now(),
+      context: {
+        runId: metadata.id,
+        provider: metadata.providerName,
+        providerId: metadata.providerId,
+        model: metadata.model,
+        exitCode: metadata.exitCode,
+        duration: metadata.duration,
+        workspacePath: metadata.workspacePath,
+        workspaceName: metadata.workspaceName,
+        errorDetails: errorMessage,
+        // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
+      }
+    });
+  }
+};
+
 // Initialize AI Toolkit with PortOS configuration and hooks
 const aiToolkit = createAIToolkit({
   dataDir: DATA_DIR,
@@ -86,46 +126,12 @@ const aiToolkit = createAIToolkit({
   sampleProvidersFile: join(DATA_SAMPLE_DIR, 'providers.json'),
   io,
   asyncHandler,
-  hooks: {
-    onRunCreated: (metadata) => {
-      recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
-        console.error(`❌ Failed to record usage session: ${err.message}`);
-      });
-    },
-    onRunCompleted: (metadata, output) => {
-      const estimatedTokens = Math.ceil(output.length / 4);
-      recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
-        console.error(`❌ Failed to record usage: ${err.message}`);
-      });
-    },
-    onRunFailed: (metadata, error, output) => {
-      const errorMessage = error?.message ?? String(error);
-      errorEvents.emit('error', {
-        code: 'AI_PROVIDER_EXECUTION_FAILED',
-        message: `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-        severity: 'error',
-        canAutoFix: true,
-        timestamp: Date.now(),
-        context: {
-          runId: metadata.id,
-          provider: metadata.providerName,
-          providerId: metadata.providerId,
-          model: metadata.model,
-          exitCode: metadata.exitCode,
-          duration: metadata.duration,
-          workspacePath: metadata.workspacePath,
-          workspaceName: metadata.workspaceName,
-          errorDetails: errorMessage,
-          // Note: promptPreview and outputTail intentionally omitted to avoid leaking sensitive data
-        }
-      });
-    }
-  }
+  hooks: aiToolkitHooks
 });
 
 // Initialize compatibility shims for services that import from old service files
 setProvidersToolkit(aiToolkit);
-setRunnerToolkit(aiToolkit);
+setRunnerToolkit(aiToolkit, { dataDir: DATA_DIR, hooks: aiToolkitHooks });
 setPromptsToolkit(aiToolkit);
 
 // Patch toolkit's runner to fix shell security issue (DEP0190)
@@ -179,6 +185,7 @@ app.use('/api/agents/personalities', agentPersonalitiesRoutes);
 app.use('/api/agents/accounts', platformAccountsRoutes);
 app.use('/api/agents/schedules', automationSchedulesRoutes);
 app.use('/api/agents/activity', agentActivityRoutes);
+app.use('/api/agents/tools', agentToolsRoutes);
 // Existing running agents routes (process management)
 app.use('/api/agents', agentsRoutes);
 app.use('/api/cos/scripts', scriptsRoutes); // Mount before /api/cos to avoid route conflicts
@@ -189,6 +196,7 @@ app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/digital-twin/social-accounts', socialAccountsRoutes);
+app.use('/api/digital-twin/genome', genomeRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/browser', browserRoutes);
@@ -199,6 +207,9 @@ initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
 agentActionExecutor.init();
+
+// Initialize brain scheduler for daily digests and weekly reviews
+startBrainScheduler();
 
 // 404 handler
 app.use((req, res) => {

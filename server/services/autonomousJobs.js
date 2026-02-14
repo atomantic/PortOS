@@ -14,18 +14,29 @@
  * - Custom user-defined jobs
  */
 
-import { promises as fs } from 'fs'
-import { existsSync } from 'fs'
-import path from 'path'
+import { writeFile, readFile } from 'fs/promises'
+import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
-import { readJSONFile } from '../lib/fileUtils.js'
+import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js'
 
 const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const DATA_DIR = path.join(__dirname, '../../data/cos')
-const JOBS_FILE = path.join(DATA_DIR, 'autonomous-jobs.json')
+const __dirname = dirname(__filename)
+const DATA_DIR = PATHS.cos
+const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
+const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
+
+/**
+ * Map job IDs to their skill template filenames
+ */
+const JOB_SKILL_MAP = {
+  'job-daily-briefing': 'daily-briefing',
+  'job-git-maintenance': 'git-maintenance',
+  'job-github-repo-maintenance': 'github-repo-maintenance',
+  'job-brain-processing': 'brain-processing',
+  'job-project-review': 'project-review'
+}
 
 // Time constants
 const HOUR = 60 * 60 * 1000
@@ -59,6 +70,40 @@ Tasks to perform:
 Focus on practical, actionable maintenance. Don't make changes directly — create CoS tasks for anything that needs doing.
 
 Report a summary of the repository health status when done.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-github-repo-maintenance',
+    name: 'GitHub Repo Maintenance',
+    description: 'Audit all GitHub repos for stale dependencies, security alerts, missing CI/README/license, and repos with no recent commits.',
+    category: 'github-maintenance',
+    interval: 'weekly',
+    intervalMs: WEEK,
+    enabled: false,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] GitHub Repo Maintenance
+
+You are acting as my Chief of Staff, performing automated maintenance checks across all my GitHub repositories.
+
+My GitHub username is: atomantic
+
+Use the \`gh\` CLI to query GitHub.
+
+Tasks to perform:
+1. List all non-archived repos via gh repo list
+2. Check for stale repos (no commits in 90+ days)
+3. Check for Dependabot/security alerts per repo
+4. Flag repos missing CI, README, or license
+5. Generate a maintenance report grouped by severity
+6. Create CoS tasks for actionable maintenance items
+
+Focus on actionable findings. Don't make changes directly — create CoS tasks for anything that needs doing.
+
+Save the report via the CoS report system.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -99,6 +144,7 @@ Focus on surfacing actionable insights. Don't just classify — think about what
     category: 'daily-briefing',
     interval: 'daily',
     intervalMs: DAY,
+    scheduledTime: '05:00',
     enabled: false,
     priority: 'LOW',
     autonomyLevel: 'assistant',
@@ -155,9 +201,7 @@ Report a project health summary when done.`,
  * Ensure data directory exists
  */
 async function ensureDataDir() {
-  if (!existsSync(DATA_DIR)) {
-    await fs.mkdir(DATA_DIR, { recursive: true })
-  }
+  await ensureDir(DATA_DIR)
 }
 
 /**
@@ -221,7 +265,7 @@ function mergeWithDefaults(loaded) {
 async function saveJobs(data) {
   await ensureDataDir()
   data.lastUpdated = new Date().toISOString()
-  await fs.writeFile(JOBS_FILE, JSON.stringify(data, null, 2))
+  await writeFile(JOBS_FILE, JSON.stringify(data, null, 2))
 }
 
 /**
@@ -253,6 +297,22 @@ async function getEnabledJobs() {
 }
 
 /**
+ * Check if the current time has passed a job's scheduledTime today.
+ * scheduledTime is "HH:MM" in local time (e.g., "05:00").
+ * Returns true if no scheduledTime is set, or if current local time >= scheduledTime.
+ * @param {string|null} scheduledTime - "HH:MM" or null/undefined
+ * @returns {boolean}
+ */
+function isScheduledTimeMet(scheduledTime) {
+  if (!scheduledTime) return true
+  const [hours, minutes] = scheduledTime.split(':').map(Number)
+  const now = new Date()
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+  const targetMinutes = hours * 60 + minutes
+  return nowMinutes >= targetMinutes
+}
+
+/**
  * Get jobs that are due to run
  * @returns {Promise<Array>} Due jobs with reason
  */
@@ -266,6 +326,9 @@ async function getDueJobs() {
     const timeSinceLastRun = now - lastRun
 
     if (timeSinceLastRun >= job.intervalMs) {
+      // If job has a scheduledTime, only mark due if we've passed that time today
+      if (!isScheduledTimeMet(job.scheduledTime)) continue
+
       due.push({
         ...job,
         reason: job.lastRun ? `${job.interval}-due` : 'never-run',
@@ -296,6 +359,7 @@ async function createJob(jobData) {
     category: jobData.category || 'custom',
     interval: jobData.interval || 'weekly',
     intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
+    scheduledTime: jobData.scheduledTime || null,
     enabled: jobData.enabled !== undefined ? jobData.enabled : false,
     priority: jobData.priority || 'MEDIUM',
     autonomyLevel: jobData.autonomyLevel || 'manager',
@@ -328,7 +392,7 @@ async function updateJob(jobId, updates) {
 
   const updatableFields = [
     'name', 'description', 'category', 'interval', 'intervalMs',
-    'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
+    'scheduledTime', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
   ]
 
   for (const field of updatableFields) {
@@ -415,14 +479,104 @@ async function toggleJob(jobId) {
 }
 
 /**
+ * Load a job skill template from disk
+ * @param {string} skillName - The skill template name (e.g., 'daily-briefing')
+ * @returns {Promise<string|null>} Template content or null if not found
+ */
+async function loadJobSkillTemplate(skillName) {
+  const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
+  const content = await readFile(filePath, 'utf-8').catch(() => null)
+  if (content) {
+    console.log(`🎯 Loaded job skill template: ${skillName}`)
+  }
+  return content
+}
+
+/**
+ * Save a job skill template to disk
+ * @param {string} skillName - The skill template name
+ * @param {string} content - The template content
+ */
+async function saveJobSkillTemplate(skillName, content) {
+  await ensureDir(JOBS_SKILLS_DIR)
+  const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
+  await writeFile(filePath, content)
+  console.log(`💾 Saved job skill template: ${skillName}`)
+}
+
+/**
+ * List all job skill templates
+ * @returns {Promise<Array>} Array of { name, jobId, hasTemplate }
+ */
+async function listJobSkillTemplates() {
+  const results = []
+  for (const [jobId, skillName] of Object.entries(JOB_SKILL_MAP)) {
+    const content = await loadJobSkillTemplate(skillName)
+    results.push({
+      name: skillName,
+      jobId,
+      hasTemplate: !!content
+    })
+  }
+  return results
+}
+
+/**
+ * Get the effective prompt for a job, using skill template if available
+ * Extracts the prompt from the skill template's structured format
+ * @param {Object} job - The job object
+ * @returns {Promise<string>} The effective prompt template
+ */
+async function getJobEffectivePrompt(job) {
+  const skillName = JOB_SKILL_MAP[job.id]
+  if (!skillName) return job.promptTemplate
+
+  const template = await loadJobSkillTemplate(skillName)
+  if (!template) return job.promptTemplate
+
+  // Extract structured sections from the skill template and build a prompt
+  // The skill template has: Prompt Template header, Steps, Expected Outputs, Success Criteria
+  const lines = template.split('\n')
+  const sections = { prompt: '', steps: '', expectedOutputs: '', successCriteria: '' }
+  let currentSection = null
+
+  for (const line of lines) {
+    if (line.startsWith('## Prompt Template')) { currentSection = 'prompt'; continue }
+    if (line.startsWith('## Steps')) { currentSection = 'steps'; continue }
+    if (line.startsWith('## Expected Outputs')) { currentSection = 'expectedOutputs'; continue }
+    if (line.startsWith('## Success Criteria')) { currentSection = 'successCriteria'; continue }
+    if (line.startsWith('## Job Metadata')) { currentSection = 'metadata'; continue }
+    if (line.startsWith('# ')) { currentSection = null; continue }
+    if (currentSection && currentSection !== 'metadata') {
+      sections[currentSection] += line + '\n'
+    }
+  }
+
+  // Build the effective prompt from structured sections
+  let prompt = sections.prompt.trim()
+  if (sections.steps.trim()) {
+    prompt += '\n\nTasks to perform:\n' + sections.steps.trim()
+  }
+  if (sections.expectedOutputs.trim()) {
+    prompt += '\n\nExpected outputs:\n' + sections.expectedOutputs.trim()
+  }
+  if (sections.successCriteria.trim()) {
+    prompt += '\n\nSuccess criteria:\n' + sections.successCriteria.trim()
+  }
+
+  return prompt
+}
+
+/**
  * Generate a CoS task from a due job
  * @param {Object} job - The job to generate a task for
- * @returns {Object} Task data suitable for cos.addTask()
+ * @returns {Promise<Object>} Task data suitable for cos.addTask()
  */
-function generateTaskFromJob(job) {
+async function generateTaskFromJob(job) {
+  const description = await getJobEffectivePrompt(job)
   return {
     id: `${job.id}-${Date.now().toString(36)}`,
-    description: job.promptTemplate,
+    description,
     priority: job.priority,
     metadata: {
       autonomousJob: true,
@@ -469,15 +623,29 @@ async function getNextDueJob() {
 
   for (const job of enabledJobs) {
     const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
-    const nextDue = lastRun + job.intervalMs
+    let nextDue = lastRun + job.intervalMs
+
+    // If job has scheduledTime, adjust nextDue to that time of day
+    if (job.scheduledTime) {
+      const [hours, minutes] = job.scheduledTime.split(':').map(Number)
+      const nextDueDate = new Date(nextDue)
+      nextDueDate.setHours(hours, minutes, 0, 0)
+      // If the scheduled time already passed on the interval-due date, it's fine
+      // If not, the job waits until that time
+      if (nextDueDate.getTime() > nextDue) {
+        nextDue = nextDueDate.getTime()
+      }
+    }
 
     if (nextDue < earliestTime) {
       earliestTime = nextDue
+      const isDue = Date.now() >= nextDue && isScheduledTimeMet(job.scheduledTime)
       earliest = {
         jobId: job.id,
         jobName: job.name,
         nextDueAt: new Date(nextDue).toISOString(),
-        isDue: Date.now() >= nextDue
+        scheduledTime: job.scheduledTime || null,
+        isDue
       }
     }
   }
@@ -528,5 +696,11 @@ export {
   generateTaskFromJob,
   getJobStats,
   getNextDueJob,
-  INTERVAL_OPTIONS
+  isScheduledTimeMet,
+  INTERVAL_OPTIONS,
+  loadJobSkillTemplate,
+  saveJobSkillTemplate,
+  listJobSkillTemplates,
+  getJobEffectivePrompt,
+  JOB_SKILL_MAP
 }
