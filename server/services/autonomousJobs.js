@@ -9,7 +9,7 @@
  * - Jobs are recurring schedules that generate tasks when due
  *
  * Job types:
- * - git-maintenance: Maintain user's git repositories
+ * - github-maintenance: Audit and maintain user's GitHub repositories
  * - brain-processing: Process and act on brain ideas/inbox
  * - Custom user-defined jobs
  */
@@ -32,7 +32,6 @@ const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
  */
 const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
-  'job-git-maintenance': 'git-maintenance',
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-processing': 'brain-processing',
   'job-project-review': 'project-review'
@@ -48,37 +47,9 @@ const WEEK = 7 * DAY
  */
 const DEFAULT_JOBS = [
   {
-    id: 'job-git-maintenance',
-    name: 'Git Repository Maintenance',
-    description: 'Review and maintain my open source repositories on GitHub. Check for stale issues, outdated dependencies, and merge-worthy PRs.',
-    category: 'git-maintenance',
-    interval: 'weekly',
-    intervalMs: WEEK,
-    enabled: false,
-    priority: 'MEDIUM',
-    autonomyLevel: 'manager',
-    promptTemplate: `[Autonomous Job] Git Repository Maintenance
-
-You are acting as my Chief of Staff, maintaining my GitHub repositories.
-
-Tasks to perform:
-1. Check my local git repositories for uncommitted changes or stale branches
-2. Look for repositories that haven't been updated recently
-3. Review any obvious maintenance needs (outdated README, missing license, etc.)
-4. If there are simple cleanups to make, create tasks for them
-
-Focus on practical, actionable maintenance. Don't make changes directly — create CoS tasks for anything that needs doing.
-
-Report a summary of the repository health status when done.`,
-    lastRun: null,
-    runCount: 0,
-    createdAt: null,
-    updatedAt: null
-  },
-  {
     id: 'job-github-repo-maintenance',
     name: 'GitHub Repo Maintenance',
-    description: 'Audit all GitHub repos for stale dependencies, security alerts, missing CI/README/license, and repos with no recent commits.',
+    description: 'Audit all GitHub repos for security alerts, stale dependencies, missing CI/README/license, uncommitted local changes, and stale branches.',
     category: 'github-maintenance',
     interval: 'weekly',
     intervalMs: WEEK,
@@ -94,12 +65,13 @@ My GitHub username is: atomantic
 Use the \`gh\` CLI to query GitHub.
 
 Tasks to perform:
-1. List all non-archived repos via gh repo list
-2. Check for stale repos (no commits in 90+ days)
-3. Check for Dependabot/security alerts per repo
-4. Flag repos missing CI, README, or license
-5. Generate a maintenance report grouped by severity
-6. Create CoS tasks for actionable maintenance items
+1. Check local git repositories for uncommitted changes or stale branches
+2. List all non-archived repos via gh repo list
+3. Check for stale repos (no commits in 90+ days)
+4. Check for Dependabot/security alerts per repo
+5. Flag repos missing CI, README, or license
+6. Generate a maintenance report grouped by severity
+7. Create CoS tasks for actionable maintenance items
 
 Focus on actionable findings. Don't make changes directly — create CoS tasks for anything that needs doing.
 
