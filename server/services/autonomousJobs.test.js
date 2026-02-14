@@ -6,15 +6,13 @@ vi.mock('./cosEvents.js', () => ({
 }))
 
 vi.mock('../lib/fileUtils.js', () => ({
-  readJSONFile: vi.fn()
+  readJSONFile: vi.fn(),
+  ensureDir: vi.fn().mockResolvedValue(),
+  PATHS: { cos: '/mock/data/cos' }
 }))
 
-vi.mock('fs', () => ({
-  existsSync: vi.fn().mockReturnValue(true),
-  promises: {
-    writeFile: vi.fn().mockResolvedValue(),
-    mkdir: vi.fn().mockResolvedValue()
-  }
+vi.mock('fs/promises', () => ({
+  writeFile: vi.fn().mockResolvedValue()
 }))
 
 // Import after mocks
@@ -125,12 +123,11 @@ describe('autonomousJobs', () => {
   })
 
   describe('generateTaskFromJob', () => {
-    it('returns correct task structure with metadata', () => {
+    it('returns correct task structure with metadata', async () => {
       const job = mockJobsData.jobs[0]
-      const task = generateTaskFromJob(job)
+      const task = await generateTaskFromJob(job)
 
       expect(task).toMatchObject({
-        description: job.promptTemplate,
         priority: job.priority,
         metadata: {
           autonomousJob: true,
@@ -143,15 +140,16 @@ describe('autonomousJobs', () => {
         autoApprove: false
       })
       expect(task.id).toContain(job.id)
+      expect(task.description).toBeTruthy()
     })
 
-    it('autoApprove true when autonomyLevel is yolo', () => {
+    it('autoApprove true when autonomyLevel is yolo', async () => {
       const yoloJob = {
         ...mockJobsData.jobs[0],
         autonomyLevel: 'yolo'
       }
 
-      const task = generateTaskFromJob(yoloJob)
+      const task = await generateTaskFromJob(yoloJob)
 
       expect(task.autoApprove).toBe(true)
       expect(task.metadata.autonomyLevel).toBe('yolo')
@@ -253,6 +251,7 @@ describe('autonomousJobs', () => {
       expect(jobs.length).toBeGreaterThan(1)
       expect(jobs.find(j => j.id === 'job-custom-only')).toBeDefined()
       expect(jobs.find(j => j.id === 'job-git-maintenance')).toBeDefined()
+      expect(jobs.find(j => j.id === 'job-github-repo-maintenance')).toBeDefined()
       expect(jobs.find(j => j.id === 'job-brain-processing')).toBeDefined()
     })
   })

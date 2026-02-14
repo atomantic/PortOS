@@ -87,11 +87,12 @@ router.post('/', asyncHandler(async (req, res) => {
     if (data.platform === 'moltbook') {
       let apiKey, claimUrl, username;
 
-      // Try to register with real Moltbook API
+      // Register with Moltbook API (v1 returns { agent: { api_key, claim_url, name } })
       const result = await moltbook.register(data.name, data.description);
-      apiKey = result.api_key;
-      claimUrl = result.claim_url;
-      username = result.username || data.name.toLowerCase().replace(/\s+/g, '_');
+      const agent_data = result.agent || result;
+      apiKey = agent_data.api_key;
+      claimUrl = agent_data.claim_url;
+      username = agent_data.name || data.name.toLowerCase().replace(/\s+/g, '_');
 
       const account = await platformAccounts.createAccount({
         agentId: data.agentId,
@@ -148,27 +149,27 @@ router.post('/:id/test', asyncHandler(async (req, res) => {
   }
 
   if (account.platform === 'moltbook') {
-    // Test with real Moltbook API
+    // Test with real Moltbook API - fetch profile (read-only, no side effects)
     const client = new moltbook.MoltbookClient(account.credentials.apiKey);
-    const status = await client.getStatus();
+    const profileResult = await client.getProfile();
+    const agent = profileResult.agent || profileResult;
+    const platformStatus = agent.is_claimed ? 'active' : 'pending_claim';
 
     const testResult = {
-      success: status.status === 'active' || status.status === 'claimed',
-      message: status.status === 'active' || status.status === 'claimed'
-        ? 'Connection successful'
-        : status.status === 'pending_claim'
-          ? 'Account pending claim - visit claim URL to activate'
-          : `Account status: ${status.status}`,
+      success: !!agent.id,
+      message: agent.id
+        ? `Connection successful — ${agent.name} (${agent.stats?.posts || 0} posts, ${agent.karma || 0} karma)`
+        : 'Could not retrieve profile',
       platform: account.platform,
       username: account.credentials.username,
-      platformStatus: status.status
+      platformStatus
     };
 
     // Update account status if it changed
-    if (status.status === 'active' || status.status === 'claimed') {
+    if (agent.id && agent.is_claimed) {
       await platformAccounts.updateAccountStatus(id, 'active');
-    } else if (status.status === 'suspended') {
-      await platformAccounts.updateAccountStatus(id, 'suspended');
+    } else if (!agent.is_claimed) {
+      await platformAccounts.updateAccountStatus(id, 'pending');
     }
 
     res.json(testResult);

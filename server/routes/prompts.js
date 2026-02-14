@@ -1,5 +1,13 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import {
+  listJobSkillTemplates,
+  loadJobSkillTemplate,
+  saveJobSkillTemplate,
+  getJobEffectivePrompt,
+  getJob,
+  JOB_SKILL_MAP
+} from '../services/autonomousJobs.js';
 
 /**
  * Create PortOS-specific prompts routes
@@ -52,6 +60,61 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     await promptsService.deleteVariable(req.params.key);
     res.json({ success: true });
   }));
+
+  // === Job Skill Templates (must be before /:stage wildcard) ===
+
+  // GET /api/prompts/skills/jobs - List all job skill templates
+  router.get('/skills/jobs', asyncHandler(async (req, res) => {
+    const skills = await listJobSkillTemplates();
+    res.json({ skills });
+  }));
+
+  // GET /api/prompts/skills/jobs/:name - Get a job skill template
+  router.get('/skills/jobs/:name', asyncHandler(async (req, res) => {
+    const content = await loadJobSkillTemplate(req.params.name);
+    if (!content) {
+      throw new ServerError('Job skill template not found', { status: 404, code: 'NOT_FOUND' });
+    }
+
+    // Find associated job ID
+    const jobId = Object.entries(JOB_SKILL_MAP).find(([, name]) => name === req.params.name)?.[0];
+    const job = jobId ? await getJob(jobId) : null;
+
+    res.json({
+      name: req.params.name,
+      jobId,
+      content,
+      jobName: job?.name || null,
+      category: job?.category || null,
+      interval: job?.interval || null
+    });
+  }));
+
+  // PUT /api/prompts/skills/jobs/:name - Update a job skill template
+  router.put('/skills/jobs/:name', asyncHandler(async (req, res) => {
+    const { content } = req.body;
+    if (!content) {
+      throw new ServerError('content is required', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    await saveJobSkillTemplate(req.params.name, content);
+    res.json({ success: true });
+  }));
+
+  // GET /api/prompts/skills/jobs/:name/preview - Preview the effective prompt from a job skill
+  router.get('/skills/jobs/:name/preview', asyncHandler(async (req, res) => {
+    const jobId = Object.entries(JOB_SKILL_MAP).find(([, name]) => name === req.params.name)?.[0];
+    if (!jobId) {
+      throw new ServerError('No job associated with this skill', { status: 404, code: 'NOT_FOUND' });
+    }
+    const job = await getJob(jobId);
+    if (!job) {
+      throw new ServerError('Associated job not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    const prompt = await getJobEffectivePrompt(job);
+    res.json({ preview: prompt });
+  }));
+
+  // === Stage Routes (wildcard - must be after specific paths) ===
 
   // GET /api/prompts/:stage - Get stage with template
   router.get('/:stage', asyncHandler(async (req, res) => {

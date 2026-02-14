@@ -8,14 +8,44 @@ import { join } from 'path';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
+let runnerConfig = { dataDir: './data', hooks: {} };
 
-export function setAIToolkit(toolkit) {
+export function setAIToolkit(toolkit, config = {}) {
   aiToolkitInstance = toolkit;
+  runnerConfig = { dataDir: config.dataDir || './data', hooks: config.hooks || {} };
 }
 
 export async function createRun(options) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.createRun(options);
+  const result = await aiToolkitInstance.services.runner.createRun(options);
+  console.log(`🤖 AI run [${options.source || 'unknown'}]: ${result.provider.name}/${result.metadata.model}`);
+  return result;
+}
+
+/**
+ * Build CLI args based on provider type.
+ * Each CLI provider has different conventions for stdin input and model selection.
+ */
+function buildCliArgs(provider) {
+  const providerId = provider?.id || '';
+
+  // Codex CLI: `codex exec -` reads prompt from stdin, --model for model
+  if (providerId === 'codex') {
+    const args = [...(provider.args || []), 'exec'];
+    if (provider.defaultModel) {
+      args.push('--model', provider.defaultModel);
+    }
+    args.push('-'); // stdin marker
+    return args;
+  }
+
+  // Gemini CLI: prompt is piped via stdin directly
+  if (providerId === 'gemini-cli') {
+    return [...(provider.args || [])];
+  }
+
+  // Default (Claude Code CLI): -p - means "read prompt from stdin"
+  return [...(provider.args || []), '-p', '-'];
 }
 
 /**
@@ -25,7 +55,7 @@ export async function createRun(options) {
 export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
 
-  const runsPath = join(aiToolkitInstance.config.dataDir || './data', 'runs');
+  const runsPath = join(runnerConfig.dataDir, 'runs');
   const runDir = join(runsPath, runId);
   await mkdir(runDir, { recursive: true });
   const outputPath = join(runDir, 'output.txt');
@@ -34,8 +64,8 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   const startTime = Date.now();
   let output = '';
 
-  // Build command with args - prompt passed via stdin to avoid argv limits
-  const args = [...(provider.args || []), '-p', '-'];
+  // Build provider-specific args for stdin-based prompt delivery
+  const args = buildCliArgs(provider);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
   const childProcess = spawn(provider.command, args, {
@@ -54,7 +84,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   aiToolkitInstance.services.runner._portosActiveRuns.set(runId, childProcess);
 
   // Call hooks
-  aiToolkitInstance.config.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
+  runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
 
   // Set timeout (default 5 min, guard against undefined which would fire immediately)
   const effectiveTimeout = timeout ?? provider.timeout ?? 300000;
@@ -94,7 +124,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
     await writeFile(outputPath, output).catch(() => {});
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
-    aiToolkitInstance.config.hooks?.onRunFailed?.(metadata, metadata.error, output);
+    runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
     onComplete?.(metadata);
   });
 
@@ -124,9 +154,9 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
     if (metadata.success) {
-      aiToolkitInstance.config.hooks?.onRunCompleted?.(metadata, output);
+      runnerConfig.hooks?.onRunCompleted?.(metadata, output);
     } else {
-      aiToolkitInstance.config.hooks?.onRunFailed?.(metadata, metadata.error, output);
+      runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
     }
 
     onComplete?.(metadata);

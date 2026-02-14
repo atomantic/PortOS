@@ -135,6 +135,19 @@ export function getRateLimitStatus(apiKey) {
 }
 
 /**
+ * Sync local rate limit state from a platform 429 response
+ * Sets lastAction to now so cooldown timer reflects platform enforcement
+ * @param {string} apiKey - The API key
+ * @param {string} action - The action type
+ */
+export function syncFromExternal(apiKey, action) {
+  const state = getState(apiKey);
+  if (state[action]) {
+    state[action].lastAction = Date.now();
+  }
+}
+
+/**
  * Clear rate limit state for an API key (e.g., on account deletion)
  * @param {string} apiKey - The API key
  */

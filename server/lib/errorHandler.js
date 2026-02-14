@@ -34,9 +34,11 @@ export function asyncHandler(fn) {
       const io = req.app.get('io');
       const error = normalizeError(err);
 
-      // Log the error
+      // Log the error (skip stack traces for upstream platform issues)
       const logMsg = `❌ Route error: ${error.message}`;
-      if (error.status >= 500) {
+      if (error.code === 'PLATFORM_UNAVAILABLE') {
+        console.warn(`⚠️ Platform unavailable: ${error.message}`);
+      } else if (error.status >= 500) {
         console.error(logMsg, error.stack ? error.stack : '');
       } else {
         console.error(logMsg);

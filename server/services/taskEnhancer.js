@@ -127,9 +127,7 @@ export async function enhanceTaskPrompt(description, context = '') {
         process.cwd(),
         [], // No screenshots needed
         (data) => {
-          if (data?.text) {
-            enhancedDescription += data.text;
-          }
+          enhancedDescription += typeof data === 'string' ? data : (data?.text || '');
         },
         (result) => {
           if (result?.error) {

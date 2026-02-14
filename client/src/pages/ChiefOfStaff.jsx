@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
-import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 // Import from modular components
@@ -20,16 +20,20 @@ import {
   StatCard,
   StatusBubble,
   EventLog,
+  QuickSummary,
+  ActionableInsightsBanner,
   TasksTab,
   AgentsTab,
   JobsTab,
   ScriptsTab,
   ScheduleTab,
   DigestTab,
+  ProductivityTab,
   LearningTab,
   MemoryTab,
   HealthTab,
-  ConfigTab
+  ConfigTab,
+  BriefingTab
 } from '../components/cos';
 import { resolveDynamicAvatar } from '../components/cos/constants';
 
@@ -53,6 +57,7 @@ export default function ChiefOfStaff() {
   const [eventLogs, setEventLogs] = useState([]);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
+  const [learningSummary, setLearningSummary] = useState(null);
   const socket = useSocket();
 
   // Derive avatar style from server config, with optional dynamic override
@@ -88,14 +93,15 @@ export default function ChiefOfStaff() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    const [statusData, tasksData, agentsData, scriptsData, healthData, providersData, appsData] = await Promise.all([
+    const [statusData, tasksData, agentsData, scriptsData, healthData, providersData, appsData, learningSummaryData] = await Promise.all([
       api.getCosStatus().catch(() => null),
       api.getCosTasks().catch(() => ({ user: null, cos: null })),
       api.getCosAgents().catch(() => []),
       api.getCosScripts().catch(() => ({ scripts: [] })),
       api.getCosHealth().catch(() => null),
       api.getProviders().catch(() => ({ providers: [] })),
-      api.getApps().catch(() => [])
+      api.getApps().catch(() => []),
+      api.getCosLearningSummary().catch(() => null)
     ]);
     setStatus(statusData);
     setTasks(tasksData);
@@ -105,6 +111,7 @@ export default function ChiefOfStaff() {
     setProviders(providersData.providers || []);
     // Filter out PortOS Autofixer (it's part of PortOS project)
     setApps(appsData.filter(a => a.id !== 'portos-autofixer'));
+    setLearningSummary(learningSummaryData);
     setLoading(false);
 
     const newState = deriveAgentState(statusData, agentsData, healthData);
@@ -443,7 +450,7 @@ export default function ChiefOfStaff() {
               </div>
             </div>
 
-            {/* Mobile Stats Grid - 2x2 layout for compact display */}
+            {/* Mobile Stats Grid - shows core stats in compact 2-column layout */}
             <div className="flex-1 grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10 content-center">
               <StatCard
                 label="Active"
@@ -470,6 +477,33 @@ export default function ChiefOfStaff() {
                 icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
                 compact
               />
+              {/* Learning Health - spans 2 columns on mobile for visibility */}
+              <button
+                onClick={() => navigate('/cos/learning')}
+                className={`col-span-2 bg-port-card/80 border rounded px-2 py-1.5 flex items-center gap-2 transition-all ${
+                  learningSummary?.status === 'critical' ? 'border-port-error shadow-md shadow-port-error/20' :
+                  learningSummary?.status === 'warning' ? 'border-port-warning' :
+                  'border-port-border'
+                }`}
+              >
+                <Brain className={`w-4 h-4 shrink-0 ${
+                  learningSummary?.status === 'critical' ? 'text-port-error' :
+                  learningSummary?.status === 'warning' ? 'text-port-warning' :
+                  learningSummary?.status === 'good' ? 'text-purple-400' :
+                  'text-gray-500'
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] text-gray-500">Learning</div>
+                  <div className="text-sm font-bold text-white flex items-center gap-2">
+                    {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}% success` : 'No data'}
+                    {learningSummary?.skipped > 0 && (
+                      <span className="text-[9px] text-port-error font-normal">
+                        ({learningSummary.skipped} skipped)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </button>
             </div>
           </div>
         </div>
@@ -479,7 +513,7 @@ export default function ChiefOfStaff() {
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <div className="overflow-y-auto p-3 lg:p-4">
         {/* Stats Bar - hidden on mobile for SVG mode (shown in avatar panel instead) */}
-        <div className={`grid grid-cols-4 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden lg:grid' : ''}`}>
+        <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden lg:grid' : ''}`}>
           <StatCard
             label="Active"
             value={activeAgentCount}
@@ -505,7 +539,41 @@ export default function ChiefOfStaff() {
             icon={<AlertCircle className={`w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
             mini
           />
+          {/* Learning Health - clickable to go to Learning tab */}
+          <button
+            onClick={() => navigate('/cos/learning')}
+            className={`bg-port-card border rounded p-1.5 sm:p-2 lg:p-3 transition-all text-left hover:bg-port-card/80 ${
+              learningSummary?.status === 'critical' ? 'border-port-error shadow-md shadow-port-error/20' :
+              learningSummary?.status === 'warning' ? 'border-port-warning shadow-md shadow-port-warning/20' :
+              'border-port-border hover:border-purple-500/50'
+            }`}
+            title={learningSummary?.statusMessage || 'View learning analytics'}
+          >
+            <div className="flex items-center justify-between mb-0.5">
+              <span className="text-[10px] sm:text-xs text-gray-500 truncate">Learning</span>
+              <Brain className={`w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 shrink-0 ${
+                learningSummary?.status === 'critical' ? 'text-port-error' :
+                learningSummary?.status === 'warning' ? 'text-port-warning' :
+                learningSummary?.status === 'good' ? 'text-purple-400' :
+                'text-gray-500'
+              }`} />
+            </div>
+            <div className="text-sm sm:text-base lg:text-xl font-bold text-white">
+              {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : '—'}
+            </div>
+            {learningSummary?.skipped > 0 && (
+              <div className="text-[9px] text-port-error mt-0.5 truncate">
+                {learningSummary.skipped} skipped
+              </div>
+            )}
+          </button>
         </div>
+
+        {/* Actionable Insights - priority items requiring attention */}
+        {activeTab === 'tasks' && <ActionableInsightsBanner />}
+
+        {/* Quick Summary - at-a-glance stats on tasks tab only */}
+        {activeTab === 'tasks' && <QuickSummary />}
 
         {/* Tabs - scrollable on mobile with touch-friendly sizing */}
         <div role="tablist" aria-label="Chief of Staff sections" className="flex gap-1 mb-4 lg:mb-6 border-b border-port-border overflow-x-auto scrollbar-hide pb-px">
@@ -535,6 +603,11 @@ export default function ChiefOfStaff() {
         </div>
 
         {/* Tab Content */}
+        {activeTab === 'briefing' && (
+          <div role="tabpanel" id="tabpanel-briefing" aria-labelledby="tab-briefing">
+            <BriefingTab />
+          </div>
+        )}
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <TasksTab tasks={tasks} onRefresh={fetchData} providers={providers} apps={apps} />
@@ -563,6 +636,11 @@ export default function ChiefOfStaff() {
         {activeTab === 'digest' && (
           <div role="tabpanel" id="tabpanel-digest" aria-labelledby="tab-digest">
             <DigestTab />
+          </div>
+        )}
+        {activeTab === 'productivity' && (
+          <div role="tabpanel" id="tabpanel-productivity" aria-labelledby="tab-productivity">
+            <ProductivityTab />
           </div>
         )}
         {activeTab === 'learning' && (

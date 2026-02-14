@@ -163,26 +163,30 @@ export function parseEcosystemConfig(content) {
 
     // Fall back to legacy parsing if no ports object found
     if (Object.keys(ports).length === 0) {
-      // Helper to resolve port value (literal or variable reference)
+      // Helper to resolve port value from literal, variable reference, or expression
+      // Handles: 4420, PORTS.API, process.env.PORT || 4420, Number(...) || 4420
       const resolvePortValue = (value) => {
-        if (/^\d+$/.test(value)) return parseInt(value);
-        // Try PORTS.XXX reference
-        if (portConstants[value]) return portConstants[value];
-        // Try direct constant reference
-        if (portConstants[value]) return portConstants[value];
+        const trimmed = value.trim();
+        if (/^\d+$/.test(trimmed)) return parseInt(trimmed);
+        // Expression with || fallback: "process.env.PORT || 4420"
+        const fallbackMatch = trimmed.match(/\|\|\s*['"]?(\d+)['"]?\s*$/);
+        if (fallbackMatch) return parseInt(fallbackMatch[1]);
+        // PORTS.XXX or constant reference
+        if (portConstants[trimmed]) return portConstants[trimmed];
         return null;
       };
 
       // Extract CDP_PORT first (Chrome DevTools Protocol port for browser processes)
       // Word boundary ensures we don't match VITE_CDP_PORT
-      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bCDP_PORT\s*:\s*([\w.]+)/);
+      // Capture full expression (up to , or }) to handle process.env.X || fallback
+      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bCDP_PORT\s*:\s*([^,}\n]+)/);
       if (cdpPortMatch) {
         const resolved = resolvePortValue(cdpPortMatch[1]);
         if (resolved) ports.cdp = resolved;
       }
 
-      // Extract PORT from env (handles both literals and variable references)
-      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*([\w.]+)/);
+      // Extract PORT from env (handles literals, variables, and process.env.X || fallback)
+      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*([^,}\n]+)/);
       if (portMatch) {
         const resolved = resolvePortValue(portMatch[1]);
         if (resolved) {
@@ -203,7 +207,7 @@ export function parseEcosystemConfig(content) {
       }
 
       // Extract VITE_PORT for Vite processes
-      const vitePortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*VITE_PORT\s*:\s*([\w.]+)/);
+      const vitePortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*VITE_PORT\s*:\s*([^,}\n]+)/);
       if (vitePortMatch) {
         const resolved = resolvePortValue(vitePortMatch[1]);
         if (resolved) ports.ui = resolved;

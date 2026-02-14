@@ -4,17 +4,71 @@
  * REST API client for Moltbook - an AI agent social platform.
  * All actions are performed via their REST API (no browser automation needed).
  *
- * API Base: https://www.moltbook.app/api
+ * API Base: https://www.moltbook.com/api/v1
  */
 
-import { checkRateLimit, recordAction } from './rateLimits.js';
+import { checkRateLimit, recordAction, syncFromExternal } from './rateLimits.js';
+import { solveChallenge } from './challengeSolver.js';
 
-const API_BASE = 'https://www.moltbook.app/api';
+const API_BASE = 'https://www.moltbook.com/api/v1';
+
+/**
+ * Infer the rate-limited action type from a Moltbook API endpoint
+ */
+function inferActionFromEndpoint(endpoint, method) {
+  if (method !== 'POST') return null;
+  if (endpoint === '/posts') return 'post';
+  if (/^\/posts\/[^/]+\/comments$/.test(endpoint)) return 'comment';
+  if (/^\/posts\/[^/]+\/vote$/.test(endpoint)) return 'vote';
+  if (/^\/comments\/[^/]+\/upvote$/.test(endpoint)) return 'vote';
+  if (/^\/agents\/[^/]+\/follow$/.test(endpoint)) return 'follow';
+  return null;
+}
+
+/**
+ * Handle a Moltbook verification challenge embedded in a response
+ * Challenges are obfuscated math word problems that must be solved within 5 minutes.
+ */
+async function handleVerification(data, apiKey, aiConfig) {
+  if (!data?.verification_required || !data?.verification) return data;
+
+  const { code, challenge, expires_at } = data.verification;
+  console.log(`🔐 Moltbook verification required: code=${code}, expires=${expires_at}`);
+  console.log(`🔐 Challenge: "${challenge.substring(0, 100)}..."`);
+
+  const answer = await solveChallenge(challenge, aiConfig);
+  if (!answer) {
+    console.error(`❌ Could not solve Moltbook challenge — post will remain pending`);
+    return data;
+  }
+
+  console.log(`🔐 Submitting verification: code=${code} answer=${answer}`);
+
+  const resp = await fetch(`${API_BASE}/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({ verification_code: code, answer })
+  });
+
+  const result = await resp.json().catch(() => ({}));
+  if (resp.ok && result.success !== false) {
+    console.log(`✅ Moltbook verification passed: ${result.message || 'verified'}`);
+    data.verification_solved = true;
+  } else {
+    console.error(`❌ Moltbook verification failed: ${resp.status} ${result.error || result.message || 'unknown'}`);
+    data.verification_solved = false;
+  }
+
+  return data;
+}
 
 /**
  * Make an API request to Moltbook
  */
-async function request(endpoint, options = {}) {
+async function request(endpoint, options = {}, aiConfig) {
   const url = `${API_BASE}${endpoint}`;
   const config = {
     headers: {
@@ -26,33 +80,69 @@ async function request(endpoint, options = {}) {
 
   console.log(`📚 Moltbook API: ${options.method || 'GET'} ${endpoint}`);
 
-  const response = await fetch(url, config);
+  let response;
+  const fetchResult = await fetch(url, config).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e }));
+
+  if (!fetchResult.ok) {
+    console.error(`❌ Moltbook API unreachable: ${fetchResult.error.message}`);
+    const err = new Error('Moltbook is currently unavailable');
+    err.status = 503;
+    err.code = 'PLATFORM_UNAVAILABLE';
+    throw err;
+  }
+
+  response = fetchResult.response;
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    const error = await response.json().catch(() => ({}));
     const message = error.error || error.message || `HTTP ${response.status}`;
-    console.error(`❌ Moltbook API error: ${message}`);
-    throw new Error(message);
+    if (response.status !== 404) {
+      console.error(`❌ Moltbook API error: ${response.status} ${message}`);
+    } else {
+      console.log(`📚 Moltbook API: 404 ${endpoint}`);
+    }
+    // Sync local rate limit state when platform enforces a cooldown
+    if (response.status === 429) {
+      const apiKey = config.headers?.['Authorization']?.replace('Bearer ', '');
+      const action = inferActionFromEndpoint(endpoint, options.method);
+      if (apiKey && action) {
+        syncFromExternal(apiKey, action);
+        console.log(`⏱️ Synced ${action} rate limit from 429 response`);
+      }
+    }
+
+    const err = new Error(message);
+    // Upstream 5xx → our 503 (platform unavailable), preserve 4xx as-is
+    err.status = response.status >= 500 ? 503 : response.status;
+    err.code = response.status >= 500 ? 'PLATFORM_UNAVAILABLE' : undefined;
+    err.suspended = response.status === 403 && message.toLowerCase().includes('suspended');
+    throw err;
   }
 
   if (response.status === 204) {
     return null;
   }
 
-  return response.json();
+  const data = await response.json();
+
+  // Auto-solve verification challenges embedded in responses
+  const apiKey = config.headers?.['Authorization']?.replace('Bearer ', '');
+  if (apiKey) await handleVerification(data, apiKey, aiConfig);
+
+  return data;
 }
 
 /**
  * Make an authenticated API request
  */
-async function authRequest(apiKey, endpoint, options = {}) {
+async function authRequest(apiKey, endpoint, options = {}, aiConfig) {
   return request(endpoint, {
     ...options,
     headers: {
       ...options.headers,
       'Authorization': `Bearer ${apiKey}`
     }
-  });
+  }, aiConfig);
 }
 
 // =============================================================================
@@ -66,12 +156,14 @@ async function authRequest(apiKey, endpoint, options = {}) {
  * @returns {{ api_key: string, claim_url: string }} Registration result
  */
 export async function register(name, description = '') {
+  // Moltbook requires alphanumeric usernames with underscores/hyphens (3-30 chars)
+  const username = name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '');
   const result = await request('/agents/register', {
     method: 'POST',
-    body: JSON.stringify({ name, description })
+    body: JSON.stringify({ name: username, description })
   });
 
-  console.log(`🆕 Moltbook: Registered agent "${name}"`);
+  console.log(`🆕 Moltbook: Registered agent "${username}"`);
   return result;
 }
 
@@ -81,7 +173,7 @@ export async function register(name, description = '') {
  * @returns {{ status: 'pending_claim' | 'claimed' | 'active' | 'suspended' }}
  */
 export async function getStatus(apiKey) {
-  return authRequest(apiKey, '/agents/me/status');
+  return authRequest(apiKey, '/agents/status');
 }
 
 /**
@@ -116,7 +208,7 @@ export async function updateProfile(apiKey, updates) {
  * @param {string} content - Post content (markdown)
  * @returns {Object} Created post
  */
-export async function createPost(apiKey, submolt, title, content) {
+export async function createPost(apiKey, submolt, title, content, aiConfig) {
   // Check rate limit
   const rateCheck = checkRateLimit(apiKey, 'post');
   if (!rateCheck.allowed) {
@@ -126,10 +218,11 @@ export async function createPost(apiKey, submolt, title, content) {
   const result = await authRequest(apiKey, '/posts', {
     method: 'POST',
     body: JSON.stringify({ submolt, title, content })
-  });
+  }, aiConfig);
 
   recordAction(apiKey, 'post');
-  console.log(`📝 Moltbook: Created post "${title}" in ${submolt}`);
+  const postId = result?.id || result?._id || result?.post_id;
+  console.log(`📝 Moltbook: Created post "${title}" in ${submolt} (id=${postId}, keys=${Object.keys(result || {}).join(',')})`);
   return result;
 }
 
@@ -141,6 +234,25 @@ export async function createPost(apiKey, submolt, title, content) {
  */
 export async function getFeed(apiKey, sort = 'hot', limit = 25) {
   return authRequest(apiKey, `/feed?sort=${sort}&limit=${limit}`);
+}
+
+/**
+ * Get posts by a specific author
+ * @param {string} apiKey - The agent's API key
+ * @param {string} username - The author's username
+ */
+export async function getPostsByAuthor(apiKey, username) {
+  const result = await authRequest(apiKey, `/posts?author=${encodeURIComponent(username)}`);
+  return result.posts || result || [];
+}
+
+/**
+ * Delete a post
+ * @param {string} apiKey - The agent's API key
+ * @param {string} postId - The post ID to delete
+ */
+export async function deletePost(apiKey, postId) {
+  return authRequest(apiKey, `/posts/${postId}`, { method: 'DELETE' });
 }
 
 /**
@@ -162,7 +274,7 @@ export async function getPost(apiKey, postId) {
  * @param {string} postId - The post ID
  * @param {string} content - Comment content (markdown)
  */
-export async function createComment(apiKey, postId, content) {
+export async function createComment(apiKey, postId, content, aiConfig) {
   // Check rate limit
   const rateCheck = checkRateLimit(apiKey, 'comment');
   if (!rateCheck.allowed) {
@@ -172,7 +284,7 @@ export async function createComment(apiKey, postId, content) {
   const result = await authRequest(apiKey, `/posts/${postId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ content })
-  });
+  }, aiConfig);
 
   recordAction(apiKey, 'comment');
   console.log(`💬 Moltbook: Commented on post ${postId}`);
@@ -186,7 +298,7 @@ export async function createComment(apiKey, postId, content) {
  * @param {string} parentId - The parent comment ID
  * @param {string} content - Reply content (markdown)
  */
-export async function replyToComment(apiKey, postId, parentId, content) {
+export async function replyToComment(apiKey, postId, parentId, content, aiConfig) {
   // Check rate limit
   const rateCheck = checkRateLimit(apiKey, 'comment');
   if (!rateCheck.allowed) {
@@ -196,7 +308,7 @@ export async function replyToComment(apiKey, postId, parentId, content) {
   const result = await authRequest(apiKey, `/posts/${postId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ content, parentId })
-  });
+  }, aiConfig);
 
   recordAction(apiKey, 'comment');
   console.log(`↩️ Moltbook: Replied to comment ${parentId}`);
@@ -272,9 +384,8 @@ export async function upvoteComment(apiKey, commentId) {
     throw new Error(`Rate limited: ${rateCheck.reason}`);
   }
 
-  const result = await authRequest(apiKey, `/comments/${commentId}/vote`, {
-    method: 'POST',
-    body: JSON.stringify({ direction: 'up' })
+  const result = await authRequest(apiKey, `/comments/${commentId}/upvote`, {
+    method: 'POST'
   });
 
   recordAction(apiKey, 'vote');
@@ -419,4 +530,13 @@ export async function getSubmolts(apiKey) {
  */
 export async function getSubmolt(apiKey, submoltName) {
   return authRequest(apiKey, `/submolts/${submoltName}`);
+}
+
+/**
+ * Check if an error indicates account suspension
+ * @param {Error} error - The error to check
+ * @returns {boolean}
+ */
+export function isAccountSuspended(error) {
+  return error?.suspended || (error?.status === 403 && error?.message?.toLowerCase().includes('suspended'));
 }

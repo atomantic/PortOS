@@ -2,12 +2,10 @@
   "name": "portos-browser",
   "version": "1.0.0",
   "private": true,
-  "description": "Persistent browser for PortOS CoS and sub-agents",
+  "description": "Persistent Chrome browser for PortOS with CDP",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "playwright": "^1.49.0"
-  }
+  "dependencies": {}
 }

@@ -29,11 +29,11 @@ import {
   GraduationCap,
   Settings,
   Users,
-  Link2,
-  LineChart,
   Upload,
   SquareTerminal,
-  Globe
+  Globe,
+  Newspaper,
+  Building2
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -43,18 +43,9 @@ import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
+  { to: '/city', label: 'CyberCity', icon: Building2, single: true },
   { separator: true },
-  {
-    label: 'Agents',
-    icon: Users,
-    children: [
-      { to: '/agents/personalities', label: 'Personalities', icon: Bot },
-      { to: '/agents/accounts', label: 'Accounts', icon: Link2 },
-      { to: '/agents/schedules', label: 'Schedules', icon: Calendar },
-      { to: '/agents/activity', label: 'Activity', icon: LineChart },
-      { to: '/agents/config', label: 'Config', icon: Settings }
-    ]
-  },
+  { to: '/agents', label: 'Agents', icon: Users, single: true },
   {
     label: 'AI Config',
     icon: Bot,
@@ -71,6 +62,7 @@ const navItems = [
     icon: Crown,
     showBadge: true,
     children: [
+      { to: '/cos/briefing', label: 'Briefing', icon: Newspaper },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText },
       { to: '/cos/agents', label: 'Agents', icon: Cpu },
       { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
@@ -103,7 +95,7 @@ const navItems = [
       { to: '/digital-twin', label: 'Digital Twin', icon: Heart }
     ]
   },
-  { to: '/media', label: 'Media', icon: Camera, single: true },
+  { to: '/security', label: 'Security', icon: Camera, single: true },
   { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true },
   { to: '/uploads', label: 'Uploads', icon: Upload, single: true }
 ];
@@ -459,15 +451,19 @@ export default function Layout() {
         </header>
 
         {/* Main content */}
-        <main id="main-content" className={`flex-1 overflow-auto ${location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' ? '' : 'p-4 md:p-6'}`}>
-          {location.pathname.startsWith('/cos') || location.pathname.startsWith('/brain') || location.pathname.startsWith('/digital-twin') || location.pathname.startsWith('/agents') || location.pathname === '/shell' ? (
-            <Outlet />
-          ) : (
-            <div className="max-w-7xl mx-auto">
-              <Outlet />
-            </div>
-          )}
-        </main>
+        {(() => {
+          const isFullWidth = location.pathname.startsWith('/cos') ||
+            location.pathname.startsWith('/brain') ||
+            location.pathname.startsWith('/digital-twin') ||
+            location.pathname.startsWith('/agents') ||
+            location.pathname === '/shell' ||
+            location.pathname.startsWith('/city');
+          return (
+            <main id="main-content" className={`flex-1 overflow-auto ${isFullWidth ? '' : 'p-4 md:p-6'}`}>
+              {isFullWidth ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
+            </main>
+          );
+        })()}
       </div>
     </div>
   );

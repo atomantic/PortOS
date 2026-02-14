@@ -6,6 +6,7 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCircle,
+  CheckCheck,
   Edit2,
   ChevronDown,
   ChevronRight,
@@ -36,6 +37,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const [fixDestination, setFixDestination] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
+  const [showDone, setShowDone] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const inputRef = useRef(null);
 
@@ -175,9 +177,23 @@ export default function InboxTab({ onRefresh, settings }) {
     onRefresh?.();
   };
 
+  const handleMarkDone = async (entryId) => {
+    const result = await api.markBrainInboxDone(entryId).catch(err => {
+      toast.error(err.message || 'Failed to mark done');
+      return null;
+    });
+
+    if (result) {
+      toast.success('Marked as done');
+      fetchInbox();
+      onRefresh?.();
+    }
+  };
+
   const classifyingEntries = entries.filter(e => e.status === 'classifying');
   const needsReviewEntries = entries.filter(e => e.status === 'needs_review');
   const filedEntries = entries.filter(e => e.status === 'filed' || e.status === 'corrected');
+  const doneEntries = entries.filter(e => e.status === 'done');
   const errorEntries = entries.filter(e => e.status === 'error');
 
   if (loading) {
@@ -366,6 +382,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           </button>
                         );
                       })}
+                      <button
+                        onClick={() => handleMarkDone(entry.id)}
+                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                        title="Mark as done without filing"
+                      >
+                        <CheckCheck size={12} />
+                        Done
+                      </button>
                       <button
                         onClick={() => handleRetry(entry.id)}
                         className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
@@ -579,6 +603,16 @@ export default function InboxTab({ onRefresh, settings }) {
                       </button>
                     )}
 
+                    {/* Done button */}
+                    <button
+                      onClick={() => handleMarkDone(entry.id)}
+                      className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                      title="Mark as done"
+                    >
+                      <CheckCheck size={12} />
+                      Done
+                    </button>
+
                     {/* Fix button */}
                     {fixingId === entry.id ? (
                       <div className="flex items-center gap-2">
@@ -631,6 +665,98 @@ export default function InboxTab({ onRefresh, settings }) {
           </div>
         )}
       </div>
+
+      {/* Done entries */}
+      {doneEntries.length > 0 && (
+        <div className="mt-4">
+          <button
+            onClick={() => setShowDone(!showDone)}
+            className="flex items-center gap-2 text-gray-400 font-medium mb-2"
+          >
+            {showDone ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <CheckCheck size={16} />
+            Done ({doneEntries.length})
+          </button>
+
+          {showDone && (
+            <div className="space-y-2">
+              {doneEntries.map(entry => {
+                const destInfo = DESTINATIONS[entry.classification?.destination || 'unknown'];
+                const DestIcon = destInfo.icon;
+
+                return (
+                  <div
+                    key={entry.id}
+                    className="p-3 bg-port-card border border-port-border/50 rounded-lg opacity-60"
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex-1">
+                        <p className="text-gray-400 line-through">{entry.capturedText}</p>
+                        {entry.classification?.title && (
+                          <p className="text-sm text-gray-500 mt-1">
+                            → {entry.classification.title}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setConfirmingDeleteId(entry.id)}
+                          className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                          title="Delete entry"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                        <span className="text-xs text-gray-600 whitespace-nowrap">
+                          {formatRelativeTime(entry.doneAt || entry.capturedAt)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {confirmingDeleteId === entry.id && (
+                      <div className="flex items-center gap-2 p-2 bg-port-error/10 border border-port-error/30 rounded mb-2">
+                        <span className="text-xs text-white flex-1">Delete this entry? This cannot be undone.</span>
+                        <button
+                          onClick={() => handleDelete(entry.id)}
+                          className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80 transition-colors"
+                          title="Confirm delete"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          onClick={() => setConfirmingDeleteId(null)}
+                          className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+                          title="Cancel delete"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2">
+                      <span className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color}`}>
+                        <DestIcon size={12} />
+                        {destInfo.label}
+                      </span>
+                      {entry.filed?.destinationId && (
+                        <button
+                          onClick={() => {
+                            window.location.href = `/brain/memory?type=${entry.filed.destination}&id=${entry.filed.destinationId}`;
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-500 hover:text-white transition-colors"
+                          title="View in Memory"
+                        >
+                          <ExternalLink size={12} />
+                          View
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

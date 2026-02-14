@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AppTile from '../components/AppTile';
+import CosDashboardWidget from '../components/CosDashboardWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -38,13 +39,20 @@ export default function Dashboard() {
     };
   }, [fetchData]);
 
-  // Memoize derived stats to prevent recalculation on every render
+  // Sort apps: active first, archived last
+  const sortedApps = useMemo(() =>
+    [...apps].sort((a, b) => (a.archived ? 1 : 0) - (b.archived ? 1 : 0)),
+    [apps]
+  );
+
+  // Memoize derived stats to prevent recalculation on every render (exclude archived)
+  const activeApps = useMemo(() => apps.filter(a => !a.archived), [apps]);
   const appStats = useMemo(() => ({
-    total: apps.length,
-    online: apps.filter(a => a.overallStatus === 'online').length,
-    stopped: apps.filter(a => a.overallStatus === 'stopped').length,
-    notStarted: apps.filter(a => a.overallStatus === 'not_started' || a.overallStatus === 'not_found').length
-  }), [apps]);
+    total: activeApps.length,
+    online: activeApps.filter(a => a.overallStatus === 'online').length,
+    stopped: activeApps.filter(a => a.overallStatus === 'stopped').length,
+    notStarted: activeApps.filter(a => a.overallStatus === 'not_started' || a.overallStatus === 'not_found').length
+  }), [activeApps]);
 
   if (loading) {
     return (
@@ -61,7 +69,7 @@ export default function Dashboard() {
         <div>
           <h2 className="text-2xl font-bold text-white">Dashboard</h2>
           <p className="text-gray-500 text-sm sm:text-base">
-            {apps.length} app{apps.length !== 1 ? 's' : ''} registered
+            {activeApps.length} app{activeApps.length !== 1 ? 's' : ''} registered{apps.length !== activeApps.length ? ` (${apps.length - activeApps.length} archived)` : ''}
           </p>
         </div>
         {health && (
@@ -77,6 +85,11 @@ export default function Dashboard() {
           {error}
         </div>
       )}
+
+      {/* CoS Status Widget */}
+      <div className="mb-6">
+        <CosDashboardWidget />
+      </div>
 
       {/* App Grid */}
       {apps.length === 0 ? (
@@ -95,7 +108,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {apps.map(app => (
+          {sortedApps.map(app => (
             <AppTile key={app.id} app={app} onUpdate={fetchData} />
           ))}
         </div>

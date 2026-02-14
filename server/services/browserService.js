@@ -11,10 +11,14 @@ import { EventEmitter } from 'events';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '..', '..', 'data');
+const PROJECT_ROOT = join(__dirname, '..', '..');
+const DATA_DIR = join(PROJECT_ROOT, 'data');
 const CONFIG_FILE = join(DATA_DIR, 'browser-config.json');
+const ECOSYSTEM_FILE = join(PROJECT_ROOT, 'ecosystem.config.cjs');
 
 export const browserEvents = new EventEmitter();
+
+const DEFAULT_PROFILE_DIR = join(DATA_DIR, 'browser-profile');
 
 const DEFAULT_CONFIG = {
   cdpPort: 5556,
@@ -22,7 +26,7 @@ const DEFAULT_CONFIG = {
   healthPort: 5557,
   autoConnect: true,
   headless: true,
-  userDataDir: ''
+  userDataDir: DEFAULT_PROFILE_DIR
 };
 
 let cachedConfig = null;
@@ -85,19 +89,20 @@ export async function getHealthStatus() {
     cdpHost: data.cdpHost || config.cdpHost,
     healthPort: config.healthPort,
     cdpEndpoint: data.cdpEndpoint || `ws://${config.cdpHost}:${config.cdpPort}`,
+    headless: data.headless ?? config.headless,
     status: data.status
   };
 }
 
 // ---------- PM2 process management ----------
 
-async function pm2Action(action) {
+async function pm2Action(action, args) {
   const { execFile } = await import('child_process');
   const { promisify } = await import('util');
   const execFileAsync = promisify(execFile);
 
   console.log(`🌐 Browser PM2 ${action}: portos-browser`);
-  await execFileAsync('pm2', [action, 'portos-browser']);
+  await execFileAsync('pm2', [action, ...args]);
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle
@@ -109,15 +114,16 @@ async function pm2Action(action) {
 }
 
 export async function launchBrowser() {
-  return pm2Action('start');
+  // Use ecosystem file so PM2 has the full process config even after pm2 flush/delete
+  return pm2Action('start', [ECOSYSTEM_FILE, '--only', 'portos-browser']);
 }
 
 export async function stopBrowser() {
-  return pm2Action('stop');
+  return pm2Action('stop', ['portos-browser']);
 }
 
 export async function restartBrowser() {
-  return pm2Action('restart');
+  return pm2Action('restart', ['portos-browser']);
 }
 
 // ---------- PM2 status (process-level) ----------
@@ -160,6 +166,28 @@ export async function getRecentLogs(lines = 50) {
   }).catch(() => ({ stdout: '', stderr: '' }));
 
   return { stdout: stdout || '', stderr: stderr || '' };
+}
+
+// ---------- CDP navigation ----------
+
+export async function navigateToUrl(url) {
+  const config = await loadConfig();
+  const newTabUrl = `http://${config.cdpHost}:${config.cdpPort}/json/new?${encodeURIComponent(url)}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  const response = await fetch(newTabUrl, { method: 'PUT', signal: controller.signal });
+  clearTimeout(timeout);
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`CDP navigate failed (${response.status}): ${text}`);
+  }
+
+  const page = await response.json();
+  console.log(`🌐 Opened ${url} in CDP browser (tab ${page.id})`);
+  return { id: page.id, title: page.title || '(loading)', url: page.url, type: page.type };
 }
 
 // ---------- CDP page listing (connects to the debug endpoint) ----------

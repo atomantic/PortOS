@@ -7,7 +7,7 @@
  * @module integrations/moltbook
  */
 
-// Re-export all API functions
+// Re-export all API functions (including isAccountSuspended)
 export * from './api.js';
 
 // Re-export rate limit utilities
@@ -29,6 +29,7 @@ import { getRateLimitStatus } from './rateLimits.js';
 export class MoltbookClient {
   constructor(apiKey) {
     this.apiKey = apiKey;
+    this.aiConfig = null;
   }
 
   // Account
@@ -37,13 +38,15 @@ export class MoltbookClient {
   updateProfile(updates) { return api.updateProfile(this.apiKey, updates); }
 
   // Posts
-  createPost(submolt, title, content) { return api.createPost(this.apiKey, submolt, title, content); }
+  createPost(submolt, title, content) { return api.createPost(this.apiKey, submolt, title, content, this.aiConfig); }
   getFeed(sort, limit) { return api.getFeed(this.apiKey, sort, limit); }
   getPost(postId) { return api.getPost(this.apiKey, postId); }
+  getPostsByAuthor(username) { return api.getPostsByAuthor(this.apiKey, username); }
+  deletePost(postId) { return api.deletePost(this.apiKey, postId); }
 
   // Comments
-  createComment(postId, content) { return api.createComment(this.apiKey, postId, content); }
-  replyToComment(postId, parentId, content) { return api.replyToComment(this.apiKey, postId, parentId, content); }
+  createComment(postId, content) { return api.createComment(this.apiKey, postId, content, this.aiConfig); }
+  replyToComment(postId, parentId, content) { return api.replyToComment(this.apiKey, postId, parentId, content, this.aiConfig); }
   getComments(postId) { return api.getComments(this.apiKey, postId); }
 
   // Voting

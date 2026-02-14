@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2, RotateCcw } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2, RotateCcw, Download, Rocket } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -1675,61 +1675,192 @@ export function ProcessesPage() {
   );
 }
 
+function buildReleasePrompt({ repoPath, appName, comparison, baseBranch, devBranch, hasChangelog }) {
+  const commitList = comparison.commits
+    .map(c => `- ${c.hash} ${c.message}`)
+    .join('\n');
+
+  const changelogStep = hasChangelog ? `
+2. **Changelog management**:
+   - Read version from package.json to determine the minor version series (e.g., 0.12.x)
+   - Check if \`.changelog/v{major}.{minor}.x.md\` exists
+   - If not, create it using the structure from an existing changelog file as template
+   - Update it with entries for the commits being released, categorized by type (Features, Fixes, Improvements)
+   - Keep the version as literal "x" — the release workflow substitutes the actual version
+   - Commit the changelog: \`git add .changelog/ && git commit -m "docs: update changelog for release"\`
+   - Push: \`git pull --rebase --autostash && git push\`
+` : '';
+
+  // Adjust step numbers based on whether changelog step is included
+  const prStep = hasChangelog ? 3 : 2;
+  const reviewStep = prStep + 1;
+  const feedbackStep = reviewStep + 1;
+  const reRequestStep = feedbackStep + 1;
+  const iterateStep = reRequestStep + 1;
+  const ciStep = iterateStep + 1;
+  const mergeStep = ciStep + 1;
+
+  return `You are performing a release workflow for ${appName}. The repo is at: ${repoPath}
+
+## Commits to release (${comparison.ahead} commits ahead of ${baseBranch}):
+${commitList}
+
+## Steps
+
+1. **Ensure clean state**:
+   - Check for uncommitted changes. If any, stage, commit with a descriptive message, then run \`git pull --rebase --autostash && git push\`
+   - If no uncommitted changes, still run \`git pull --rebase --autostash && git push\` to ensure we're up to date
+${changelogStep}
+${prStep}. **Create PR**:
+   - Check for existing PR: \`gh pr list --base ${baseBranch} --head ${devBranch} --state open\`
+   - If no existing PR, create one: \`gh pr create --base ${baseBranch} --head ${devBranch} --title "Release vX.Y.Z" --body "Release notes..."\`
+   - Include a summary of changes in the PR body
+
+${reviewStep}. **Wait for Copilot review**:
+   - Poll \`gh pr view --json reviews\` every 30 seconds
+   - Timeout after 2 minutes if no review appears
+
+${feedbackStep}. **Address review feedback** (if any):
+   - Fetch unresolved threads via GraphQL:
+     \`\`\`
+     gh api graphql -f query='query(\$owner: String!, \$repo: String!, \$pr: Int!) { repository(owner: \$owner, name: \$repo) { pullRequest(number: \$pr) { reviewThreads(first: 100) { nodes { id isResolved comments(first: 10) { nodes { body path line author { login } } } } } } } }'
+     \`\`\`
+   - Make requested changes, commit, push (\`git pull --rebase --autostash && git push\`)
+   - Resolve addressed threads via GraphQL mutation
+
+${reRequestStep}. **Re-request review**:
+   - Get repo info: \`gh repo view --json owner,name\`
+   - Get PR number from \`gh pr view --json number\`
+   - Try API: \`gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers -f '{"reviewers":["copilot-pull-request-reviewer"]}' --method POST\`
+   - If that fails, use browser MCP to navigate to the PR page and click the re-request review button (the sync icon button with \`name="re_request_reviewer_id"\`)
+
+${iterateStep}. **Iterate**: Repeat steps ${reviewStep}-${reRequestStep} up to 3 times max
+
+${ciStep}. **Verify CI**: Run \`gh pr checks\` and fix any failures
+
+${mergeStep}. **Merge**: Once approved and CI passes, merge with \`gh pr merge --merge\`
+
+## Important rules:
+- Always \`git pull --rebase --autostash\` before pushing
+- No co-author info in commits${hasChangelog ? '\n- Keep changelog version as literal "x" (the release workflow substitutes the actual version number)' : ''}
+- Max 3 review iterations to prevent infinite loops
+- Report clearly if something fails
+- Parse repo owner/name from \`gh repo view --json owner,name\``;
+}
+
 export function GitPage() {
   const [apps, setApps] = useState([]);
-  const [selectedApp, setSelectedApp] = useState('');
+  const [selectedAppId, setSelectedAppId] = useState('');
   const [gitInfo, setGitInfo] = useState(null);
   const [diff, setDiff] = useState('');
   const [showDiff, setShowDiff] = useState(false);
   const [loading, setLoading] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
   const [committing, setCommitting] = useState(false);
+  const [branchComparison, setBranchComparison] = useState(null);
+  const [updating, setUpdating] = useState(false);
+  const [releasing, setReleasing] = useState(false);
+  const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
+
+  const selectedApp = apps.find(a => a.id === selectedAppId);
+  const repoPath = selectedApp?.repoPath || '';
+  const appName = selectedApp?.name || '';
 
   useEffect(() => {
-    api.getApps().then(apps => {
-      setApps(apps);
-      if (apps.length > 0) {
-        setSelectedApp(apps[0].repoPath);
+    api.getApps().then(allApps => {
+      const active = allApps.filter(a => !a.archived);
+      setApps(active);
+      if (active.length > 0) {
+        setSelectedAppId(active[0].id);
       }
     }).catch(() => []);
   }, []);
 
   useEffect(() => {
-    if (selectedApp) loadGitInfo();
-  }, [selectedApp]);
+    if (repoPath) loadGitInfo();
+  }, [selectedAppId]);
 
   const loadGitInfo = async () => {
-    if (!selectedApp) return;
+    if (!repoPath) return;
     setLoading(true);
-    const info = await api.getGitInfo(selectedApp).catch(() => null);
+    const info = await api.getGitInfo(repoPath).catch(() => null);
+    let comparison = null;
+    if (info?.baseBranch && info?.devBranch) {
+      comparison = await api.getBranchComparison(repoPath, info.baseBranch, info.devBranch).catch(() => null);
+    }
     setGitInfo(info);
+    setBranchComparison(comparison);
     setLoading(false);
   };
 
   const loadDiff = async () => {
-    if (!selectedApp) return;
-    const result = await api.getGitDiff(selectedApp).catch(() => ({ diff: '' }));
+    if (!repoPath) return;
+    const result = await api.getGitDiff(repoPath).catch(() => ({ diff: '' }));
     setDiff(result.diff || '');
     setShowDiff(true);
   };
 
   const handleStage = async (file) => {
-    await api.stageFiles(selectedApp, [file]);
+    await api.stageFiles(repoPath, [file]);
     await loadGitInfo();
   };
 
   const handleUnstage = async (file) => {
-    await api.unstageFiles(selectedApp, [file]);
+    await api.unstageFiles(repoPath, [file]);
     await loadGitInfo();
   };
 
   const handleCommit = async () => {
     if (!commitMessage.trim()) return;
     setCommitting(true);
-    await api.createCommit(selectedApp, commitMessage).catch(() => null);
+    await api.createCommit(repoPath, commitMessage).catch(() => null);
     setCommitMessage('');
     setCommitting(false);
     await loadGitInfo();
+  };
+
+  const handleUpdateBranches = async () => {
+    if (!repoPath) return;
+    setUpdating(true);
+    const result = await api.updateBranches(repoPath).catch(() => null);
+    setUpdating(false);
+    if (result) {
+      const parts = [];
+      // Dynamically iterate branch results instead of hardcoded dev/main
+      for (const [key, val] of Object.entries(result)) {
+        if (key !== 'stashed' && key !== 'stashRestored' && key !== 'currentBranch' && val) {
+          parts.push(`${key}: ${val}`);
+        }
+      }
+      if (result.stashed) parts.push(result.stashRestored ? 'stash restored' : 'stash conflict');
+      toast.success(`Branches updated — ${parts.join(', ')}`);
+    }
+    await loadGitInfo();
+  };
+
+  const handleReleasePR = async () => {
+    if (!branchComparison || branchComparison.ahead === 0) return;
+    setShowReleaseConfirm(false);
+    setReleasing(true);
+    const prompt = buildReleasePrompt({
+      repoPath,
+      appName,
+      comparison: branchComparison,
+      baseBranch: gitInfo?.baseBranch || 'main',
+      devBranch: gitInfo?.devBranch || 'dev',
+      hasChangelog: gitInfo?.hasChangelog || false
+    });
+    const result = await api.addCosTask({
+      description: prompt,
+      context: `Release PR for ${appName}`,
+      priority: 'high',
+      autoApprove: true
+    }).catch(() => null);
+    setReleasing(false);
+    if (result) {
+      toast.success(`Release task queued for ${appName} — check CoS Agents tab`);
+      await api.forceCosEvaluate().catch(() => null);
+    }
   };
 
   const getStatusIcon = (file) => {
@@ -1744,14 +1875,22 @@ export function GitPage() {
         <h1 className="text-2xl font-bold text-white">Git Status</h1>
         <div className="flex items-center gap-4">
           <select
-            value={selectedApp}
-            onChange={(e) => setSelectedApp(e.target.value)}
+            value={selectedAppId}
+            onChange={(e) => setSelectedAppId(e.target.value)}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
           >
             {apps.map(app => (
-              <option key={app.id} value={app.repoPath}>{app.name}</option>
+              <option key={app.id} value={app.id}>{app.name}</option>
             ))}
           </select>
+          <button
+            onClick={handleUpdateBranches}
+            disabled={updating || !repoPath}
+            className="flex items-center gap-1.5 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50"
+          >
+            <Download size={16} className={updating ? 'animate-bounce' : ''} />
+            {updating ? 'Updating...' : 'Update'}
+          </button>
           <button
             onClick={loadGitInfo}
             className="p-2 text-gray-400 hover:text-white"
@@ -1764,114 +1903,155 @@ export function GitPage() {
       {loading ? (
         <div className="text-center py-8 text-gray-400">Loading...</div>
       ) : gitInfo && gitInfo.isRepo ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Status Panel */}
-          <div className="space-y-4">
-            {/* Branch Info */}
-            <div className="bg-port-card border border-port-border rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <GitBranch size={18} className="text-port-accent" />
-                <span className="font-medium text-white">{gitInfo.branch}</span>
-                {gitInfo.status?.clean && (
-                  <span className="text-xs text-port-success px-2 py-0.5 bg-port-success/20 rounded">Clean</span>
-                )}
-              </div>
-              <div className="flex gap-4 text-sm">
-                <div className="text-gray-400">
-                  <span className="text-port-success">+{gitInfo.diffStats?.insertions || 0}</span>
-                  <span className="mx-1">/</span>
-                  <span className="text-port-error">-{gitInfo.diffStats?.deletions || 0}</span>
-                </div>
-                <div className="text-gray-500">
-                  {gitInfo.diffStats?.files || 0} files changed
-                </div>
-              </div>
-            </div>
-
-            {/* Changed Files */}
+        <div className="space-y-6">
+          {/* Branch Comparison / Release Status */}
+          {branchComparison && branchComparison.ahead > 0 && (
             <div className="bg-port-card border border-port-border rounded-xl p-4">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-gray-400">Changed Files</h3>
-                <button
-                  onClick={loadDiff}
-                  className="text-xs text-port-accent hover:underline"
-                >
-                  View Diff
-                </button>
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-medium text-gray-400">Release Status</h3>
+                  <span className="text-xs font-medium text-port-accent px-2 py-0.5 bg-port-accent/20 rounded">
+                    {branchComparison.ahead} ahead of {gitInfo?.baseBranch || 'main'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs text-gray-400">
+                  <span className="text-port-success">+{branchComparison.stats.insertions}</span>
+                  <span className="text-port-error">-{branchComparison.stats.deletions}</span>
+                  <span>{branchComparison.stats.files} files</span>
+                </div>
               </div>
-              <div className="space-y-1 max-h-64 overflow-auto">
-                {gitInfo.status?.files?.map((file, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm py-1 group">
-                    {getStatusIcon(file)}
-                    <span className={`flex-1 font-mono text-xs ${file.staged ? 'text-port-success' : 'text-gray-300'}`}>
-                      {file.path}
-                    </span>
-                    <span className="text-xs text-gray-500">{file.status}</span>
-                    {file.staged ? (
-                      <button
-                        onClick={() => handleUnstage(file.path)}
-                        className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-white"
-                      >
-                        Unstage
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleStage(file.path)}
-                        className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-white"
-                      >
-                        Stage
-                      </button>
-                    )}
+
+              <div className="space-y-1.5 max-h-48 overflow-auto mb-4">
+                {branchComparison.commits.map((commit, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm">
+                    <code className="text-xs text-port-accent shrink-0">{commit.hash}</code>
+                    <span className="text-gray-300 truncate">{commit.message}</span>
                   </div>
                 ))}
-                {(!gitInfo.status?.files || gitInfo.status.files.length === 0) && (
-                  <div className="text-gray-500 text-sm">No changes</div>
-                )}
               </div>
-            </div>
 
-            {/* Quick Commit */}
-            {gitInfo.status?.staged > 0 && (
+              {gitInfo.devBranch && gitInfo.branch === gitInfo.devBranch && (
+                <button
+                  onClick={() => setShowReleaseConfirm(true)}
+                  disabled={releasing}
+                  className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm disabled:opacity-50"
+                >
+                  <Rocket size={16} />
+                  {releasing ? 'Creating Release Task...' : 'Create Release PR'}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Status Panel */}
+            <div className="space-y-4">
+              {/* Branch Info */}
               <div className="bg-port-card border border-port-border rounded-xl p-4">
-                <h3 className="text-sm font-medium text-gray-400 mb-2">Quick Commit</h3>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={commitMessage}
-                    onChange={(e) => setCommitMessage(e.target.value)}
-                    placeholder="Commit message..."
-                    className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                  />
+                <div className="flex items-center gap-2 mb-3">
+                  <GitBranch size={18} className="text-port-accent" />
+                  <span className="font-medium text-white">{gitInfo.branch}</span>
+                  {gitInfo.status?.clean && (
+                    <span className="text-xs text-port-success px-2 py-0.5 bg-port-success/20 rounded">Clean</span>
+                  )}
+                </div>
+                <div className="flex gap-4 text-sm">
+                  <div className="text-gray-400">
+                    <span className="text-port-success">+{gitInfo.diffStats?.insertions || 0}</span>
+                    <span className="mx-1">/</span>
+                    <span className="text-port-error">-{gitInfo.diffStats?.deletions || 0}</span>
+                  </div>
+                  <div className="text-gray-500">
+                    {gitInfo.diffStats?.files || 0} files changed
+                  </div>
+                </div>
+              </div>
+
+              {/* Changed Files */}
+              <div className="bg-port-card border border-port-border rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-400">Changed Files</h3>
                   <button
-                    onClick={handleCommit}
-                    disabled={committing || !commitMessage.trim()}
-                    className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg text-sm disabled:opacity-50"
+                    onClick={loadDiff}
+                    className="text-xs text-port-accent hover:underline"
                   >
-                    Commit
+                    View Diff
                   </button>
                 </div>
+                <div className="space-y-1 max-h-64 overflow-auto">
+                  {gitInfo.status?.files?.map((file, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm py-1 group">
+                      {getStatusIcon(file)}
+                      <span className={`flex-1 font-mono text-xs ${file.staged ? 'text-port-success' : 'text-gray-300'}`}>
+                        {file.path}
+                      </span>
+                      <span className="text-xs text-gray-500">{file.status}</span>
+                      {file.staged ? (
+                        <button
+                          onClick={() => handleUnstage(file.path)}
+                          className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-white"
+                        >
+                          Unstage
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleStage(file.path)}
+                          className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-white"
+                        >
+                          Stage
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {(!gitInfo.status?.files || gitInfo.status.files.length === 0) && (
+                    <div className="text-gray-500 text-sm">No changes</div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* Recent Commits */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Commits</h3>
-            <div className="space-y-2">
-              {gitInfo.recentCommits?.map((commit, i) => (
-                <div key={i} className="py-2 border-b border-port-border last:border-0">
-                  <div className="flex items-center gap-2">
-                    <code className="text-xs text-port-accent">{commit.hash}</code>
-                    <span className="text-sm text-white truncate">{commit.message}</span>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {commit.author} • {new Date(commit.date).toLocaleDateString()}
+              {/* Quick Commit */}
+              {gitInfo.status?.staged > 0 && (
+                <div className="bg-port-card border border-port-border rounded-xl p-4">
+                  <h3 className="text-sm font-medium text-gray-400 mb-2">Quick Commit</h3>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={commitMessage}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                      placeholder="Commit message..."
+                      className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                    />
+                    <button
+                      onClick={handleCommit}
+                      disabled={committing || !commitMessage.trim()}
+                      className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg text-sm disabled:opacity-50"
+                    >
+                      Commit
+                    </button>
                   </div>
                 </div>
-              ))}
-              {(!gitInfo.recentCommits || gitInfo.recentCommits.length === 0) && (
-                <div className="text-gray-500 text-sm">No commits</div>
               )}
+            </div>
+
+            {/* Recent Commits */}
+            <div className="bg-port-card border border-port-border rounded-xl p-4">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Commits</h3>
+              <div className="space-y-2">
+                {gitInfo.recentCommits?.map((commit, i) => (
+                  <div key={i} className="py-2 border-b border-port-border last:border-0">
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs text-port-accent">{commit.hash}</code>
+                      <span className="text-sm text-white truncate">{commit.message}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {commit.author} • {new Date(commit.date).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))}
+                {(!gitInfo.recentCommits || gitInfo.recentCommits.length === 0) && (
+                  <div className="text-gray-500 text-sm">No commits</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1899,6 +2079,51 @@ export function GitPage() {
               })}
               {!diff && <span className="text-gray-500">No changes to display</span>}
             </pre>
+          </div>
+        </div>
+      )}
+
+      {/* Release Confirmation Dialog */}
+      {showReleaseConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowReleaseConfirm(false)}>
+          <div className="bg-port-card border border-port-border rounded-xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-port-border">
+              <h3 className="font-medium text-white flex items-center gap-2">
+                <Rocket size={18} className="text-port-accent" />
+                Create Release PR for {appName}
+              </h3>
+              <button onClick={() => setShowReleaseConfirm(false)} className="text-gray-400 hover:text-white">×</button>
+            </div>
+            <div className="p-4 space-y-3">
+              <p className="text-sm text-gray-300">
+                This will create a CoS agent task to automate the full release workflow:
+              </p>
+              <ul className="text-sm text-gray-400 space-y-1.5 ml-4 list-disc">
+                <li>Push local commits to origin/{gitInfo?.devBranch || 'dev'}</li>
+                {gitInfo?.hasChangelog && <li>Check and update the changelog</li>}
+                <li>Create PR from {gitInfo?.devBranch || 'dev'} to {gitInfo?.baseBranch || 'main'}</li>
+                <li>Wait for Copilot review and address feedback</li>
+                <li>Merge when approved and CI passes</li>
+              </ul>
+              <p className="text-xs text-gray-500">
+                {branchComparison?.ahead || 0} commits will be included in this release.
+              </p>
+            </div>
+            <div className="flex justify-end gap-3 p-4 border-t border-port-border">
+              <button
+                onClick={() => setShowReleaseConfirm(false)}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReleasePR}
+                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm"
+              >
+                <Rocket size={16} />
+                Start Release
+              </button>
+            </div>
           </div>
         </div>
       )}

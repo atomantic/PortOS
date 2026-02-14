@@ -8,16 +8,20 @@ import {
   Calendar,
   Clock,
   GraduationCap,
-  Bot
+  Bot,
+  Flame,
+  Newspaper
 } from 'lucide-react';
 
 export const TABS = [
+  { id: 'briefing', label: 'Briefing', icon: Newspaper },
   { id: 'tasks', label: 'Tasks', icon: FileText },
   { id: 'agents', label: 'Agents', icon: Cpu },
   { id: 'jobs', label: 'Jobs', icon: Bot },
   { id: 'scripts', label: 'Scripts', icon: Terminal },
   { id: 'schedule', label: 'Schedule', icon: Clock },
   { id: 'digest', label: 'Digest', icon: Calendar },
+  { id: 'productivity', label: 'Streaks', icon: Flame },
   { id: 'learning', label: 'Learning', icon: GraduationCap },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'health', label: 'Health', icon: Activity },

@@ -32,9 +32,16 @@ function formatTimeAgo(dateStr) {
   return mins > 0 ? `${mins}m ago` : 'Just now';
 }
 
-function formatNextDue(lastRun, intervalMs) {
-  if (!lastRun) return 'Immediately';
-  const nextDue = new Date(lastRun).getTime() + intervalMs;
+function formatNextDue(lastRun, intervalMs, scheduledTime) {
+  if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
+  let nextDue = new Date(lastRun).getTime() + intervalMs;
+  // If there's a scheduledTime, adjust the next-due to that time of day
+  if (scheduledTime) {
+    const [hours, minutes] = scheduledTime.split(':').map(Number);
+    const nextDate = new Date(nextDue);
+    nextDate.setHours(hours, minutes, 0, 0);
+    if (nextDate.getTime() > nextDue) nextDue = nextDate.getTime();
+  }
   const diff = nextDue - Date.now();
   if (diff <= 0) return 'Now';
   const hours = Math.floor(diff / 3600000);
@@ -55,6 +62,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
       name: job.name,
       description: job.description,
       interval: job.interval,
+      scheduledTime: job.scheduledTime || '',
       priority: job.priority,
       autonomyLevel: job.autonomyLevel,
       promptTemplate: job.promptTemplate
@@ -110,11 +118,12 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
             <span className="flex items-center gap-1">
               <Clock size={10} />
               {INTERVAL_OPTIONS.find(i => i.value === job.interval)?.label || job.interval}
+              {job.scheduledTime && ` at ${job.scheduledTime}`}
             </span>
             <span>Last: {formatTimeAgo(job.lastRun)}</span>
             {job.enabled && (
               <span className={isDue ? 'text-port-warning' : 'text-gray-500'}>
-                Next: {formatNextDue(job.lastRun, job.intervalMs)}
+                Next: {formatNextDue(job.lastRun, job.intervalMs, job.scheduledTime)}
               </span>
             )}
             <span>Runs: {job.runCount || 0}</span>
@@ -175,6 +184,13 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
+                <input
+                  type="time"
+                  value={editData.scheduledTime || ''}
+                  onChange={e => setEditData(d => ({ ...d, scheduledTime: e.target.value || null }))}
+                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  title="Run at specific time (leave empty for any time)"
+                />
                 <select
                   value={editData.priority}
                   onChange={e => setEditData(d => ({ ...d, priority: e.target.value }))}
@@ -257,6 +273,7 @@ export default function JobsTab() {
     description: '',
     category: 'custom',
     interval: 'daily',
+    scheduledTime: '',
     priority: 'MEDIUM',
     autonomyLevel: 'manager',
     promptTemplate: '',
@@ -293,6 +310,7 @@ export default function JobsTab() {
       description: '',
       category: 'custom',
       interval: 'daily',
+      scheduledTime: '',
       priority: 'MEDIUM',
       autonomyLevel: 'manager',
       promptTemplate: '',
@@ -419,6 +437,13 @@ export default function JobsTab() {
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
+              <input
+                type="time"
+                value={newJob.scheduledTime || ''}
+                onChange={e => setNewJob(j => ({ ...j, scheduledTime: e.target.value || null }))}
+                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                title="Run at specific time (leave empty for any time)"
+              />
               <select
                 value={newJob.priority}
                 onChange={e => setNewJob(j => ({ ...j, priority: e.target.value }))}

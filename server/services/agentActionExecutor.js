@@ -3,13 +3,18 @@
  *
  * Executes scheduled agent actions by connecting to platform APIs.
  * Listens to scheduler events and performs the actual platform operations.
+ * Supports AI-generated content when params are missing.
  */
 
 import { scheduleEvents } from './automationScheduler.js';
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
-import { MoltbookClient } from '../integrations/moltbook/index.js';
+import { MoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
+import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
+import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Execute an action based on type
@@ -30,6 +35,12 @@ async function executeAction(schedule, account, agent) {
 
     case 'vote':
       return executeVote(client, action.params);
+
+    case 'engage':
+      return executeEngage(client, agent, action.params);
+
+    case 'monitor':
+      return executeMonitor(client, agent, schedule, action.params);
 
     default:
       throw new Error(`Unknown action type: ${action.type}`);
@@ -54,33 +65,88 @@ async function executeHeartbeat(client, params) {
 
 /**
  * Execute a post action
+ * When title/content missing, uses AI generation
  */
 async function executePost(client, agent, params) {
-  // If content is not provided, we would need AI generation
-  // For now, require content in params
-  const { submolt = 'general', title, content } = params;
+  const { submolt = 'general', aiGenerate } = params;
+  let { title, content } = params;
 
-  if (!title || !content) {
-    throw new Error('Post action requires title and content in params');
+  // AI generate if content not provided
+  if ((!title || !content) && aiGenerate !== false) {
+    console.log(`🤖 AI generating post content for "${agent.name}"`);
+    const contentConfig = agent.aiConfig?.content || agent.aiConfig;
+    const generated = await generatePost(agent, { submolt }, contentConfig?.providerId, contentConfig?.model);
+    title = generated.title;
+    content = generated.content;
   }
 
-  const post = await client.createPost(submolt, title, content);
+  if (!title || !content) {
+    throw new Error('Post action requires title and content in params (or aiGenerate enabled)');
+  }
+
+  const result = await client.createPost(submolt, title, content);
+  const post = result?.post || result;
   return {
     type: 'post',
-    postId: post.id,
+    postId: post?.id || post?._id || post?.post_id,
     submolt,
-    title
+    title,
+    generated: !params.title || !params.content
   };
 }
 
 /**
  * Execute a comment action
+ * When postId missing, finds relevant post. When content missing, uses AI generation.
  */
 async function executeComment(client, agent, params) {
-  const { postId, content, parentId } = params;
+  let { postId, content, parentId } = params;
+
+  // Find a relevant post if no postId specified
+  if (!postId) {
+    console.log(`🔍 Finding relevant post for "${agent.name}" to comment on`);
+    const opportunities = await findReplyOpportunities(client, agent, { maxCandidates: 3 });
+
+    if (opportunities.length === 0) {
+      return { type: 'comment', action: 'none', reason: 'no relevant posts found' };
+    }
+
+    const pick = opportunities[0];
+    postId = pick.post.id;
+
+    const contentConfig = agent.aiConfig?.content || agent.aiConfig;
+
+    // AI generate comment if no content
+    if (!content) {
+      console.log(`🤖 AI generating comment for "${agent.name}" on post ${postId}`);
+      const generated = await generateComment(agent, pick.post, pick.comments, null, contentConfig?.providerId, contentConfig?.model);
+      content = generated.content;
+    }
+  } else if (!content) {
+    // Have postId but no content - generate it
+    console.log(`🤖 AI generating comment for "${agent.name}" on post ${postId}`);
+    const post = await client.getPost(postId);
+    const commentsResponse = await client.getComments(postId);
+    const comments = commentsResponse.comments || commentsResponse || [];
+    const contentConfig = agent.aiConfig?.content || agent.aiConfig;
+
+    if (parentId) {
+      const parent = comments.find(c => c.id === parentId);
+      if (parent) {
+        const generated = await generateReply(agent, post, parent, null, contentConfig?.providerId, contentConfig?.model);
+        content = generated.content;
+      } else {
+        const generated = await generateComment(agent, post, comments, null, contentConfig?.providerId, contentConfig?.model);
+        content = generated.content;
+      }
+    } else {
+      const generated = await generateComment(agent, post, comments, null, contentConfig?.providerId, contentConfig?.model);
+      content = generated.content;
+    }
+  }
 
   if (!postId || !content) {
-    throw new Error('Comment action requires postId and content in params');
+    throw new Error('Comment action requires postId and content');
   }
 
   let result;
@@ -92,9 +158,10 @@ async function executeComment(client, agent, params) {
 
   return {
     type: 'comment',
-    commentId: result.id,
+    commentId: result?.id || result?._id || result?.comment_id,
     postId,
-    isReply: !!parentId
+    isReply: !!parentId,
+    generated: !params.content
   };
 }
 
@@ -137,6 +204,186 @@ async function executeVote(client, params) {
   }
 
   return { type: 'vote', action: direction === 'up' ? 'upvote' : 'downvote', postId };
+}
+
+/**
+ * Execute an engage action - compound autonomous browsing, voting, and commenting
+ */
+async function executeEngage(client, agent, params) {
+  const { maxComments = 1, maxVotes = 3 } = params;
+
+  const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+
+  console.log(`🤝 Starting engage for "${agent.name}" (maxComments=${maxComments}, maxVotes=${maxVotes})`);
+
+  const relevantPosts = await findRelevantPosts(client, agent, {
+    sort: 'hot',
+    limit: 25,
+    minScore: 1,
+    maxResults: 10
+  });
+
+  const votes = [];
+  const comments = [];
+  let suspended = false;
+
+  // Vote on relevant posts
+  for (const post of relevantPosts) {
+    if (votes.length >= maxVotes || suspended) break;
+
+    const rateCheck = checkRateLimit(client.apiKey, 'vote');
+    if (!rateCheck.allowed) break;
+
+    await client.upvote(post.id).catch(e => {
+      if (isAccountSuspended(e)) suspended = true;
+    });
+    if (suspended) break;
+    votes.push({ postId: post.id, title: post.title });
+    await delay(1500);
+  }
+
+  // Comment on best matches
+  if (maxComments > 0 && !suspended) {
+    const opportunities = await findReplyOpportunities(client, agent, {
+      sort: 'hot',
+      minScore: 2,
+      maxCandidates: maxComments + 2
+    });
+
+    for (const opportunity of opportunities) {
+      if (comments.length >= maxComments || suspended) break;
+
+      const rateCheck = checkRateLimit(client.apiKey, 'comment');
+      if (!rateCheck.allowed) break;
+
+      const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, engagementConfig?.providerId, engagementConfig?.model);
+      await client.createComment(opportunity.post.id, generated.content).catch(e => {
+        if (isAccountSuspended(e)) suspended = true;
+      });
+      if (suspended) break;
+
+      comments.push({
+        postId: opportunity.post.id || opportunity.post._id,
+        postTitle: opportunity.post.title,
+        reason: opportunity.reason
+      });
+      await delay(1500);
+    }
+  }
+
+  if (suspended) {
+    console.log(`🚫 Account suspended during engage — halting`);
+  }
+
+  console.log(`🤝 Engage ${suspended ? 'aborted (suspended)' : 'complete'} for "${agent.name}": ${votes.length} votes, ${comments.length} comments`);
+
+  return {
+    type: 'engage',
+    postsReviewed: relevantPosts.length,
+    votes,
+    comments,
+    suspended
+  };
+}
+
+/**
+ * Execute a monitor action - check engagement on published posts and respond
+ */
+async function executeMonitor(client, agent, schedule, params) {
+  const { days = 7, maxReplies = 2, maxUpvotes = 10 } = params;
+
+  const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+
+  console.log(`👀 Starting monitor for "${agent.name}" (days=${days}, maxReplies=${maxReplies}, maxUpvotes=${maxUpvotes})`);
+
+  const account = await platformAccounts.getAccountWithCredentials(schedule.accountId);
+  const agentUsername = account?.credentials?.username;
+
+  // Fetch posts directly from Moltbook API
+  const allPosts = await client.getPostsByAuthor(agentUsername);
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const posts = allPosts.filter(p => new Date(p.created_at) >= cutoff);
+
+  console.log(`👀 Found ${allPosts.length} total posts by ${agentUsername}, ${posts.length} within ${days} days`);
+
+  const upvoted = [];
+  const replied = [];
+  let totalComments = 0;
+  let newComments = 0;
+  let suspended = false;
+
+  for (const post of posts) {
+    if (suspended) break;
+
+    const postId = post.id;
+    const commentsResponse = await client.getComments(postId).catch(e => {
+      if (isAccountSuspended(e)) suspended = true;
+      return { comments: [] };
+    });
+    if (suspended) break;
+
+    const allComments = commentsResponse.comments || commentsResponse || [];
+    totalComments += allComments.length;
+
+    const otherComments = allComments.filter(c => {
+      const authorName = typeof c.author === 'object' ? c.author?.name : c.author;
+      return authorName !== agentUsername;
+    });
+    newComments += otherComments.length;
+
+    for (const comment of otherComments) {
+      if (suspended) break;
+
+      if (upvoted.length < maxUpvotes) {
+        const rateCheck = checkRateLimit(client.apiKey, 'vote');
+        if (rateCheck.allowed) {
+          await client.upvoteComment(comment.id).catch(e => {
+            if (isAccountSuspended(e)) suspended = true;
+          });
+          if (suspended) break;
+          upvoted.push({ commentId: comment.id, postId, postTitle: post.title });
+          await delay(1500);
+        }
+      }
+
+      if (!suspended && replied.length < maxReplies) {
+        const rateCheck = checkRateLimit(client.apiKey, 'comment');
+        if (rateCheck.allowed) {
+          const generated = await generateReply(agent, post, comment, null, engagementConfig?.providerId, engagementConfig?.model);
+          await client.replyToComment(postId, comment.id, generated.content).catch(e => {
+            if (isAccountSuspended(e)) suspended = true;
+          });
+          if (suspended) break;
+          replied.push({
+            commentId: comment.id,
+            postId,
+            postTitle: post.title
+          });
+          await delay(1500);
+        }
+      }
+
+      if (upvoted.length >= maxUpvotes && replied.length >= maxReplies) break;
+    }
+  }
+
+  if (suspended) {
+    console.log(`🚫 Account ${agentUsername} suspended — halting monitor, marking account`);
+    await platformAccounts.updateAccountStatus(schedule.accountId, 'suspended');
+  }
+
+  console.log(`👀 Monitor ${suspended ? 'aborted (suspended)' : 'complete'} for "${agent.name}": ${posts.length} posts, ${newComments} new comments, ${upvoted.length} upvotes, ${replied.length} replies`);
+
+  return {
+    type: 'monitor',
+    postsChecked: posts.length,
+    totalComments,
+    newComments,
+    upvoted,
+    replied,
+    suspended
+  };
 }
 
 /**

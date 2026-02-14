@@ -1,6 +1,6 @@
 {
   "name": "portos-client",
-  "version": "0.11.17",
+  "version": "0.12.48",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,10 +17,13 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
+    "fflate": "^0.8.2",
+    "geist": "^1.7.0",
     "lucide-react": "^0.562.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hot-toast": "^2.6.0",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.1.1",
     "socket.io-client": "^4.8.3",
     "three": "^0.182.0"

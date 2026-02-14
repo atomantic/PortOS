@@ -721,59 +721,15 @@ export async function runTests(providerId, model, testIds = null) {
 async function runSingleTest(test, soulContext, providerId, model) {
   const provider = await getProviderById(providerId);
 
-  // Build the prompt with soul context as system prompt
-  const systemPrompt = `You are embodying the following identity. Respond as this person would, based on the soul document below:\n\n${soulContext}`;
+  // Combine system prompt with user prompt for callProviderAI (single-message interface)
+  const combinedPrompt = `You are embodying the following identity. Respond as this person would, based on the soul document below:\n\n${soulContext}\n\nUser: ${test.prompt}`;
 
-  let response = '';
-
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const apiResponse = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: test.prompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 1000
-      })
-    });
-
-    if (!apiResponse.ok) {
-      throw new Error(`API error: ${apiResponse.status}`);
-    }
-
-    const data = await apiResponse.json();
-    response = data.choices?.[0]?.message?.content || '';
-  } else {
-    // For CLI providers, combine system prompt with user prompt
-    const { spawn } = await import('child_process');
-    const combinedPrompt = `${systemPrompt}\n\nUser: ${test.prompt}`;
-
-    response = await new Promise((resolve, reject) => {
-      const args = [...(provider.args || []), combinedPrompt];
-      let output = '';
-
-      const child = spawn(provider.command, args, {
-        env: { ...process.env, ...provider.envVars },
-        shell: false
-      });
-
-      child.stdout.on('data', (data) => { output += data.toString(); });
-      child.stderr.on('data', (data) => { output += data.toString(); });
-      child.on('close', () => resolve(output));
-      child.on('error', reject);
-
-      setTimeout(() => { child.kill(); reject(new Error('Timeout')); }, 60000);
-    });
+  const result = await callProviderAI(provider, model, combinedPrompt, { temperature: 0.7, max_tokens: 1000 });
+  if (result.error) {
+    throw new Error(result.error);
   }
+
+  const response = result.text || '';
 
   // Score the response
   const scoring = await scoreTestResponse(test, response, providerId, model);
@@ -812,29 +768,10 @@ async function scoreTestResponse(test, response, providerId, model) {
   }
 
   const provider = await getProviderById(providerId);
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.1, max_tokens: 500 });
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const apiResponse = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1,
-        max_tokens: 500
-      })
-    });
-
-    if (apiResponse.ok) {
-      const data = await apiResponse.json();
-      const scoringResponse = data.choices?.[0]?.message?.content || '';
-      return parseScoreResponse(scoringResponse);
-    }
+  if (!result.error && result.text) {
+    return parseScoreResponse(result.text);
   }
 
   // Default fallback
@@ -976,25 +913,9 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   const fallbackText = `What else should your digital twin know about your ${config.label.toLowerCase()}?`;
   let question = null;
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.8,
-        max_tokens: 200
-      })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      question = data.choices?.[0]?.message?.content?.trim() || null;
-    }
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.8, max_tokens: 200 });
+  if (!result.error && result.text) {
+    question = result.text.trim() || null;
   }
 
   // If AI didn't produce a question, use generic fallback (but only once)
@@ -1152,24 +1073,10 @@ export async function processEnrichmentAnswer(data) {
       answer
     }).catch(() => null);
 
-    if (prompt && provider.type === 'api') {
-      const headers = { 'Content-Type': 'application/json' };
-      if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-      const response = await fetch(`${provider.endpoint}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: providerOverride || provider.defaultModel,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 500
-        })
-      });
-
-      if (response.ok) {
-        const respData = await response.json();
-        formattedContent = respData.choices?.[0]?.message?.content?.trim() || formattedContent;
+    if (prompt) {
+      const result = await callProviderAI(provider, providerOverride || provider.defaultModel, prompt, { temperature: 0.3, max_tokens: 500 });
+      if (!result.error && result.text) {
+        formattedContent = result.text.trim() || formattedContent;
       }
     }
   }
@@ -1325,32 +1232,12 @@ Respond in JSON format:
 }
 \`\`\``;
 
-  if (provider.type !== 'api') {
-    throw new Error('List analysis requires an API provider');
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.7, max_tokens: 3000 });
+  if (result.error) {
+    throw new Error(result.error);
   }
 
-  const headers = { 'Content-Type': 'application/json' };
-  if (provider.apiKey) {
-    headers['Authorization'] = `Bearer ${provider.apiKey}`;
-  }
-
-  const response = await fetch(`${provider.endpoint}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 3000
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const responseText = data.choices?.[0]?.message?.content || '';
+  const responseText = result.text || '';
 
   // Parse the JSON response
   const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
@@ -1800,31 +1687,12 @@ export async function detectContradictions(providerId, model) {
     return { issues: [], error: 'Provider not found or disabled' };
   }
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 2000
-      })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content || '';
-      return parseContradictionResponse(responseText);
-    }
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.3, max_tokens: 2000 });
+  if (!result.error && result.text) {
+    return parseContradictionResponse(result.text);
   }
 
-  return { issues: [], error: 'Failed to analyze contradictions' };
+  return { issues: [], error: result.error || 'Failed to analyze contradictions' };
 }
 
 function parseContradictionResponse(response) {
@@ -1864,31 +1732,12 @@ export async function generateDynamicTests(providerId, model) {
     return { tests: [], error: 'Provider not found or disabled' };
   }
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
-        max_tokens: 3000
-      })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content || '';
-      return parseGeneratedTests(responseText);
-    }
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.7, max_tokens: 3000 });
+  if (!result.error && result.text) {
+    return parseGeneratedTests(result.text);
   }
 
-  return { tests: [], error: 'Failed to generate tests' };
+  return { tests: [], error: result.error || 'Failed to generate tests' };
 }
 
 function parseGeneratedTests(response) {
@@ -1928,31 +1777,12 @@ export async function analyzeWritingSamples(samples, providerId, model) {
     return { error: 'Provider not found or disabled' };
   }
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.5,
-        max_tokens: 2000
-      })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content || '';
-      return parseWritingAnalysis(responseText);
-    }
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.5, max_tokens: 2000 });
+  if (!result.error && result.text) {
+    return parseWritingAnalysis(result.text);
   }
 
-  return { error: 'Failed to analyze writing samples' };
+  return { error: result.error || 'Failed to analyze writing samples' };
 }
 
 function parseWritingAnalysis(response) {
@@ -2078,55 +1908,33 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
     return { error: 'Provider not found or disabled' };
   }
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 3000
-      })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content || '';
-      const parsedTraits = parseTraitsResponse(responseText);
-
-      if (parsedTraits.error) {
-        return parsedTraits;
-      }
-
-      // Save to meta
-      const traits = {
-        bigFive: parsedTraits.bigFive,
-        valuesHierarchy: parsedTraits.valuesHierarchy,
-        communicationProfile: parsedTraits.communicationProfile,
-        lastAnalyzed: new Date().toISOString(),
-        analysisVersion: '1.0'
-      };
-
-      meta.traits = traits;
-      await saveMeta(meta);
-      digitalTwinEvents.emit('traits:analyzed', traits);
-
-      // Recalculate confidence with updated traits
-      await calculateConfidence();
-
-      return { traits, analysisNotes: parsedTraits.analysisNotes };
-    }
-
-    return { error: `Provider request failed: ${response.status}` };
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.3, max_tokens: 3000 });
+  if (result.error) {
+    return { error: result.error };
   }
 
-  return { error: 'Provider type not supported for trait analysis' };
+  const parsedTraits = parseTraitsResponse(result.text || '');
+  if (parsedTraits.error) {
+    return parsedTraits;
+  }
+
+  // Save to meta
+  const traits = {
+    bigFive: parsedTraits.bigFive,
+    valuesHierarchy: parsedTraits.valuesHierarchy,
+    communicationProfile: parsedTraits.communicationProfile,
+    lastAnalyzed: new Date().toISOString(),
+    analysisVersion: '1.0'
+  };
+
+  meta.traits = traits;
+  await saveMeta(meta);
+  digitalTwinEvents.emit('traits:analyzed', traits);
+
+  // Recalculate confidence with updated traits
+  await calculateConfidence();
+
+  return { traits, analysisNotes: parsedTraits.analysisNotes };
 }
 
 function parseTraitsResponse(response) {
@@ -2181,40 +1989,21 @@ export async function calculateConfidence(providerId, model) {
     return calculateLocalConfidence(twinContent, currentTraits, meta);
   }
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.3, max_tokens: 2000 });
+  if (!result.error && result.text) {
+    const parsed = parseConfidenceResponse(result.text);
 
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 2000
-      })
-    });
+    if (!parsed.error) {
+      const confidence = {
+        ...parsed,
+        lastCalculated: new Date().toISOString()
+      };
 
-    if (response.ok) {
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content || '';
-      const parsed = parseConfidenceResponse(responseText);
+      meta.confidence = confidence;
+      await saveMeta(meta);
+      digitalTwinEvents.emit('confidence:calculated', confidence);
 
-      if (!parsed.error) {
-        const confidence = {
-          ...parsed,
-          lastCalculated: new Date().toISOString()
-        };
-
-        meta.confidence = confidence;
-        await saveMeta(meta);
-        digitalTwinEvents.emit('confidence:calculated', confidence);
-
-        return { confidence };
-      }
+      return { confidence };
     }
   }
 
@@ -2784,33 +2573,12 @@ async function analyzeWithPrompt(prompt, providerId, model, source, parsedData) 
     return { error: 'Provider not found or disabled' };
   }
 
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.4,
-        max_tokens: 3000
-      })
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content || '';
-      return parseImportAnalysisResponse(responseText, source, parsedData);
-    }
-
-    return { error: `Provider request failed: ${response.status}` };
+  const result = await callProviderAI(provider, model, prompt, { temperature: 0.4, max_tokens: 3000 });
+  if (!result.error && result.text) {
+    return parseImportAnalysisResponse(result.text, source, parsedData);
   }
 
-  return { error: 'Provider type not supported' };
+  return { error: result.error || 'Provider request failed' };
 }
 
 /**
