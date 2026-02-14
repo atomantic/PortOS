@@ -358,7 +358,7 @@ export default function GenomeTab() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="SNPs" value={summary.snpCount?.toLocaleString()} />
         <StatCard label="Build" value={summary.build} />
-        <StatCard label="Markers" value={summary.markerCount || 0} statusCounts={summary.statusCounts} />
+        <StatCard label="Found Curated Markers" value={summary.markerCount || 0} statusCounts={summary.statusCounts} />
         <StatCard label="Uploaded" value={summary.uploadedAt ? new Date(summary.uploadedAt).toLocaleDateString() : 'N/A'} />
       </div>
 
