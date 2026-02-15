@@ -912,6 +912,13 @@ router.get('/productivity/trends', asyncHandler(async (req, res) => {
   res.json(trends);
 }));
 
+// GET /api/cos/productivity/calendar - Get activity calendar for GitHub-style heatmap
+router.get('/productivity/calendar', asyncHandler(async (req, res) => {
+  const weeks = parseInt(req.query.weeks) || 12;
+  const calendar = await productivity.getActivityCalendar(weeks);
+  res.json(calendar);
+}));
+
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {

@@ -376,10 +376,10 @@ export const checkAgentPosts = (agentId, accountId, days, maxReplies, maxUpvotes
   });
 
 // Moltworld Tools
-export const moltworldJoin = (accountId, x, y, thinking, say, sayTo) =>
+export const moltworldJoin = (accountId, x, y, thinking, say, sayTo, agentId) =>
   request('/agents/tools/moltworld/join', {
     method: 'POST',
-    body: JSON.stringify({ accountId, x, y, thinking, say, sayTo })
+    body: JSON.stringify({ accountId, agentId, x, y, thinking, say, sayTo })
   });
 export const moltworldBuild = (accountId, agentId, x, y, z, type, action) =>
   request('/agents/tools/moltworld/build', {
@@ -397,6 +397,58 @@ export const moltworldBalance = (accountId) =>
   request(`/agents/tools/moltworld/balance?accountId=${accountId}`);
 export const moltworldRateLimits = (accountId) =>
   request(`/agents/tools/moltworld/rate-limits?accountId=${accountId}`);
+export const moltworldThink = (accountId, thought, agentId) =>
+  request('/agents/tools/moltworld/think', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, thought })
+  });
+export const moltworldSay = (accountId, message, sayTo, agentId) =>
+  request('/agents/tools/moltworld/say', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, message, ...(sayTo ? { sayTo } : {}) })
+  });
+
+// Moltworld Action Queue
+export const moltworldGetQueue = (agentId) =>
+  request(`/agents/tools/moltworld/queue/${agentId}`);
+export const moltworldAddToQueue = (agentId, actionType, params, scheduledFor) =>
+  request('/agents/tools/moltworld/queue', {
+    method: 'POST',
+    body: JSON.stringify({ agentId, actionType, params, scheduledFor })
+  });
+export const moltworldRemoveFromQueue = (id) =>
+  request(`/agents/tools/moltworld/queue/${id}`, { method: 'DELETE' });
+
+// Moltworld WebSocket Relay
+export const moltworldWsConnect = (accountId) =>
+  request('/agents/tools/moltworld/ws/connect', {
+    method: 'POST',
+    body: JSON.stringify({ accountId })
+  });
+export const moltworldWsDisconnect = () =>
+  request('/agents/tools/moltworld/ws/disconnect', { method: 'POST' });
+export const moltworldWsStatus = () =>
+  request('/agents/tools/moltworld/ws/status');
+export const moltworldWsMove = (x, y, thought) =>
+  request('/agents/tools/moltworld/ws/move', {
+    method: 'POST',
+    body: JSON.stringify({ x, y, ...(thought ? { thought } : {}) })
+  });
+export const moltworldWsThink = (thought) =>
+  request('/agents/tools/moltworld/ws/think', {
+    method: 'POST',
+    body: JSON.stringify({ thought })
+  });
+export const moltworldWsNearby = (radius) =>
+  request('/agents/tools/moltworld/ws/nearby', {
+    method: 'POST',
+    body: JSON.stringify({ ...(radius ? { radius } : {}) })
+  });
+export const moltworldWsInteract = (to, payload) =>
+  request('/agents/tools/moltworld/ws/interact', {
+    method: 'POST',
+    body: JSON.stringify({ to, payload })
+  });
 
 // Agent Drafts
 export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
@@ -565,6 +617,7 @@ export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
 export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
+export const getCosActivityCalendar = (weeks = 12) => request(`/cos/productivity/calendar?weeks=${weeks}`);
 export const getCosQuickSummary = () => request('/cos/quick-summary');
 export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
 export const getCosActionableInsights = () => request('/cos/actionable-insights');
