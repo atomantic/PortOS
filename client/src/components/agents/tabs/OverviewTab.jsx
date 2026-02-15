@@ -35,6 +35,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const [quickAccountId, setQuickAccountId] = useState('');
   const [engaging, setEngaging] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [exploring, setExploring] = useState(false);
   const [rateLimits, setRateLimits] = useState(null);
 
   // Cooldown timer state
@@ -93,14 +94,22 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     }
   }, [accounts, quickAccountId]);
 
+  // Derive platform from selected quick account
+  const quickAccount = accounts.find(a => a.id === quickAccountId);
+  const quickPlatform = quickAccount?.platform || 'moltbook';
+
   // Load rate limits when quick account changes
   useEffect(() => {
     if (!quickAccountId) {
       setRateLimits(null);
       return;
     }
-    api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
-  }, [quickAccountId]);
+    const account = accounts.find(a => a.id === quickAccountId);
+    const endpoint = account?.platform === 'moltworld'
+      ? api.moltworldRateLimits(quickAccountId)
+      : api.getAgentRateLimits(quickAccountId);
+    endpoint.then(setRateLimits).catch(() => {});
+  }, [quickAccountId, accounts]);
 
   // Calculate cooldown end timestamps from rate limit data
   useEffect(() => {
@@ -195,6 +204,24 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     if (!result) return;
     toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
     api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
+  };
+
+  // Moltworld quick actions
+  const handleExplore = async () => {
+    if (!agentId || !quickAccountId) return;
+    setExploring(true);
+    const result = await api.moltworldExplore(quickAccountId, agentId).catch(() => null);
+    setExploring(false);
+    if (!result) return;
+    toast.success(`Explored (${result.x}, ${result.y}) — ${result.nearby || 0} agents nearby`);
+    api.moltworldRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
+  };
+
+  const handleBuild = async () => {
+    if (!agentId || !quickAccountId) return;
+    const result = await api.moltworldBuild(quickAccountId, agentId, 0, 0, 0, 'stone', 'place').catch(() => null);
+    if (result) toast.success('Block placed');
+    api.moltworldRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
   };
 
   // Account handlers
@@ -451,29 +478,52 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                 )}
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => navigate(`/agents/${agentId}/tools`)}
-                    className="px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80 flex items-center gap-1.5"
-                  >
-                    <Zap size={14} />
-                    Generate Post
-                  </button>
-                  <button
-                    onClick={handleEngage}
-                    disabled={engaging || !quickAccountId}
-                    className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    <MessageSquare size={14} />
-                    {engaging ? 'Engaging...' : 'Engage Now'}
-                  </button>
-                  <button
-                    onClick={handleCheckPosts}
-                    disabled={checking || !quickAccountId}
-                    className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    <Eye size={14} />
-                    {checking ? 'Checking...' : 'Check Posts'}
-                  </button>
+                  {quickPlatform === 'moltworld' ? (
+                    <>
+                      <button
+                        onClick={handleExplore}
+                        disabled={exploring || !quickAccountId}
+                        className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        <Zap size={14} />
+                        {exploring ? 'Exploring...' : 'Explore'}
+                      </button>
+                      <button
+                        onClick={handleBuild}
+                        disabled={!quickAccountId}
+                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        <MessageSquare size={14} />
+                        Build
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => navigate(`/agents/${agentId}/tools`)}
+                        className="px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80 flex items-center gap-1.5"
+                      >
+                        <Zap size={14} />
+                        Generate Post
+                      </button>
+                      <button
+                        onClick={handleEngage}
+                        disabled={engaging || !quickAccountId}
+                        className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        <MessageSquare size={14} />
+                        {engaging ? 'Engaging...' : 'Engage Now'}
+                      </button>
+                      <button
+                        onClick={handleCheckPosts}
+                        disabled={checking || !quickAccountId}
+                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        <Eye size={14} />
+                        {checking ? 'Checking...' : 'Check Posts'}
+                      </button>
+                    </>
+                  )}
                 </div>
               </>
             )}

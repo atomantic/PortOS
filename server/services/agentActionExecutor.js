@@ -11,6 +11,7 @@ import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
 import { MoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
+import { MoltworldClient } from '../integrations/moltworld/index.js';
 import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 
@@ -21,6 +22,12 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  */
 async function executeAction(schedule, account, agent) {
   const { action } = schedule;
+
+  // Dispatch to platform-specific handler
+  if (account.platform === 'moltworld') {
+    return executeMoltworldAction(action, account, agent);
+  }
+
   const client = new MoltbookClient(account.credentials.apiKey);
 
   switch (action.type) {
@@ -384,6 +391,163 @@ async function executeMonitor(client, agent, schedule, params) {
     replied,
     suspended
   };
+}
+
+// =============================================================================
+// MOLTWORLD ACTION HANDLERS
+// =============================================================================
+
+/**
+ * Dispatch a Moltworld action
+ */
+async function executeMoltworldAction(action, account, agent) {
+  const client = new MoltworldClient(
+    account.credentials.apiKey,
+    account.credentials.agentId
+  );
+
+  switch (action.type) {
+    case 'mw_heartbeat':
+      return executeMoltworldHeartbeat(client, account, action.params);
+
+    case 'explore':
+      return executeMoltworldExplore(client, account, action.params);
+
+    case 'build':
+      return executeMoltworldBuild(client, action.params);
+
+    case 'say':
+      return executeMoltworldSay(client, action.params);
+
+    case 'interact':
+      return executeMoltworldInteract(client, account, action.params);
+
+    default:
+      throw new Error(`Unknown Moltworld action type: ${action.type}`);
+  }
+}
+
+/**
+ * Moltworld heartbeat — join/move to stay visible
+ */
+async function executeMoltworldHeartbeat(client, account, params) {
+  const x = params.x ?? 0;
+  const y = params.y ?? 0;
+
+  const result = await client.joinWorld({
+    name: account.credentials.username,
+    x,
+    y
+  });
+
+  console.log(`💓 Moltworld: Heartbeat for ${account.credentials.username} at (${x}, ${y})`);
+
+  return {
+    type: 'mw_heartbeat',
+    x,
+    y,
+    nearby: result?.nearby?.length || 0
+  };
+}
+
+/**
+ * Moltworld explore — move to coordinates and think
+ */
+async function executeMoltworldExplore(client, account, params) {
+  const x = params.x ?? Math.floor(Math.random() * 480) - 240;
+  const y = params.y ?? Math.floor(Math.random() * 480) - 240;
+  const thinking = params.thinking || `Exploring area (${x}, ${y})...`;
+
+  const result = await client.joinWorld({
+    name: account.credentials.username,
+    x,
+    y,
+    thinking
+  });
+
+  console.log(`🌍 Moltworld: Explore to (${x}, ${y}) for ${account.credentials.username}`);
+
+  return {
+    type: 'explore',
+    x,
+    y,
+    thinking,
+    nearby: result?.nearby?.length || 0
+  };
+}
+
+/**
+ * Moltworld build — place or remove blocks
+ */
+async function executeMoltworldBuild(client, params) {
+  const result = await client.build({
+    x: params.x || 0,
+    y: params.y || 0,
+    z: params.z || 0,
+    type: params.type || 'stone',
+    action: params.action || 'place'
+  });
+
+  return {
+    type: 'build',
+    ...result
+  };
+}
+
+/**
+ * Moltworld say — broadcast or direct message via join
+ */
+async function executeMoltworldSay(client, params) {
+  const result = await client.joinWorld({
+    name: params.name || 'Agent',
+    x: params.x ?? 0,
+    y: params.y ?? 0,
+    say: params.message,
+    sayTo: params.sayTo
+  });
+
+  console.log(`💬 Moltworld: Said "${(params.message || '').substring(0, 50)}"`);
+
+  return {
+    type: 'say',
+    message: params.message,
+    sayTo: params.sayTo,
+    nearby: result?.nearby?.length || 0
+  };
+}
+
+/**
+ * Moltworld interact — compound action: move, think, optionally build
+ */
+async function executeMoltworldInteract(client, account, params) {
+  const x = params.x ?? Math.floor(Math.random() * 480) - 240;
+  const y = params.y ?? Math.floor(Math.random() * 480) - 240;
+
+  // Move and think
+  const moveResult = await client.joinWorld({
+    name: account.credentials.username,
+    x,
+    y,
+    thinking: params.thinking || `Looking around (${x}, ${y})...`
+  });
+
+  const results = { type: 'interact', x, y, nearby: moveResult?.nearby?.length || 0 };
+
+  // Optionally build
+  if (params.buildType) {
+    await delay(1500);
+    const buildResult = await client.build({
+      x,
+      y,
+      z: params.z || 0,
+      type: params.buildType,
+      action: 'place'
+    });
+    results.built = buildResult;
+  }
+
+  console.log(`🤝 Moltworld: Interact at (${x}, ${y}) for ${account.credentials.username}`);
+  return results;
 }
 
 /**

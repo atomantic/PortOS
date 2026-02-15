@@ -11,6 +11,7 @@ import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { logAction } from '../services/history.js';
 import * as moltbook from '../integrations/moltbook/index.js';
+import * as moltworld from '../integrations/moltworld/index.js';
 
 const router = Router();
 
@@ -118,6 +119,34 @@ router.post('/', asyncHandler(async (req, res) => {
         ...account,
         claimUrl
       });
+    } else if (data.platform === 'moltworld') {
+      // Register with Moltworld API — returns { agentId, apiKey }
+      const result = await moltworld.register(data.name, {});
+      const agentId = result.agentId;
+      const apiKey = result.apiKey;
+      const username = data.name;
+
+      const account = await platformAccounts.createAccount({
+        agentId: data.agentId,
+        platform: data.platform,
+        credentials: {
+          apiKey,
+          username,
+          agentId   // Moltworld uses agentId for auth
+        },
+        status: 'active',  // No claim step for Moltworld
+        platformData: {
+          registrationName: data.name,
+          registrationDescription: data.description
+        }
+      });
+
+      await logAction('register', 'platform-account', account.id, {
+        platform: account.platform,
+        agentId: account.agentId
+      });
+
+      res.status(201).json(account);
     } else {
       throw new ServerError('Unsupported platform', { status: 400, code: 'UNSUPPORTED_PLATFORM' });
     }
@@ -171,6 +200,28 @@ router.post('/:id/test', asyncHandler(async (req, res) => {
     } else if (!agent.is_claimed) {
       await platformAccounts.updateAccountStatus(id, 'pending');
     }
+
+    res.json(testResult);
+  } else if (account.platform === 'moltworld') {
+    // Test with Moltworld API — fetch profile + balance
+    const client = new moltworld.MoltworldClient(
+      account.credentials.apiKey,
+      account.credentials.agentId
+    );
+    const profileResult = await client.getProfile();
+    const agent = profileResult?.agent || profileResult;
+    const balanceResult = await client.getBalance().catch(() => null);
+    const balance = balanceResult?.balance;
+
+    const testResult = {
+      success: !!agent?.id || !!agent?.name,
+      message: agent?.id || agent?.name
+        ? `Connection successful — ${agent.name}${balance ? ` (${balance.sim || 0} SIM)` : ''}`
+        : 'Could not retrieve profile',
+      platform: account.platform,
+      username: account.credentials.username,
+      platformStatus: 'active'
+    };
 
     res.json(testResult);
   } else {

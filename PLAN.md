@@ -67,13 +67,14 @@ pm2 logs
 - [x] **M38**: Agent Tools - AI content generation, feed browsing, and autonomous engagement for Moltbook agents
 - [x] **M39**: Agent-Centric Drill-Down - Redesigned Agents section with agent-first hierarchy, deep-linkable URLs, and scoped sub-tabs
 - [x] **M41**: CyberCity Immersive Overhaul - Procedural synthwave audio, enhanced post-processing (chromatic aberration, film grain, color grading), reflective wet-street ground, settings system, and atmosphere enhancements
+- [x] **M43**: Moltworld Platform Support - Second platform integration for AI agents in a shared voxel world with movement, building, thinking, messaging, and SIM token economy
 
 ### Planned
 
 - [ ] **M7**: App Templates - Template management and app scaffolding from templates
 - [ ] **M34 P3,P5-P7**: Digital Twin - Behavioral feedback loop, multi-modal capture, advanced testing, personas
 - [ ] **M40**: Agent Skill System - Task-type-specific prompt templates with routing logic, negative examples, and embedded workflows for improved agent accuracy and reliability
-- [ ] **M42**: Unified Digital Twin Identity System - Connect Genome, Chronotype, Aesthetic Taste, and Mortality-Aware Goals into a single coherent Identity architecture
+- [ ] **M42**: Unified Digital Twin Identity System - Connect Genome (117 markers, 32 categories), Chronotype (5 sleep markers + behavioral), Aesthetic Taste (P2 complete, P2.5 adds twin-aware prompting), and Mortality-Aware Goals into a single coherent Identity architecture with cross-insights engine
 
 ---
 
@@ -85,9 +86,9 @@ Four separate workstreams converge on the same vision: a personal digital twin t
 
 | Subsystem | Current State | Location |
 |-----------|--------------|----------|
-| **Genome** | Fully implemented: 23andMe upload, 37+ curated SNP markers across 13 categories, ClinVar integration | `server/services/genome.js`, `GenomeTab.jsx`, `data/digital-twin/genome.json` |
-| **Chronotype** | Partially exists: 2 sleep markers (CLOCK rs1801260, DEC2 rs57875989) in genome + `daily_routines` enrichment category | `curatedGenomeMarkers.js` sleep category, `ENRICHMENT_CATEGORIES.daily_routines` |
-| **Aesthetic Taste** | Partially exists: `aesthetics` enrichment category + book/movie/music list-based enrichments | `ENRICHMENT_CATEGORIES.aesthetics`, `BOOKS.md`, `MOVIES.md`, `AUDIO.md` |
+| **Genome** | Fully implemented: 23andMe upload, 117 curated SNP markers across 32 categories, ClinVar integration, epigenetic tracking | `server/services/genome.js`, `GenomeTab.jsx`, `data/digital-twin/genome.json` |
+| **Chronotype** | Genetic data ready: 5 sleep/circadian markers (CLOCK rs1801260, DEC2 rs57875989, PER2 rs35333999, CRY1 rs2287161, MTNR1B rs10830963) + `daily_routines` enrichment category. Derivation service not yet built | `curatedGenomeMarkers.js` sleep category, `ENRICHMENT_CATEGORIES.daily_routines` |
+| **Aesthetic Taste** | P2 complete: Taste questionnaire with 5 sections (movies, music, visual_art, architecture, food), conversational Q&A, AI summary generation. Enrichment categories also feed taste data from book/movie/music lists | `TasteTab.jsx`, `taste-questionnaire.js`, `data/digital-twin/taste-profile.json` |
 | **Goal Tracking** | Partially exists: `COS-GOALS.md` for CoS missions, `TASKS.md` for user tasks, `EXISTENTIAL.md` soul doc | `data/COS-GOALS.md`, `data/TASKS.md`, `data/digital-twin/EXISTENTIAL.md` |
 
 These should be unified under a single **Identity** architecture so the twin can reason across all dimensions (e.g., "your CLOCK gene says evening chronotype — schedule deep work after 8pm" or "given your longevity markers and age, here's how to prioritize your 10-year goals").
@@ -102,7 +103,7 @@ These should be unified under a single **Identity** architecture so the twin can
   "createdAt": "2026-02-12T00:00:00.000Z",
   "updatedAt": "2026-02-12T00:00:00.000Z",
   "sections": {
-    "genome": { "status": "active", "dataFile": "genome.json", "markerCount": 37, "lastScanAt": "..." },
+    "genome": { "status": "active", "dataFile": "genome.json", "markerCount": 117, "categoryCount": 32, "lastScanAt": "..." },
     "chronotype": { "status": "active", "dataFile": "chronotype.json", "derivedFrom": ["genome:sleep", "enrichment:daily_routines"] },
     "aesthetics": { "status": "active", "dataFile": "aesthetics.json", "derivedFrom": ["enrichment:aesthetics", "enrichment:favorite_books", "enrichment:favorite_movies", "enrichment:music_taste"] },
     "goals": { "status": "active", "dataFile": "goals.json" }
@@ -122,7 +123,10 @@ Derived from genome sleep markers + daily_routines enrichment answers + user ove
   "sources": {
     "genetic": {
       "clockGene": { "rsid": "rs1801260", "genotype": "T/C", "signal": "mild_evening" },
-      "dec2": { "rsid": "rs57875989", "genotype": "G/G", "signal": "standard_sleep_need" }
+      "dec2": { "rsid": "rs57875989", "genotype": "G/G", "signal": "standard_sleep_need" },
+      "per2": { "rsid": "rs35333999", "genotype": "C/C", "signal": "standard_circadian" },
+      "cry1": { "rsid": "rs2287161", "genotype": "C/C", "signal": "standard_period" },
+      "mtnr1b": { "rsid": "rs10830963", "genotype": "T/T", "signal": "normal_melatonin_receptor" }
     },
     "behavioral": {
       "preferredWakeTime": "08:30",
@@ -141,7 +145,7 @@ Derived from genome sleep markers + daily_routines enrichment answers + user ove
 }
 ```
 
-**Derivation logic**: Genome sleep markers provide the genetic baseline. The `daily_routines` enrichment answers provide behavioral confirmation. When genetic and behavioral signals agree, confidence is high. When they disagree, surface the conflict for user review. Caffeine cutoff cross-references caffeine metabolism markers (CYP1A2 rs762551, ADA rs73598374).
+**Derivation logic**: Five genome sleep markers provide the genetic baseline: CLOCK (evening preference), DEC2 (sleep duration need), PER2 (circadian period), CRY1 (delayed sleep phase), MTNR1B (melatonin receptor / nighttime glucose). The `daily_routines` enrichment answers provide behavioral confirmation. When genetic and behavioral signals agree, confidence is high. When they disagree, surface the conflict for user review. Caffeine cutoff cross-references caffeine metabolism markers (CYP1A2 rs762551, ADA rs73598374). MTNR1B status also informs late-eating recommendations.
 
 #### Entity: Aesthetic Taste Profile (`aesthetics.json`)
 
@@ -259,8 +263,9 @@ Consolidates scattered aesthetic data into a structured profile.
 ```
 
 **Cross-cutting links** (stored in `identity.json.crossLinks`):
-- `genome:sleep` → `chronotype:genetic` (CLOCK/DEC2 markers feed chronotype)
+- `genome:sleep` → `chronotype:genetic` (CLOCK/DEC2/PER2/CRY1/MTNR1B markers feed chronotype)
 - `genome:caffeine` → `chronotype:recommendations.caffeineCutoff` (CYP1A2/ADA markers set cutoff)
+- `genome:sleep:mtnr1b` → `chronotype:recommendations.lateEatingCutoff` (MTNR1B impairs nighttime glucose)
 - `genome:longevity` + `genome:cardiovascular` → `goals:lifeExpectancyEstimate` (risk-adjusted lifespan)
 - `enrichment:daily_routines` → `chronotype:behavioral` (self-reported schedule)
 - `enrichment:aesthetics` + `enrichment:favorite_*` + `enrichment:music_taste` → `aesthetics:profile` (taste extraction)
@@ -284,22 +289,23 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌─ Genome Summary Card ─────────────────────────────────┐  │
-│  │  37 markers scanned across 13 categories              │  │
-│  │  Key findings: 3 beneficial, 2 concern, 1 major       │  │
+│  │  117 markers scanned across 32 categories             │  │
+│  │  Key findings: ~20 beneficial, ~40 concern, ~5 major  │  │
 │  │  [View Full Genome →]                                 │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌─ Chronotype Card ─────────────────────────────────────┐  │
-│  │  Type: Evening Owl (75% confidence)                   │  │
-│  │  Genetic: CLOCK T/C (mild evening) + DEC2 G/G         │  │
+│  │  Type: Evening Owl (75% confidence from 5 markers)    │  │
+│  │  Genetic: CLOCK T/C + CRY1 C/C + PER2 C/C + DEC2 G/G│  │
 │  │  Peak focus: 8pm-2am | Caffeine cutoff: 2pm           │  │
+│  │  Late eating cutoff: 8pm (MTNR1B-informed)            │  │
 │  │  [Configure Schedule →]                               │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌─ Aesthetic Taste Card ────────────────────────────────┐  │
-│  │  Status: Needs questionnaire (0/7 sections)           │  │
+│  │  Taste Tab: 0/5 sections completed (P2 UI ready)      │  │
 │  │  Detected themes from media: brutalist, atmospheric   │  │
-│  │  [Start Taste Questionnaire →]                        │  │
+│  │  [Continue Taste Questionnaire →] [Go to Taste Tab →] │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌─ Life Goals Card ─────────────────────────────────────┐  │
@@ -330,11 +336,12 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 
 #### P1: Identity Orchestrator & Chronotype (data layer)
 - Create `data/digital-twin/identity.json` with section status tracking
-- Create `server/services/identity.js` — orchestrator that reads from genome, enrichment, and new data files
-- Create `data/digital-twin/chronotype.json` — derive from genome sleep markers + daily_routines enrichment
+- Create `server/services/identity.js` — orchestrator that reads from genome, enrichment, taste-profile, and new data files
+- Create `data/digital-twin/chronotype.json` — derive from 5 genome sleep markers + daily_routines enrichment
 - Add `GET /api/digital-twin/identity` route returning unified section status
 - Add `GET/PUT /api/digital-twin/identity/chronotype` routes
-- Derivation function: `deriveChronotypeFromGenome(genomeSummary)` extracts CLOCK + DEC2 status → chronotype signal
+- Derivation function: `deriveChronotypeFromGenome(genomeSummary)` extracts all 5 sleep markers (CLOCK, DEC2, PER2, CRY1, MTNR1B) → composite chronotype signal with weighted confidence
+- Cross-reference CYP1A2/ADA caffeine markers and MTNR1B melatonin receptor for caffeine cutoff and late-eating recommendations
 
 #### P2: Aesthetic Taste Questionnaire ✅
 - Created `data/digital-twin/taste-profile.json` for structured taste preference storage
@@ -348,7 +355,7 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 - Create `data/digital-twin/goals.json`
 - Add `GET/POST/PUT/DELETE /api/digital-twin/identity/goals` routes
 - Birth date input + SSA actuarial table lookup
-- Genome-adjusted life expectancy: weight longevity markers (FOXO3A, IGF1R, CETP) and cardiovascular risk markers (Factor V, 9p21, Lp(a)) into adjustment factor
+- Genome-adjusted life expectancy: weight longevity markers (5 markers: FOXO3A, IGF1R, CETP, IPMK, TP53) and cardiovascular risk markers (5 markers: Factor V, 9p21, Lp(a), LPA aspirin, PCSK9) into adjustment factor
 - Time-horizon calculation: years remaining, healthy years, percent complete
 - Urgency scoring: `urgency = (goalHorizonYears - yearsRemaining) / goalHorizonYears` normalized
 - Goal CRUD with category tagging and milestone tracking
@@ -361,31 +368,86 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 - Create `GoalTracker.jsx` — goal list with urgency heatmap and timeline view
 - Wire sub-routes for deep dives
 
+#### P2.5: Digital Twin Aesthetic Taste Prompting (brain idea 608dc733)
+The existing Taste tab uses static questions. This phase enhances it by having the digital twin generate personalized follow-up questions based on existing identity documents and enrichment answers. The twin reads BOOKS.md, AUDIO.md, and enrichment responses to craft targeted queries like "You listed Blade Runner as a favorite — what specific visual elements resonated?" instead of generic "Name a movie you like."
+- Add `generatePersonalizedTasteQuestion(section, existingResponses, identityContext)` to `taste-questionnaire.js`
+- Identity context includes: enrichment answers, document excerpts (BOOKS.md, AUDIO.md, CREATIVE.md), traits (aesthetic markers from Big Five Openness dimension)
+- LLM generates contextual follow-ups that probe deeper into already-expressed preferences
+- Responses feed back into `taste-profile.json` and `aesthetics.json` (once P1 Identity orchestrator exists)
+- Prerequisite: P1 (identity orchestrator provides the context aggregation)
+
 #### P5: Cross-Insights Engine
 - Add `generateCrossInsights(identity)` in identity service
 - Cross-reference genome markers with chronotype, goals, and enrichment data
 - Generate natural-language insight strings (e.g., caffeine + chronotype, longevity + goal urgency)
 - Display on Identity dashboard and inject into CoS context when relevant
 - Consider autonomous job: periodic identity insight refresh
+- Example cross-insights from current marker data:
+  - CLOCK + CRY1 + PER2 → composite chronotype confidence (3 markers agreeing = high confidence evening/morning)
+  - MTNR1B concern + evening chronotype → "avoid eating after 8pm — your melatonin receptor variant impairs late glucose handling"
+  - CYP1A2 slow metabolizer + CLOCK evening → "caffeine cutoff by noon, not 2pm"
+  - FOXO3A/CETP/IGF1R longevity markers + cardiovascular risk → adjusted life expectancy for goal urgency
+
+### Identity Extension Roadmap
+
+This roadmap connects brain ideas and the Genome Section Integration project (0e6a0332) into a unified implementation sequence.
+
+#### Source Ideas
+- **Brain idea 608dc733**: "Prompting Aesthetic Taste Docs via Digital Twin" — use the twin's existing knowledge to generate personalized aesthetic preference questions
+- **Brain idea 284dd487**: "Genome Types & Chronotype Trait" — derive chronotype from 5 sleep/circadian markers + behavioral data
+- **Project 0e6a0332**: "Genome Section Integration" — unify genome data with Identity page architecture
+
+#### Phase Dependency Graph
+
+```
+P1: Identity Orchestrator & Chronotype ──── (brain idea 284dd487)
+ │   Creates identity.json, chronotype.json,
+ │   identity service, derivation from 5 sleep markers
+ │
+ ├─► P2.5: Personalized Taste Prompting ─── (brain idea 608dc733)
+ │    Uses identity context to generate smart taste questions
+ │    Enhances existing TasteTab with twin-aware follow-ups
+ │
+ ├─► P3: Mortality-Aware Goal Tracking
+ │    Birth date + genome longevity/cardio markers → life expectancy
+ │    Urgency scoring for prioritized goal management
+ │
+ └─► P4: Identity Tab UI
+      Dashboard with summary cards for all 4 sections
+      Sub-routes for chronotype, taste, goals deep dives
+      │
+      └─► P5: Cross-Insights Engine
+           Reads all sections, generates natural-language insights
+           Injects identity context into CoS agent briefings
+```
+
+#### Implementation Priority
+1. **P1** — Foundation: nothing else works without the orchestrator
+2. **P2.5** — Quick win: enhances existing Taste tab with minimal new infrastructure
+3. **P3** — New feature: mortality-aware goals need genome data flowing through identity service
+4. **P4** — UI: renders what P1-P3 produce
+5. **P5** — Polish: cross-entity reasoning requires all sections populated
 
 ### Data Flow
 
 ```
-User uploads 23andMe → genome.json (existing)
+User uploads 23andMe → genome.json (117 markers, 32 categories)
                         ↓
-Identity service reads genome sleep markers + caffeine markers
+Identity service reads 5 sleep markers + 2 caffeine markers
                         ↓
-Derives chronotype.json (with behavioral input from enrichment)
+Derives chronotype.json (+ behavioral input from daily_routines enrichment)
                         ↓
-User sets birth date → goals.json (life expectancy from actuarial + genome)
+Twin reads identity context → generates personalized taste questions (P2.5)
                         ↓
-User completes taste questionnaire → aesthetics.json
+User completes taste questionnaire → taste-profile.json → aesthetics.json
                         ↓
-LLM analyzes books/movies/music → seeds aesthetic profile themes
+LLM analyzes books/movies/music docs → seeds aesthetic profile themes
+                        ↓
+User sets birth date → goals.json (life expectancy from actuarial + 10 genome markers)
                         ↓
 Cross-insights engine reads all 4 sections → generates natural-language insights
                         ↓
-Identity tab renders unified dashboard
+Identity tab renders unified dashboard with summary cards + insights
                         ↓
 CoS injects identity context into agent briefings when relevant
 ```
@@ -411,15 +473,19 @@ CoS injects identity context into agent briefings when relevant
 - `client/src/pages/DigitalTwin.jsx` — add Identity tab rendering
 - `client/src/services/api.js` — add identity API methods
 - `server/index.js` — mount identity routes
+- `server/services/taste-questionnaire.js` — add `generatePersonalizedTasteQuestion()` using identity context (P2.5)
+- `client/src/components/digital-twin/tabs/TasteTab.jsx` — wire personalized question generation (P2.5)
 
 ### Design Decisions
 
-1. **Separate data files per section** (not one giant file) — each section has independent update cadence and the genome file is already large
+1. **Separate data files per section** (not one giant file) — each section has independent update cadence and the genome file (82KB) is already large
 2. **Derivation over duplication** — chronotype reads from genome.json at query time rather than copying marker data. Identity service is the join layer
 3. **Progressive disclosure** — Identity tab shows summary cards; deep dives are sub-routes, not modals (per CLAUDE.md: all views must be deep-linkable)
 4. **LLM-assisted but user-confirmed** — aesthetic themes extracted by LLM from media lists are suggestions, not gospel. User confirms/edits
 5. **No new dependencies** — uses existing Zod, Express, React, Lucide stack
 6. **Genome data stays read-only** — identity service reads genome markers but never writes to genome.json
+7. **Taste data consolidation** — P2 created `taste-profile.json` (5 sections). P2.5 adds twin-aware personalized questions. Long-term, taste data migrates into `aesthetics.json` as the canonical aesthetic profile, with taste-profile.json as the raw questionnaire responses
+8. **Weighted chronotype confidence** — 5 sleep markers weighted by specificity: CRY1 (strongest DSPD signal) > CLOCK (evening tendency) > PER2 (circadian period) > MTNR1B (melatonin coupling) > DEC2 (duration, not phase). Behavioral data from daily_routines enrichment gets equal weight to genetic composite
 
 ---
 
