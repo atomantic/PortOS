@@ -369,12 +369,214 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 - Wire sub-routes for deep dives
 
 #### P2.5: Digital Twin Aesthetic Taste Prompting (brain idea 608dc733)
-The existing Taste tab uses static questions. This phase enhances it by having the digital twin generate personalized follow-up questions based on existing identity documents and enrichment answers. The twin reads BOOKS.md, AUDIO.md, and enrichment responses to craft targeted queries like "You listed Blade Runner as a favorite — what specific visual elements resonated?" instead of generic "Name a movie you like."
-- Add `generatePersonalizedTasteQuestion(section, existingResponses, identityContext)` to `taste-questionnaire.js`
-- Identity context includes: enrichment answers, document excerpts (BOOKS.md, AUDIO.md, CREATIVE.md), traits (aesthetic markers from Big Five Openness dimension)
-- LLM generates contextual follow-ups that probe deeper into already-expressed preferences
-- Responses feed back into `taste-profile.json` and `aesthetics.json` (once P1 Identity orchestrator exists)
-- Prerequisite: P1 (identity orchestrator provides the context aggregation)
+
+##### Problem
+
+P2's Taste questionnaire uses static questions and keyword-triggered follow-ups. The questions are good but generic — they don't reference anything the twin already knows about the user. Brain idea 608dc733 proposes using the digital twin's existing knowledge (books, music, movie lists, enrichment answers, personality traits) to generate personalized, conversational prompts that feel like talking to someone who already knows you rather than filling out a survey.
+
+##### What Data to Capture
+
+The aesthetic taste system captures preferences across **7 domains**, extending P2's 5 sections with 2 new ones (fashion/texture and digital/interface):
+
+| Domain | Data Captured | Sources That Seed It |
+|--------|--------------|---------------------|
+| **Movies & Film** | Visual style preferences, narrative structure, mood/atmosphere, genre affinities, anti-preferences, formative films | BOOKS.md (narrative taste), enrichment:favorite_movies, existing P2 responses |
+| **Music & Sound** | Functional use (focus/energy/decompress), genre affinities, production preferences, anti-sounds, formative artists | AUDIO.md, enrichment:music_taste, existing P2 responses |
+| **Visual Art & Design** | Minimalism vs maximalism spectrum, color palette preferences, design movements, typography, layout sensibility | CREATIVE.md, enrichment:aesthetics, existing P2 responses |
+| **Architecture & Spaces** | Material preferences, light quality, scale/intimacy, indoor-outdoor relationship, sacred vs functional | enrichment:aesthetics, existing P2 responses |
+| **Food & Culinary** | Flavor profiles, cuisine affinities, cooking philosophy, dining experience priorities, sensory texture preferences | enrichment:daily_routines (meal patterns), existing P2 responses |
+| **Fashion & Texture** *(new)* | Material/fabric preferences, silhouette comfort, color wardrobe, formality spectrum, tactile sensitivity | genome:sensory markers (if available), enrichment:aesthetics |
+| **Digital & Interface** *(new)* | Dark vs light mode, information density, animation tolerance, typography preferences, notification style, tool aesthetics | PREFERENCES.md, existing PortOS theme choices (port-bg, port-card etc.) |
+
+Each domain captures:
+- **Positive affinities** — what they're drawn to and why
+- **Anti-preferences** — what they actively avoid (often more revealing than likes)
+- **Functional context** — how the preference serves them (focus, comfort, identity, social)
+- **Formative influences** — early experiences that shaped the preference
+- **Evolution** — how the preference has changed over time
+
+##### Conversational Prompting Flow
+
+The key design principle: **conversation, not survey**. The twin generates questions that reference things it already knows, creating a dialogue that feels like it's building on shared context.
+
+**Flow architecture:**
+
+```
+┌─────────────────────────────────────────────────┐
+│ 1. Context Aggregation                          │
+│    Read: BOOKS.md, AUDIO.md, CREATIVE.md,       │
+│    PREFERENCES.md, enrichment answers,          │
+│    existing taste-profile.json responses,       │
+│    personality traits (Big Five Openness)        │
+├─────────────────────────────────────────────────┤
+│ 2. Static Core Question (from P2)               │
+│    Serve the existing static question first      │
+│    to establish baseline in that domain          │
+├─────────────────────────────────────────────────┤
+│ 3. Personalized Follow-Up Generation            │
+│    LLM generates 1 contextual follow-up using   │
+│    identity context + previous answer            │
+│    e.g., "You listed Blade Runner — what about  │
+│    its visual language specifically grabbed you?" │
+├─────────────────────────────────────────────────┤
+│ 4. Depth Probing (optional, user-initiated)     │
+│    "Want to go deeper?" button generates         │
+│    another personalized question that connects   │
+│    across domains (e.g., music taste ↔ visual)   │
+├─────────────────────────────────────────────────┤
+│ 5. Summary & Synthesis                          │
+│    After core + follow-ups complete, LLM         │
+│    generates section summary + cross-domain      │
+│    pattern detection                             │
+└─────────────────────────────────────────────────┘
+```
+
+**Prompt template for personalized question generation:**
+
+```
+You are a thoughtful interviewer building an aesthetic taste profile.
+You already know the following about this person:
+
+## Identity Context
+{identityContext — excerpts from BOOKS.md, AUDIO.md, enrichment answers, traits}
+
+## Previous Responses in This Section
+{existingResponses — Q&A pairs from taste-profile.json for this section}
+
+## Section: {sectionLabel}
+
+Generate ONE follow-up question that:
+1. References something specific from their identity context or previous answers
+2. Probes WHY they prefer what they do, not just WHAT
+3. Feels conversational — like a friend who knows them asking a natural question
+4. Explores an angle their previous answers haven't covered yet
+5. Is concise (1-2 sentences max)
+
+Do NOT:
+- Ask generic questions that ignore the context
+- Repeat topics already covered in previous responses
+- Use survey language ("On a scale of 1-10...")
+- Ask multiple questions at once
+```
+
+**Example personalized exchanges:**
+
+> **Static (P2):** "Name 3-5 films you consider near-perfect."
+> **User:** "Blade Runner, Stalker, Lost in Translation, Drive, Arrival"
+>
+> **Personalized (P2.5):** "Your BOOKS.md lists several sci-fi titles with themes of isolation and altered perception. Four of your five film picks share that same atmosphere. Is solitude a feature of stories you're drawn to, or is it more about the specific visual treatment of lonely spaces?"
+
+> **Static (P2):** "What artists or albums have had a lasting impact?"
+> **User:** "Radiohead, Boards of Canada, Massive Attack"
+>
+> **Personalized (P2.5):** "All three of those artists layer heavy texture over minimalist structures. Your CREATIVE.md mentions an appreciation for 'controlled complexity.' Does this principle — density within restraint — apply to how you think about visual design too?"
+
+##### Data Model — Where Taste Lives
+
+Taste data lives in **two files** with distinct roles:
+
+**1. Raw questionnaire responses: `data/digital-twin/taste-profile.json`** (existing, extended)
+
+```json
+{
+  "version": "2.0.0",
+  "createdAt": "...",
+  "updatedAt": "...",
+  "sections": {
+    "movies": {
+      "status": "completed",
+      "responses": [
+        {
+          "questionId": "movies-core-1",
+          "answer": "Blade Runner, Stalker, Lost in Translation...",
+          "answeredAt": "...",
+          "source": "static"
+        },
+        {
+          "questionId": "movies-p25-1",
+          "answer": "It's not solitude per se, it's the visual...",
+          "answeredAt": "...",
+          "source": "personalized",
+          "generatedQuestion": "Your BOOKS.md lists several sci-fi titles...",
+          "identityContextUsed": ["BOOKS.md:sci-fi-themes", "taste:movies-core-1"]
+        }
+      ],
+      "summary": "..."
+    },
+    "fashion": { "status": "pending", "responses": [], "summary": null },
+    "digital": { "status": "pending", "responses": [], "summary": null }
+  },
+  "profileSummary": null,
+  "lastSessionAt": null
+}
+```
+
+Changes from v1:
+- `source` field distinguishes static vs personalized questions
+- `generatedQuestion` stores the LLM-generated question text (since personalized questions aren't in the static definition)
+- `identityContextUsed` tracks which identity sources informed the question (for provenance)
+- Two new sections: `fashion`, `digital`
+- Version bumped to 2.0.0
+
+**2. Synthesized aesthetic profile: `data/digital-twin/aesthetics.json`** (planned in P1, populated by P2.5)
+
+```json
+{
+  "version": "1.0.0",
+  "updatedAt": "...",
+  "profile": {
+    "visualStyle": ["brutalist minimalism", "high-contrast neon", "controlled complexity"],
+    "narrativePreferences": ["isolation themes", "slow burn", "ambiguity over resolution"],
+    "musicProfile": ["textural electronica", "atmospheric layering", "functional listening"],
+    "spatialPreferences": ["raw materials", "dramatic light", "intimacy over grandeur"],
+    "culinaryIdentity": ["umami-driven", "improvisational cooking", "experience over formality"],
+    "fashionSensibility": ["monochrome", "natural fibers", "minimal branding"],
+    "digitalAesthetic": ["dark mode", "high information density", "subtle animation"],
+    "antiPatterns": ["visual clutter", "forced symmetry", "saccharine sentimentality"],
+    "corePrinciples": ["density within restraint", "function informing form", "earned complexity"]
+  },
+  "sources": {
+    "tasteQuestionnaire": {
+      "sectionsCompleted": 7,
+      "totalResponses": 28,
+      "lastUpdated": "..."
+    },
+    "enrichment": {
+      "aesthetics": { "questionsAnswered": 5 },
+      "favoriteBooks": { "analyzed": true, "themes": ["existential sci-fi", "systems thinking"] },
+      "favoriteMovies": { "analyzed": true, "themes": ["atmospheric isolation", "neon noir"] },
+      "musicTaste": { "analyzed": true, "themes": ["textural electronica", "ambient"] }
+    },
+    "documents": ["BOOKS.md", "AUDIO.md", "CREATIVE.md", "PREFERENCES.md"]
+  },
+  "crossDomainPatterns": [
+    "Preference for 'controlled complexity' appears across music (layered textures), visual art (minimalist structure with dense detail), architecture (raw materials with precise placement), and food (complex umami built from simple ingredients)",
+    "Anti-preference for overt sentimentality spans film (avoids melodrama), music (dislikes saccharine pop), and design (rejects decorative ornamentation)"
+  ],
+  "genomicCorrelations": {
+    "tasteReceptorGenes": "TAS2R38 status may correlate with bitter-food tolerance preferences",
+    "sensoryProcessing": "Olfactory receptor variants may explain heightened texture sensitivity"
+  }
+}
+```
+
+This file is the **canonical aesthetic profile** referenced by the Identity orchestrator (`identity.json`). It is regenerated whenever taste-profile.json accumulates significant new responses.
+
+##### Implementation Steps
+
+1. **Add 2 new sections** to `TASTE_SECTIONS` in `taste-questionnaire.js`: `fashion` and `digital`, each with 3 core questions and keyword-triggered follow-ups
+2. **Add `aggregateIdentityContext(sectionId)`** to `taste-questionnaire.js` — reads BOOKS.md, AUDIO.md, CREATIVE.md, PREFERENCES.md, enrichment answers, and existing taste responses to build a context string for the LLM
+3. **Add `generatePersonalizedTasteQuestion(sectionId, existingResponses, identityContext)`** — calls the active AI provider with the prompt template above, returns a single personalized follow-up question
+4. **Add `POST /api/digital-twin/taste/:section/personalized-question`** route that returns a generated question
+5. **Extend `submitAnswer()`** to accept `source: 'personalized'` and store `generatedQuestion` + `identityContextUsed` metadata
+6. **Add "Go deeper" button** to TasteTab.jsx after each static follow-up cycle completes — clicking it calls the personalized question endpoint
+7. **Add `generateAestheticsProfile()`** to `taste-questionnaire.js` — synthesizes all taste-profile.json responses + enrichment data into `aesthetics.json`
+8. **Bump taste-profile.json version** to 2.0.0, migrate existing responses to include `source: 'static'`
+9. **Update TasteTab.jsx** to render personalized questions differently (subtle indicator showing the twin referenced specific context)
+
+##### Prerequisite Relaxation
+
+The original spec listed P1 (Identity orchestrator) as a hard prerequisite. This is relaxed: P2.5 can read identity documents directly from the filesystem (`BOOKS.md`, `AUDIO.md`, etc.) and enrichment data from `meta.json` without needing the orchestrator layer. The orchestrator becomes useful for caching and cross-section queries but is not strictly required for context aggregation.
 
 #### P5: Cross-Insights Engine
 - Add `generateCrossInsights(identity)` in identity service
