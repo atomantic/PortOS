@@ -39,6 +39,7 @@ import packageJson from '../../package.json';
 import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
+import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
@@ -113,6 +114,9 @@ export default function Layout() {
 
   // Subscribe to server error notifications
   useErrorNotifications();
+
+  // Subscribe to agent completion feedback toasts
+  useAgentFeedbackToast();
 
   // Notifications for user task alerts
   const {
