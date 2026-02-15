@@ -11,7 +11,8 @@ import {
   Zap,
   Bot,
   XCircle,
-  History
+  History,
+  Activity
 } from 'lucide-react';
 import * as api from '../services/api';
 
@@ -23,19 +24,22 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   const [summary, setSummary] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
   const [recentTasks, setRecentTasks] = useState(null);
+  const [activityCalendar, setActivityCalendar] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tasksExpanded, setTasksExpanded] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
-      const [quickData, learningData, tasksData] = await Promise.all([
+      const [quickData, learningData, tasksData, calendarData] = await Promise.all([
         api.getCosQuickSummary().catch(() => null),
         api.getCosLearningSummary().catch(() => null),
-        api.getCosRecentTasks(5).catch(() => null)
+        api.getCosRecentTasks(5).catch(() => null),
+        api.getCosActivityCalendar(8).catch(() => null)
       ]);
       setSummary(quickData);
       setLearningSummary(learningData);
       setRecentTasks(tasksData);
+      setActivityCalendar(calendarData);
       setLoading(false);
     };
 
@@ -184,6 +188,11 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
         </Link>
       </div>
 
+      {/* Activity Calendar - GitHub-style heatmap */}
+      {activityCalendar?.weeks?.length > 0 && activityCalendar.summary.totalTasks > 0 && (
+        <ActivityCalendar data={activityCalendar} />
+      )}
+
       {/* Recent Tasks Section */}
       {recentTasks?.tasks?.length > 0 && (
         <div className="mt-4 pt-4 border-t border-port-border">
@@ -256,5 +265,113 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     </div>
   );
 });
+
+/**
+ * ActivityCalendar - Compact GitHub-style activity heatmap
+ * Shows daily task completion as colored squares
+ */
+function ActivityCalendar({ data }) {
+  // Calculate intensity level (0-4) based on tasks completed
+  const getIntensityLevel = (tasks) => {
+    if (tasks === 0) return 0;
+    if (tasks === 1) return 1;
+    const max = data.maxTasks || 1;
+    const ratio = tasks / max;
+    if (ratio >= 0.75) return 4;
+    if (ratio >= 0.5) return 3;
+    if (ratio >= 0.25) return 2;
+    return 1;
+  };
+
+  // Get color class based on intensity and success rate
+  const getColorClass = (day) => {
+    if (day.tasks === 0 || day.isFuture) return 'bg-port-border/20';
+    const intensity = getIntensityLevel(day.tasks);
+
+    // Color based on success rate
+    if (day.successRate >= 80) {
+      const shades = ['', 'bg-emerald-900/50', 'bg-emerald-700/60', 'bg-emerald-500/70', 'bg-emerald-400'];
+      return shades[intensity];
+    } else if (day.successRate >= 50) {
+      const shades = ['', 'bg-amber-900/50', 'bg-amber-700/60', 'bg-amber-500/70', 'bg-amber-400'];
+      return shades[intensity];
+    } else {
+      const shades = ['', 'bg-red-900/50', 'bg-red-700/60', 'bg-red-500/70', 'bg-red-400'];
+      return shades[intensity];
+    }
+  };
+
+  const formatDate = (dateStr) => {
+    const date = new Date(dateStr + 'T12:00:00');
+    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <div className="mt-4 pt-4 border-t border-port-border">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Activity size={14} className="text-port-accent" />
+          <span className="text-sm font-medium text-gray-300">Activity</span>
+          {data.currentStreak > 0 && (
+            <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">
+              <Flame size={10} />
+              {data.currentStreak}d
+            </span>
+          )}
+        </div>
+        <Link
+          to="/cos/productivity"
+          className="flex items-center gap-1 text-xs text-gray-500 hover:text-port-accent transition-colors"
+        >
+          {data.summary.activeDays} active days
+          <ChevronRight size={12} />
+        </Link>
+      </div>
+
+      {/* Calendar Grid */}
+      <div className="overflow-x-auto scrollbar-hide">
+        <div className="flex gap-0.5" style={{ minWidth: 'max-content' }}>
+          {data.weeks.map((week, weekIdx) => (
+            <div key={weekIdx} className="flex flex-col gap-0.5">
+              {week.map((day) => (
+                <div
+                  key={day.date}
+                  className={`
+                    w-[9px] h-[9px] sm:w-[10px] sm:h-[10px]
+                    rounded-sm transition-colors cursor-default
+                    ${getColorClass(day)}
+                    ${day.isToday ? 'ring-1 ring-port-accent' : ''}
+                    ${day.isFuture ? 'opacity-30' : ''}
+                  `}
+                  title={day.isFuture ? '' : `${formatDate(day.date)}: ${day.tasks} task${day.tasks !== 1 ? 's' : ''} (${day.successRate}% success)`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Summary Row */}
+      <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+        <span>
+          <span className="text-white font-medium">{data.summary.totalTasks}</span> tasks,{' '}
+          <span className={`font-medium ${
+            data.summary.successRate >= 80 ? 'text-port-success' :
+            data.summary.successRate >= 50 ? 'text-port-warning' : 'text-port-error'
+          }`}>{data.summary.successRate}%</span> success
+        </span>
+        {/* Mini Legend */}
+        <div className="flex items-center gap-0.5">
+          <span className="mr-1 hidden sm:inline">Less</span>
+          <div className="w-2 h-2 rounded-sm bg-port-border/20" />
+          <div className="w-2 h-2 rounded-sm bg-emerald-900/50" />
+          <div className="w-2 h-2 rounded-sm bg-emerald-500/70" />
+          <div className="w-2 h-2 rounded-sm bg-emerald-400" />
+          <span className="ml-1 hidden sm:inline">More</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default CosDashboardWidget;
