@@ -36,6 +36,7 @@ import digitalTwinRoutes from './routes/digital-twin.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
 import browserRoutes from './routes/browser.js';
+import moltworldToolsRoutes from './routes/moltworldTools.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
@@ -185,6 +186,7 @@ app.use('/api/agents/personalities', agentPersonalitiesRoutes);
 app.use('/api/agents/accounts', platformAccountsRoutes);
 app.use('/api/agents/schedules', automationSchedulesRoutes);
 app.use('/api/agents/activity', agentActivityRoutes);
+app.use('/api/agents/tools/moltworld', moltworldToolsRoutes);
 app.use('/api/agents/tools', agentToolsRoutes);
 // Existing running agents routes (process management)
 app.use('/api/agents', agentsRoutes);

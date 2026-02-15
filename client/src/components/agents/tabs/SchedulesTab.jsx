@@ -89,6 +89,13 @@ export default function SchedulesTab({ agentId }) {
 
   const filteredAccounts = accounts.filter(a => a.status === 'active');
 
+  // Filter action types by the selected account's platform
+  const selectedAccount = accounts.find(a => a.id === formData.accountId);
+  const selectedPlatform = selectedAccount?.platform;
+  const filteredActionTypes = selectedPlatform
+    ? ACTION_TYPES.filter(a => a.platform === selectedPlatform)
+    : ACTION_TYPES.filter(a => a.platform === 'moltbook');
+
   const formatSchedule = (schedule) => {
     if (schedule.type === 'cron') {
       const preset = CRON_PRESETS.find(p => p.value === schedule.cron);
@@ -145,14 +152,19 @@ export default function SchedulesTab({ agentId }) {
               <label className="block text-sm text-gray-400 mb-1">Account</label>
               <select
                 value={formData.accountId}
-                onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
+                onChange={(e) => {
+                  const acct = accounts.find(a => a.id === e.target.value);
+                  const platform = acct?.platform;
+                  const defaultAction = platform === 'moltworld' ? 'mw_heartbeat' : 'heartbeat';
+                  setFormData({ ...formData, accountId: e.target.value, action: { type: defaultAction, params: {} } });
+                }}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 required
               >
                 <option value="">Select account...</option>
                 {filteredAccounts.map(account => (
                   <option key={account.id} value={account.id}>
-                    {account.credentials.username}
+                    {account.credentials.username} ({account.platform})
                   </option>
                 ))}
               </select>
@@ -164,7 +176,7 @@ export default function SchedulesTab({ agentId }) {
                 onChange={(e) => setFormData({ ...formData, action: { type: e.target.value, params: {} } })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               >
-                {ACTION_TYPES.map(action => (
+                {filteredActionTypes.map(action => (
                   <option key={action.value} value={action.value}>
                     {action.icon} {action.label}
                   </option>

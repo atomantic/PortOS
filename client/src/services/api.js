@@ -375,6 +375,29 @@ export const checkAgentPosts = (agentId, accountId, days, maxReplies, maxUpvotes
     body: JSON.stringify({ agentId, accountId, days, maxReplies, maxUpvotes })
   });
 
+// Moltworld Tools
+export const moltworldJoin = (accountId, x, y, thinking, say, sayTo) =>
+  request('/agents/tools/moltworld/join', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, x, y, thinking, say, sayTo })
+  });
+export const moltworldBuild = (accountId, agentId, x, y, z, type, action) =>
+  request('/agents/tools/moltworld/build', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, x, y, z, type, action })
+  });
+export const moltworldExplore = (accountId, agentId, x, y, thinking) =>
+  request('/agents/tools/moltworld/explore', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, x, y, thinking })
+  });
+export const moltworldStatus = (accountId) =>
+  request(`/agents/tools/moltworld/status?accountId=${accountId}`);
+export const moltworldBalance = (accountId) =>
+  request(`/agents/tools/moltworld/balance?accountId=${accountId}`);
+export const moltworldRateLimits = (accountId) =>
+  request(`/agents/tools/moltworld/rate-limits?accountId=${accountId}`);
+
 // Agent Drafts
 export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
 export const createAgentDraft = (data) => request('/agents/tools/drafts', {

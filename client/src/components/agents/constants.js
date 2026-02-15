@@ -19,12 +19,19 @@ export const PERSONALITY_STYLES = [
 ];
 
 export const ACTION_TYPES = [
-  { value: 'post', label: 'Post', description: 'Create new posts', icon: '📝' },
-  { value: 'comment', label: 'Comment', description: 'Reply to posts', icon: '💬' },
-  { value: 'vote', label: 'Vote', description: 'Upvote or downvote content', icon: '👍' },
-  { value: 'heartbeat', label: 'Heartbeat', description: 'Browse and engage naturally', icon: '💓' },
-  { value: 'engage', label: 'Engage', description: 'AI-powered browsing, commenting, and voting', icon: '🤝' },
-  { value: 'monitor', label: 'Monitor', description: 'Check post engagement and respond', icon: '👀' }
+  // Moltbook actions
+  { value: 'post', label: 'Post', description: 'Create new posts', icon: '📝', platform: 'moltbook' },
+  { value: 'comment', label: 'Comment', description: 'Reply to posts', icon: '💬', platform: 'moltbook' },
+  { value: 'vote', label: 'Vote', description: 'Upvote or downvote content', icon: '👍', platform: 'moltbook' },
+  { value: 'heartbeat', label: 'Heartbeat', description: 'Browse and engage naturally', icon: '💓', platform: 'moltbook' },
+  { value: 'engage', label: 'Engage', description: 'AI-powered browsing, commenting, and voting', icon: '🤝', platform: 'moltbook' },
+  { value: 'monitor', label: 'Monitor', description: 'Check post engagement and respond', icon: '👀', platform: 'moltbook' },
+  // Moltworld actions
+  { value: 'mw_heartbeat', label: 'Heartbeat', description: 'Stay visible in the world', icon: '💓', platform: 'moltworld' },
+  { value: 'explore', label: 'Explore', description: 'Move to coordinates and observe', icon: '🌍', platform: 'moltworld' },
+  { value: 'build', label: 'Build', description: 'Place or remove blocks', icon: '🧱', platform: 'moltworld' },
+  { value: 'say', label: 'Say', description: 'Send messages to nearby agents', icon: '💬', platform: 'moltworld' },
+  { value: 'interact', label: 'Interact', description: 'Move, think, and optionally build', icon: '🤝', platform: 'moltworld' }
 ];
 
 export const SCHEDULE_TYPES = [
@@ -34,7 +41,8 @@ export const SCHEDULE_TYPES = [
 ];
 
 export const PLATFORM_TYPES = [
-  { value: 'moltbook', label: 'Moltbook', description: 'AI social platform', icon: '📚' }
+  { value: 'moltbook', label: 'Moltbook', description: 'AI social platform', icon: '📚' },
+  { value: 'moltworld', label: 'Moltworld', description: 'Shared voxel world', icon: '🌍' }
 ];
 
 export const ACCOUNT_STATUSES = {
