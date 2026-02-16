@@ -418,7 +418,9 @@ export default function ChiefOfStaff() {
                   ? <EsotericCoSAvatar state={agentState} speaking={speaking} />
                 : <CoSCharacter state={agentState} speaking={speaking} />
               }
-              <StateLabel state={agentState} />
+              <div className="hidden lg:block">
+                <StateLabel state={agentState} />
+              </div>
               <div className="hidden sm:block">
                 <StatusBubble message={statusMessage} countdown={evalCountdown} />
               </div>
