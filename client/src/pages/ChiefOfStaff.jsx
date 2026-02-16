@@ -334,7 +334,7 @@ export default function ChiefOfStaff() {
   }
 
   return (
-    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-screen overflow-hidden">
+    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-full overflow-hidden">
       {/* Agent Panel */}
       {avatarStyle === 'ascii' ? (
         <TerminalCoSPanel
@@ -349,7 +349,7 @@ export default function ChiefOfStaff() {
           evalCountdown={evalCountdown}
         />
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
@@ -380,7 +380,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex flex-1`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex flex-1 min-w-0`}
           >
             {/* Background Effects */}
             <div
@@ -394,7 +394,7 @@ export default function ChiefOfStaff() {
             />
 
             {/* Avatar Column - half width on mobile, full on desktop */}
-            <div className="flex-1 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
+            <div className="flex-1 min-w-0 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
                 Digital Assistant
               </div>
@@ -512,7 +512,7 @@ export default function ChiefOfStaff() {
       )}
 
       {/* Content Panel */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
         <div className="overflow-y-auto p-3 lg:p-4">
         {/* Stats Bar - hidden on mobile for SVG mode (shown in avatar panel instead) */}
         <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden lg:grid' : ''}`}>

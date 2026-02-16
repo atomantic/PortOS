@@ -463,7 +463,7 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/city');
           return (
-            <main id="main-content" className={`flex-1 overflow-auto ${isFullWidth ? '' : 'p-4 md:p-6'}`}>
+            <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               {isFullWidth ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
             </main>
           );
