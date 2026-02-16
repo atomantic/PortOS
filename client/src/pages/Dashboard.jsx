@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AppTile from '../components/AppTile';
 import CosDashboardWidget from '../components/CosDashboardWidget';
+import GoalProgressWidget from '../components/GoalProgressWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -89,6 +90,11 @@ export default function Dashboard() {
       {/* CoS Status Widget */}
       <div className="mb-6">
         <CosDashboardWidget />
+      </div>
+
+      {/* Goal Progress Widget */}
+      <div className="mb-6">
+        <GoalProgressWidget />
       </div>
 
       {/* App Grid */}

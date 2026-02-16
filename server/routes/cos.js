@@ -13,6 +13,7 @@ import * as autonomousJobs from '../services/autonomousJobs.js';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
+import * as goalProgress from '../services/goalProgress.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -1082,6 +1083,19 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       lastEvaluation: todayActivity.lastEvaluation
     }
   });
+}));
+
+// GET /api/cos/goal-progress - Get progress toward user goals
+// Maps completed tasks to goal categories from COS-GOALS.md
+router.get('/goal-progress', asyncHandler(async (req, res) => {
+  const progress = await goalProgress.getGoalProgress();
+  res.json(progress);
+}));
+
+// GET /api/cos/goal-progress/summary - Get compact goal progress for dashboard
+router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
+  const summary = await goalProgress.getGoalProgressSummary();
+  res.json(summary);
 }));
 
 export default router;

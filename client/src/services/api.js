@@ -621,6 +621,8 @@ export const getCosActivityCalendar = (weeks = 12) => request(`/cos/productivity
 export const getCosQuickSummary = () => request('/cos/quick-summary');
 export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
 export const getCosActionableInsights = () => request('/cos/actionable-insights');
+export const getCosGoalProgress = () => request('/cos/goal-progress');
+export const getCosGoalProgressSummary = () => request('/cos/goal-progress/summary');
 
 // Task Schedule (Configurable Intervals)
 export const getCosSchedule = () => request('/cos/schedule');
