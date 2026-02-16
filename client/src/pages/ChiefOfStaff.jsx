@@ -4,6 +4,7 @@ import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
 import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain } from 'lucide-react';
 import toast from 'react-hot-toast';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 // Import from modular components
 import {
@@ -328,7 +329,7 @@ export default function ChiefOfStaff() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading...</div>
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

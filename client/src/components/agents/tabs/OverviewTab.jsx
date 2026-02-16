@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Cpu, Zap, MessageSquare, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
@@ -280,7 +281,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   };
 
   if (!formData) {
-    return <div className="p-4 text-gray-400">Loading...</div>;
+    return <div className="p-4"><BrailleSpinner text="Loading" /></div>;
   }
 
   const activeAccounts = accounts.filter(a => a.status === 'active');

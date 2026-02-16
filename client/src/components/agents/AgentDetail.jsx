@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 import { AGENT_DETAIL_TABS } from './constants';
 import OverviewTab from './tabs/OverviewTab';
 import ToolsTab from './tabs/ToolsTab';
+import WorldTab from './tabs/WorldTab';
 import PublishedTab from './tabs/PublishedTab';
 import SchedulesTab from './tabs/SchedulesTab';
 import ActivityTab from './tabs/ActivityTab';
@@ -17,6 +19,7 @@ export default function AgentDetail() {
   const [agent, setAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [platformAccounts, setPlatformAccounts] = useState([]);
 
   const fetchAgent = useCallback(async () => {
     const data = await api.getAgentPersonality(agentId).catch(() => null);
@@ -33,6 +36,28 @@ export default function AgentDetail() {
     fetchAgent();
   }, [fetchAgent]);
 
+  useEffect(() => {
+    api.getPlatformAccounts(agentId).then(setPlatformAccounts).catch(() => {});
+  }, [agentId]);
+
+  const hasMoltbookAccount = useMemo(
+    () => platformAccounts.some(a => a.platform === 'moltbook'),
+    [platformAccounts]
+  );
+
+  const hasMoltworldAccount = useMemo(
+    () => platformAccounts.some(a => a.platform === 'moltworld'),
+    [platformAccounts]
+  );
+
+  const visibleTabs = useMemo(
+    () => AGENT_DETAIL_TABS.filter(t =>
+      (t.id !== 'tools' || hasMoltbookAccount) &&
+      (t.id !== 'world' || hasMoltworldAccount)
+    ),
+    [hasMoltbookAccount, hasMoltworldAccount]
+  );
+
   // Redirect bare /agents/:id to /agents/:id/overview
   useEffect(() => {
     if (!tab && agentId) {
@@ -46,7 +71,7 @@ export default function AgentDetail() {
   };
 
   if (loading) {
-    return <div className="p-6 text-gray-400">Loading agent...</div>;
+    return <div className="p-6"><BrailleSpinner text="Loading agent" /></div>;
   }
 
   if (notFound) {
@@ -66,6 +91,8 @@ export default function AgentDetail() {
         return <OverviewTab agentId={agentId} agent={agent} onAgentUpdate={fetchAgent} />;
       case 'tools':
         return <ToolsTab agentId={agentId} agent={agent} />;
+      case 'world':
+        return <WorldTab agentId={agentId} agent={agent} />;
       case 'published':
         return <PublishedTab agentId={agentId} />;
       case 'schedules':
@@ -115,7 +142,7 @@ export default function AgentDetail() {
 
       {/* Sub-tab Navigation */}
       <div className="flex gap-1 px-4 py-2 border-b border-port-border bg-port-card/50">
-        {AGENT_DETAIL_TABS.map(tabDef => {
+        {visibleTabs.map(tabDef => {
           const isActive = activeTab === tabDef.id;
           return (
             <button

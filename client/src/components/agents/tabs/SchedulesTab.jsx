@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 import { ACTION_TYPES, SCHEDULE_TYPES, CRON_PRESETS, INTERVAL_PRESETS } from '../constants';
 
 export default function SchedulesTab({ agentId }) {
@@ -114,7 +115,7 @@ export default function SchedulesTab({ agentId }) {
   };
 
   if (loading) {
-    return <div className="p-4 text-gray-400">Loading schedules...</div>;
+    return <div className="p-4"><BrailleSpinner text="Loading schedules" /></div>;
   }
 
   return (
