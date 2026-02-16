@@ -1968,14 +1968,40 @@ export async function runHealthCheck() {
     });
   }
 
-  // Check for errored processes
+  // Check for errored processes and auto-restart them
   const erroredProcesses = pm2Processes.filter(p => p.pm2_env?.status === 'errored');
   if (erroredProcesses.length > 0) {
-    issues.push({
-      type: 'error',
-      category: 'processes',
-      message: `${erroredProcesses.length} errored PM2 processes: ${erroredProcesses.map(p => p.name).join(', ')}`
-    });
+    const names = erroredProcesses.map(p => p.name);
+    emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
+
+    const restartResults = await Promise.all(names.map(async (name) => {
+      const result = await execAsync(`pm2 restart ${name} 2>&1`).catch(e => ({ stdout: '', stderr: e.message }));
+      const failed = result.stderr && !result.stdout;
+      if (failed) {
+        emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);
+      } else {
+        emitLog('success', `✅ Auto-restarted errored process: ${name}`);
+      }
+      return { name, success: !failed };
+    }));
+
+    const failedRestarts = restartResults.filter(r => !r.success);
+    if (failedRestarts.length > 0) {
+      issues.push({
+        type: 'error',
+        category: 'processes',
+        message: `${failedRestarts.length} errored PM2 process(es) failed to auto-restart: ${failedRestarts.map(r => r.name).join(', ')}`
+      });
+    }
+
+    const succeededRestarts = restartResults.filter(r => r.success);
+    if (succeededRestarts.length > 0) {
+      issues.push({
+        type: 'warning',
+        category: 'processes',
+        message: `Auto-restarted ${succeededRestarts.length} errored PM2 process(es): ${succeededRestarts.map(r => r.name).join(', ')}`
+      });
+    }
   }
 
   // Check memory usage per process
