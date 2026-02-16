@@ -831,7 +831,11 @@ export const updateBrainProject = (id, data) => request(`/brain/projects/${id}`,
 export const deleteBrainProject = (id) => request(`/brain/projects/${id}`, { method: 'DELETE' });
 
 // Brain - Ideas
-export const getBrainIdeas = () => request('/brain/ideas');
+export const getBrainIdeas = (filters) => {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  return request(`/brain/ideas?${params}`);
+};
 export const getBrainIdea = (id) => request(`/brain/ideas/${id}`);
 export const createBrainIdea = (data) => request('/brain/ideas', {
   method: 'POST',

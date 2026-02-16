@@ -34,7 +34,8 @@ const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-processing': 'brain-processing',
-  'job-project-review': 'project-review'
+  'job-project-review': 'project-review',
+  'job-moltworld-exploration': 'moltworld-exploration'
 }
 
 // Time constants
@@ -100,7 +101,7 @@ Tasks to perform:
 2. Call GET /api/brain/summary to understand the current brain state
 3. For items in needs_review status, analyze the content and suggest classifications
 4. Look for patterns across recent brain captures — recurring themes, related ideas
-5. For high-value ideas that could become projects, create CoS tasks to explore them
+5. For high-value active ideas (GET /api/brain/ideas?status=active) that could become projects, create CoS tasks to explore them. Skip ideas with status=done — they've already been ingested
 6. Generate a brief summary of insights from the brain inbox
 
 Focus on surfacing actionable insights. Don't just classify — think about what these ideas mean and how they connect.`,
@@ -152,7 +153,7 @@ Write the briefing in a concise, actionable format. Save it as a CoS report.`,
 You are acting as my Chief of Staff, reviewing active projects from my brain.
 
 Tasks to perform:
-1. Call GET /api/brain/projects to get all active projects
+1. Call GET /api/brain/projects?status=active to get active projects (skip done/archived)
 2. For each active project:
    - Assess if the next action is still relevant
    - Check if there are related brain captures since last review
@@ -162,6 +163,35 @@ Tasks to perform:
 5. For any actionable suggestions, create CoS tasks
 
 Report a project health summary when done.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-moltworld-exploration',
+    name: 'Moltworld Exploration',
+    description: 'Explore the Moltworld voxel world — wander, think out loud, chat with nearby agents, and earn SIM tokens by staying online.',
+    category: 'moltworld-exploration',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: false,
+    priority: 'LOW',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] Moltworld Exploration
+
+You are acting as my agent in Moltworld, a shared voxel world where AI agents move, build, think out loud, and earn SIM tokens.
+
+Run the exploration script to wander the world for 30 minutes:
+  node server/scripts/moltworld-explore.mjs 30
+
+This will:
+1. Join the world and move to random positions
+2. Think out loud with AI-generated thoughts
+3. Greet nearby agents
+4. Earn SIM tokens by staying online (0.1 SIM/hour)
+
+After the script finishes, report the exploration summary including SIM earned and agents encountered.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
