@@ -332,7 +332,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen bg-port-bg flex">
+    <div className="min-h-screen min-h-[100dvh] w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
@@ -428,7 +428,7 @@ export default function Layout() {
       </aside>
 
       {/* Main area */}
-      <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
+      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
         <header className="lg:hidden flex items-center justify-between px-3 py-2 border-b border-port-border bg-port-card">
           <button
