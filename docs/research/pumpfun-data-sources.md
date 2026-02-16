@@ -41,10 +41,14 @@ Solana-native RPC and API platform. Best-in-class for raw blockchain data, real-
 ### Key APIs for external project Tracking
 
 **Enhanced Transactions API**
+- `POST https://api-mainnet.helius-rpc.com/v0/transactions?api-key=KEY` — parse up to 100 signatures per request
+- `GET https://api-mainnet.helius-rpc.com/v0/addresses/{address}/transactions?api-key=KEY` — address history with pagination
 - Parses raw Solana transactions into human-readable format
 - Decodes instruction data, token transfers, balance changes
-- Response includes: `accountKeys`, `signature`, `preTokenBalances`, `postTokenBalances`, `logMessages`
+- Response includes: `description`, `type`, `source`, `fee`, `feePayer`, `signature`, `slot`, `timestamp`, `nativeTransfers`, `tokenTransfers`, `accountData`, `events`
 - Filter by external project program ID: `6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`
+- Commitment levels: `finalized` (default) or `confirmed`
+- Error responses: 400 (bad request), 401 (auth), 429 (rate limit), 500/503/504 (server)
 
 **Webhooks**
 - Push-based event delivery for on-chain events
@@ -175,6 +179,21 @@ DeFi analytics platform with comprehensive REST APIs for token data, pricing, tr
 }
 ```
 
+### Response Schema (Price API — `GET /defi/price?address=MINT`)
+```json
+{
+  "success": true,
+  "data": {
+    "value": 0.38622,
+    "updateUnixTime": 1745058945,
+    "updateHumanTime": "2025-04-19T10:35:45",
+    "priceChange24h": 1.93,
+    "priceInNative": 0.00277,
+    "liquidity": 10854103.37
+  }
+}
+```
+
 ### Strengths
 - Richest analytics out of the box (market cap, liquidity, security scores)
 - Pre-computed OHLCV eliminates aggregation logic
@@ -182,12 +201,53 @@ DeFi analytics platform with comprehensive REST APIs for token data, pricing, tr
 - Batch pricing for monitoring multiple tokens
 - Clean REST API, easy to integrate
 
+### WebSocket: New Token Listing Stream
+
+Available on Premium Plus ($250/mo) and above. Directly relevant for external project launch detection.
+
+- **URL**: `wss://public-api.birdeye.so/socket/solana?x-api-key=YOUR_KEY`
+- **Headers**: `Origin: ws://public-api.birdeye.so`, `Sec-WebSocket-Protocol: echo-protocol`
+- **Subscribe**: `{ "type": "SUBSCRIBE_TOKEN_NEW_LISTING", "meme_platform_enabled": true, "sources": ["pump_dot_fun"] }`
+- **CU cost**: 0.08 CU per byte
+
+Response schema:
+```json
+{
+  "type": "TOKEN_NEW_LISTING_DATA",
+  "data": {
+    "address": "BkQfwVktcbWmxePJN5weHWJZgReWbiz8gzTdFa2w7Uds",
+    "decimals": 6,
+    "name": "Worker Cat",
+    "symbol": "$MCDCAT",
+    "liquidity": "12120.155172280874",
+    "liquidityAddedAt": 1720155863
+  }
+}
+```
+
+Supports `min_liquidity`/`max_liquidity` filters and 100+ DEX source filters including Raydium, Orca, Meteora, and external project.
+
+### Compute Unit Costs (Key Endpoints)
+
+| Endpoint | CU Cost | Notes |
+|----------|---------|-------|
+| Token Price | 10 | Cheapest price check |
+| Token Metadata | 5 | Very low cost |
+| Token List v3 | 100 | Higher cost for list queries |
+| Trades (token) | 10 | Affordable for trade monitoring |
+| OHLCV | 40 | Moderate |
+| Token New Listing (REST) | 80 | One-shot listing check |
+| WS: New Listing | 0.08/byte | Streaming cost scales with data |
+| WS: Price | 0.003/byte | Very affordable streaming |
+| WS: Transactions | 0.0004/byte | Cheapest stream |
+
 ### Limitations
-- No push-based event delivery (polling only on lower tiers)
+- No push-based event delivery on tiers below Premium Plus (polling only)
 - WebSocket access requires Premium Plus ($250/mo) minimum
-- New token detection has inherent latency — tokens must be indexed first
+- New token detection via REST has inherent latency — tokens must be indexed first
 - Wallet endpoints severely rate-limited (30 rpm)
 - Compute unit costs can escalate with heavy usage
+- CU costs subject to change without notice
 
 ---
 
@@ -220,12 +280,25 @@ external project exposes several undocumented/semi-official API services. These 
 - Direct access to external project-specific metadata not available elsewhere
 - Creator profiles and reputation data
 
+### Key V3 Endpoints
+- `GET /coins/latest` — latest token launches
+- `GET /coins/{mint}` — token details by mint address
+- `GET /trades/latest` — latest trades across all tokens
+- `GET /trades/token/{mint}` — trades for specific token
+
+### Observed Rate Limits
+- ~20 requests per minute (RPM) across all endpoints
+- Rate limit headers in responses: `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`
+- HTTP 429 on exceeded limits
+- Recommended: exponential backoff with max 3 retries
+
 ### Limitations
 - **Undocumented/unofficial** — endpoints can break without warning
 - JWT auth requires mimicking browser authentication flow
-- No published rate limit numbers (only HTTP 429 responses)
+- Rate limits are restrictive (~20 RPM) and undocumented officially
 - No SLA or support
 - Legal gray area for automated access
+- WebSocket support listed as "coming soon" — not yet available
 
 ---
 
@@ -307,8 +380,8 @@ Specializes in low-latency Solana data streaming with dedicated external project
 
 | Criteria | Helius | Birdeye | external project Direct | Bitquery |
 |----------|--------|---------|-----------------|----------|
-| **New token detection latency** | ~1s (webhook/gRPC) | 5-30s (polling) | Unknown | ~2-5s (subscription) |
-| **Real-time streaming** | gRPC + WebSocket | WebSocket ($250+) | No | GraphQL subscriptions |
+| **New token detection latency** | ~1s (webhook/gRPC) | 5-30s (REST) / ~2s (WS) | Unknown | ~2-5s (subscription) |
+| **Real-time streaming** | gRPC + WebSocket | WS w/ external project filter ($250+) | No | GraphQL subscriptions |
 | **Token analytics** | Raw tx data only | Rich (mcap, vol, security) | Basic metadata | Rich (GraphQL) |
 | **OHLCV / Charts** | No | Yes | No | Yes |
 | **Security scoring** | No | Yes | No | Partial |
