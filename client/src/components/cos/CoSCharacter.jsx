@@ -4,7 +4,7 @@ export default function CoSCharacter({ state, speaking }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
 
   return (
-    <div className="relative w-full max-w-[14rem] lg:max-w-[20rem] overflow-visible">
+    <div className="relative w-full max-w-[8rem] lg:max-w-[12rem] overflow-visible">
       <svg viewBox="0 0 200 240" className="cos-character w-full h-auto overflow-visible">
         <defs>
           <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">

@@ -430,7 +430,7 @@ function Scene({ state, speaking }) {
 
 export default function CyberCoSAvatar({ state, speaking }) {
   return (
-    <div className="relative w-full max-w-[14rem] lg:max-w-[20rem] aspect-[5/6]">
+    <div className="relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]">
       <Canvas
         camera={{ position: [0, 0, 3.5], fov: 45 }}
         style={{ background: 'transparent' }}
