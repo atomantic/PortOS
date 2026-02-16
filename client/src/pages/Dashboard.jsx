@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AppTile from '../components/AppTile';
+import BrailleSpinner from '../components/BrailleSpinner';
 import CosDashboardWidget from '../components/CosDashboardWidget';
 import GoalProgressWidget from '../components/GoalProgressWidget';
 import * as api from '../services/api';
@@ -58,7 +59,7 @@ export default function Dashboard() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading...</div>
+        <BrailleSpinner text="Loading dashboard" />
       </div>
     );
   }

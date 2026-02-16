@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function ToolsTab({ agentId, agent }) {
-  const [accounts, setAccounts] = useState([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [accountName, setAccountName] = useState('');
   const [rateLimits, setRateLimits] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -45,21 +46,19 @@ export default function ToolsTab({ agentId, agent }) {
   const [cooldownEnds, setCooldownEnds] = useState({});
   const [, setTick] = useState(0);
 
-  const fetchInitial = useCallback(async () => {
-    const accountsData = await api.getPlatformAccounts(agentId);
-    const active = accountsData.filter(a => a.status === 'active');
-    setAccounts(active);
-    if (active.length === 1 && !selectedAccountId) {
-      setSelectedAccountId(active[0].id);
-    }
-    setLoading(false);
+  // Auto-resolve the moltbook account for this agent
+  useEffect(() => {
+    api.getPlatformAccounts(agentId, 'moltbook').then(data => {
+      const active = data.filter(a => a.status === 'active');
+      if (active.length > 0) {
+        setSelectedAccountId(active[0].id);
+        setAccountName(active[0].credentials?.username || '');
+      }
+      setLoading(false);
+    }).catch(() => setLoading(false));
   }, [agentId]);
 
-  useEffect(() => {
-    fetchInitial();
-  }, [fetchInitial]);
-
-  // Load rate limits + submolts when account changes
+  // Load rate limits + submolts when account resolves
   useEffect(() => {
     if (!selectedAccountId) {
       setRateLimits(null);
@@ -300,15 +299,14 @@ export default function ToolsTab({ agentId, agent }) {
       setPostTitle(draft.title || '');
       setPostContent(draft.content || '');
       if (draft.submolt) setSelectedSubmolt(draft.submolt);
-      if (draft.accountId) setSelectedAccountId(draft.accountId);
       setSelectedPost(null);
       setCommentContent('');
     } else {
       setCommentContent(draft.content || '');
       setReplyToId(draft.parentId || null);
-      if (draft.postId && draft.accountId) {
-        setSelectedAccountId(draft.accountId);
-        api.getAgentPost(draft.accountId, draft.postId).then(details => {
+      if (draft.postId) {
+        const acctId = draft.accountId || selectedAccountId;
+        api.getAgentPost(acctId, draft.postId).then(details => {
           setSelectedPost(details);
           setPostComments(details.comments || []);
         }).catch(() => {});
@@ -337,30 +335,23 @@ export default function ToolsTab({ agentId, agent }) {
   };
 
   if (loading) {
-    return <div className="p-4 text-gray-400">Loading tools...</div>;
+    return <div className="p-4"><BrailleSpinner text="Loading tools" /></div>;
   }
 
-  const ready = !!selectedAccountId;
+  if (!selectedAccountId) {
+    return (
+      <div className="p-4 text-center py-12 text-gray-400">
+        <p className="text-lg mb-2">No active Moltbook account</p>
+        <p className="text-sm">Register a Moltbook account on the Overview tab to get started</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4">
-      {/* Header: Account Selection + Rate Limits */}
-      <div className="flex flex-wrap items-end gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Account</label>
-          <select
-            value={selectedAccountId}
-            onChange={(e) => setSelectedAccountId(e.target.value)}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded text-white min-w-[200px]"
-          >
-            <option value="">Select account...</option>
-            {accounts.map(account => (
-              <option key={account.id} value={account.id}>
-                {account.credentials.username}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Header: Account Name + Rate Limits */}
+      <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
+        <span className="text-sm text-gray-400">Account: <span className="text-white font-medium">{accountName}</span></span>
         {rateLimits && (
           <div className="flex gap-3 ml-auto">
             {Object.entries(rateLimits).map(([action, rl]) => {
@@ -384,14 +375,7 @@ export default function ToolsTab({ agentId, agent }) {
         )}
       </div>
 
-      {!ready && (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-lg mb-2">Select an account to get started</p>
-          <p className="text-sm">Use the dropdown above to choose an active Moltbook account</p>
-        </div>
-      )}
-
-      {ready && (<>
+      {(<>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left Column: Feed + Engage */}
           <div className="space-y-4">

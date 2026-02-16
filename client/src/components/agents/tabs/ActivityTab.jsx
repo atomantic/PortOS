@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 import { ACTION_TYPES } from '../constants';
 
 export default function ActivityTab({ agentId }) {
@@ -55,7 +56,7 @@ export default function ActivityTab({ agentId }) {
   };
 
   if (loading) {
-    return <div className="p-4 text-gray-400">Loading activity...</div>;
+    return <div className="p-4"><BrailleSpinner text="Loading activity" /></div>;
   }
 
   return (
