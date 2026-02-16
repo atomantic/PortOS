@@ -6,12 +6,12 @@ export const CITY_COLORS = {
   ambient: '#0d0d2b',
   building: {
     online: '#06b6d4',
-    stopped: '#f59e0b',
-    not_started: '#6366f1',
-    not_found: '#6366f1',
-    archived: '#475569',
+    stopped: '#ef4444',
+    not_started: '#8b5cf6',
+    not_found: '#8b5cf6',
+    archived: '#64748b',
   },
-  buildingBody: '#10102a',
+  buildingBody: '#0c0c24',
   particles: '#06b6d4',
   stars: '#ffffff',
   // Neon accent palette for building window/decoration variety

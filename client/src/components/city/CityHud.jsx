@@ -15,11 +15,11 @@ const formatUptime = (seconds) => {
 
 // Weather status text based on system health
 const getWeatherStatus = (onlineRatio) => {
-  if (onlineRatio >= 1.0) return { text: 'CLEAR', color: 'text-emerald-400', icon: '//' };
-  if (onlineRatio >= 0.8) return { text: 'FAIR', color: 'text-cyan-400', icon: '~' };
-  if (onlineRatio >= 0.5) return { text: 'OVERCAST', color: 'text-amber-400', icon: '%%' };
-  if (onlineRatio >= 0.2) return { text: 'RAIN', color: 'text-orange-400', icon: '||' };
-  return { text: 'STORM', color: 'text-red-400', icon: '!!' };
+  if (onlineRatio >= 1.0) return { text: 'CLEAR', color: 'text-emerald-400', icon: '//', desc: 'All systems operational' };
+  if (onlineRatio >= 0.8) return { text: 'FAIR', color: 'text-cyan-400', icon: '~', desc: 'Minor issues detected' };
+  if (onlineRatio >= 0.5) return { text: 'OVERCAST', color: 'text-amber-400', icon: '%%', desc: 'Multiple systems down' };
+  if (onlineRatio >= 0.2) return { text: 'RAIN', color: 'text-orange-400', icon: '||', desc: 'Significant outages' };
+  return { text: 'STORM', color: 'text-red-400', icon: '!!', desc: 'Critical system failure' };
 };
 
 // Animated corner decoration for HUD panels
@@ -133,27 +133,27 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
       {/* Top-left: Clock + system status + vitals */}
       <div className="absolute top-3 left-3 pointer-events-auto">
-        <div className="relative bg-black/80 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-4 py-2.5 overflow-hidden">
+        <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-3 overflow-hidden">
           <HudCorner position="tl" />
           <HudCorner position="tr" />
           <HudCorner position="bl" />
           <HudCorner position="br" />
 
-          <div className="font-pixel text-cyan-400 text-lg tracking-wider" style={{ textShadow: '0 0 8px rgba(6,182,212,0.5)' }}>
+          <div className="font-pixel text-cyan-400 text-xl tracking-wider" style={{ textShadow: '0 0 10px rgba(6,182,212,0.6)' }}>
             {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </div>
-          <div className="font-pixel text-[10px] text-cyan-600 tracking-wide">
+          <div className="font-pixel text-[11px] text-cyan-500 tracking-wide mt-0.5">
             {activeApps}/{totalApps} SYSTEMS ONLINE
           </div>
 
           {/* System health bar */}
-          <div className="mt-1.5">
+          <div className="mt-2">
             <HealthBar value={activeApps} max={totalApps} color="#06b6d4" />
           </div>
         </div>
 
         {/* System Vitals panel */}
-        <div className="relative mt-2 bg-black/80 backdrop-blur-sm border border-cyan-500/20 rounded-lg px-3 py-2 space-y-1 overflow-hidden">
+        <div className="relative mt-2 bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2.5 space-y-1.5 overflow-hidden">
           <HudCorner position="tl" />
           <HudCorner position="tr" />
           <HudCorner position="bl" />
@@ -161,34 +161,34 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
           {/* Animated scan line */}
           <div
-            className="absolute left-0 right-0 h-px bg-cyan-400/10 pointer-events-none"
+            className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none"
             style={{ top: `${scanLine}%` }}
           />
 
-          <div className="font-pixel text-[9px] text-cyan-500/60 tracking-wider mb-1">
+          <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider mb-1">
             SYSTEM VITALS
           </div>
 
           {/* Uptime */}
-          <div className="flex items-center justify-between gap-4">
-            <span className="font-pixel text-[9px] text-gray-500 tracking-wide">UPTIME</span>
-            <span className="font-pixel text-[10px] text-cyan-400" style={{ textShadow: '0 0 4px rgba(6,182,212,0.3)' }}>
+          <div className="flex items-center justify-between gap-6">
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">UPTIME</span>
+            <span className="font-pixel text-[11px] text-cyan-400" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
               {formatUptime(uptimeSeconds)}
             </span>
           </div>
 
           {/* Weather (system health) */}
-          <div className="flex items-center justify-between gap-4">
-            <span className="font-pixel text-[9px] text-gray-500 tracking-wide">WEATHER</span>
-            <span className={`font-pixel text-[10px] ${weather.color}`}>
-              <span className="opacity-50 mr-1">{weather.icon}</span>{weather.text}
+          <div className="flex items-center justify-between gap-6" title={weather.desc}>
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">WEATHER</span>
+            <span className={`font-pixel text-[11px] ${weather.color}`}>
+              <span className="opacity-60 mr-1">{weather.icon}</span>{weather.text}
             </span>
           </div>
 
           {/* Active agents */}
-          <div className="flex items-center justify-between gap-4">
-            <span className="font-pixel text-[9px] text-gray-500 tracking-wide">AGENTS</span>
-            <span className={`font-pixel text-[10px] ${activeAgentCount > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
+          <div className="flex items-center justify-between gap-6">
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">AGENTS</span>
+            <span className={`font-pixel text-[11px] ${activeAgentCount > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
               {activeAgentCount > 0 && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse" />}
               {activeAgentCount} ACTIVE
             </span>
@@ -196,9 +196,9 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
           {/* Stopped count */}
           {stoppedApps > 0 && (
-            <div className="flex items-center justify-between gap-4">
-              <span className="font-pixel text-[9px] text-gray-500 tracking-wide">STOPPED</span>
-              <span className="font-pixel text-[10px] text-amber-400" style={{ textShadow: '0 0 4px rgba(245,158,11,0.3)' }}>
+            <div className="flex items-center justify-between gap-6">
+              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">STOPPED</span>
+              <span className="font-pixel text-[11px] text-red-400" style={{ textShadow: '0 0 4px rgba(239,68,68,0.3)' }}>
                 {stoppedApps}
               </span>
             </div>
@@ -206,17 +206,17 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
           {/* Archived */}
           {archivedApps > 0 && (
-            <div className="flex items-center justify-between gap-4">
-              <span className="font-pixel text-[9px] text-gray-500 tracking-wide">ARCHIVED</span>
-              <span className="font-pixel text-[10px] text-gray-600">{archivedApps}</span>
+            <div className="flex items-center justify-between gap-6">
+              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">ARCHIVED</span>
+              <span className="font-pixel text-[11px] text-gray-500">{archivedApps}</span>
             </div>
           )}
 
           {/* Productivity - today's tasks */}
           {productivityData?.todaySucceeded > 0 && (
-            <div className="flex items-center justify-between gap-4">
-              <span className="font-pixel text-[9px] text-gray-500 tracking-wide">TASKS</span>
-              <span className="font-pixel text-[10px] text-purple-400" style={{ textShadow: '0 0 4px rgba(168,85,247,0.3)' }}>
+            <div className="flex items-center justify-between gap-6">
+              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">TASKS</span>
+              <span className="font-pixel text-[11px] text-purple-400" style={{ textShadow: '0 0 4px rgba(168,85,247,0.3)' }}>
                 {productivityData.todaySucceeded} TODAY
               </span>
             </div>
@@ -224,19 +224,19 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
           {/* Streak */}
           {productivityData?.currentDailyStreak > 0 && (
-            <div className="flex items-center justify-between gap-4">
-              <span className="font-pixel text-[9px] text-gray-500 tracking-wide">STREAK</span>
-              <span className={`font-pixel text-[10px] ${productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}`}>
+            <div className="flex items-center justify-between gap-6">
+              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">STREAK</span>
+              <span className={`font-pixel text-[11px] ${productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}`}>
                 {productivityData.currentDailyStreak}d
               </span>
             </div>
           )}
 
           {/* Divider */}
-          <div className="border-t border-cyan-500/10 mt-1 pt-1">
+          <div className="border-t border-cyan-500/15 mt-1.5 pt-1.5">
             <div className="flex items-center justify-between">
-              <span className="font-pixel text-[8px] text-cyan-500/30 tracking-widest">SYS.OK</span>
-              <span className="font-pixel text-[8px] text-cyan-500/30 tracking-widest">
+              <span className="font-pixel text-[9px] text-cyan-500/40 tracking-widest">SYS.OK</span>
+              <span className="font-pixel text-[9px] text-cyan-500/40 tracking-widest">
                 {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()}
               </span>
             </div>
@@ -257,22 +257,22 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
       {/* Top-right: Connection + CoS status */}
       <div className="absolute top-3 right-3 pointer-events-auto">
-        <div className="relative bg-black/80 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2 flex items-center gap-3">
+        <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2.5 flex items-center gap-4">
           <HudCorner position="tl" />
           <HudCorner position="tr" />
           <HudCorner position="bl" />
           <HudCorner position="br" />
 
-          <div className="flex items-center gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(34,197,94,0.5)]' : 'bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.5)]'}`} />
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-emerald-400 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-400 shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse'}`} />
+            <span className={`font-pixel text-[11px] tracking-wide ${connected ? 'text-gray-300' : 'text-red-400'}`}>
               {connected ? 'LINK' : 'OFFLINE'}
             </span>
           </div>
-          <div className="w-px h-4 bg-cyan-500/20" />
-          <div className="flex items-center gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${cosStatus?.running ? 'bg-cyan-400 animate-pulse shadow-[0_0_6px_rgba(6,182,212,0.5)]' : 'bg-gray-600'}`} />
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">
+          <div className="w-px h-5 bg-cyan-500/25" />
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${cosStatus?.running ? 'bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.6)]' : 'bg-gray-600'}`} />
+            <span className={`font-pixel text-[11px] tracking-wide ${cosStatus?.running ? 'text-cyan-400' : 'text-gray-500'}`}>
               CoS {cosStatus?.running ? 'RUN' : 'IDLE'}
             </span>
           </div>
@@ -285,21 +285,43 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
       {/* Bottom: Agent status bar */}
       <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
 
-      {/* Bottom-left: Settings gear + corner decoration */}
+      {/* Bottom-left: Settings gear + legend + corner decoration */}
       <div className="absolute bottom-16 left-3">
+        {/* Status legend */}
+        <div className="pointer-events-none mb-2 bg-black/70 backdrop-blur-sm border border-cyan-500/15 rounded-lg px-2.5 py-2 space-y-1">
+          <div className="font-pixel text-[8px] text-cyan-500/50 tracking-wider mb-1">LEGEND</div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-sm bg-cyan-500" />
+            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ONLINE</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-sm bg-red-500" />
+            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">STOPPED</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-sm bg-violet-500" />
+            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">NOT STARTED</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-sm bg-slate-500" />
+            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ARCHIVED</span>
+          </div>
+        </div>
+
         <button
           onClick={() => navigate(location.pathname === '/city/settings' ? '/city' : '/city/settings')}
-          className="pointer-events-auto mb-2 relative bg-black/80 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-2.5 py-1.5 hover:border-cyan-400/60 transition-all group"
+          className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
+          title="Settings"
         >
           <HudCorner position="tl" />
           <HudCorner position="br" />
-          <svg className="w-3.5 h-3.5 text-cyan-500/60 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 4px rgba(6,182,212,0.3))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
         <div className="pointer-events-none">
-          <div className="font-pixel text-[8px] text-cyan-500/15 tracking-widest leading-tight">
+          <div className="font-pixel text-[8px] text-cyan-500/20 tracking-widest leading-tight">
             {'>'} SYS.INIT<br/>
             {'>'} NET.LINK<br/>
             {'>'} HUD.READY
