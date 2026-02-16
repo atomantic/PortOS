@@ -30,11 +30,12 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
 
   useEffect(() => {
     const loadData = async () => {
+      const silent = { silent: true };
       const [quickData, learningData, tasksData, calendarData] = await Promise.all([
-        api.getCosQuickSummary().catch(() => null),
-        api.getCosLearningSummary().catch(() => null),
-        api.getCosRecentTasks(5).catch(() => null),
-        api.getCosActivityCalendar(8).catch(() => null)
+        api.getCosQuickSummary(silent).catch(() => null),
+        api.getCosLearningSummary(silent).catch(() => null),
+        api.getCosRecentTasks(5, silent).catch(() => null),
+        api.getCosActivityCalendar(8, silent).catch(() => null)
       ]);
       setSummary(quickData);
       setLearningSummary(learningData);

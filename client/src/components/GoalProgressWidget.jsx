@@ -18,7 +18,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
 
   useEffect(() => {
     const loadData = async () => {
-      const data = await api.getCosGoalProgressSummary().catch(() => null);
+      const data = await api.getCosGoalProgressSummary({ silent: true }).catch(() => null);
       setProgress(data);
       setLoading(false);
     };

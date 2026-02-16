@@ -3,13 +3,14 @@ import toast from 'react-hot-toast';
 const API_BASE = '/api';
 
 async function request(endpoint, options = {}) {
+  const { silent, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
   const config = {
     headers: {
       'Content-Type': 'application/json',
-      ...options.headers
+      ...fetchOptions.headers
     },
-    ...options
+    ...fetchOptions
   };
 
   const response = await fetch(url, config);
@@ -17,11 +18,13 @@ async function request(endpoint, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
     const errorMessage = error.error || `HTTP ${response.status}`;
-    // Platform unavailability is a warning, not an error
-    if (error.code === 'PLATFORM_UNAVAILABLE') {
-      toast(errorMessage, { icon: '⚠️' });
-    } else {
-      toast.error(errorMessage);
+    if (!silent) {
+      // Platform unavailability is a warning, not an error
+      if (error.code === 'PLATFORM_UNAVAILABLE') {
+        toast(errorMessage, { icon: '⚠️' });
+      } else {
+        toast.error(errorMessage);
+      }
     }
     throw new Error(errorMessage);
   }
@@ -556,7 +559,7 @@ export const getCosLearningDurations = () => request('/cos/learning/durations');
 export const getCosLearningSkipped = () => request('/cos/learning/skipped');
 export const getCosLearningPerformance = () => request('/cos/learning/performance');
 export const getCosLearningRouting = () => request('/cos/learning/routing');
-export const getCosLearningSummary = () => request('/cos/learning/summary');
+export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
@@ -617,12 +620,12 @@ export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
 export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
-export const getCosActivityCalendar = (weeks = 12) => request(`/cos/productivity/calendar?weeks=${weeks}`);
-export const getCosQuickSummary = () => request('/cos/quick-summary');
-export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
+export const getCosActivityCalendar = (weeks = 12, options) => request(`/cos/productivity/calendar?weeks=${weeks}`, options);
+export const getCosQuickSummary = (options) => request('/cos/quick-summary', options);
+export const getCosRecentTasks = (limit = 10, options) => request(`/cos/recent-tasks?limit=${limit}`, options);
 export const getCosActionableInsights = () => request('/cos/actionable-insights');
 export const getCosGoalProgress = () => request('/cos/goal-progress');
-export const getCosGoalProgressSummary = () => request('/cos/goal-progress/summary');
+export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
 // Task Schedule (Configurable Intervals)
 export const getCosSchedule = () => request('/cos/schedule');
