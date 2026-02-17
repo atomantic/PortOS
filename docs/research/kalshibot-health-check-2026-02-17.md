@@ -81,12 +81,15 @@ Trades 1 and 2 both targeted the 16:00 UTC settlement window. Combined exposure:
 
 The sniper's `settlementRideThreshold: 0.40` can override the forced exit at t-60s. In bracket markets where the probability model can be persistently wrong (model shows 40% edge but the bracket misses), this turns a possible small-loss exit into a guaranteed 100% loss.
 
-### 5. Gamma-Scalper Live Execution Gap
+### 5. Gamma-Scalper Live Execution Gap (Root Cause Confirmed)
 
-Gamma-scalper is `enabled: true` in config but its shadow trade on B67875 suggests it didn't fire a live signal for the same market. Possible reasons:
-- The fair-value strategy consumed the position slot first (both target the same settlement window)
-- The B67875 bracket was only OTM-priced after the live strategies had already deployed capital
-- No cross-strategy priority system exists to prefer smaller-risk trades
+Gamma-scalper is `enabled: true` in config but was blocked from live execution by the **one-position-per-settlement-window** rule in `simulation-engine.js` (lines 773-798). The engine evaluates strategies in config order: settlement-sniper → coinbase-fair-value → momentum-rider → gamma-scalper. By the time gamma-scalper generated its B67875 signal at 16:57 UTC, the coinbase-fair-value strategy had already placed a position (B67625 YES) in the 17:00 UTC settlement window, triggering the cross-position conflict check.
+
+**Code path**: `simulation-engine.js:773-798` — when a buy signal arrives, the engine checks if any existing position or pending reservation shares the same `close_time`. If so, the signal is rejected with `"settlement window conflict"`. Since gamma-scalper evaluates last in the strategy loop (`simulation-engine.js:680`), it always loses to earlier strategies.
+
+**Why the shadow trade succeeded**: Shadow evaluation (`simulation-engine.js:863-925`) runs against `shadowState.positions`, which is separate from live positions. The shadow state had no positions in the 17:00 window, so the gamma-scalper signal passed.
+
+**Fix required**: Strategy evaluation order should prioritize lower-risk strategies (gamma-scalper at $4/trade) over higher-risk ones ($50/trade), or the engine should collect all signals first and rank them before executing.
 
 ---
 
@@ -132,19 +135,36 @@ Gamma-scalper is `enabled: true` in config but its shadow trade on B67875 sugges
 7. **fair-value `maxPositions` 3 -> 2**: Reduce concurrent risk exposure.
 8. **gamma-scalper `maxPositions` 2 -> 3**: Give the proven low-risk strategy more room to deploy.
 
-### Code Changes Needed (Future)
+### Post-Analysis Config Audit (2026-02-17)
 
-1. **Per-window exposure cap**: In `simulation-engine.js`, add risk check capping total $ deployed per settlement window across all strategies (e.g., 5% of balance per window)
-2. **Strategy priority by risk**: When multiple strategies signal for the same window, prefer lower cost-per-trade strategies (gamma-scalper $4 vs fair-value $50)
-3. **Position size audit**: Verify `calculatePositionSize` in `base-strategy.js` correctly enforces `maxBetPct` — Trade 2's $52 cost exceeded the 3% cap of ~$30
+After the initial health check, some parameters were applied to `config.json` but several were applied incorrectly or missed:
+
+| Parameter | Health Check Target | Current Config | Status |
+|-----------|-------------------|----------------|--------|
+| sniper `maxBetPct` | 0.03 | 0.03 | Applied |
+| sniper `maxContracts` | 100 | 100 | Applied |
+| sniper `settlementRideThreshold` | 1.0 | 0.40 | **NOT applied** |
+| fair-value `edgeThreshold` | 0.25 | 0.15 | **WRONG DIRECTION** (lowered instead of raised) |
+| fair-value `exitEdgeThreshold` | 0.10 | 0.10 | Applied |
+| fair-value `maxSecondsToSettlement` | 180 | 300 | **NOT applied** |
+| fair-value `maxPositions` | 2 | 2 | Applied |
+| gamma-scalper `maxPositions` | 3 | 2 | **NOT applied** |
+
+The coinbase-fair-value `edgeThreshold` being set to 0.15 (lower than the previous 0.20) makes the strategy **more aggressive**, which is the opposite of the intended fix. This must be corrected to 0.25 immediately.
+
+### Code Changes Needed (Kalshibot repo)
+
+1. **Strategy evaluation order by risk** (CRITICAL): In `simulation-engine.js:680`, the strategy loop evaluates in config order. Since only one position per settlement window is allowed (line 773-798), the first strategy to claim a window wins. Change the loop to sort enabled strategies by `maxBetPct` ascending (cheapest first), so gamma-scalper ($4/trade) gets priority over fair-value ($50/trade). This single change would have allowed the +$46 gamma-scalper trade to execute live.
+2. **Per-window exposure cap**: Already implemented at `simulation-engine.js:800-815` with `maxExposurePerWindow: 75`. This was added after the initial analysis — verify it's working correctly.
+3. **Position size audit**: Verify `calculatePositionSize` in `base-strategy.js` correctly enforces `maxBetPct` — Trade 2's $52 cost exceeded the 3% cap of ~$30.
 
 ---
 
 ## Impact Estimate
 
 If these parameter changes had been active on 2026-02-16:
-- **Trade 1**: ~$21 loss instead of $42 (maxContracts: 100, maxBetPct: 0.03)
-- **Trade 2**: Likely filtered out (edgeThreshold 0.25 instead of 0.20)
-- **Trade 3**: Would still have occurred (edge may have exceeded 0.25) but with lower maxPositions might have been blocked
-- **Gamma-scalper**: More likely to fire live trades with maxPositions: 3
-- **Estimated day**: -$21 to -$73 instead of -$148, potentially positive with gamma-scalper live trades
+- **Trade 1**: ~$21 loss instead of $42 (maxContracts: 100, maxBetPct: 0.03) — already applied
+- **Trade 2**: Filtered out entirely (edgeThreshold 0.25 would reject the 20% signal)
+- **Trade 3**: Likely filtered or reduced (tighter maxSecondsToSettlement: 180 blocks 4m-early entries)
+- **Gamma-scalper**: With strategy-order-by-risk, would have claimed the 17:00 window first → +$46 live
+- **Estimated day**: -$21 + $46 = **+$25 net** instead of -$148 — a $173 improvement
