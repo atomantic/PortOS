@@ -65,6 +65,10 @@ export function getFullQueue(agentId) {
  */
 export function addAction(agentId, actionType, params = {}, scheduledFor = null) {
   const queue = getOrCreateQueue(agentId);
+  const pendingCount = queue.filter(i => i.status === 'pending' || i.status === 'executing').length;
+  if (pendingCount >= MAX_ITEMS_PER_AGENT) {
+    throw new Error(`Queue full: ${pendingCount} pending/executing items (max ${MAX_ITEMS_PER_AGENT})`);
+  }
   const item = {
     id: randomUUID(),
     agentId,

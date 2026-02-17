@@ -9,12 +9,9 @@
  */
 
 import { readFile } from 'fs/promises'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { join } from 'path'
 import { readJSONFile, PATHS } from '../lib/fileUtils.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
 const GOALS_FILE = join(PATHS.data, 'COS-GOALS.md')
 const LEARNING_FILE = join(PATHS.cos, 'learning.json')
 
@@ -126,7 +123,6 @@ function calculateGoalProgress(goals, taskStats) {
   return goals.map(goal => {
     let totalTasks = 0
     let succeededTasks = 0
-    let recentActivity = 0 // Tasks in last 24h (approximated from streak/recent)
 
     // Sum up tasks matching this goal's task types
     for (const taskType of goal.mapping.taskTypes) {
@@ -217,7 +213,7 @@ async function getGoalProgress() {
 async function getGoalProgressSummary() {
   const progress = await getGoalProgress()
 
-  // Return top 3 goals by activity for compact display
+  // Return top 5 goals by activity for compact display
   const topGoals = progress.goals
     .sort((a, b) => b.metrics.totalTasks - a.metrics.totalTasks)
     .slice(0, 5)

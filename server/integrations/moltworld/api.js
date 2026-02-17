@@ -164,7 +164,10 @@ export async function getBalance(agentId) {
 export async function joinWorld(agentId, options = {}) {
   const rateCheck = checkRateLimit(agentId, 'join');
   if (!rateCheck.allowed) {
-    throw new Error(`Rate limited: ${rateCheck.reason}`);
+    const err = new Error(`Rate limited: ${rateCheck.reason}`);
+    err.status = 429;
+    err.waitMs = rateCheck.waitMs;
+    throw err;
   }
 
   const body = { agentId, ...options };
@@ -186,7 +189,10 @@ export async function joinWorld(agentId, options = {}) {
 export async function think(agentId, thought) {
   const rateCheck = checkRateLimit(agentId, 'think');
   if (!rateCheck.allowed) {
-    throw new Error(`Rate limited: ${rateCheck.reason}`);
+    const err = new Error(`Rate limited: ${rateCheck.reason}`);
+    err.status = 429;
+    err.waitMs = rateCheck.waitMs;
+    throw err;
   }
 
   const result = await request('/api/world/think', {
@@ -212,7 +218,10 @@ export async function think(agentId, thought) {
 export async function build(agentId, options = {}) {
   const rateCheck = checkRateLimit(agentId, 'build');
   if (!rateCheck.allowed) {
-    throw new Error(`Rate limited: ${rateCheck.reason}`);
+    const err = new Error(`Rate limited: ${rateCheck.reason}`);
+    err.status = 429;
+    err.waitMs = rateCheck.waitMs;
+    throw err;
   }
 
   const result = await request('/api/world/build', {

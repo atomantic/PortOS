@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema } from '../lib/validation.js';
+import { validate, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
@@ -262,12 +262,12 @@ router.get('/queue/:agentId', asyncHandler(async (req, res) => {
 
 // POST /queue — Add action to queue
 router.post('/queue', asyncHandler(async (req, res) => {
-  const { agentId, actionType, params, scheduledFor } = req.body;
-  if (!agentId || !actionType) {
-    throw new ServerError('agentId and actionType required', { status: 400, code: 'VALIDATION_ERROR' });
+  const { success, data, errors } = validate(moltworldQueueAddSchema, req.body);
+  if (!success) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
   }
-  console.log(`📋 POST /api/agents/tools/moltworld/queue agentId=${agentId} action=${actionType}`);
-  const item = moltworldQueue.addAction(agentId, actionType, params || {}, scheduledFor);
+  console.log(`📋 POST /api/agents/tools/moltworld/queue agentId=${data.agentId} action=${data.actionType}`);
+  const item = moltworldQueue.addAction(data.agentId, data.actionType, data.params, data.scheduledFor);
   res.json(item);
 }));
 
