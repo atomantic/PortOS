@@ -136,6 +136,7 @@ export const updateProvider = (id, data) => request(`/providers/${id}`, {
   body: JSON.stringify(data)
 });
 export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
+export const getSampleProviders = () => request('/providers/samples');
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id) => request(`/providers/${id}/refresh-models`, { method: 'POST' });
 
