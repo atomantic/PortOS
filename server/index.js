@@ -38,6 +38,7 @@ import lmstudioRoutes from './routes/lmstudio.js';
 import browserRoutes from './routes/browser.js';
 import moltworldToolsRoutes from './routes/moltworldTools.js';
 import moltworldWsRoutes from './routes/moltworldWs.js';
+import jiraRoutes from './routes/jira.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
@@ -204,6 +205,7 @@ app.use('/api/digital-twin/genome', genomeRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/browser', browserRoutes);
+app.use('/api/jira', jiraRoutes);
 
 // Initialize script runner
 initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));
