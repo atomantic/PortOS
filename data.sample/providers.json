@@ -30,7 +30,8 @@
       "timeout": 300000,
       "enabled": false,
       "envVars": {
-        "CLAUDE_CODE_USE_BEDROCK": "1"
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_BEARER_TOKEN_BEDROCK": ""
       }
     },
     "codex": {
