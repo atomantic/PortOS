@@ -258,7 +258,11 @@ router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
 
   const result = await cos.submitAgentFeedback(req.params.id, { rating, comment });
   if (result?.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+    const isNotFound = result.error === 'Agent not found';
+    throw new ServerError(result.error, {
+      status: isNotFound ? 404 : 400,
+      code: isNotFound ? 'NOT_FOUND' : 'INVALID_STATE'
+    });
   }
   res.json(result);
 }));

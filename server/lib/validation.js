@@ -366,6 +366,17 @@ export const moltworldWsInteractSchema = z.object({
   payload: z.record(z.unknown()).optional().default({})
 });
 
+export const moltworldQueueActionTypeSchema = z.enum([
+  'mw_explore', 'mw_build', 'mw_say', 'mw_think', 'mw_heartbeat', 'mw_interact'
+]);
+
+export const moltworldQueueAddSchema = z.object({
+  agentId: z.string().min(1),
+  actionType: moltworldQueueActionTypeSchema,
+  params: z.record(z.unknown()).optional().default({}),
+  scheduledFor: z.string().datetime().optional().nullable()
+});
+
 /**
  * Validate data against a schema
  * Returns { success: true, data } or { success: false, errors }

@@ -72,7 +72,9 @@ function scheduleReconnect() {
   reconnectAttempts++;
   setStatus('reconnecting');
   console.log(`🌐 Moltworld WS: reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})`);
-  reconnectTimer = setTimeout(() => doConnect(), delay);
+  reconnectTimer = setTimeout(() => doConnect().catch(err => {
+    console.error(`🌐 Moltworld WS: reconnect failed: ${err.message}`);
+  }), delay);
 }
 
 function handleMessage(raw) {
@@ -105,7 +107,7 @@ function handleMessage(raw) {
       agentActivity.logActivity({
         agentId: currentAgentId,
         accountId: currentAccountId,
-        action: 'moltworld:interaction',
+        action: 'mw_interaction',
         params: { eventType, from: data.agentName || data.agentId },
         status: 'completed',
         result: { type: eventType, content: data.message || data.thought || '' },
