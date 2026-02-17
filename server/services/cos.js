@@ -22,6 +22,7 @@ import { generateProactiveTasks as generateMissionTasks, getStats as getMissionS
 import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
 import { formatDuration } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
+import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
@@ -1096,6 +1097,11 @@ async function generateSelfImprovementTask(state) {
 
   if (!nextTypeResult) {
     emitLog('info', 'No self-improvement tasks are eligible to run based on schedule');
+    await recordDecision(
+      DECISION_TYPES.NOT_DUE,
+      'No self-improvement tasks are eligible based on schedule',
+      { category: 'selfImprovement' }
+    );
     return null;
   }
 
@@ -1114,13 +1120,28 @@ async function generateSelfImprovementTask(state) {
       reason: cooldownInfo.reason
     });
 
+    // Record the skip decision
+    await recordDecision(
+      DECISION_TYPES.TASK_SKIPPED,
+      `Poor success rate (${cooldownInfo.successRate}% after ${cooldownInfo.completed} attempts)`,
+      { taskType: nextType, successRate: cooldownInfo.successRate, attempts: cooldownInfo.completed }
+    );
+
     // Try to find another eligible task type
     const dueTasks = await taskSchedule.getDueSelfImprovementTasks();
     const alternativeTask = dueTasks.find(t => t.taskType !== nextType);
 
     if (alternativeTask) {
+      const originalType = nextType;
       nextType = alternativeTask.taskType;
       emitLog('info', `Switched to alternative task type: ${nextType}`);
+
+      // Record the switch decision
+      await recordDecision(
+        DECISION_TYPES.TASK_SWITCHED,
+        `Switched from ${originalType} to ${nextType}`,
+        { fromTask: originalType, toTask: nextType, reason: 'poor-success-rate' }
+      );
     } else {
       // Fall back to the skipped types logic
       const skippedTypes = await getSkippedTaskTypes().catch(() => []);
@@ -1129,6 +1150,13 @@ async function generateSelfImprovementTask(state) {
         const oldestType = skippedTypes[0].taskType.replace('self-improve:', '');
         nextType = oldestType;
         emitLog('info', `Retrying ${oldestType} as it hasn't been attempted recently`);
+
+        // Record rehabilitation decision
+        await recordDecision(
+          DECISION_TYPES.REHABILITATION,
+          `Retrying ${oldestType} after period of inactivity`,
+          { taskType: oldestType, reason: 'oldest-skipped-type' }
+        );
       } else {
         nextType = SELF_IMPROVEMENT_TYPES[0];
       }
@@ -1155,6 +1183,18 @@ async function generateSelfImprovementTask(state) {
   });
 
   emitLog('info', `Generating self-improvement task: ${nextType} (${selectionReason})`);
+
+  // Record task selection decision
+  await recordDecision(
+    DECISION_TYPES.TASK_SELECTED,
+    `Selected ${nextType} for self-improvement`,
+    {
+      taskType: nextType,
+      reason: selectionReason,
+      multiplier: cooldownInfo.multiplier,
+      successRate: cooldownInfo.successRate
+    }
+  );
 
   // Get task descriptions from the centralized helper function
   const taskDescriptions = getSelfImprovementTaskDescriptions();

@@ -5,6 +5,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import CosDashboardWidget from '../components/CosDashboardWidget';
 import GoalProgressWidget from '../components/GoalProgressWidget';
 import UpcomingTasksWidget from '../components/UpcomingTasksWidget';
+import DecisionLogWidget from '../components/DecisionLogWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -102,6 +103,11 @@ export default function Dashboard() {
       {/* Upcoming Tasks Widget */}
       <div className="mb-6">
         <UpcomingTasksWidget />
+      </div>
+
+      {/* Decision Log Widget */}
+      <div className="mb-6">
+        <DecisionLogWidget />
       </div>
 
       {/* App Grid */}
