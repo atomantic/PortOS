@@ -29,18 +29,10 @@ function getOrCreateQueue(agentId) {
 
 function evictCompleted(queue) {
   if (queue.length <= MAX_ITEMS_PER_AGENT) return;
-  // Remove oldest completed/failed items first
-  const completedIndices = [];
-  for (let i = 0; i < queue.length; i++) {
+  // Remove oldest completed/failed items first, iterating in reverse to avoid index shifting
+  for (let i = queue.length - 1; i >= 0 && queue.length > MAX_ITEMS_PER_AGENT; i--) {
     if (queue[i].status === 'completed' || queue[i].status === 'failed') {
-      completedIndices.push(i);
-    }
-  }
-  while (queue.length > MAX_ITEMS_PER_AGENT && completedIndices.length > 0) {
-    queue.splice(completedIndices.shift(), 1);
-    // Adjust remaining indices
-    for (let j = 0; j < completedIndices.length; j++) {
-      completedIndices[j]--;
+      queue.splice(i, 1);
     }
   }
 }

@@ -168,11 +168,12 @@ async function executeCliAnalysis(provider, prompt, cwd) {
     const args = [...(provider.args || []), prompt];
     let output = '';
     let settled = false;
+    let timer = null;
 
     const settle = (fn, value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       fn(value);
     };
 
@@ -201,7 +202,7 @@ async function executeCliAnalysis(provider, prompt, cwd) {
     child.on('error', (err) => settle(reject, err));
 
     const timeoutMs = provider.timeout || 180000;
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       console.log(`⏰ CLI analysis timed out after ${timeoutMs / 1000}s for: ${provider.command}`);
       child.kill();
       settle(reject, new Error(`Standardization analysis timed out after ${timeoutMs / 1000}s`));

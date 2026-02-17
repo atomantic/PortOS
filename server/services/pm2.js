@@ -187,8 +187,7 @@ export async function getAppStatus(name, pm2Home = null) {
       // pm2 jlist may output ANSI codes and warnings before JSON
       let jsonStart = stdout.indexOf('[{');
       if (jsonStart < 0) {
-        const emptyMatch = stdout.match(/\[\](?![0-9])/);
-        jsonStart = emptyMatch ? stdout.indexOf(emptyMatch[0]) : -1;
+        jsonStart = stdout.lastIndexOf('[]');
       }
       const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
       const processes = JSON.parse(pm2Json);
