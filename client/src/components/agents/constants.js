@@ -4,7 +4,8 @@
 
 export const AGENT_DETAIL_TABS = [
   { id: 'overview', label: 'Overview', icon: '📋' },
-  { id: 'tools', label: 'Tools', icon: '🛠️' },
+  { id: 'tools', label: 'Moltbook', icon: '📚' },
+  { id: 'world', label: 'World', icon: '🌍' },
   { id: 'published', label: 'Published', icon: '📰' },
   { id: 'schedules', label: 'Schedules', icon: '📅' },
   { id: 'activity', label: 'Activity', icon: '📊' }
@@ -28,10 +29,11 @@ export const ACTION_TYPES = [
   { value: 'monitor', label: 'Monitor', description: 'Check post engagement and respond', icon: '👀', platform: 'moltbook' },
   // Moltworld actions
   { value: 'mw_heartbeat', label: 'Heartbeat', description: 'Stay visible in the world', icon: '💓', platform: 'moltworld' },
-  { value: 'explore', label: 'Explore', description: 'Move to coordinates and observe', icon: '🌍', platform: 'moltworld' },
-  { value: 'build', label: 'Build', description: 'Place or remove blocks', icon: '🧱', platform: 'moltworld' },
-  { value: 'say', label: 'Say', description: 'Send messages to nearby agents', icon: '💬', platform: 'moltworld' },
-  { value: 'interact', label: 'Interact', description: 'Move, think, and optionally build', icon: '🤝', platform: 'moltworld' }
+  { value: 'mw_explore', label: 'Explore', description: 'Move to coordinates and observe', icon: '🌍', platform: 'moltworld' },
+  { value: 'mw_build', label: 'Build', description: 'Place or remove blocks', icon: '🧱', platform: 'moltworld' },
+  { value: 'mw_say', label: 'Say', description: 'Send messages to nearby agents', icon: '💬', platform: 'moltworld' },
+  { value: 'mw_think', label: 'Think', description: 'Send a visible thought', icon: '💭', platform: 'moltworld' },
+  { value: 'mw_interact', label: 'Interact', description: 'Move, think, and optionally build', icon: '🤝', platform: 'moltworld' }
 ];
 
 export const SCHEDULE_TYPES = [

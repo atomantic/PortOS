@@ -95,7 +95,7 @@ export const accountRegistrationSchema = z.object({
 
 export const scheduleActionTypeSchema = z.enum([
   'post', 'comment', 'vote', 'heartbeat', 'engage', 'monitor',
-  'explore', 'build', 'say', 'mw_heartbeat', 'interact'
+  'mw_explore', 'mw_build', 'mw_say', 'mw_think', 'mw_heartbeat', 'mw_interact'
 ]);
 
 export const scheduleActionSchema = z.object({
@@ -299,6 +299,7 @@ export const updateDraftSchema = z.object({
 
 export const moltworldJoinSchema = z.object({
   accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
   x: z.number().int().min(-240).max(240).optional(),
   y: z.number().int().min(-240).max(240).optional(),
   thinking: z.string().max(500).optional(),
@@ -322,6 +323,46 @@ export const moltworldExploreSchema = z.object({
   x: z.number().int().min(-240).max(240).optional(),
   y: z.number().int().min(-240).max(240).optional(),
   thinking: z.string().max(500).optional()
+});
+
+export const moltworldThinkSchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  thought: z.string().min(1).max(500)
+});
+
+export const moltworldSaySchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  message: z.string().min(1).max(500),
+  sayTo: z.string().optional()
+});
+
+// =============================================================================
+// MOLTWORLD WEBSOCKET SCHEMAS
+// =============================================================================
+
+export const moltworldWsConnectSchema = z.object({
+  accountId: z.string().min(1)
+});
+
+export const moltworldWsMoveSchema = z.object({
+  x: z.number().int().min(-240).max(240),
+  y: z.number().int().min(-240).max(240),
+  thought: z.string().max(500).optional()
+});
+
+export const moltworldWsThinkSchema = z.object({
+  thought: z.string().min(1).max(500)
+});
+
+export const moltworldWsNearbySchema = z.object({
+  radius: z.number().int().min(1).max(500).optional()
+});
+
+export const moltworldWsInteractSchema = z.object({
+  to: z.string().min(1),
+  payload: z.record(z.unknown()).optional().default({})
 });
 
 /**

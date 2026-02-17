@@ -12,6 +12,8 @@ import { platformAccountEvents } from './platformAccounts.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
 import { brainEvents } from './brainStorage.js';
+import { moltworldWsEvents } from './moltworldWs.js';
+import { queueEvents } from './moltworldQueue.js';
 import * as shellService from './shell.js';
 
 // Store active log streams per socket
@@ -296,6 +298,12 @@ export function initSocket(io) {
 
   // Set up brain event forwarding
   setupBrainEventForwarding();
+
+  // Set up Moltworld WebSocket event forwarding
+  setupMoltworldWsEventForwarding();
+
+  // Set up Moltworld queue event forwarding
+  setupMoltworldQueueEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -445,4 +453,22 @@ function setupBrainEventForwarding() {
       ioInstance.emit('brain:classified', data);
     }
   });
+}
+
+// Set up Moltworld WebSocket event forwarding to agent subscribers
+function setupMoltworldWsEventForwarding() {
+  moltworldWsEvents.on('status', (data) => broadcastToAgents('moltworld:status', data));
+  moltworldWsEvents.on('event', (data) => broadcastToAgents('moltworld:event', data));
+  moltworldWsEvents.on('presence', (data) => broadcastToAgents('moltworld:presence', data));
+  moltworldWsEvents.on('thinking', (data) => broadcastToAgents('moltworld:thinking', data));
+  moltworldWsEvents.on('action', (data) => broadcastToAgents('moltworld:action', data));
+  moltworldWsEvents.on('interaction', (data) => broadcastToAgents('moltworld:interaction', data));
+  moltworldWsEvents.on('nearby', (data) => broadcastToAgents('moltworld:nearby', data));
+}
+
+// Set up Moltworld queue event forwarding to agent subscribers
+function setupMoltworldQueueEventForwarding() {
+  queueEvents.on('added', (data) => broadcastToAgents('moltworld:queue:added', data));
+  queueEvents.on('updated', (data) => broadcastToAgents('moltworld:queue:updated', data));
+  queueEvents.on('removed', (data) => broadcastToAgents('moltworld:queue:removed', data));
 }
