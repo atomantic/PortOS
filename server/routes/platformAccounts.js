@@ -128,6 +128,10 @@ router.post('/', asyncHandler(async (req, res) => {
       const apiKey = result.apiKey || result.api_key;
       const moltworldAgentId = result.agentId || result.agent_id || result.id || apiKey;
       const username = data.name;
+
+      if (!apiKey || !moltworldAgentId) {
+        throw new ServerError('Moltworld registration returned incomplete credentials', { status: 502, code: 'PLATFORM_ERROR' });
+      }
       console.log(`🌍 Moltworld registration result keys: ${Object.keys(result).join(', ')}`);
 
       const account = await platformAccounts.createAccount({

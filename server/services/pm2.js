@@ -190,7 +190,12 @@ export async function getAppStatus(name, pm2Home = null) {
         jsonStart = stdout.lastIndexOf('[]');
       }
       const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
-      const processes = JSON.parse(pm2Json);
+      let processes;
+      try {
+        processes = JSON.parse(pm2Json);
+      } catch {
+        return resolve({ name, status: 'error', pm2_env: null });
+      }
       const proc = processes.find(p => p.name === name);
 
       if (!proc) {

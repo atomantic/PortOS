@@ -29,6 +29,7 @@ let reconnectAttempts = 0;
 let connectedAt = null;
 let lastEvent = null;
 let currentStatus = 'disconnected';
+let isReconnecting = false;
 let currentAccountId = null;
 let currentAgentId = null;
 let currentAgentName = null;
@@ -71,6 +72,7 @@ function scheduleReconnect() {
   );
   reconnectAttempts++;
   setStatus('reconnecting');
+  isReconnecting = true;
   console.log(`🌐 Moltworld WS: reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})`);
   reconnectTimer = setTimeout(() => doConnect().catch(err => {
     console.error(`🌐 Moltworld WS: reconnect failed: ${err.message}`);
@@ -161,6 +163,7 @@ function doConnect() {
       clearTimeout(timeout);
       connectedAt = Date.now();
       reconnectAttempts = 0;
+      isReconnecting = false;
       setStatus('connected');
 
       // Send hello with agent credentials
@@ -188,8 +191,10 @@ function doConnect() {
       clearTimeout(timeout);
       console.error(`🌐 Moltworld WS: error: ${err.message}`);
       cleanupWs();
-      // Only reject on initial connect, not reconnects
-      if (currentStatus === 'connecting') {
+      if (isReconnecting) {
+        // Continue backoff loop on reconnect failures
+        scheduleReconnect();
+      } else {
         setStatus('disconnected');
         reject(new Error(`WebSocket connection failed: ${err.message}`));
       }
@@ -230,6 +235,7 @@ export async function connect(accountId) {
 export function disconnect() {
   clearReconnectTimer();
   currentStatus = 'disconnected';
+  isReconnecting = false;
   connectedAt = null;
   reconnectAttempts = 0;
   cleanupWs();

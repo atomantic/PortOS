@@ -98,6 +98,11 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   const [processStats, setProcessStats] = useState(null);
   const [killing, setKilling] = useState(false);
   const [feedbackState, setFeedbackState] = useState(agent.feedback?.rating || null);
+
+  // Sync feedback state when parent refreshes agent data
+  useEffect(() => {
+    if (agent.feedback?.rating) setFeedbackState(agent.feedback.rating);
+  }, [agent.feedback?.rating]);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [showFeedbackComment, setShowFeedbackComment] = useState(false);
   const [feedbackComment, setFeedbackComment] = useState('');

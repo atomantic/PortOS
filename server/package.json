@@ -19,7 +19,7 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "uuid": "^11.0.3",
-    "ws": "^7.5.10",
+    "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
