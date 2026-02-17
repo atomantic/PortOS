@@ -10,9 +10,32 @@ const execAsync = promisify(exec);
 /**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
  * Uses regex parsing since we can't safely execute arbitrary JS
+ * @returns {{ processes: Array, pm2Home: string|null }}
  */
 export function parseEcosystemConfig(content) {
   const processes = [];
+  let pm2Home = null;
+
+  // Extract PM2_HOME constant if defined (e.g., const PM2_HOME = `${require("os").homedir()}/.pm2-grace`)
+  const pm2HomeMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*[`'"](.*?)[`'"]/);
+  if (pm2HomeMatch) {
+    // Handle template literal with homedir()
+    let homePath = pm2HomeMatch[1];
+    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, process.env.HOME || '~');
+    pm2Home = homePath;
+  } else {
+    // Check for PM2_HOME in env blocks
+    const envPm2HomeMatch = content.match(/PM2_HOME\s*:\s*PM2_HOME/);
+    if (envPm2HomeMatch) {
+      // PM2_HOME is used but defined as a variable - try to extract the original definition
+      const varMatch = content.match(/PM2_HOME\s*=\s*`([^`]+)`/);
+      if (varMatch) {
+        let homePath = varMatch[1];
+        homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, process.env.HOME || '~');
+        pm2Home = homePath;
+      }
+    }
+  }
 
   // Extract top-level port constants (e.g., const CDP_PORT = 5549)
   const portConstants = {};
@@ -248,7 +271,7 @@ export function parseEcosystemConfig(content) {
     lastIndex = endPos;
   }
 
-  return processes;
+  return { processes, pm2Home };
 }
 
 /**
@@ -262,13 +285,14 @@ function extractVitePort(content) {
 /**
  * Parse ecosystem config from a directory path (non-streaming, for refresh)
  * Also checks vite.config files in subdirectories for processes that use Vite
+ * @returns {{ processes: Array, pm2Home: string|null }}
  */
 export async function parseEcosystemFromPath(dirPath) {
   for (const ecosystemFile of ['ecosystem.config.js', 'ecosystem.config.cjs']) {
     const ecosystemPath = join(dirPath, ecosystemFile);
     if (existsSync(ecosystemPath)) {
       const content = await readFile(ecosystemPath, 'utf-8');
-      const processes = parseEcosystemConfig(content);
+      const { processes, pm2Home } = parseEcosystemConfig(content);
 
       // For processes that use vite and don't have a port, check their cwd for vite.config
       for (const proc of processes) {
@@ -291,10 +315,10 @@ export async function parseEcosystemFromPath(dirPath) {
         delete proc.usesVite;
       }
 
-      return processes;
+      return { processes, pm2Home };
     }
   }
-  return [];
+  return { processes: [], pm2Home: null };
 }
 
 /**
@@ -314,6 +338,7 @@ export async function streamDetection(socket, dirPath) {
     pm2ProcessNames: [],
     pm2Status: null,
     processes: [],
+    pm2Home: null,
     type: 'unknown'
   };
 
@@ -414,7 +439,10 @@ export async function streamDetection(socket, dirPath) {
       const content = await readFile(ecosystemPath, 'utf-8').catch(() => '');
       if (content) {
         // Parse all processes with their ports using the dedicated parser
-        const parsedProcesses = parseEcosystemConfig(content);
+        const { processes: parsedProcesses, pm2Home } = parseEcosystemConfig(content);
+        if (pm2Home) {
+          result.pm2Home = pm2Home;
+        }
         if (parsedProcesses.length > 0) {
           // For processes that use vite and don't have a port, check their cwd for vite.config
           for (const proc of parsedProcesses) {
@@ -469,8 +497,18 @@ export async function streamDetection(socket, dirPath) {
 
   // Step 5: Check PM2 status
   emit('pm2', 'running', { message: 'Checking PM2 processes...' });
-  const { stdout } = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
-  const pm2Processes = safeJSONParse(stdout, []);
+  // Use custom PM2_HOME if detected from ecosystem config
+  const pm2Env = result.pm2Home ? { ...process.env, PM2_HOME: result.pm2Home } : process.env;
+  const pm2Cmd = 'pm2 jlist';
+  const { stdout } = await execAsync(pm2Cmd, { env: pm2Env }).catch(() => ({ stdout: '[]' }));
+  // pm2 jlist may output ANSI codes and warnings before JSON
+  let jsonStart = stdout.indexOf('[{');
+  if (jsonStart < 0) {
+    const emptyMatch = stdout.match(/\[\](?![0-9])/);
+    jsonStart = emptyMatch ? stdout.indexOf(emptyMatch[0]) : -1;
+  }
+  const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
+  const pm2Processes = safeJSONParse(pm2Json, []);
 
   // Look for processes that might be this app
   const possibleNames = [

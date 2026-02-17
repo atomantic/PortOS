@@ -57,7 +57,8 @@ router.get('/', asyncHandler(async (req, res) => {
     // Auto-populate processes from ecosystem config if not already set
     let processes = app.processes;
     if ((!processes || processes.length === 0) && existsSync(app.repoPath)) {
-      processes = await parseEcosystemFromPath(app.repoPath).catch(() => []);
+      const parsed = await parseEcosystemFromPath(app.repoPath).catch(() => ({ processes: [] }));
+      processes = parsed.processes;
     }
 
     return {
@@ -413,10 +414,15 @@ router.post('/:id/refresh-config', asyncHandler(async (req, res, next) => {
   }
 
   // Parse ecosystem config from the app's repo path
-  const processes = await parseEcosystemFromPath(app.repoPath);
+  const { processes, pm2Home } = await parseEcosystemFromPath(app.repoPath);
 
   // Update app with new process data
   const updates = {};
+
+  // Update pm2Home if detected and different from current
+  if (pm2Home && pm2Home !== app.pm2Home) {
+    updates.pm2Home = pm2Home;
+  }
 
   if (processes.length > 0) {
     updates.processes = processes;
