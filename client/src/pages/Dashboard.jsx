@@ -4,6 +4,7 @@ import AppTile from '../components/AppTile';
 import BrailleSpinner from '../components/BrailleSpinner';
 import CosDashboardWidget from '../components/CosDashboardWidget';
 import GoalProgressWidget from '../components/GoalProgressWidget';
+import UpcomingTasksWidget from '../components/UpcomingTasksWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -96,6 +97,11 @@ export default function Dashboard() {
       {/* Goal Progress Widget */}
       <div className="mb-6">
         <GoalProgressWidget />
+      </div>
+
+      {/* Upcoming Tasks Widget */}
+      <div className="mb-6">
+        <UpcomingTasksWidget />
       </div>
 
       {/* App Grid */}
