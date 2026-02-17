@@ -165,7 +165,8 @@ export const appSchema = z.object({
   icon: z.string().nullable().optional(),
   editorCommand: z.string().optional(),
   description: z.string().optional(),
-  archived: z.boolean().optional().default(false)
+  archived: z.boolean().optional().default(false),
+  pm2Home: z.string().optional() // Custom PM2_HOME path for apps that run in their own PM2 instance
 });
 
 // Partial schema for updates

@@ -3,7 +3,24 @@ import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 
 /**
+ * Build environment object with optional custom PM2_HOME
+ * @param {string} pm2Home Optional custom PM2_HOME path
+ * @returns {object} Environment variables
+ */
+function buildEnv(pm2Home) {
+  const env = { ...process.env };
+  if (pm2Home) {
+    env.PM2_HOME = pm2Home;
+  }
+  // Strip PortOS env vars to avoid conflicts
+  delete env.PORT;
+  delete env.HOST;
+  return env;
+}
+
+/**
  * Connect to PM2 daemon and run an action
+ * Note: This uses the default PM2_HOME. For custom PM2_HOME, use CLI commands.
  */
 function connectAndRun(action) {
   return new Promise((resolve, reject) => {
@@ -53,8 +70,26 @@ export async function startApp(name, options = {}) {
 /**
  * Stop an app
  * @param {string} name PM2 process name
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function stopApp(name) {
+export async function stopApp(name, pm2Home = null) {
+  // Use CLI for custom PM2_HOME
+  if (pm2Home) {
+    return new Promise((resolve, reject) => {
+      const child = spawn('pm2', ['stop', name], {
+        shell: false,
+        env: buildEnv(pm2Home)
+      });
+      let stderr = '';
+      child.stderr.on('data', (data) => { stderr += data.toString(); });
+      child.on('close', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `pm2 stop exited with code ${code}`));
+        resolve({ success: true });
+      });
+      child.on('error', reject);
+    });
+  }
+
   return connectAndRun((pm2) => {
     return new Promise((resolve, reject) => {
       pm2.stop(name, (err) => {
@@ -68,8 +103,26 @@ export async function stopApp(name) {
 /**
  * Restart an app
  * @param {string} name PM2 process name
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function restartApp(name) {
+export async function restartApp(name, pm2Home = null) {
+  // Use CLI for custom PM2_HOME
+  if (pm2Home) {
+    return new Promise((resolve, reject) => {
+      const child = spawn('pm2', ['restart', name], {
+        shell: false,
+        env: buildEnv(pm2Home)
+      });
+      let stderr = '';
+      child.stderr.on('data', (data) => { stderr += data.toString(); });
+      child.on('close', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `pm2 restart exited with code ${code}`));
+        resolve({ success: true });
+      });
+      child.on('error', reject);
+    });
+  }
+
   return connectAndRun((pm2) => {
     return new Promise((resolve, reject) => {
       pm2.restart(name, (err) => {
@@ -83,8 +136,26 @@ export async function restartApp(name) {
 /**
  * Delete an app from PM2
  * @param {string} name PM2 process name
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function deleteApp(name) {
+export async function deleteApp(name, pm2Home = null) {
+  // Use CLI for custom PM2_HOME
+  if (pm2Home) {
+    return new Promise((resolve, reject) => {
+      const child = spawn('pm2', ['delete', name], {
+        shell: false,
+        env: buildEnv(pm2Home)
+      });
+      let stderr = '';
+      child.stderr.on('data', (data) => { stderr += data.toString(); });
+      child.on('close', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `pm2 delete exited with code ${code}`));
+        resolve({ success: true });
+      });
+      child.on('error', reject);
+    });
+  }
+
   return connectAndRun((pm2) => {
     return new Promise((resolve, reject) => {
       pm2.delete(name, (err) => {
@@ -98,10 +169,14 @@ export async function deleteApp(name) {
 /**
  * Get status of a specific process using CLI (avoids connection deadlocks)
  * @param {string} name PM2 process name
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function getAppStatus(name) {
+export async function getAppStatus(name, pm2Home = null) {
   return new Promise((resolve) => {
-    const child = spawn('pm2', ['jlist'], { shell: false });
+    const child = spawn('pm2', ['jlist'], {
+      shell: false,
+      env: buildEnv(pm2Home)
+    });
     let stdout = '';
 
     child.stdout.on('data', (data) => {
@@ -109,7 +184,14 @@ export async function getAppStatus(name) {
     });
 
     child.on('close', () => {
-      const processes = JSON.parse(stdout || '[]');
+      // pm2 jlist may output ANSI codes and warnings before JSON
+      let jsonStart = stdout.indexOf('[{');
+      if (jsonStart < 0) {
+        const emptyMatch = stdout.match(/\[\](?![0-9])/);
+        jsonStart = emptyMatch ? stdout.indexOf(emptyMatch[0]) : -1;
+      }
+      const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
+      const processes = JSON.parse(pm2Json);
       const proc = processes.find(p => p.name === name);
 
       if (!proc) {
@@ -141,10 +223,14 @@ export async function getAppStatus(name) {
 
 /**
  * List all PM2 processes using CLI (avoids connection deadlocks)
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function listProcesses() {
+export async function listProcesses(pm2Home = null) {
   return new Promise((resolve) => {
-    const child = spawn('pm2', ['jlist'], { shell: false });
+    const child = spawn('pm2', ['jlist'], {
+      shell: false,
+      env: buildEnv(pm2Home)
+    });
     let stdout = '';
 
     child.stdout.on('data', (data) => {
@@ -184,11 +270,15 @@ export async function listProcesses() {
  * Get logs for a process using pm2 CLI (more reliable for log retrieval)
  * @param {string} name PM2 process name
  * @param {number} lines Number of lines to retrieve
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function getLogs(name, lines = 100) {
+export async function getLogs(name, lines = 100, pm2Home = null) {
   return new Promise((resolve, reject) => {
     const args = ['logs', name, '--lines', String(lines), '--nostream', '--raw'];
-    const child = spawn('pm2', args, { shell: false });
+    const child = spawn('pm2', args, {
+      shell: false,
+      env: buildEnv(pm2Home)
+    });
 
     let stdout = '';
     let stderr = '';
@@ -244,8 +334,9 @@ export async function startWithCommand(name, cwd, command) {
  * This properly uses all env vars, scripts, args defined in the config
  * @param {string} cwd Working directory containing ecosystem config
  * @param {string[]} processNames Optional: specific processes to start (--only flag)
+ * @param {string} pm2Home Optional custom PM2_HOME path
  */
-export async function startFromEcosystem(cwd, processNames = []) {
+export async function startFromEcosystem(cwd, processNames = [], pm2Home = null) {
   return new Promise((resolve, reject) => {
     const ecosystemFile = ['ecosystem.config.cjs', 'ecosystem.config.js']
       .find(f => existsSync(`${cwd}/${f}`));
@@ -259,13 +350,11 @@ export async function startFromEcosystem(cwd, processNames = []) {
       args.push('--only', processNames.join(','));
     }
 
-    // Strip PortOS env vars so child ecosystem configs don't inherit them
-    // e.g., process.env.PORT || 4420 would resolve to PortOS's 5554 otherwise
-    const cleanEnv = { ...process.env };
-    delete cleanEnv.PORT;
-    delete cleanEnv.HOST;
-
-    const child = spawn('pm2', args, { cwd, shell: false, env: cleanEnv });
+    const child = spawn('pm2', args, {
+      cwd,
+      shell: false,
+      env: buildEnv(pm2Home)
+    });
     let stdout = '';
     let stderr = '';
 

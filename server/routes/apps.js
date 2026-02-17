@@ -15,12 +15,28 @@ const router = Router();
 router.get('/', asyncHandler(async (req, res) => {
   const apps = await appsService.getAllApps();
 
-  // Get all PM2 processes once
-  const allPm2 = await pm2Service.listProcesses().catch(() => []);
-  const pm2Map = new Map(allPm2.map(p => [p.name, p]));
+  // Group apps by their PM2_HOME (null = default)
+  const pm2HomeGroups = new Map();
+  for (const app of apps) {
+    const home = app.pm2Home || null;
+    if (!pm2HomeGroups.has(home)) {
+      pm2HomeGroups.set(home, []);
+    }
+    pm2HomeGroups.get(home).push(app);
+  }
+
+  // Fetch PM2 processes for each unique PM2_HOME
+  const pm2Maps = new Map();
+  for (const pm2Home of pm2HomeGroups.keys()) {
+    const processes = await pm2Service.listProcesses(pm2Home).catch(() => []);
+    pm2Maps.set(pm2Home, new Map(processes.map(p => [p.name, p])));
+  }
 
   // Enrich with PM2 status and auto-populate processes if needed
   const enriched = await Promise.all(apps.map(async (app) => {
+    const pm2Home = app.pm2Home || null;
+    const pm2Map = pm2Maps.get(pm2Home) || new Map();
+
     const statuses = {};
     for (const processName of app.pm2ProcessNames || []) {
       const pm2Proc = pm2Map.get(processName);
@@ -63,10 +79,10 @@ router.get('/:id', asyncHandler(async (req, res, next) => {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  // Get PM2 status for each process
+  // Get PM2 status for each process (using app's custom PM2_HOME if set)
   const statuses = {};
   for (const processName of app.pm2ProcessNames || []) {
-    const status = await pm2Service.getAppStatus(processName).catch(() => ({ status: 'unknown' }));
+    const status = await pm2Service.getAppStatus(processName, app.pm2Home).catch(() => ({ status: 'unknown' }));
     statuses[processName] = status;
   }
 
@@ -165,7 +181,8 @@ router.post('/:id/start', asyncHandler(async (req, res, next) => {
 
   if (hasEcosystem) {
     // Use ecosystem config for proper env/port configuration
-    const result = await pm2Service.startFromEcosystem(app.repoPath, processNames)
+    // Pass custom PM2_HOME if the app has one
+    const result = await pm2Service.startFromEcosystem(app.repoPath, processNames, app.pm2Home)
       .catch(err => ({ success: false, error: err.message }));
     // Map result to each process name for consistent response format
     for (const name of processNames) {
@@ -201,7 +218,7 @@ router.post('/:id/stop', asyncHandler(async (req, res, next) => {
   const results = {};
 
   for (const name of app.pm2ProcessNames || []) {
-    const result = await pm2Service.stopApp(name)
+    const result = await pm2Service.stopApp(name, app.pm2Home)
       .catch(err => ({ success: false, error: err.message }));
     results[name] = result;
   }
@@ -224,7 +241,7 @@ router.post('/:id/restart', asyncHandler(async (req, res, next) => {
   const results = {};
 
   for (const name of app.pm2ProcessNames || []) {
-    const result = await pm2Service.restartApp(name)
+    const result = await pm2Service.restartApp(name, app.pm2Home)
       .catch(err => ({ success: false, error: err.message }));
     results[name] = result;
   }
@@ -247,7 +264,7 @@ router.get('/:id/status', asyncHandler(async (req, res, next) => {
   const statuses = {};
 
   for (const name of app.pm2ProcessNames || []) {
-    const status = await pm2Service.getAppStatus(name)
+    const status = await pm2Service.getAppStatus(name, app.pm2Home)
       .catch(err => ({ status: 'error', error: err.message }));
     statuses[name] = status;
   }
@@ -270,7 +287,7 @@ router.get('/:id/logs', asyncHandler(async (req, res, next) => {
     throw new ServerError('No process name specified', { status: 400, code: 'MISSING_PROCESS' });
   }
 
-  const logs = await pm2Service.getLogs(processName, lines)
+  const logs = await pm2Service.getLogs(processName, lines, app.pm2Home)
     .catch(err => `Error retrieving logs: ${err.message}`);
 
   res.json({ processName, lines, logs });
