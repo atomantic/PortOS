@@ -18,22 +18,32 @@ export function parseEcosystemConfig(content) {
   let pm2Home = null;
 
   // Extract PM2_HOME constant if defined (e.g., const PM2_HOME = `${require("os").homedir()}/.pm2-grace`)
-  const pm2HomeMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*[`'"](.*?)[`'"]/);
-  if (pm2HomeMatch) {
-    // Handle template literal with homedir()
-    let homePath = pm2HomeMatch[1];
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, homedir());
+  // First try template literals (backticks) which can contain nested quotes
+  const templateMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*`([^`]+)`/);
+  if (templateMatch) {
+    let homePath = templateMatch[1];
+    // Replace common template expressions
+    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
+    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, process.env.USER || 'user');
+    homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
     pm2Home = homePath;
   } else {
-    // Check for PM2_HOME in env blocks
-    const envPm2HomeMatch = content.match(/PM2_HOME\s*:\s*PM2_HOME/);
-    if (envPm2HomeMatch) {
-      // PM2_HOME is used but defined as a variable - try to extract the original definition
-      const varMatch = content.match(/PM2_HOME\s*=\s*`([^`]+)`/);
-      if (varMatch) {
-        let homePath = varMatch[1];
-        homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, homedir());
-        pm2Home = homePath;
+    // Try regular string literals
+    const stringMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*['"]([^'"]+)['"]/);
+    if (stringMatch) {
+      pm2Home = stringMatch[1];
+    } else {
+      // Check for PM2_HOME in env blocks
+      const envPm2HomeMatch = content.match(/PM2_HOME\s*:\s*PM2_HOME/);
+      if (envPm2HomeMatch) {
+        // PM2_HOME is used but defined as a variable - try template literal first
+        const varTemplateMatch = content.match(/PM2_HOME\s*=\s*`([^`]+)`/);
+        if (varTemplateMatch) {
+          let homePath = varTemplateMatch[1];
+          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
+          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, process.env.USER || 'user');
+          pm2Home = homePath;
+        }
       }
     }
   }
