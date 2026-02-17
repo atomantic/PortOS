@@ -1410,3 +1410,122 @@ Repository: {repoPath}
 Perform ${taskType} analysis on {appName}.
 Analyze the codebase and make improvements. Commit changes with clear descriptions.`;
 }
+
+/**
+ * Get upcoming tasks preview - what tasks will run next
+ * Returns a list of tasks sorted by when they'll be eligible to run
+ * @param {number} limit - Maximum number of upcoming tasks to return
+ * @returns {Array} Upcoming tasks with timing info
+ */
+export async function getUpcomingTasks(limit = 10) {
+  const schedule = await loadSchedule();
+  const now = Date.now();
+  const upcoming = [];
+
+  // Process self-improvement tasks
+  for (const [taskType, interval] of Object.entries(schedule.selfImprovement)) {
+    if (!interval.enabled) continue;
+    if (interval.type === INTERVAL_TYPES.ON_DEMAND) continue;
+
+    const check = await shouldRunSelfImprovementTask(taskType);
+    const execution = schedule.executions[`self-improve:${taskType}`] || { lastRun: null, count: 0 };
+    const lastRun = execution.lastRun ? new Date(execution.lastRun).getTime() : 0;
+
+    // Calculate when task becomes eligible
+    let eligibleAt = now;
+    let status = 'ready';
+
+    if (check.shouldRun) {
+      eligibleAt = now;
+      status = 'ready';
+    } else if (check.nextRunAt) {
+      eligibleAt = new Date(check.nextRunAt).getTime();
+      status = 'scheduled';
+    } else if (interval.type === INTERVAL_TYPES.ONCE && execution.count > 0) {
+      status = 'completed';
+      eligibleAt = Infinity;
+    }
+
+    if (status === 'completed') continue;
+
+    upcoming.push({
+      taskType,
+      category: 'selfImprovement',
+      intervalType: interval.type,
+      status,
+      eligibleAt,
+      eligibleIn: eligibleAt - now,
+      eligibleInFormatted: formatTimeRemaining(eligibleAt - now),
+      lastRun: execution.lastRun,
+      lastRunFormatted: execution.lastRun ? formatRelativeTime(new Date(execution.lastRun).getTime()) : 'never',
+      runCount: execution.count,
+      successRate: check.successRate ?? null,
+      learningAdjusted: check.learningApplied || false,
+      adjustmentMultiplier: check.adjustmentMultiplier || 1.0,
+      description: getTaskTypeDescription(taskType)
+    });
+  }
+
+  // Sort by eligibility time (ready tasks first, then by time until eligible)
+  upcoming.sort((a, b) => {
+    if (a.status === 'ready' && b.status !== 'ready') return -1;
+    if (b.status === 'ready' && a.status !== 'ready') return 1;
+    return a.eligibleAt - b.eligibleAt;
+  });
+
+  return upcoming.slice(0, limit);
+}
+
+/**
+ * Format time remaining in human-readable form
+ */
+function formatTimeRemaining(ms) {
+  if (ms <= 0) return 'now';
+
+  const minutes = Math.floor(ms / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '< 1m';
+}
+
+/**
+ * Format relative time (e.g., "2h ago")
+ */
+function formatRelativeTime(timestamp) {
+  const now = Date.now();
+  const diff = now - timestamp;
+
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (minutes > 0) return `${minutes}m ago`;
+  return 'just now';
+}
+
+/**
+ * Get human-readable description for task type
+ */
+function getTaskTypeDescription(taskType) {
+  const descriptions = {
+    'ui-bugs': 'Find and fix UI bugs',
+    'mobile-responsive': 'Check mobile responsiveness',
+    'security': 'Security vulnerability audit',
+    'code-quality': 'Code quality improvements',
+    'console-errors': 'Fix console errors',
+    'performance': 'Performance optimization',
+    'cos-enhancement': 'Enhance CoS capabilities',
+    'test-coverage': 'Improve test coverage',
+    'documentation': 'Update documentation',
+    'feature-ideas': 'Brainstorm and implement features',
+    'accessibility': 'Accessibility audit',
+    'dependency-updates': 'Update dependencies'
+  };
+  return descriptions[taskType] || taskType.replace(/-/g, ' ');
+}

@@ -628,6 +628,7 @@ export const getCosGoalProgress = () => request('/cos/goal-progress');
 export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
 // Task Schedule (Configurable Intervals)
+export const getCosUpcomingTasks = (limit = 10) => request(`/cos/upcoming?limit=${limit}`);
 export const getCosSchedule = () => request('/cos/schedule');
 export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval-types');
 export const getCosScheduleDueTasks = () => request('/cos/schedule/due');

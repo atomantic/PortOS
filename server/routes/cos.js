@@ -563,6 +563,13 @@ router.get('/schedule', asyncHandler(async (req, res) => {
   res.json(status);
 }));
 
+// GET /api/cos/upcoming - Get upcoming tasks preview
+router.get('/upcoming', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit) || 10;
+  const upcoming = await taskSchedule.getUpcomingTasks(limit);
+  res.json(upcoming);
+}));
+
 // GET /api/cos/schedule/self-improvement/:taskType - Get interval for self-improvement task
 router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
