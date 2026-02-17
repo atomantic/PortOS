@@ -399,6 +399,13 @@ export default function AIProviders() {
                       Fallback: <span className="text-port-accent">{providers.find(p => p.id === provider.fallbackProvider)?.name || provider.fallbackProvider}</span>
                     </p>
                   )}
+                  {provider.envVars && Object.keys(provider.envVars).length > 0 && (
+                    <p className="text-xs">
+                      Env: {Object.entries(provider.envVars).map(([k, v]) => (
+                        <code key={k} className="ml-1 text-orange-400">{k}={v}</code>
+                      ))}
+                    </p>
+                  )}
                 </div>
 
                 {testResults[provider.id] && !testResults[provider.id].testing && (
@@ -536,8 +543,12 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     heavyModel: provider?.heavyModel || '',
     fallbackProvider: provider?.fallbackProvider || '',
     timeout: provider?.timeout || 300000,
-    enabled: provider?.enabled !== false
+    enabled: provider?.enabled !== false,
+    envVars: provider?.envVars || {}
   });
+
+  const [newEnvKey, setNewEnvKey] = useState('');
+  const [newEnvValue, setNewEnvValue] = useState('');
 
   const availableModels = formData.models || [];
 
@@ -814,6 +825,75 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             </select>
             <p className="text-xs text-gray-500 mt-1">
               If this provider hits a usage limit or becomes unavailable, tasks will automatically use the fallback provider.
+            </p>
+          </div>
+
+          {/* Environment Variables */}
+          <div className="border-t border-port-border pt-4 mt-4">
+            <h4 className="text-sm font-medium text-gray-300 mb-3">Environment Variables</h4>
+            {Object.entries(formData.envVars).length > 0 && (
+              <div className="space-y-2 mb-3">
+                {Object.entries(formData.envVars).map(([key, value]) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <code className="text-xs text-gray-300 bg-port-bg px-2 py-1.5 rounded border border-port-border flex-shrink-0">{key}</code>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        envVars: { ...prev.envVars, [key]: e.target.value }
+                      }))}
+                      className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => {
+                        const { [key]: _, ...rest } = prev.envVars;
+                        return { ...prev, envVars: rest };
+                      })}
+                      className="px-2 py-1.5 text-xs text-port-error hover:bg-port-error/20 rounded transition-colors flex-shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newEnvKey}
+                onChange={(e) => setNewEnvKey(e.target.value.toUpperCase())}
+                placeholder="KEY"
+                className="w-1/3 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none font-mono"
+              />
+              <input
+                type="text"
+                value={newEnvValue}
+                onChange={(e) => setNewEnvValue(e.target.value)}
+                placeholder="value"
+                className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (newEnvKey.trim()) {
+                    setFormData(prev => ({
+                      ...prev,
+                      envVars: { ...prev.envVars, [newEnvKey.trim()]: newEnvValue }
+                    }));
+                    setNewEnvKey('');
+                    setNewEnvValue('');
+                  }
+                }}
+                disabled={!newEnvKey.trim()}
+                className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 flex-shrink-0"
+              >
+                Add
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Environment variables passed to the CLI process (e.g., CLAUDE_CODE_USE_BEDROCK=1, AWS_PROFILE).
             </p>
           </div>
 
