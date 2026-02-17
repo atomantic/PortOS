@@ -2223,6 +2223,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}
 - Follow existing code patterns and conventions
 - Do not make unrelated changes
 - If blocked, explain clearly why
+- Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
 
 ## Working Directory
 You are working in the project directory. Use the available tools to explore, modify, and test code.
