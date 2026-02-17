@@ -584,6 +584,7 @@ export async function getSummary() {
       inbox: inboxCounts
     },
     activeProjects: projects.filter(p => p.status === 'active').length,
+    activeIdeas: ideas.filter(i => !i.status || i.status === 'active').length,
     openAdmin: adminItems.filter(a => a.status === 'open').length,
     gitHubRepos: links.filter(l => l.isGitHubRepo).length,
     needsReview: inboxCounts.needs_review,

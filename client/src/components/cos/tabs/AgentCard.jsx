@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Cpu,
   Trash2,
@@ -9,10 +9,14 @@ import {
   Skull,
   Activity,
   Clock,
-  Brain
+  Brain,
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquare
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import MarkdownOutput from '../MarkdownOutput';
+import toast from 'react-hot-toast';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {
@@ -86,16 +90,49 @@ function OutputBlocks({ output }) {
   );
 }
 
-export default function AgentCard({ agent, onKill, onDelete, onResume, completed, liveOutput, durations }) {
+export default function AgentCard({ agent, onKill, onDelete, onResume, completed, liveOutput, durations, onFeedbackChange }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
   const [processStats, setProcessStats] = useState(null);
   const [killing, setKilling] = useState(false);
+  const [feedbackState, setFeedbackState] = useState(agent.feedback?.rating || null);
+
+  // Sync feedback state when parent refreshes agent data
+  useEffect(() => {
+    if (agent.feedback?.rating) setFeedbackState(agent.feedback.rating);
+  }, [agent.feedback?.rating]);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [showFeedbackComment, setShowFeedbackComment] = useState(false);
+  const [feedbackComment, setFeedbackComment] = useState('');
 
   // Determine if this is a system agent (health check, etc.)
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
+
+  // Handle feedback submission
+  const submitFeedback = useCallback(async (rating) => {
+    if (submittingFeedback) return;
+    setSubmittingFeedback(true);
+
+    const result = await api.submitCosAgentFeedback(agent.id, {
+      rating,
+      comment: feedbackComment || undefined
+    }).catch(err => {
+      toast.error(`Failed to submit feedback: ${err.message}`);
+      return null;
+    });
+
+    setSubmittingFeedback(false);
+
+    if (result?.success) {
+      setFeedbackState(rating);
+      setShowFeedbackComment(false);
+      setFeedbackComment('');
+      toast.success(`Feedback recorded: ${rating}`);
+      onFeedbackChange?.();
+    }
+  }, [agent.id, feedbackComment, submittingFeedback, onFeedbackChange]);
 
   // Update duration display for running agents
   useEffect(() => {
@@ -280,7 +317,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 <span className="hidden sm:inline">Kill</span>
               </button>
             )}
-            {completed && !isSystemAgent && onResume && (
+            {completed && onResume && (
               <button
                 onClick={() => onResume(agent)}
                 className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
@@ -441,6 +478,81 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 ) : (
                   <span className="opacity-50">No memories</span>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Feedback section - shown for completed non-system agents */}
+        {completed && !isSystemAgent && (
+          <div className="mt-3 pt-3 border-t border-port-border/50">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-xs text-gray-500">Was this helpful?</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => submitFeedback('positive')}
+                  disabled={submittingFeedback}
+                  className={`p-1.5 rounded transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center ${
+                    feedbackState === 'positive'
+                      ? 'bg-port-success/30 text-port-success'
+                      : 'text-gray-500 hover:text-port-success hover:bg-port-success/10'
+                  } disabled:opacity-50`}
+                  title="Helpful"
+                  aria-label="Mark as helpful"
+                  aria-pressed={feedbackState === 'positive'}
+                >
+                  <ThumbsUp size={14} />
+                </button>
+                <button
+                  onClick={() => submitFeedback('negative')}
+                  disabled={submittingFeedback}
+                  className={`p-1.5 rounded transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center ${
+                    feedbackState === 'negative'
+                      ? 'bg-port-error/30 text-port-error'
+                      : 'text-gray-500 hover:text-port-error hover:bg-port-error/10'
+                  } disabled:opacity-50`}
+                  title="Not helpful"
+                  aria-label="Mark as not helpful"
+                  aria-pressed={feedbackState === 'negative'}
+                >
+                  <ThumbsDown size={14} />
+                </button>
+                {!feedbackState && (
+                  <button
+                    onClick={() => setShowFeedbackComment(!showFeedbackComment)}
+                    className="p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-border/50 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
+                    title="Add comment"
+                    aria-label="Add feedback comment"
+                    aria-expanded={showFeedbackComment}
+                  >
+                    <MessageSquare size={14} />
+                  </button>
+                )}
+              </div>
+              {feedbackState && (
+                <span className={`text-xs ${feedbackState === 'positive' ? 'text-port-success' : 'text-port-error'}`}>
+                  {feedbackState === 'positive' ? 'Thanks for the feedback!' : 'We\'ll improve'}
+                </span>
+              )}
+            </div>
+            {/* Comment input */}
+            {showFeedbackComment && !feedbackState && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="text"
+                  value={feedbackComment}
+                  onChange={(e) => setFeedbackComment(e.target.value)}
+                  placeholder="Optional: add a comment..."
+                  className="flex-1 px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white placeholder-gray-500 focus:outline-none focus:border-port-accent min-h-[32px]"
+                  maxLength={200}
+                />
+                <button
+                  onClick={() => submitFeedback('neutral')}
+                  disabled={submittingFeedback || !feedbackComment.trim()}
+                  className="px-3 py-1 text-xs bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50 min-h-[32px]"
+                >
+                  Submit
+                </button>
               </div>
             )}
           </div>

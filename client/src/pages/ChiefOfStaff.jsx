@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
-import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain } from 'lucide-react';
+import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain } from 'lucide-react';
 import toast from 'react-hot-toast';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 // Import from modular components
 import {
@@ -58,6 +59,9 @@ export default function ChiefOfStaff() {
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const tabsRef = useRef(null);
   const socket = useSocket();
 
   // Derive avatar style from server config, with optional dynamic override
@@ -325,16 +329,38 @@ export default function ChiefOfStaff() {
     [tasks.user?.grouped?.pending?.length, tasks.cos?.grouped?.pending?.length]
   );
 
+  // Check if tabs can scroll left/right
+  const checkTabsScroll = useCallback(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  // Update scroll state on mount and resize
+  useEffect(() => {
+    checkTabsScroll();
+    window.addEventListener('resize', checkTabsScroll);
+    return () => window.removeEventListener('resize', checkTabsScroll);
+  }, [checkTabsScroll]);
+
+  const scrollTabs = useCallback((direction) => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const scrollAmount = 200;
+    el.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' });
+  }, []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading...</div>
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-screen overflow-hidden">
+    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-full overflow-hidden">
       {/* Agent Panel */}
       {avatarStyle === 'ascii' ? (
         <TerminalCoSPanel
@@ -349,7 +375,7 @@ export default function ChiefOfStaff() {
           evalCountdown={evalCountdown}
         />
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
@@ -380,7 +406,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex flex-1`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex flex-1 min-w-0`}
           >
             {/* Background Effects */}
             <div
@@ -394,7 +420,7 @@ export default function ChiefOfStaff() {
             />
 
             {/* Avatar Column - half width on mobile, full on desktop */}
-            <div className="flex-1 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
+            <div className="flex-1 min-w-0 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
                 Digital Assistant
               </div>
@@ -418,7 +444,9 @@ export default function ChiefOfStaff() {
                   ? <EsotericCoSAvatar state={agentState} speaking={speaking} />
                 : <CoSCharacter state={agentState} speaking={speaking} />
               }
-              <StateLabel state={agentState} />
+              <div className="hidden lg:block">
+                <StateLabel state={agentState} />
+              </div>
               <div className="hidden sm:block">
                 <StatusBubble message={statusMessage} countdown={evalCountdown} />
               </div>
@@ -510,7 +538,7 @@ export default function ChiefOfStaff() {
       )}
 
       {/* Content Panel */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
         <div className="overflow-y-auto p-3 lg:p-4">
         {/* Stats Bar - hidden on mobile for SVG mode (shown in avatar panel instead) */}
         <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden lg:grid' : ''}`}>
@@ -575,31 +603,59 @@ export default function ChiefOfStaff() {
         {/* Quick Summary - at-a-glance stats on tasks tab only */}
         {activeTab === 'tasks' && <QuickSummary />}
 
-        {/* Tabs - scrollable on mobile with touch-friendly sizing */}
-        <div role="tablist" aria-label="Chief of Staff sections" className="flex gap-1 mb-4 lg:mb-6 border-b border-port-border overflow-x-auto scrollbar-hide pb-px">
-          {TABS.map(tabItem => {
-            const Icon = tabItem.icon;
-            const isSelected = activeTab === tabItem.id;
-            return (
-              <button
-                key={tabItem.id}
-                role="tab"
-                aria-selected={isSelected}
-                aria-controls={`tabpanel-${tabItem.id}`}
-                id={`tab-${tabItem.id}`}
-                onClick={() => navigate(`/cos/${tabItem.id}`)}
-                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
-                  isSelected
-                    ? 'text-port-accent border-port-accent'
-                    : 'text-gray-500 border-transparent hover:text-white'
-                }`}
-              >
-                <Icon size={16} aria-hidden="true" />
-                <span className="hidden sm:inline">{tabItem.label}</span>
-                <span className="sr-only sm:hidden">{tabItem.label}</span>
-              </button>
-            );
-          })}
+        {/* Tabs - scrollable with arrow navigation */}
+        <div className="relative mb-4 lg:mb-6">
+          {/* Left scroll button */}
+          {canScrollLeft && (
+            <button
+              onClick={() => scrollTabs('left')}
+              className="absolute left-0 top-0 bottom-px z-10 flex items-center justify-center w-8 bg-gradient-to-r from-port-bg via-port-bg to-transparent hover:from-port-card"
+              aria-label="Scroll tabs left"
+            >
+              <ChevronLeft size={18} className="text-gray-400" />
+            </button>
+          )}
+          {/* Right scroll button */}
+          {canScrollRight && (
+            <button
+              onClick={() => scrollTabs('right')}
+              className="absolute right-0 top-0 bottom-px z-10 flex items-center justify-center w-8 bg-gradient-to-l from-port-bg via-port-bg to-transparent hover:from-port-card"
+              aria-label="Scroll tabs right"
+            >
+              <ChevronRight size={18} className="text-gray-400" />
+            </button>
+          )}
+          <div
+            ref={tabsRef}
+            role="tablist"
+            aria-label="Chief of Staff sections"
+            className="flex gap-1 border-b border-port-border overflow-x-auto scrollbar-hide pb-px"
+            onScroll={checkTabsScroll}
+          >
+            {TABS.map(tabItem => {
+              const Icon = tabItem.icon;
+              const isSelected = activeTab === tabItem.id;
+              return (
+                <button
+                  key={tabItem.id}
+                  role="tab"
+                  aria-selected={isSelected}
+                  aria-controls={`tabpanel-${tabItem.id}`}
+                  id={`tab-${tabItem.id}`}
+                  onClick={() => navigate(`/cos/${tabItem.id}`)}
+                  className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
+                    isSelected
+                      ? 'text-port-accent border-port-accent'
+                      : 'text-gray-500 border-transparent hover:text-white'
+                  }`}
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  <span className="hidden sm:inline">{tabItem.label}</span>
+                  <span className="sr-only sm:hidden">{tabItem.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Tab Content */}

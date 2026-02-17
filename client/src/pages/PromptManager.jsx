@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -233,7 +234,7 @@ export default function PromptManager() {
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-gray-500">Loading...</div>;
+    return <div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading prompts" /></div>;
   }
 
   return (

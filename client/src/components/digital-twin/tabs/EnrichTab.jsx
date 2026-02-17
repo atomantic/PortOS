@@ -477,7 +477,7 @@ export default function EnrichTab({ onRefresh }) {
 
               <div className="flex items-center justify-between text-xs">
                 <span className="text-gray-500">
-                  {catProgress?.answered || 0} questions answered
+                  {catProgress?.answered || 0} {catProgress?.listBased ? 'items added' : 'questions answered'}
                 </span>
                 <span className={isComplete ? 'text-green-400' : 'text-gray-500'}>
                   {catProgress?.percentage || 0}%

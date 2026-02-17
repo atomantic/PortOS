@@ -277,6 +277,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   const edgeColor = getBuildingColor(app.overallStatus, app.archived);
   const accentColor = getAccentColor(app);
   const isOnline = app.overallStatus === 'online' && !app.archived;
+  const isStopped = app.overallStatus === 'stopped' && !app.archived;
   const { width, depth } = BUILDING_PARAMS;
 
   // Name hash for seeded randomness
@@ -306,8 +307,12 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
     const t = clock.getElapsedTime();
 
     const nb = neonBrightness;
-    const baseIntensity = (isOnline ? 0.5 : 0.2) * nb;
-    const pulse = isOnline ? Math.sin(t * 2 + seed) * 0.15 * nb : 0;
+    const baseIntensity = (isOnline ? 0.5 : isStopped ? 0.35 : 0.2) * nb;
+    const pulse = isOnline
+      ? Math.sin(t * 2 + seed) * 0.15 * nb
+      : isStopped
+        ? Math.sin(t * 3.5 + seed) * 0.2 * nb
+        : 0;
     const hoverBoost = hovered ? 0.4 * nb : 0;
     meshRef.current.material.emissiveIntensity = baseIntensity + pulse + hoverBoost;
 
@@ -340,7 +345,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           emissiveIntensity={0.35 * neonBrightness}
           map={windowTexture}
           transparent
-          opacity={app.archived ? 0.75 : 0.95}
+          opacity={app.archived ? 0.6 : 0.95}
         />
       </mesh>
 

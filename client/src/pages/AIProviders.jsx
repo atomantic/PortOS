@@ -18,6 +18,10 @@ export default function AIProviders() {
   const [apps, setApps] = useState([]);
   const [activeRun, setActiveRun] = useState(null);
   const [runOutput, setRunOutput] = useState('');
+  const [showSamples, setShowSamples] = useState(false);
+  const [sampleProviders, setSampleProviders] = useState([]);
+  const [loadingSamples, setLoadingSamples] = useState(false);
+  const [addingSample, setAddingSample] = useState({});
 
   useEffect(() => {
     loadData();
@@ -138,6 +142,32 @@ export default function AIProviders() {
     }
   };
 
+  const handleLoadSamples = async () => {
+    setLoadingSamples(true);
+    setShowSamples(true);
+    const result = await api.getSampleProviders().catch(() => ({ providers: [] }));
+    setSampleProviders(result.providers || []);
+    setLoadingSamples(false);
+  };
+
+  const handleAddSample = async (provider) => {
+    setAddingSample(prev => ({ ...prev, [provider.id]: true }));
+    await api.createProvider(provider);
+    setSampleProviders(prev => prev.filter(p => p.id !== provider.id));
+    setAddingSample(prev => ({ ...prev, [provider.id]: false }));
+    loadData();
+    toast.success(`Added ${provider.name}`);
+  };
+
+  const handleAddAllSamples = async () => {
+    for (const provider of sampleProviders) {
+      await api.createProvider(provider);
+    }
+    setSampleProviders([]);
+    loadData();
+    toast.success(`Added ${sampleProviders.length} providers`);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -158,6 +188,12 @@ export default function AIProviders() {
             {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
           </button>
           <button
+            onClick={handleLoadSamples}
+            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
+          >
+            {loadingSamples ? 'Loading...' : 'Load Samples'}
+          </button>
+          <button
             onClick={() => { setEditingProvider(null); setShowForm(true); }}
             className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
           >
@@ -165,6 +201,85 @@ export default function AIProviders() {
           </button>
         </div>
       </div>
+
+      {/* Sample Providers Panel */}
+      {showSamples && (
+        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-white">Sample Providers</h2>
+            <div className="flex gap-2">
+              {sampleProviders.length > 1 && (
+                <button
+                  onClick={handleAddAllSamples}
+                  className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors"
+                >
+                  Add All ({sampleProviders.length})
+                </button>
+              )}
+              <button
+                onClick={() => setShowSamples(false)}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+
+          {loadingSamples ? (
+            <div className="text-center py-6 text-gray-400">Loading sample providers...</div>
+          ) : sampleProviders.length === 0 ? (
+            <div className="text-center py-6 text-gray-500">
+              All sample providers are already in your configuration.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {sampleProviders.map(provider => (
+                <div
+                  key={provider.id}
+                  className="bg-port-bg border border-port-border rounded-lg p-3 flex flex-col sm:flex-row sm:items-start justify-between gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-semibold text-white">{provider.name}</h3>
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        provider.type === 'cli' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
+                      }`}>
+                        {provider.type.toUpperCase()}
+                      </span>
+                      {!provider.enabled && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
+                          DISABLED
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-400 space-y-0.5">
+                      {provider.type === 'cli' && (
+                        <p>Command: <code className="text-gray-300">{provider.command} {provider.args?.join(' ')}</code></p>
+                      )}
+                      {provider.type === 'api' && (
+                        <p>Endpoint: <code className="text-gray-300">{provider.endpoint}</code></p>
+                      )}
+                      {provider.models?.length > 0 && (
+                        <p>Models: {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}</p>
+                      )}
+                      {provider.envVars && Object.keys(provider.envVars).length > 0 && (
+                        <p>Env: {Object.entries(provider.envVars).map(([k, v]) => `${k}=${v}`).join(', ')}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleAddSample(provider)}
+                    disabled={addingSample[provider.id]}
+                    className="px-4 py-1.5 text-sm bg-port-success/20 text-port-success hover:bg-port-success/30 rounded transition-colors disabled:opacity-50 flex-shrink-0"
+                  >
+                    {addingSample[provider.id] ? 'Adding...' : 'Add'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Run Panel */}
       {showRunPanel && (
@@ -282,6 +397,13 @@ export default function AIProviders() {
                   {provider.fallbackProvider && (
                     <p className="text-xs">
                       Fallback: <span className="text-port-accent">{providers.find(p => p.id === provider.fallbackProvider)?.name || provider.fallbackProvider}</span>
+                    </p>
+                  )}
+                  {provider.envVars && Object.keys(provider.envVars).length > 0 && (
+                    <p className="text-xs">
+                      Env: {Object.entries(provider.envVars).map(([k, v]) => (
+                        <code key={k} className="ml-1 text-orange-400">{k}={v}</code>
+                      ))}
                     </p>
                   )}
                 </div>
@@ -421,8 +543,12 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     heavyModel: provider?.heavyModel || '',
     fallbackProvider: provider?.fallbackProvider || '',
     timeout: provider?.timeout || 300000,
-    enabled: provider?.enabled !== false
+    enabled: provider?.enabled !== false,
+    envVars: provider?.envVars || {}
   });
+
+  const [newEnvKey, setNewEnvKey] = useState('');
+  const [newEnvValue, setNewEnvValue] = useState('');
 
   const availableModels = formData.models || [];
 
@@ -699,6 +825,75 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             </select>
             <p className="text-xs text-gray-500 mt-1">
               If this provider hits a usage limit or becomes unavailable, tasks will automatically use the fallback provider.
+            </p>
+          </div>
+
+          {/* Environment Variables */}
+          <div className="border-t border-port-border pt-4 mt-4">
+            <h4 className="text-sm font-medium text-gray-300 mb-3">Environment Variables</h4>
+            {Object.entries(formData.envVars).length > 0 && (
+              <div className="space-y-2 mb-3">
+                {Object.entries(formData.envVars).map(([key, value]) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <code className="text-xs text-gray-300 bg-port-bg px-2 py-1.5 rounded border border-port-border flex-shrink-0">{key}</code>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        envVars: { ...prev.envVars, [key]: e.target.value }
+                      }))}
+                      className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => {
+                        const { [key]: _, ...rest } = prev.envVars;
+                        return { ...prev, envVars: rest };
+                      })}
+                      className="px-2 py-1.5 text-xs text-port-error hover:bg-port-error/20 rounded transition-colors flex-shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newEnvKey}
+                onChange={(e) => setNewEnvKey(e.target.value.toUpperCase())}
+                placeholder="KEY"
+                className="w-1/3 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none font-mono"
+              />
+              <input
+                type="text"
+                value={newEnvValue}
+                onChange={(e) => setNewEnvValue(e.target.value)}
+                placeholder="value"
+                className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (newEnvKey.trim()) {
+                    setFormData(prev => ({
+                      ...prev,
+                      envVars: { ...prev.envVars, [newEnvKey.trim()]: newEnvValue }
+                    }));
+                    setNewEnvKey('');
+                    setNewEnvValue('');
+                  }
+                }}
+                disabled={!newEnvKey.trim()}
+                className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 flex-shrink-0"
+              >
+                Add
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Environment variables passed to the CLI process (e.g., CLAUDE_CODE_USE_BEDROCK=1, AWS_PROFILE).
             </p>
           </div>
 

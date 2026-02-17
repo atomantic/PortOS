@@ -3,13 +3,14 @@ import toast from 'react-hot-toast';
 const API_BASE = '/api';
 
 async function request(endpoint, options = {}) {
+  const { silent, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
   const config = {
     headers: {
       'Content-Type': 'application/json',
-      ...options.headers
+      ...fetchOptions.headers
     },
-    ...options
+    ...fetchOptions
   };
 
   const response = await fetch(url, config);
@@ -17,11 +18,13 @@ async function request(endpoint, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
     const errorMessage = error.error || `HTTP ${response.status}`;
-    // Platform unavailability is a warning, not an error
-    if (error.code === 'PLATFORM_UNAVAILABLE') {
-      toast(errorMessage, { icon: '⚠️' });
-    } else {
-      toast.error(errorMessage);
+    if (!silent) {
+      // Platform unavailability is a warning, not an error
+      if (error.code === 'PLATFORM_UNAVAILABLE') {
+        toast(errorMessage, { icon: '⚠️' });
+      } else {
+        toast.error(errorMessage);
+      }
     }
     throw new Error(errorMessage);
   }
@@ -133,6 +136,7 @@ export const updateProvider = (id, data) => request(`/providers/${id}`, {
   body: JSON.stringify(data)
 });
 export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
+export const getSampleProviders = () => request('/providers/samples');
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id) => request(`/providers/${id}/refresh-models`, { method: 'POST' });
 
@@ -375,6 +379,81 @@ export const checkAgentPosts = (agentId, accountId, days, maxReplies, maxUpvotes
     body: JSON.stringify({ agentId, accountId, days, maxReplies, maxUpvotes })
   });
 
+// Moltworld Tools
+export const moltworldJoin = (accountId, x, y, thinking, say, sayTo, agentId) =>
+  request('/agents/tools/moltworld/join', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, x, y, thinking, say, sayTo })
+  });
+export const moltworldBuild = (accountId, agentId, x, y, z, type, action) =>
+  request('/agents/tools/moltworld/build', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, x, y, z, type, action })
+  });
+export const moltworldExplore = (accountId, agentId, x, y, thinking) =>
+  request('/agents/tools/moltworld/explore', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, x, y, thinking })
+  });
+export const moltworldStatus = (accountId) =>
+  request(`/agents/tools/moltworld/status?accountId=${accountId}`);
+export const moltworldBalance = (accountId) =>
+  request(`/agents/tools/moltworld/balance?accountId=${accountId}`);
+export const moltworldRateLimits = (accountId) =>
+  request(`/agents/tools/moltworld/rate-limits?accountId=${accountId}`);
+export const moltworldThink = (accountId, thought, agentId) =>
+  request('/agents/tools/moltworld/think', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, thought })
+  });
+export const moltworldSay = (accountId, message, sayTo, agentId) =>
+  request('/agents/tools/moltworld/say', {
+    method: 'POST',
+    body: JSON.stringify({ accountId, agentId, message, ...(sayTo ? { sayTo } : {}) })
+  });
+
+// Moltworld Action Queue
+export const moltworldGetQueue = (agentId) =>
+  request(`/agents/tools/moltworld/queue/${agentId}`);
+export const moltworldAddToQueue = (agentId, actionType, params, scheduledFor) =>
+  request('/agents/tools/moltworld/queue', {
+    method: 'POST',
+    body: JSON.stringify({ agentId, actionType, params, scheduledFor })
+  });
+export const moltworldRemoveFromQueue = (id) =>
+  request(`/agents/tools/moltworld/queue/${id}`, { method: 'DELETE' });
+
+// Moltworld WebSocket Relay
+export const moltworldWsConnect = (accountId) =>
+  request('/agents/tools/moltworld/ws/connect', {
+    method: 'POST',
+    body: JSON.stringify({ accountId })
+  });
+export const moltworldWsDisconnect = () =>
+  request('/agents/tools/moltworld/ws/disconnect', { method: 'POST' });
+export const moltworldWsStatus = () =>
+  request('/agents/tools/moltworld/ws/status');
+export const moltworldWsMove = (x, y, thought) =>
+  request('/agents/tools/moltworld/ws/move', {
+    method: 'POST',
+    body: JSON.stringify({ x, y, ...(thought ? { thought } : {}) })
+  });
+export const moltworldWsThink = (thought) =>
+  request('/agents/tools/moltworld/ws/think', {
+    method: 'POST',
+    body: JSON.stringify({ thought })
+  });
+export const moltworldWsNearby = (radius) =>
+  request('/agents/tools/moltworld/ws/nearby', {
+    method: 'POST',
+    body: JSON.stringify({ ...(radius ? { radius } : {}) })
+  });
+export const moltworldWsInteract = (to, payload) =>
+  request('/agents/tools/moltworld/ws/interact', {
+    method: 'POST',
+    body: JSON.stringify({ to, payload })
+  });
+
 // Agent Drafts
 export const getAgentDrafts = (agentId) => request(`/agents/tools/drafts?agentId=${agentId}`);
 export const createAgentDraft = (data) => request('/agents/tools/drafts', {
@@ -458,6 +537,11 @@ export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 
 export const getCosAgentStats = (id) => request(`/cos/agents/${id}/stats`);
 export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
 export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
+export const submitCosAgentFeedback = (id, feedback) => request(`/cos/agents/${id}/feedback`, {
+  method: 'POST',
+  body: JSON.stringify(feedback)
+});
+export const getCosFeedbackStats = () => request('/cos/feedback/stats');
 export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');
 export const getCosReport = (date) => request(`/cos/reports/${date}`);
@@ -476,7 +560,7 @@ export const getCosLearningDurations = () => request('/cos/learning/durations');
 export const getCosLearningSkipped = () => request('/cos/learning/skipped');
 export const getCosLearningPerformance = () => request('/cos/learning/performance');
 export const getCosLearningRouting = () => request('/cos/learning/routing');
-export const getCosLearningSummary = () => request('/cos/learning/summary');
+export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 
@@ -537,11 +621,15 @@ export const getCosProductivity = () => request('/cos/productivity');
 export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
 export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
-export const getCosQuickSummary = () => request('/cos/quick-summary');
-export const getCosRecentTasks = (limit = 10) => request(`/cos/recent-tasks?limit=${limit}`);
+export const getCosActivityCalendar = (weeks = 12, options) => request(`/cos/productivity/calendar?weeks=${weeks}`, options);
+export const getCosQuickSummary = (options) => request('/cos/quick-summary', options);
+export const getCosRecentTasks = (limit = 10, options) => request(`/cos/recent-tasks?limit=${limit}`, options);
 export const getCosActionableInsights = () => request('/cos/actionable-insights');
+export const getCosGoalProgress = () => request('/cos/goal-progress');
+export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
 // Task Schedule (Configurable Intervals)
+export const getCosUpcomingTasks = (limit = 10) => request(`/cos/upcoming?limit=${limit}`);
 export const getCosSchedule = () => request('/cos/schedule');
 export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval-types');
 export const getCosScheduleDueTasks = () => request('/cos/schedule/due');
@@ -748,7 +836,11 @@ export const updateBrainProject = (id, data) => request(`/brain/projects/${id}`,
 export const deleteBrainProject = (id) => request(`/brain/projects/${id}`, { method: 'DELETE' });
 
 // Brain - Ideas
-export const getBrainIdeas = () => request('/brain/ideas');
+export const getBrainIdeas = (filters) => {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  return request(`/brain/ideas?${params}`);
+};
 export const getBrainIdea = (id) => request(`/brain/ideas/${id}`);
 export const createBrainIdea = (data) => request('/brain/ideas', {
   method: 'POST',

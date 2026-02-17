@@ -31,14 +31,24 @@ function CyberCityInner() {
   }, []);
 
   const handleBuildingClick = useCallback((app) => {
-    navigate('/apps');
+    if (app?.id) {
+      navigate(`/apps/${app.id}`);
+    } else {
+      navigate('/apps');
+    }
   }, [navigate]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ background: '#030308' }}>
-        <div className="font-pixel text-cyan-400 text-sm tracking-widest animate-pulse">
-          INITIALIZING CYBERCITY...
+      <div className="flex flex-col items-center justify-center h-full gap-4" style={{ background: '#030308' }}>
+        <div className="font-pixel text-cyan-400 text-lg tracking-widest animate-pulse" style={{ textShadow: '0 0 12px rgba(6,182,212,0.5)' }}>
+          INITIALIZING CYBERCITY
+        </div>
+        <div className="w-48 h-1 bg-gray-800 rounded-full overflow-hidden">
+          <div className="h-full bg-cyan-500 rounded-full animate-pulse" style={{ width: '60%', boxShadow: '0 0 8px rgba(6,182,212,0.5)' }} />
+        </div>
+        <div className="font-pixel text-[10px] text-cyan-500/40 tracking-wider">
+          LOADING SYSTEMS...
         </div>
       </div>
     );

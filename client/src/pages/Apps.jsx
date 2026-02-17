@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore } from 'lucide-react';
 import toast from 'react-hot-toast';
+import BrailleSpinner from '../components/BrailleSpinner';
 import StatusBadge from '../components/StatusBadge';
 import IconPicker from '../components/IconPicker';
 import * as api from '../services/api';
@@ -127,7 +128,7 @@ export default function Apps() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading...</div>
+        <BrailleSpinner text="Loading apps" />
       </div>
     );
   }

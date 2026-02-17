@@ -296,7 +296,9 @@ router.delete('/projects/:id', asyncHandler(async (req, res) => {
 // =============================================================================
 
 router.get('/ideas', asyncHandler(async (req, res) => {
-  const ideas = await brainService.getIdeas();
+  const { status } = req.query;
+  const filters = status ? { status } : undefined;
+  const ideas = await brainService.getIdeas(filters);
   res.json(ideas);
 }));
 

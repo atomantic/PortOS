@@ -106,14 +106,14 @@ export default function CityGround({ settings }) {
 
       <Grid
         infiniteGrid
-        cellSize={1}
-        sectionSize={4}
-        cellColor={CITY_COLORS.ground}
-        sectionColor={CITY_COLORS.ground}
-        cellThickness={0.4}
-        sectionThickness={1}
-        fadeDistance={70}
-        fadeStrength={0.8}
+        cellSize={2}
+        sectionSize={6}
+        cellColor="#0e7490"
+        sectionColor="#06b6d4"
+        cellThickness={0.6}
+        sectionThickness={1.4}
+        fadeDistance={80}
+        fadeStrength={0.6}
         position={[0, -0.01, 0]}
       />
 
@@ -128,7 +128,7 @@ export default function CityGround({ settings }) {
         <meshBasicMaterial
           color="#06b6d4"
           transparent
-          opacity={0.03}
+          opacity={0.045}
           blending={THREE.AdditiveBlending}
           side={THREE.DoubleSide}
         />

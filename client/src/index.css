@@ -27,10 +27,21 @@
   font-family: 'GeistPixelGrid', 'Courier New', monospace;
 }
 
+html, body, #root {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
 body {
   background-color: #0f0f0f;
   color: #e5e5e5;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* Accessibility: Global focus styles for keyboard navigation */

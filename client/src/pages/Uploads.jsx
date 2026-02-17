@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
+import BrailleSpinner from '../components/BrailleSpinner';
 import * as api from '../services/api';
 
 // File type icons based on MIME type
@@ -137,7 +138,7 @@ export default function Uploads() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading...</div>
+        <BrailleSpinner text="Loading uploads" />
       </div>
     );
   }

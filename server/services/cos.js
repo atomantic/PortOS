@@ -9,7 +9,7 @@ import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
@@ -27,6 +27,7 @@ import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1968,14 +1969,40 @@ export async function runHealthCheck() {
     });
   }
 
-  // Check for errored processes
+  // Check for errored processes and auto-restart them
   const erroredProcesses = pm2Processes.filter(p => p.pm2_env?.status === 'errored');
   if (erroredProcesses.length > 0) {
-    issues.push({
-      type: 'error',
-      category: 'processes',
-      message: `${erroredProcesses.length} errored PM2 processes: ${erroredProcesses.map(p => p.name).join(', ')}`
-    });
+    const names = erroredProcesses.map(p => p.name);
+    emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
+
+    const restartResults = await Promise.all(names.map(async (name) => {
+      const result = await execFileAsync('pm2', ['restart', name]).catch(e => ({ stdout: '', stderr: e.message }));
+      const failed = result.stderr && !result.stdout;
+      if (failed) {
+        emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);
+      } else {
+        emitLog('success', `✅ Auto-restarted errored process: ${name}`);
+      }
+      return { name, success: !failed };
+    }));
+
+    const failedRestarts = restartResults.filter(r => !r.success);
+    if (failedRestarts.length > 0) {
+      issues.push({
+        type: 'error',
+        category: 'processes',
+        message: `${failedRestarts.length} errored PM2 process(es) failed to auto-restart: ${failedRestarts.map(r => r.name).join(', ')}`
+      });
+    }
+
+    const succeededRestarts = restartResults.filter(r => r.success);
+    if (succeededRestarts.length > 0) {
+      issues.push({
+        type: 'warning',
+        category: 'processes',
+        message: `Auto-restarted ${succeededRestarts.length} errored PM2 process(es): ${succeededRestarts.map(r => r.name).join(', ')}`
+      });
+    }
   }
 
   // Check memory usage per process
@@ -2347,6 +2374,112 @@ export async function deleteAgent(agentId) {
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
     return { success: true, agentId };
   });
+}
+
+/**
+ * Submit feedback for a completed agent
+ * @param {string} agentId - Agent ID
+ * @param {object} feedback - { rating: 'positive'|'negative'|'neutral', comment?: string }
+ */
+export async function submitAgentFeedback(agentId, feedback) {
+  return withStateLock(async () => {
+    const state = await loadState();
+
+    if (!state.agents[agentId]) {
+      return { error: 'Agent not found' };
+    }
+
+    const agent = state.agents[agentId];
+    if (agent.status !== 'completed') {
+      return { error: 'Can only submit feedback for completed agents' };
+    }
+
+    // Store feedback on the agent
+    state.agents[agentId].feedback = {
+      rating: feedback.rating,
+      comment: feedback.comment || null,
+      submittedAt: new Date().toISOString()
+    };
+
+    await saveState(state);
+
+    emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
+    cosEvents.emit('agent:feedback', { agentId, feedback: state.agents[agentId].feedback });
+
+    return { success: true, agent: state.agents[agentId] };
+  });
+}
+
+/**
+ * Get aggregated feedback statistics
+ */
+export async function getFeedbackStats() {
+  const state = await loadState();
+  const agents = Object.values(state.agents);
+
+  const withFeedback = agents.filter(a => a.feedback);
+  const positive = withFeedback.filter(a => a.feedback.rating === 'positive').length;
+  const negative = withFeedback.filter(a => a.feedback.rating === 'negative').length;
+  const neutral = withFeedback.filter(a => a.feedback.rating === 'neutral').length;
+
+  // Group by task type
+  const byTaskType = {};
+  withFeedback.forEach(a => {
+    const taskType = extractTaskType(a.metadata?.taskDescription);
+    if (!byTaskType[taskType]) {
+      byTaskType[taskType] = { positive: 0, negative: 0, neutral: 0, total: 0 };
+    }
+    byTaskType[taskType][a.feedback.rating]++;
+    byTaskType[taskType].total++;
+  });
+
+  // Recent feedback (last 10 with comments)
+  const recentWithComments = withFeedback
+    .filter(a => a.feedback.comment)
+    .sort((a, b) => new Date(b.feedback.submittedAt) - new Date(a.feedback.submittedAt))
+    .slice(0, 10)
+    .map(a => ({
+      agentId: a.id,
+      taskDescription: a.metadata?.taskDescription,
+      rating: a.feedback.rating,
+      comment: a.feedback.comment,
+      submittedAt: a.feedback.submittedAt
+    }));
+
+  const satisfactionRate = withFeedback.length > 0
+    ? Math.round((positive / withFeedback.length) * 100)
+    : null;
+
+  return {
+    total: withFeedback.length,
+    positive,
+    negative,
+    neutral,
+    satisfactionRate,
+    byTaskType,
+    recentWithComments
+  };
+}
+
+// Helper to extract task type from description (mirrors client-side logic)
+function extractTaskType(description) {
+  if (!description) return 'general';
+  const d = description.toLowerCase();
+  if (d.includes('fix') || d.includes('bug') || d.includes('error') || d.includes('issue')) return 'bug-fix';
+  if (d.includes('refactor') || d.includes('clean up') || d.includes('improve') || d.includes('optimize')) return 'refactor';
+  if (d.includes('test')) return 'testing';
+  if (d.includes('document') || d.includes('readme') || d.includes('docs')) return 'documentation';
+  if (d.includes('review') || d.includes('audit')) return 'code-review';
+  if (d.includes('mobile') || d.includes('responsive')) return 'mobile-responsive';
+  if (d.includes('security') || d.includes('vulnerability')) return 'security';
+  if (d.includes('performance') || d.includes('speed')) return 'performance';
+  if (d.includes('ui') || d.includes('ux') || d.includes('design') || d.includes('style')) return 'ui-ux';
+  if (d.includes('api') || d.includes('endpoint') || d.includes('route')) return 'api';
+  if (d.includes('database') || d.includes('migration')) return 'database';
+  if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
+  if (d.includes('investigate') || d.includes('debug')) return 'investigation';
+  if (d.includes('self-improvement') || d.includes('feature idea')) return 'self-improvement';
+  return 'feature';
 }
 
 /**

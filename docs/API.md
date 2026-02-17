@@ -376,6 +376,55 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | GET | `/media/video` | Get video stream |
 | GET | `/media/audio` | Get audio stream |
 
+### Browser Management
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/browser` | Get browser status |
+| GET | `/browser/config` | Get browser configuration |
+| PUT | `/browser/config` | Update browser configuration |
+| POST | `/browser/launch` | Launch browser instance |
+| POST | `/browser/stop` | Stop browser instance |
+| POST | `/browser/restart` | Restart browser instance |
+| POST | `/browser/navigate` | Navigate browser to URL |
+| GET | `/browser/health` | Get browser health status |
+| GET | `/browser/process` | Get browser process info |
+| GET | `/browser/pages` | Get open browser pages |
+| GET | `/browser/version` | Get browser version info |
+| GET | `/browser/logs` | Get browser logs |
+
+### Digital Twin Genome
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/digital-twin/genome` | Get genome summary |
+| POST | `/digital-twin/genome/upload` | Upload 23andMe genome file |
+| POST | `/digital-twin/genome/scan` | Scan curated SNP markers |
+| POST | `/digital-twin/genome/search` | Search SNP by rsid |
+| GET | `/digital-twin/genome/markers` | Get scanned markers |
+| GET | `/digital-twin/genome/markers/:rsid` | Get single marker details |
+| PUT | `/digital-twin/genome/markers/:rsid/notes` | Update marker notes |
+| POST | `/digital-twin/genome/markers/:rsid/save` | Save marker to genome.json |
+| DELETE | `/digital-twin/genome/markers/:rsid` | Remove saved marker |
+| GET | `/digital-twin/genome/categories` | Get marker categories |
+| GET | `/digital-twin/genome/clinvar/:rsid` | Lookup ClinVar data for rsid |
+| GET | `/digital-twin/genome/epigenetic` | Get epigenetic interventions |
+| POST | `/digital-twin/genome/epigenetic` | Add epigenetic intervention |
+| PUT | `/digital-twin/genome/epigenetic/:id` | Update intervention |
+| DELETE | `/digital-twin/genome/epigenetic/:id` | Delete intervention |
+| POST | `/digital-twin/genome/epigenetic/:id/log` | Log intervention entry |
+
+### Moltworld Agent Tools
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/agents/tools/moltworld/join` | Join/move agent in world |
+| POST | `/agents/tools/moltworld/explore` | Get nearby entities |
+| POST | `/agents/tools/moltworld/build` | Place/remove blocks |
+| POST | `/agents/tools/moltworld/think` | Display thinking bubble |
+| POST | `/agents/tools/moltworld/say` | Send chat message |
+| GET | `/agents/tools/moltworld/status` | Get world status |
+
 ## WebSocket Events
 
 Connect to Socket.IO at `http://localhost:5554`.

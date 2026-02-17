@@ -9,7 +9,7 @@
  * - Jobs are recurring schedules that generate tasks when due
  *
  * Job types:
- * - git-maintenance: Maintain user's git repositories
+ * - github-maintenance: Audit and maintain user's GitHub repositories
  * - brain-processing: Process and act on brain ideas/inbox
  * - Custom user-defined jobs
  */
@@ -32,10 +32,10 @@ const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
  */
 const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
-  'job-git-maintenance': 'git-maintenance',
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-processing': 'brain-processing',
-  'job-project-review': 'project-review'
+  'job-project-review': 'project-review',
+  'job-moltworld-exploration': 'moltworld-exploration'
 }
 
 // Time constants
@@ -48,37 +48,9 @@ const WEEK = 7 * DAY
  */
 const DEFAULT_JOBS = [
   {
-    id: 'job-git-maintenance',
-    name: 'Git Repository Maintenance',
-    description: 'Review and maintain my open source repositories on GitHub. Check for stale issues, outdated dependencies, and merge-worthy PRs.',
-    category: 'git-maintenance',
-    interval: 'weekly',
-    intervalMs: WEEK,
-    enabled: false,
-    priority: 'MEDIUM',
-    autonomyLevel: 'manager',
-    promptTemplate: `[Autonomous Job] Git Repository Maintenance
-
-You are acting as my Chief of Staff, maintaining my GitHub repositories.
-
-Tasks to perform:
-1. Check my local git repositories for uncommitted changes or stale branches
-2. Look for repositories that haven't been updated recently
-3. Review any obvious maintenance needs (outdated README, missing license, etc.)
-4. If there are simple cleanups to make, create tasks for them
-
-Focus on practical, actionable maintenance. Don't make changes directly — create CoS tasks for anything that needs doing.
-
-Report a summary of the repository health status when done.`,
-    lastRun: null,
-    runCount: 0,
-    createdAt: null,
-    updatedAt: null
-  },
-  {
     id: 'job-github-repo-maintenance',
     name: 'GitHub Repo Maintenance',
-    description: 'Audit all GitHub repos for stale dependencies, security alerts, missing CI/README/license, and repos with no recent commits.',
+    description: 'Audit all GitHub repos for security alerts, stale dependencies, missing CI/README/license, uncommitted local changes, and stale branches.',
     category: 'github-maintenance',
     interval: 'weekly',
     intervalMs: WEEK,
@@ -94,12 +66,13 @@ My GitHub username is: atomantic
 Use the \`gh\` CLI to query GitHub.
 
 Tasks to perform:
-1. List all non-archived repos via gh repo list
-2. Check for stale repos (no commits in 90+ days)
-3. Check for Dependabot/security alerts per repo
-4. Flag repos missing CI, README, or license
-5. Generate a maintenance report grouped by severity
-6. Create CoS tasks for actionable maintenance items
+1. Check local git repositories for uncommitted changes or stale branches
+2. List all non-archived repos via gh repo list
+3. Check for stale repos (no commits in 90+ days)
+4. Check for Dependabot/security alerts per repo
+5. Flag repos missing CI, README, or license
+6. Generate a maintenance report grouped by severity
+7. Create CoS tasks for actionable maintenance items
 
 Focus on actionable findings. Don't make changes directly — create CoS tasks for anything that needs doing.
 
@@ -128,7 +101,7 @@ Tasks to perform:
 2. Call GET /api/brain/summary to understand the current brain state
 3. For items in needs_review status, analyze the content and suggest classifications
 4. Look for patterns across recent brain captures — recurring themes, related ideas
-5. For high-value ideas that could become projects, create CoS tasks to explore them
+5. For high-value active ideas (GET /api/brain/ideas?status=active) that could become projects, create CoS tasks to explore them. Skip ideas with status=done — they've already been ingested
 6. Generate a brief summary of insights from the brain inbox
 
 Focus on surfacing actionable insights. Don't just classify — think about what these ideas mean and how they connect.`,
@@ -180,7 +153,7 @@ Write the briefing in a concise, actionable format. Save it as a CoS report.`,
 You are acting as my Chief of Staff, reviewing active projects from my brain.
 
 Tasks to perform:
-1. Call GET /api/brain/projects to get all active projects
+1. Call GET /api/brain/projects?status=active to get active projects (skip done/archived)
 2. For each active project:
    - Assess if the next action is still relevant
    - Check if there are related brain captures since last review
@@ -190,6 +163,35 @@ Tasks to perform:
 5. For any actionable suggestions, create CoS tasks
 
 Report a project health summary when done.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-moltworld-exploration',
+    name: 'Moltworld Exploration',
+    description: 'Explore the Moltworld voxel world — wander, think out loud, chat with nearby agents, and earn SIM tokens by staying online.',
+    category: 'moltworld-exploration',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: false,
+    priority: 'LOW',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] Moltworld Exploration
+
+You are acting as my agent in Moltworld, a shared voxel world where AI agents move, build, think out loud, and earn SIM tokens.
+
+Run the exploration script to wander the world for 30 minutes:
+  node server/scripts/moltworld-explore.mjs 30
+
+This will:
+1. Join the world and move to random positions
+2. Think out loud with AI-generated thoughts
+3. Greet nearby agents
+4. Earn SIM tokens by staying online (0.1 SIM/hour)
+
+After the script finishes, report the exploration summary including SIM earned and agents encountered.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
