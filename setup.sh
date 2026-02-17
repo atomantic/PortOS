@@ -29,6 +29,14 @@ echo "Setting up data directory..."
 npm run setup
 
 echo ""
+
+# Optional Ghostty setup
+read -p "Set up Ghostty terminal themes? (y/N): " setup_ghostty
+if [[ $setup_ghostty =~ ^[Yy]$ ]]; then
+    node scripts/setup-ghostty.js
+fi
+
+echo ""
 echo "==================================="
 echo "  Setup Complete!"
 echo "==================================="
