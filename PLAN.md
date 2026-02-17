@@ -75,6 +75,274 @@ pm2 logs
 - [ ] **M34 P3,P5-P7**: Digital Twin - Behavioral feedback loop, multi-modal capture, advanced testing, personas
 - [ ] **M40**: Agent Skill System - Task-type-specific prompt templates with routing logic, negative examples, and embedded workflows for improved agent accuracy and reliability
 - [ ] **M42**: Unified Digital Twin Identity System - Connect Genome (117 markers, 32 categories), Chronotype (5 sleep markers + behavioral), Aesthetic Taste (P2 complete, P2.5 adds twin-aware prompting), and Mortality-Aware Goals into a single coherent Identity architecture with cross-insights engine
+- [ ] **M44**: Pump.fun Launch Tracking Engine - Real-time pump.fun token detection via Helius webhooks, token enrichment via Birdeye, sniper account tracking, and launch analytics dashboard
+
+---
+
+## M44: Pump.fun Launch Tracking Engine
+
+### Motivation
+
+The Solana memecoin ecosystem on pump.fun generates thousands of token launches daily. A small percentage become high-performers (10x+ returns). Sniper accounts — wallets that consistently buy into winning tokens within seconds of launch — represent a detectable signal for launch quality. This engine detects new launches in real-time, tracks token performance, inventories sniper accounts, and builds a data foundation for predicting upcoming high-performing launches.
+
+**Brain Project**: 467fbe07 — research complete (see `docs/research/pumpfun-data-sources.md`)
+
+### Data Source Selection
+
+| Source | Role | Tier | Cost/mo |
+|--------|------|------|---------|
+| **Helius** | Primary: real-time token detection, transaction monitoring | Developer | $49 |
+| **Birdeye** | Enrichment: market cap, volume, security scores, OHLCV | Starter | $99 |
+| **pump.fun Direct** | Supplement: creator metadata (sparingly, no SLA) | Free | $0 |
+
+**Total**: $148/mo for Phase 1+2
+
+### Data Model
+
+All data persists to `data/pumpfun/` following PortOS conventions (entity stores with `records` keyed by ID, JSONL for append-heavy logs, 2s cache TTL).
+
+#### `data/pumpfun/meta.json` — Configuration
+
+```json
+{
+  "version": "1.0.0",
+  "helius": {
+    "apiKey": null,
+    "webhookId": null,
+    "webhookUrl": null,
+    "programId": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    "tier": "developer",
+    "rpsLimit": 10
+  },
+  "birdeye": {
+    "apiKey": null,
+    "tier": "starter",
+    "rpsLimit": 15
+  },
+  "tracking": {
+    "enabled": false,
+    "enrichmentIntervalMs": 60000,
+    "snapshotIntervalMs": 300000,
+    "retentionDays": 90,
+    "autoEnrich": true
+  },
+  "filters": {
+    "minHolders": 10,
+    "minVolume24h": 1000,
+    "minLiquiditySol": 5,
+    "excludeRugPull": true
+  },
+  "alerts": {
+    "volumeSpikeThreshold": 5,
+    "holderSpikeThreshold": 3,
+    "sniperOverlapThreshold": 3
+  }
+}
+```
+
+#### `data/pumpfun/tokens.json` — Tracked Tokens (Entity Store)
+
+```json
+{
+  "records": {
+    "TokenMintAddress44chars": {
+      "mint": "TokenMintAddress44chars",
+      "symbol": "PUMP",
+      "name": "Pump Token",
+      "creator": "CreatorWalletAddress",
+      "launchSignature": "txSignature",
+      "launchSlot": 123456789,
+      "launchAt": "2026-02-17T12:00:00.000Z",
+      "bondingCurve": {
+        "address": "BondingCurveAccountAddress",
+        "graduated": false,
+        "graduatedAt": null
+      },
+      "status": "active",
+      "performance": {
+        "athMultiple": null,
+        "athPrice": null,
+        "athAt": null,
+        "currentPrice": null,
+        "priceAtLaunch": null
+      },
+      "metrics": {
+        "holders": 0,
+        "volume24h": 0,
+        "marketCap": 0,
+        "liquidity": 0,
+        "securityScore": null
+      },
+      "snipers": [],
+      "tags": [],
+      "enrichedAt": null,
+      "createdAt": "2026-02-17T12:00:00.000Z",
+      "updatedAt": "2026-02-17T12:00:00.000Z"
+    }
+  }
+}
+```
+
+Key: mint address (not UUID) since tokens are uniquely identified by their on-chain mint.
+
+#### `data/pumpfun/snipers.json` — Sniper Account Inventory (Entity Store)
+
+```json
+{
+  "records": {
+    "WalletAddress": {
+      "wallet": "WalletAddress",
+      "label": null,
+      "stats": {
+        "totalSnipes": 0,
+        "successRate": 0,
+        "avgEntryDelaySec": 0,
+        "avgReturnMultiple": 0,
+        "bestReturn": null,
+        "worstReturn": null,
+        "activeSince": null
+      },
+      "recentTokens": [],
+      "reputation": "unknown",
+      "tags": [],
+      "createdAt": "2026-02-17T12:00:00.000Z",
+      "updatedAt": "2026-02-17T12:00:00.000Z"
+    }
+  }
+}
+```
+
+Reputation levels: `unknown` → `newcomer` → `consistent` → `elite` (based on success rate + volume).
+
+#### `data/pumpfun/events.jsonl` — Trade & Price Events (Append Log)
+
+```jsonl
+{"id":"evt-uuid","mint":"TokenMint","type":"launch","creator":"Wallet","signature":"txSig","slot":123456789,"timestamp":"2026-02-17T12:00:00.000Z"}
+{"id":"evt-uuid","mint":"TokenMint","type":"trade","side":"buy","wallet":"Wallet","amountSol":1.5,"amountTokens":1000000,"signature":"txSig","slot":123456790,"timestamp":"2026-02-17T12:00:01.000Z"}
+{"id":"evt-uuid","mint":"TokenMint","type":"enrichment","holders":250,"volume24h":50000,"marketCap":120000,"liquidity":5000,"securityScore":85,"source":"birdeye","timestamp":"2026-02-17T12:01:00.000Z"}
+{"id":"evt-uuid","mint":"TokenMint","type":"graduation","bondingCurve":"Address","signature":"txSig","timestamp":"2026-02-17T14:00:00.000Z"}
+```
+
+Event types: `launch`, `trade`, `enrichment`, `graduation`, `sniper_detected`, `alert`.
+
+### MVP Architecture
+
+```
+                    ┌──────────────────────────────────┐
+                    │         Helius Webhooks           │
+                    │  (pump.fun program monitoring)    │
+                    └──────────────┬───────────────────┘
+                                   │
+                          POST /api/pumpfun/webhook
+                          (new token + trade events)
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    PortOS Server                              │
+│                                                              │
+│  ┌─────────────────┐   ┌──────────────────┐                 │
+│  │  Webhook Route   │──▶│  PumpFun Service  │                │
+│  │  (validates +    │   │  - detectToken()  │                │
+│  │   parses events) │   │  - recordTrade()  │                │
+│  └─────────────────┘   │  - detectSniper() │                │
+│                         │  - enrichToken()  │                │
+│  ┌─────────────────┐   │  - getStats()     │                │
+│  │  REST Routes     │──▶│  - alertCheck()   │                │
+│  │  GET /tokens     │   └────────┬─────────┘                │
+│  │  GET /snipers    │            │                           │
+│  │  GET /stats      │            ▼                           │
+│  └─────────────────┘   ┌──────────────────┐                 │
+│                         │  Data Layer       │                │
+│  ┌─────────────────┐   │  tokens.json      │                │
+│  │  Enrichment      │   │  snipers.json     │                │
+│  │  Scheduler       │──▶│  events.jsonl     │                │
+│  │  (polls Birdeye  │   │  meta.json        │                │
+│  │   for active     │   └──────────────────┘                │
+│  │   tokens)        │                                        │
+│  └─────────────────┘                                         │
+│                                                              │
+│  ┌─────────────────┐   ┌──────────────────┐                 │
+│  │  Socket.IO       │──▶│  Client UI        │                │
+│  │  pumpfun:token   │   │  /pumpfun         │                │
+│  │  pumpfun:trade   │   │  /pumpfun/tokens  │                │
+│  │  pumpfun:alert   │   │  /pumpfun/snipers │                │
+│  └─────────────────┘   └──────────────────┘                 │
+└──────────────────────────────────────────────────────────────┘
+                                   │
+                          Token enrichment
+                          (market data, security)
+                                   │
+                                   ▼
+                    ┌──────────────────────────────────┐
+                    │         Birdeye REST API          │
+                    │  token_overview, token_security,  │
+                    │  OHLCV, price history             │
+                    └──────────────────────────────────┘
+```
+
+### Implementation Phases
+
+#### P1: Token Detection (Helius webhook receiver)
+- Create `data/pumpfun/` directory with `meta.json`, `tokens.json`, `snipers.json`, `events.jsonl`
+- Create `server/services/pumpfun.js` — core service with token detection, event logging, file I/O with caching
+- Create `server/routes/pumpfun.js` — webhook endpoint (`POST /api/pumpfun/webhook`) + REST endpoints
+- Add Zod schemas for webhook payload validation and API inputs in `server/lib/validation.js`
+- Parse Helius enhanced transaction events: extract mint address, creator, initial supply from `TOKEN_MINT` type events where `source` is `PUMP_FUN`
+- Persist detected tokens to `tokens.json`, log launch events to `events.jsonl`
+- Mount routes in `server/index.js`
+- Emit Socket.IO `pumpfun:token` events for real-time UI updates
+
+#### P2: Token Enrichment (Birdeye integration)
+- Add enrichment scheduler to `pumpfun.js` — polls Birdeye `/defi/token_overview` and `/defi/token_security` for active tokens
+- Update token records with market cap, volume, holder count, security score, liquidity
+- Track ATH (all-time high) price and multiple for each token
+- Log enrichment snapshots to `events.jsonl` for historical tracking
+- Detect bonding curve graduation events
+- Filter out rug-pulls using Birdeye security endpoint (mint authority, freeze authority checks)
+
+#### P3: Sniper Detection & Analytics
+- Parse early buy transactions (within first 60s of launch) from Helius trade events
+- Cross-reference buyer wallets across multiple launches to identify repeat snipers
+- Build sniper reputation scores: success rate, avg entry delay, avg return multiple
+- Track sniper overlap — when 3+ known snipers enter the same token, flag as high signal
+- Create `/pumpfun/snipers` REST endpoint for sniper leaderboard data
+- Emit `pumpfun:alert` Socket.IO events when sniper overlap threshold exceeded
+
+#### P4: Dashboard UI
+- Create `client/src/pages/PumpFun.jsx` — main page with tab navigation
+- `/pumpfun/tokens` — live token feed with status, metrics, performance columns, sortable
+- `/pumpfun/snipers` — sniper leaderboard with wallet, stats, recent tokens
+- `/pumpfun/stats` — aggregate dashboard: launches/day, avg performer, top tokens, sniper activity
+- `/pumpfun/settings` — API key management, filter config, alert thresholds
+- Real-time updates via Socket.IO subscription
+- Deep-linkable routes per CLAUDE.md conventions
+
+### Files to Create
+
+**New files:**
+- `data/pumpfun/meta.json` — configuration
+- `data/pumpfun/tokens.json` — token entity store
+- `data/pumpfun/snipers.json` — sniper entity store
+- `data/pumpfun/events.jsonl` — event log
+- `server/services/pumpfun.js` — core service
+- `server/routes/pumpfun.js` — API routes
+- `client/src/pages/PumpFun.jsx` — dashboard page
+
+**Modified files:**
+- `server/lib/validation.js` — add pumpfun Zod schemas
+- `server/index.js` — mount pumpfun routes
+- `client/src/App.jsx` — add PumpFun route
+- `client/src/components/Sidebar.jsx` — add PumpFun nav item
+
+### Design Decisions
+
+1. **Mint address as entity key** (not UUID) — tokens are uniquely identified by their on-chain mint address, avoiding a mapping layer
+2. **Webhook-first** — push model from Helius eliminates polling overhead and gives ~1s detection latency
+3. **Enrichment on schedule, not inline** — Birdeye calls happen on a timer (60s default) for active tokens rather than blocking the webhook handler
+4. **JSONL for events** — trade/price events are high-volume, append-only; JSONL avoids rewriting large files
+5. **Sniper detection is cross-launch** — individual trades are meaningless; the value is in correlating the same wallet appearing in multiple successful early entries
+6. **No external DB** — consistent with PortOS's JSON file persistence pattern; suitable for the expected data volume (hundreds of tokens/day, not millions)
+7. **Security filtering built-in** — Birdeye's token_security endpoint flags rug-pull indicators early, preventing noise in the tracking data
 
 ---
 
