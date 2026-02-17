@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, CheckCircle, AlertCircle, RotateCcw } from 'lucide-react';
 
-export default function ResumeAgentModal({ agent, providers, apps, onSubmit, onClose }) {
+export default function ResumeAgentModal({ agent, taskType = 'user', providers, apps, onSubmit, onClose }) {
   const taskDescription = agent.metadata?.taskDescription || agent.taskId || 'Resume previous task';
   const outputSummary = agent.output?.length > 0
     ? agent.output.slice(-20).map(o => o.line).join('\n')
@@ -39,7 +39,8 @@ export default function ResumeAgentModal({ agent, providers, apps, onSubmit, onC
       context: fullContext,
       model: formData.model,
       provider: formData.provider,
-      app: formData.app
+      app: formData.app,
+      type: taskType
     });
   };
 
@@ -47,7 +48,9 @@ export default function ResumeAgentModal({ agent, providers, apps, onSubmit, onC
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-port-card border border-port-border rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-white">Resume Agent Task</h2>
+          <h2 className="text-xl font-bold text-white">
+            Resume {taskType === 'internal' ? 'System ' : ''}Agent Task
+          </h2>
           <button
             onClick={onClose}
             className="text-gray-500 hover:text-white transition-colors"

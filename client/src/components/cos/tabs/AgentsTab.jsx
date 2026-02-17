@@ -31,18 +31,19 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
     setResumingAgent(agent);
   };
 
-  const handleResumeSubmit = async ({ description, context, model, provider, app }) => {
+  const handleResumeSubmit = async ({ description, context, model, provider, app, type = 'user' }) => {
     await api.addCosTask({
       description,
       context,
       model: model || undefined,
       provider: provider || undefined,
-      app: app || undefined
+      app: app || undefined,
+      type
     }).catch(err => {
       toast.error(err.message);
       return;
     });
-    toast.success('Created resume task');
+    toast.success(`Created ${type === 'internal' ? 'system ' : ''}resume task`);
     setResumingAgent(null);
     onRefresh();
   };
@@ -170,6 +171,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
       {resumingAgent && (
         <ResumeAgentModal
           agent={resumingAgent}
+          taskType={resumingAgent.taskId?.startsWith('sys-') || resumingAgent.metadata?.taskType === 'internal' ? 'internal' : 'user'}
           providers={providers}
           apps={apps}
           onSubmit={handleResumeSubmit}

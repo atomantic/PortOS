@@ -312,7 +312,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 <span className="hidden sm:inline">Kill</span>
               </button>
             )}
-            {completed && !isSystemAgent && onResume && (
+            {completed && onResume && (
               <button
                 onClick={() => onResume(agent)}
                 className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
