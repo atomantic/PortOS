@@ -14,6 +14,7 @@ import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
 import * as goalProgress from '../services/goalProgress.js';
+import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -1107,6 +1108,30 @@ router.get('/goal-progress', asyncHandler(async (req, res) => {
 router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
   const summary = await goalProgress.getGoalProgressSummary();
   res.json(summary);
+}));
+
+// ============================================================
+// Decision Log Routes
+// ============================================================
+
+// GET /api/cos/decisions - Get recent decisions
+router.get('/decisions', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 20;
+  const type = req.query.type || null;
+  const decisions = await decisionLog.getRecentDecisions(limit, type);
+  res.json({ decisions });
+}));
+
+// GET /api/cos/decisions/summary - Get decision summary for dashboard
+router.get('/decisions/summary', asyncHandler(async (req, res) => {
+  const summary = await decisionLog.getDecisionSummary();
+  res.json(summary);
+}));
+
+// GET /api/cos/decisions/patterns - Get decision patterns/insights
+router.get('/decisions/patterns', asyncHandler(async (req, res) => {
+  const patterns = await decisionLog.getDecisionPatterns();
+  res.json(patterns);
 }));
 
 export default router;

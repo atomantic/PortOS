@@ -628,6 +628,15 @@ export const getCosActionableInsights = () => request('/cos/actionable-insights'
 export const getCosGoalProgress = () => request('/cos/goal-progress');
 export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
+// Decision Log
+export const getCosDecisions = (limit = 20, type = null) => {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (type) params.append('type', type);
+  return request(`/cos/decisions?${params}`);
+};
+export const getCosDecisionSummary = (options) => request('/cos/decisions/summary', options);
+export const getCosDecisionPatterns = () => request('/cos/decisions/patterns');
+
 // Task Schedule (Configurable Intervals)
 export const getCosUpcomingTasks = (limit = 10) => request(`/cos/upcoming?limit=${limit}`);
 export const getCosSchedule = () => request('/cos/schedule');
