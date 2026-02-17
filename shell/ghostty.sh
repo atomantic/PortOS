@@ -121,7 +121,7 @@ function proj() {
   "$ghostty_bin" \
     --config-file="$theme_file" \
     --title="$window_title" \
-    --working-directory="$project_path" &
+    --working-directory="$project_path" &>/dev/null &
 
   disown
   echo "Launched: $window_title"
