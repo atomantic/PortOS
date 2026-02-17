@@ -175,10 +175,18 @@ function _ghostty_apply_osc() {
   if [[ -n "$theme_file" ]]; then
     GHOSTTY_THEME_ACTIVE="$theme_file"
     _ghostty_set_colors "$theme_file"
+    # Set tab title to project name with theme emoji
+    local project_dir="$(dirname "$theme_file")"
+    local project_name="$(basename "$project_dir")"
+    local theme_name="$(_ghostty_theme_name "$theme_file")"
+    local emoji="$(_ghostty_theme_emoji "$theme_name")"
+    printf '\e]2;%s\a' "${emoji} ${project_name}"
   elif [[ -n "$GHOSTTY_THEME_ACTIVE" ]]; then
     # Left a themed directory — reset to defaults
     GHOSTTY_THEME_ACTIVE=""
     _ghostty_reset_colors
+    # Reset title (empty string restores default behavior)
+    printf '\e]2;%s\a' ""
   fi
 }
 
