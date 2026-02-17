@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
-import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain } from 'lucide-react';
+import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 
@@ -59,6 +59,9 @@ export default function ChiefOfStaff() {
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const tabsRef = useRef(null);
   const socket = useSocket();
 
   // Derive avatar style from server config, with optional dynamic override
@@ -326,6 +329,28 @@ export default function ChiefOfStaff() {
     [tasks.user?.grouped?.pending?.length, tasks.cos?.grouped?.pending?.length]
   );
 
+  // Check if tabs can scroll left/right
+  const checkTabsScroll = useCallback(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  // Update scroll state on mount and resize
+  useEffect(() => {
+    checkTabsScroll();
+    window.addEventListener('resize', checkTabsScroll);
+    return () => window.removeEventListener('resize', checkTabsScroll);
+  }, [checkTabsScroll]);
+
+  const scrollTabs = useCallback((direction) => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const scrollAmount = 200;
+    el.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' });
+  }, []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -578,31 +603,59 @@ export default function ChiefOfStaff() {
         {/* Quick Summary - at-a-glance stats on tasks tab only */}
         {activeTab === 'tasks' && <QuickSummary />}
 
-        {/* Tabs - scrollable on mobile with touch-friendly sizing */}
-        <div role="tablist" aria-label="Chief of Staff sections" className="flex gap-1 mb-4 lg:mb-6 border-b border-port-border overflow-x-auto scrollbar-hide pb-px">
-          {TABS.map(tabItem => {
-            const Icon = tabItem.icon;
-            const isSelected = activeTab === tabItem.id;
-            return (
-              <button
-                key={tabItem.id}
-                role="tab"
-                aria-selected={isSelected}
-                aria-controls={`tabpanel-${tabItem.id}`}
-                id={`tab-${tabItem.id}`}
-                onClick={() => navigate(`/cos/${tabItem.id}`)}
-                className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
-                  isSelected
-                    ? 'text-port-accent border-port-accent'
-                    : 'text-gray-500 border-transparent hover:text-white'
-                }`}
-              >
-                <Icon size={16} aria-hidden="true" />
-                <span className="hidden sm:inline">{tabItem.label}</span>
-                <span className="sr-only sm:hidden">{tabItem.label}</span>
-              </button>
-            );
-          })}
+        {/* Tabs - scrollable with arrow navigation */}
+        <div className="relative mb-4 lg:mb-6">
+          {/* Left scroll button */}
+          {canScrollLeft && (
+            <button
+              onClick={() => scrollTabs('left')}
+              className="absolute left-0 top-0 bottom-px z-10 flex items-center justify-center w-8 bg-gradient-to-r from-port-bg via-port-bg to-transparent hover:from-port-card"
+              aria-label="Scroll tabs left"
+            >
+              <ChevronLeft size={18} className="text-gray-400" />
+            </button>
+          )}
+          {/* Right scroll button */}
+          {canScrollRight && (
+            <button
+              onClick={() => scrollTabs('right')}
+              className="absolute right-0 top-0 bottom-px z-10 flex items-center justify-center w-8 bg-gradient-to-l from-port-bg via-port-bg to-transparent hover:from-port-card"
+              aria-label="Scroll tabs right"
+            >
+              <ChevronRight size={18} className="text-gray-400" />
+            </button>
+          )}
+          <div
+            ref={tabsRef}
+            role="tablist"
+            aria-label="Chief of Staff sections"
+            className="flex gap-1 border-b border-port-border overflow-x-auto scrollbar-hide pb-px"
+            onScroll={checkTabsScroll}
+          >
+            {TABS.map(tabItem => {
+              const Icon = tabItem.icon;
+              const isSelected = activeTab === tabItem.id;
+              return (
+                <button
+                  key={tabItem.id}
+                  role="tab"
+                  aria-selected={isSelected}
+                  aria-controls={`tabpanel-${tabItem.id}`}
+                  id={`tab-${tabItem.id}`}
+                  onClick={() => navigate(`/cos/${tabItem.id}`)}
+                  className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
+                    isSelected
+                      ? 'text-port-accent border-port-accent'
+                      : 'text-gray-500 border-transparent hover:text-white'
+                  }`}
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  <span className="hidden sm:inline">{tabItem.label}</span>
+                  <span className="sr-only sm:hidden">{tabItem.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Tab Content */}
