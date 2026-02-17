@@ -15,7 +15,7 @@
     "express": "^4.21.2",
     "node-pty": "^1.2.0-beta.10",
     "pm2": "^5.4.3",
-    "portos-ai-toolkit": "github:atomantic/portos-ai-toolkit#v0.4.1",
+    "portos-ai-toolkit": "^0.4.2",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "uuid": "^11.0.3",
