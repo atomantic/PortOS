@@ -29,7 +29,7 @@ export default function Jira() {
     try {
       setLoading(true);
       const response = await api.get('/jira/instances');
-      setInstances(response.data.instances || {});
+      setInstances(response.instances || {});
     } catch (error) {
       console.error('Failed to load JIRA instances:', error);
       toast.error(`Failed to load JIRA instances: ${error.message}`);
@@ -133,9 +133,9 @@ export default function Jira() {
       setTestResult(null);
 
       const response = await api.post(`/jira/instances/${instanceId}/test`);
-      setTestResult(response.data);
+      setTestResult(response);
 
-      if (response.data.success) {
+      if (response.success) {
         toast.success('Connection successful!');
       }
     } catch (error) {
