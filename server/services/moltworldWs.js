@@ -31,7 +31,8 @@ let lastEvent = null;
 let currentStatus = 'disconnected';
 let isReconnecting = false;
 let currentAccountId = null;
-let currentAgentId = null;
+let currentPortosAgentId = null;  // PortOS agent personality ID (for activity logging)
+let currentMoltworldAgentId = null;  // Moltworld credential ID (for WS protocol)
 let currentAgentName = null;
 
 const MAX_RECONNECT_DELAY_MS = 60000;
@@ -51,7 +52,8 @@ export function getStatus() {
     connectedAt,
     lastEvent,
     reconnectAttempts,
-    agentId: currentAgentId,
+    portosAgentId: currentPortosAgentId,
+    moltworldAgentId: currentMoltworldAgentId,
     agentName: currentAgentName,
     accountId: currentAccountId
   };
@@ -105,9 +107,9 @@ function handleMessage(raw) {
   } else if (eventType === 'interaction' || eventType === 'message' || eventType === 'say') {
     moltworldWsEvents.emit('interaction', data);
     // Log interactions to activity service
-    if (currentAgentId && data.agentId) {
+    if (currentPortosAgentId && data.agentId) {
       agentActivity.logActivity({
-        agentId: currentAgentId,
+        agentId: currentPortosAgentId,
         accountId: currentAccountId,
         action: 'mw_interaction',
         params: { eventType, from: data.agentName || data.agentId },
@@ -169,7 +171,7 @@ function doConnect() {
       // Send hello with agent credentials
       send({
         type: 'hello',
-        agentId: currentAgentId,
+        agentId: currentMoltworldAgentId,
         name: currentAgentName
       });
 
@@ -223,7 +225,8 @@ export async function connect(accountId) {
   }
 
   currentAccountId = accountId;
-  currentAgentId = account.credentials.agentId || account.credentials.apiKey;
+  currentPortosAgentId = account.agentId;  // PortOS personality ID for activity logging
+  currentMoltworldAgentId = account.credentials.agentId || account.credentials.apiKey;  // Moltworld protocol ID
   currentAgentName = account.credentials.username || 'Agent';
 
   await doConnect();
@@ -238,6 +241,8 @@ export function disconnect() {
   isReconnecting = false;
   connectedAt = null;
   reconnectAttempts = 0;
+  currentPortosAgentId = null;
+  currentMoltworldAgentId = null;
   cleanupWs();
   setStatus('disconnected');
 }
@@ -258,14 +263,14 @@ export function send(message) {
 export function sendMove(x, y, thought) {
   send({
     type: 'move',
-    agentId: currentAgentId,
+    agentId: currentMoltworldAgentId,
     x,
     y,
     ...(thought ? { thinking: thought } : {})
   });
-  if (currentAgentId && currentAccountId) {
+  if (currentPortosAgentId && currentAccountId) {
     agentActivity.logActivity({
-      agentId: currentAgentId,
+      agentId: currentPortosAgentId,
       accountId: currentAccountId,
       action: 'mw_explore',
       params: { x, y, thinking: thought, via: 'ws' },
@@ -282,12 +287,12 @@ export function sendMove(x, y, thought) {
 export function sendThink(thought) {
   send({
     type: 'think',
-    agentId: currentAgentId,
+    agentId: currentMoltworldAgentId,
     thought
   });
-  if (currentAgentId && currentAccountId) {
+  if (currentPortosAgentId && currentAccountId) {
     agentActivity.logActivity({
-      agentId: currentAgentId,
+      agentId: currentPortosAgentId,
       accountId: currentAccountId,
       action: 'mw_think',
       params: { thought, via: 'ws' },
@@ -304,13 +309,13 @@ export function sendThink(thought) {
 export function sendInteract(toAgentId, payload) {
   send({
     type: 'interact',
-    agentId: currentAgentId,
+    agentId: currentMoltworldAgentId,
     to: toAgentId,
     ...payload
   });
-  if (currentAgentId && currentAccountId) {
+  if (currentPortosAgentId && currentAccountId) {
     agentActivity.logActivity({
-      agentId: currentAgentId,
+      agentId: currentPortosAgentId,
       accountId: currentAccountId,
       action: 'mw_say',
       params: { to: toAgentId, ...payload, via: 'ws' },
@@ -327,7 +332,7 @@ export function sendInteract(toAgentId, payload) {
 export function sendNearby(radius) {
   send({
     type: 'nearby',
-    agentId: currentAgentId,
+    agentId: currentMoltworldAgentId,
     ...(radius ? { radius } : {})
   });
 }
