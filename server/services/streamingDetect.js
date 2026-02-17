@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename } from 'path';
+import { homedir } from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { safeJSONParse } from '../lib/fileUtils.js';
@@ -21,7 +22,7 @@ export function parseEcosystemConfig(content) {
   if (pm2HomeMatch) {
     // Handle template literal with homedir()
     let homePath = pm2HomeMatch[1];
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, process.env.HOME || '~');
+    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, homedir());
     pm2Home = homePath;
   } else {
     // Check for PM2_HOME in env blocks
@@ -31,7 +32,7 @@ export function parseEcosystemConfig(content) {
       const varMatch = content.match(/PM2_HOME\s*=\s*`([^`]+)`/);
       if (varMatch) {
         let homePath = varMatch[1];
-        homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, process.env.HOME || '~');
+        homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/, homedir());
         pm2Home = homePath;
       }
     }

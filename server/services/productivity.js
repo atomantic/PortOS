@@ -528,9 +528,15 @@ export async function getActivityCalendar(weeks = 12) {
   let currentWeek = [];
   let maxTasks = 1;
 
-  while (currentDate <= today) {
+  // Build calendar up through end of today's week (Saturday) for a complete grid
+  const endOfWeek = new Date(today);
+  endOfWeek.setDate(endOfWeek.getDate() + (6 - endOfWeek.getDay()));
+
+  while (currentDate <= endOfWeek) {
     const dateStr = getDateString(currentDate);
-    const dayData = dailyHistory[dateStr] || { tasks: 0, successes: 0, failures: 0, successRate: 0 };
+    const isFuture = currentDate > today;
+    const dayData = isFuture ? { tasks: 0, successes: 0, failures: 0, successRate: 0 } :
+      (dailyHistory[dateStr] || { tasks: 0, successes: 0, failures: 0, successRate: 0 });
 
     if (dayData.tasks > maxTasks) {
       maxTasks = dayData.tasks;
@@ -544,7 +550,7 @@ export async function getActivityCalendar(weeks = 12) {
       failures: dayData.failures,
       successRate: dayData.successRate,
       isToday: dateStr === todayStr,
-      isFuture: currentDate > today
+      isFuture
     });
 
     // Start new week on Sunday

@@ -9,7 +9,7 @@ import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
@@ -27,6 +27,7 @@ import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1975,7 +1976,7 @@ export async function runHealthCheck() {
     emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
 
     const restartResults = await Promise.all(names.map(async (name) => {
-      const result = await execAsync(`pm2 restart ${name} 2>&1`).catch(e => ({ stdout: '', stderr: e.message }));
+      const result = await execFileAsync('pm2', ['restart', name]).catch(e => ({ stdout: '', stderr: e.message }));
       const failed = result.stderr && !result.stdout;
       if (failed) {
         emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);
