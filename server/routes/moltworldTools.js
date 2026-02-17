@@ -7,11 +7,12 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema } from '../lib/validation.js';
+import { validate, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
 import { MoltworldClient } from '../integrations/moltworld/index.js';
+import * as moltworldQueue from '../services/moltworldQueue.js';
 
 const router = Router();
 
@@ -32,9 +33,11 @@ async function getClientAndAgent(accountId, agentId) {
 
   const agent = agentId ? await agentPersonalities.getAgentById(agentId) : null;
 
+  // Moltworld uses agentId for all API calls; fall back to apiKey which serves as the agent identifier
+  const moltworldAgentId = account.credentials.agentId || account.credentials.apiKey;
   const client = new MoltworldClient(
     account.credentials.apiKey,
-    account.credentials.agentId
+    moltworldAgentId
   );
   return { client, agent, account };
 }
@@ -48,7 +51,7 @@ router.post('/join', asyncHandler(async (req, res) => {
 
   console.log(`🌍 POST /api/agents/tools/moltworld/join account=${data.accountId}`);
 
-  const { client, account } = await getClientAndAgent(data.accountId, null);
+  const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
   const result = await client.joinWorld({
     name: account.credentials.username,
     x: data.x ?? 0,
@@ -59,6 +62,17 @@ router.post('/join', asyncHandler(async (req, res) => {
   });
 
   await platformAccounts.recordActivity(data.accountId);
+  if (data.agentId) {
+    await agentActivity.logActivity({
+      agentId: data.agentId,
+      accountId: data.accountId,
+      action: 'mw_heartbeat',
+      params: { x: data.x, y: data.y, thinking: data.thinking, say: data.say },
+      status: 'completed',
+      result: { agents: result?.agents?.length || 0, messages: result?.messages?.length || 0 },
+      timestamp: new Date().toISOString()
+    });
+  }
   res.json(result);
 }));
 
@@ -85,7 +99,7 @@ router.post('/build', asyncHandler(async (req, res) => {
     await agentActivity.logActivity({
       agentId: data.agentId,
       accountId: data.accountId,
-      action: 'build',
+      action: 'mw_build',
       params: { x: data.x, y: data.y, z: data.z, type: data.type, action: data.action },
       status: 'completed',
       result: { type: 'build', ...result },
@@ -123,15 +137,73 @@ router.post('/explore', asyncHandler(async (req, res) => {
     await agentActivity.logActivity({
       agentId: data.agentId,
       accountId: data.accountId,
-      action: 'explore',
+      action: 'mw_explore',
       params: { x, y, thinking: data.thinking },
       status: 'completed',
-      result: { type: 'explore', x, y, nearby: result?.nearby?.length || 0 },
+      result: { type: 'explore', x, y, nearby: result?.agents?.length || 0 },
       timestamp: new Date().toISOString()
     });
   }
 
   res.json({ x, y, ...result });
+}));
+
+// POST /think — Send a thought
+router.post('/think', asyncHandler(async (req, res) => {
+  const { success, data, errors } = validate(moltworldThinkSchema, req.body);
+  if (!success) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
+  }
+
+  console.log(`💭 POST /api/agents/tools/moltworld/think account=${data.accountId}`);
+
+  const { client } = await getClientAndAgent(data.accountId, data.agentId);
+  const result = await client.think(data.thought);
+
+  await platformAccounts.recordActivity(data.accountId);
+  if (data.agentId) {
+    await agentActivity.logActivity({
+      agentId: data.agentId,
+      accountId: data.accountId,
+      action: 'mw_think',
+      params: { thought: data.thought },
+      status: 'completed',
+      result: { type: 'think' },
+      timestamp: new Date().toISOString()
+    });
+  }
+  res.json(result);
+}));
+
+// POST /say — Send a message (wraps join with say/sayTo params)
+router.post('/say', asyncHandler(async (req, res) => {
+  const { success, data, errors } = validate(moltworldSaySchema, req.body);
+  if (!success) {
+    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
+  }
+
+  console.log(`💬 POST /api/agents/tools/moltworld/say account=${data.accountId}`);
+
+  const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
+  const result = await client.joinWorld({
+    name: account.credentials.username,
+    say: data.message,
+    sayTo: data.sayTo
+  });
+
+  await platformAccounts.recordActivity(data.accountId);
+  if (data.agentId) {
+    await agentActivity.logActivity({
+      agentId: data.agentId,
+      accountId: data.accountId,
+      action: 'mw_say',
+      params: { message: data.message, sayTo: data.sayTo },
+      status: 'completed',
+      result: { type: 'say' },
+      timestamp: new Date().toISOString()
+    });
+  }
+  res.json(result);
 }));
 
 // GET /status — Agent position, balance, nearby agents
@@ -178,6 +250,57 @@ router.get('/rate-limits', asyncHandler(async (req, res) => {
   const { client } = await getClientAndAgent(accountId);
   const rateLimits = client.getRateLimitStatus();
   res.json(rateLimits);
+}));
+
+// GET /queue/:agentId — Get queue for an agent
+router.get('/queue/:agentId', asyncHandler(async (req, res) => {
+  const { agentId } = req.params;
+  console.log(`📋 GET /api/agents/tools/moltworld/queue/${agentId}`);
+  const queue = moltworldQueue.getQueue(agentId);
+  res.json(queue);
+}));
+
+// POST /queue — Add action to queue
+router.post('/queue', asyncHandler(async (req, res) => {
+  const { agentId, actionType, params, scheduledFor } = req.body;
+  if (!agentId || !actionType) {
+    throw new ServerError('agentId and actionType required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  console.log(`📋 POST /api/agents/tools/moltworld/queue agentId=${agentId} action=${actionType}`);
+  const item = moltworldQueue.addAction(agentId, actionType, params || {}, scheduledFor);
+  res.json(item);
+}));
+
+// DELETE /queue/:id — Remove pending item from queue
+router.delete('/queue/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  console.log(`📋 DELETE /api/agents/tools/moltworld/queue/${id}`);
+  const item = moltworldQueue.removeAction(id);
+  if (!item) {
+    throw new ServerError('Queue item not found or not pending', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ success: true, removed: item });
+}));
+
+// POST /queue/:id/complete — Mark queue item as completed (used by explore script)
+router.post('/queue/:id/complete', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const item = moltworldQueue.markCompleted(id);
+  if (!item) {
+    throw new ServerError('Queue item not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(item);
+}));
+
+// POST /queue/:id/fail — Mark queue item as failed (used by explore script)
+router.post('/queue/:id/fail', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { error } = req.body || {};
+  const item = moltworldQueue.markFailed(id, error || 'Unknown error');
+  if (!item) {
+    throw new ServerError('Queue item not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(item);
 }));
 
 export default router;

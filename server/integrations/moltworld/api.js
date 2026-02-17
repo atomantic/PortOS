@@ -106,8 +106,11 @@ export async function register(name, appearance = {}) {
     })
   });
 
-  console.log(`🆕 Moltworld: Registered agent "${name}" (agentId=${result?.agentId})`);
-  return result;
+  // Normalize: API may return { agent: { id } } or { agentId }
+  const agentId = result?.agentId || result?.agent?.id || result?.id;
+  const apiKey = result?.apiKey || result?.api_key || agentId;
+  console.log(`🆕 Moltworld: Registered agent "${name}" (agentId=${agentId})`);
+  return { ...result, agentId, apiKey };
 }
 
 // =============================================================================

@@ -23,6 +23,9 @@ router.get('/', asyncHandler(async (req, res) => {
   let accounts;
   if (agentId) {
     accounts = await platformAccounts.getAccountsByAgent(agentId);
+    if (platform) {
+      accounts = accounts.filter(a => a.platform === platform);
+    }
   } else if (platform) {
     accounts = await platformAccounts.getAccountsByPlatform(platform);
   } else {
@@ -120,11 +123,12 @@ router.post('/', asyncHandler(async (req, res) => {
         claimUrl
       });
     } else if (data.platform === 'moltworld') {
-      // Register with Moltworld API — returns { agentId, apiKey }
+      // Register with Moltworld API — returns agent ID and API key
       const result = await moltworld.register(data.name, {});
-      const agentId = result.agentId;
-      const apiKey = result.apiKey;
+      const apiKey = result.apiKey || result.api_key;
+      const moltworldAgentId = result.agentId || result.agent_id || result.id || apiKey;
       const username = data.name;
+      console.log(`🌍 Moltworld registration result keys: ${Object.keys(result).join(', ')}`);
 
       const account = await platformAccounts.createAccount({
         agentId: data.agentId,
@@ -132,7 +136,7 @@ router.post('/', asyncHandler(async (req, res) => {
         credentials: {
           apiKey,
           username,
-          agentId   // Moltworld uses agentId for auth
+          agentId: moltworldAgentId   // Moltworld uses agentId for auth
         },
         status: 'active',  // No claim step for Moltworld
         platformData: {

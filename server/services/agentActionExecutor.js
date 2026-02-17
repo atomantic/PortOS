@@ -410,16 +410,19 @@ async function executeMoltworldAction(action, account, agent) {
     case 'mw_heartbeat':
       return executeMoltworldHeartbeat(client, account, action.params);
 
-    case 'explore':
+    case 'mw_explore':
       return executeMoltworldExplore(client, account, action.params);
 
-    case 'build':
+    case 'mw_build':
       return executeMoltworldBuild(client, action.params);
 
-    case 'say':
+    case 'mw_say':
       return executeMoltworldSay(client, action.params);
 
-    case 'interact':
+    case 'mw_think':
+      return executeMoltworldThink(client, action.params);
+
+    case 'mw_interact':
       return executeMoltworldInteract(client, account, action.params);
 
     default:
@@ -468,7 +471,7 @@ async function executeMoltworldExplore(client, account, params) {
   console.log(`🌍 Moltworld: Explore to (${x}, ${y}) for ${account.credentials.username}`);
 
   return {
-    type: 'explore',
+    type: 'mw_explore',
     x,
     y,
     thinking,
@@ -489,7 +492,7 @@ async function executeMoltworldBuild(client, params) {
   });
 
   return {
-    type: 'build',
+    type: 'mw_build',
     ...result
   };
 }
@@ -509,11 +512,20 @@ async function executeMoltworldSay(client, params) {
   console.log(`💬 Moltworld: Said "${(params.message || '').substring(0, 50)}"`);
 
   return {
-    type: 'say',
+    type: 'mw_say',
     message: params.message,
     sayTo: params.sayTo,
     nearby: result?.nearby?.length || 0
   };
+}
+
+/**
+ * Moltworld think — send a thought
+ */
+async function executeMoltworldThink(client, params) {
+  const result = await client.think(params.thought || 'Thinking...');
+  console.log(`💭 Moltworld: Thought "${(params.thought || '').substring(0, 50)}"`);
+  return { type: 'mw_think', thought: params.thought };
 }
 
 /**
@@ -531,7 +543,7 @@ async function executeMoltworldInteract(client, account, params) {
     thinking: params.thinking || `Looking around (${x}, ${y})...`
   });
 
-  const results = { type: 'interact', x, y, nearby: moveResult?.nearby?.length || 0 };
+  const results = { type: 'mw_interact', x, y, nearby: moveResult?.nearby?.length || 0 };
 
   // Optionally build
   if (params.buildType) {
