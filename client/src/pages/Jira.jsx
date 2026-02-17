@@ -28,7 +28,7 @@ export default function Jira() {
   const loadInstances = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/jira/instances');
+      const response = await api.get('/jira/instances');
       setInstances(response.data.instances || {});
     } catch (error) {
       console.error('Failed to load JIRA instances:', error);
@@ -91,7 +91,7 @@ export default function Jira() {
       };
 
       console.log('Saving JIRA instance:', payload);
-      await api.post('/api/jira/instances', payload);
+      await api.post('/jira/instances', payload);
 
       toast.success(`JIRA instance "${payload.name}" saved successfully`);
       await loadInstances();
@@ -114,7 +114,7 @@ export default function Jira() {
     setDeleteConfirm(null);
 
     try {
-      await api.delete(`/api/jira/instances/${instanceId}`);
+      await api.delete(`/jira/instances/${instanceId}`);
       toast.success(`JIRA instance "${instanceId}" deleted`);
       await loadInstances();
     } catch (error) {
@@ -132,7 +132,7 @@ export default function Jira() {
       setTestingInstance(instanceId);
       setTestResult(null);
 
-      const response = await api.post(`/api/jira/instances/${instanceId}/test`);
+      const response = await api.post(`/jira/instances/${instanceId}/test`);
       setTestResult(response.data);
 
       if (response.data.success) {
