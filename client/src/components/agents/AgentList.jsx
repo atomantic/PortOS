@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
+import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
 
@@ -155,7 +156,7 @@ export default function AgentList() {
   };
 
   if (loading) {
-    return <div className="p-6 text-gray-400">Loading agents...</div>;
+    return <div className="p-6"><BrailleSpinner text="Loading agents" /></div>;
   }
 
   return (

@@ -127,7 +127,8 @@ export async function createAccount(accountData) {
     platform: accountData.platform,
     credentials: {
       apiKey: accountData.credentials.apiKey,
-      username: accountData.credentials.username
+      username: accountData.credentials.username,
+      ...(accountData.credentials.agentId ? { agentId: accountData.credentials.agentId } : {})
     },
     status: accountData.status || 'pending',
     lastActivity: null,

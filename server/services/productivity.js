@@ -500,3 +500,92 @@ export async function getDailyTrends(days = 30) {
     }
   };
 }
+
+/**
+ * Get activity calendar data for GitHub-style heatmap
+ * Returns last N weeks of daily activity in a format optimized for calendar display
+ * @param {number} weeks - Number of weeks to include (default: 12)
+ * @returns {Object} Calendar data with days organized by week
+ */
+export async function getActivityCalendar(weeks = 12) {
+  const data = await loadProductivity();
+  const dailyHistory = data.dailyHistory || {};
+
+  // Calculate date range: from start of week N weeks ago to today
+  const today = new Date();
+  const todayStr = getDateString(today);
+
+  // Find the start of the range (weeks ago, aligned to Sunday)
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - (weeks * 7) + 1);
+  // Align to Sunday
+  const startDayOfWeek = startDate.getDay();
+  startDate.setDate(startDate.getDate() - startDayOfWeek);
+
+  // Build calendar grid: array of weeks, each containing 7 days
+  const calendar = [];
+  let currentDate = new Date(startDate);
+  let currentWeek = [];
+  let maxTasks = 1;
+
+  // Build calendar up through end of today's week (Saturday) for a complete grid
+  const endOfWeek = new Date(today);
+  endOfWeek.setDate(endOfWeek.getDate() + (6 - endOfWeek.getDay()));
+
+  while (currentDate <= endOfWeek) {
+    const dateStr = getDateString(currentDate);
+    const isFuture = currentDate > today;
+    const dayData = isFuture ? { tasks: 0, successes: 0, failures: 0, successRate: 0 } :
+      (dailyHistory[dateStr] || { tasks: 0, successes: 0, failures: 0, successRate: 0 });
+
+    if (dayData.tasks > maxTasks) {
+      maxTasks = dayData.tasks;
+    }
+
+    currentWeek.push({
+      date: dateStr,
+      dayOfWeek: currentDate.getDay(),
+      tasks: dayData.tasks,
+      successes: dayData.successes,
+      failures: dayData.failures,
+      successRate: dayData.successRate,
+      isToday: dateStr === todayStr,
+      isFuture
+    });
+
+    // Start new week on Sunday
+    if (currentDate.getDay() === 6) {
+      calendar.push(currentWeek);
+      currentWeek = [];
+    }
+
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  // Add remaining days if any
+  if (currentWeek.length > 0) {
+    calendar.push(currentWeek);
+  }
+
+  // Calculate summary stats
+  const allDays = calendar.flat();
+  const activeDays = allDays.filter(d => d.tasks > 0);
+  const totalTasks = activeDays.reduce((sum, d) => sum + d.tasks, 0);
+  const totalSuccesses = activeDays.reduce((sum, d) => sum + d.successes, 0);
+
+  return {
+    weeks: calendar,
+    maxTasks,
+    summary: {
+      totalDays: allDays.length,
+      activeDays: activeDays.length,
+      totalTasks,
+      totalSuccesses,
+      successRate: totalTasks > 0 ? Math.round((totalSuccesses / totalTasks) * 100) : 0,
+      avgTasksPerActiveDay: activeDays.length > 0
+        ? Math.round((totalTasks / activeDays.length) * 10) / 10
+        : 0
+    },
+    currentStreak: data.streaks?.currentDaily || 0
+  };
+}

@@ -39,3 +39,4 @@ Thumbs.db
 
 # Browser service node_modules (code is committed)
 browser/node_modules/
+.pm2

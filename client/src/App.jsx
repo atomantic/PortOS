@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import BrailleSpinner from './components/BrailleSpinner';
 import Dashboard from './pages/Dashboard';
 import Apps from './pages/Apps';
 import CreateApp from './pages/CreateApp';
@@ -30,7 +31,7 @@ const CyberCity = lazy(() => import('./pages/CyberCity'));
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
   <div className="flex items-center justify-center h-64">
-    <div className="text-gray-500">Loading...</div>
+    <BrailleSpinner text="Loading" />
   </div>
 );
 

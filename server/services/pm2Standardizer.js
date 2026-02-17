@@ -167,6 +167,15 @@ async function executeCliAnalysis(provider, prompt, cwd) {
   return new Promise((resolve, reject) => {
     const args = [...(provider.args || []), prompt];
     let output = '';
+    let settled = false;
+    let timer = null;
+
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(value);
+    };
 
     const child = spawn(provider.command, args, {
       cwd,
@@ -184,18 +193,20 @@ async function executeCliAnalysis(provider, prompt, cwd) {
 
     child.on('close', (code) => {
       if (code === 0) {
-        resolve(output);
+        settle(resolve, output);
       } else {
-        reject(new Error(`CLI exited with code ${code}`));
+        settle(reject, new Error(`CLI exited with code ${code}`));
       }
     });
 
-    child.on('error', reject);
+    child.on('error', (err) => settle(reject, err));
 
-    setTimeout(() => {
+    const timeoutMs = provider.timeout || 180000;
+    timer = setTimeout(() => {
+      console.log(`⏰ CLI analysis timed out after ${timeoutMs / 1000}s for: ${provider.command}`);
       child.kill();
-      reject(new Error('Standardization analysis timed out'));
-    }, provider.timeout || 120000);
+      settle(reject, new Error(`Standardization analysis timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
   });
 }
 
@@ -208,15 +219,20 @@ async function executeApiAnalysis(provider, prompt) {
     headers['Authorization'] = `Bearer ${provider.apiKey}`;
   }
 
+  const timeoutMs = provider.timeout || 180000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   const response = await fetch(`${provider.endpoint}/chat/completions`, {
     method: 'POST',
     headers,
+    signal: controller.signal,
     body: JSON.stringify({
       model: provider.defaultModel,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1
     })
-  });
+  }).finally(() => clearTimeout(timer));
 
   if (!response.ok) {
     throw new Error(`API error: ${response.status}`);
@@ -346,6 +362,9 @@ export async function analyzeApp(repoPath, providerId = null) {
   const prompt = buildStandardizationPrompt(context);
 
   // Execute analysis
+  const startTime = Date.now();
+  console.log(`🤖 Running ${provider.type} analysis via ${provider.name} (timeout: ${(provider.timeout || 180000) / 1000}s)`);
+
   let response;
   if (provider.type === 'cli') {
     response = await executeCliAnalysis(provider, prompt, repoPath);
@@ -354,6 +373,8 @@ export async function analyzeApp(repoPath, providerId = null) {
   } else {
     return { success: false, error: 'Unknown provider type' };
   }
+
+  console.log(`✅ Analysis response received in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
   // Parse response
   const analysis = parseAnalysisResponse(response);

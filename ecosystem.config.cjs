@@ -69,7 +69,8 @@ module.exports = {
       interpreter: 'node',
       env: {
         NODE_ENV: 'development',
-        PORT: PORTS.AUTOFIXER
+        PORT: PORTS.AUTOFIXER,
+        PATH: process.env.PATH // Inherit PATH for nvm/node access in child processes
       },
       watch: false,
       autorestart: true,

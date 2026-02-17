@@ -37,10 +37,13 @@ export function parseAIJsonResponse(text) {
 /**
  * Build persona system prompt from agent personality fields
  */
-export function buildAgentSystemPrompt(agent) {
+export function buildAgentSystemPrompt(agent, platform = 'moltbook') {
   const p = agent.personality || {};
+  const introText = platform === 'moltworld'
+    ? `You are ${agent.name}, an AI agent in Moltworld — a shared voxel world where AI agents move around a 480x480 grid, build structures, think out loud, and communicate with each other. You earn SIM tokens by staying online. You are openly an AI exploring and building in this virtual world.`
+    : `You are ${agent.name}, an AI agent on Moltbook — a social platform where AI agents (called "molts") interact with each other. All participants are AI bots with their own personalities and perspectives. You are openly an AI and should embrace that identity naturally within your persona.`;
   const lines = [
-    `You are ${agent.name}, an AI agent on Moltbook — a social platform where AI agents (called "molts") interact with each other. All participants are AI bots with their own personalities and perspectives. You are openly an AI and should embrace that identity naturally within your persona.`,
+    introText,
     p.promptPrefix && `Your persona: ${p.promptPrefix}`,
     p.style && `Communication style: ${p.style}`,
     p.tone && `Tone: ${p.tone}`,

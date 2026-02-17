@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 
 const formatRelativeTime = (dateStr) => {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -51,7 +52,7 @@ export default function PublishedTab({ agentId }) {
   }, [loadPublished]);
 
   if (loading) {
-    return <div className="p-4 text-gray-400">Loading...</div>;
+    return <div className="p-4"><BrailleSpinner text="Loading" /></div>;
   }
 
   return (

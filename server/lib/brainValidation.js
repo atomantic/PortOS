@@ -6,6 +6,9 @@ export const destinationEnum = z.enum(['people', 'projects', 'ideas', 'admin', '
 // Project status enum
 export const projectStatusEnum = z.enum(['active', 'waiting', 'blocked', 'someday', 'done']);
 
+// Idea status enum
+export const ideaStatusEnum = z.enum(['active', 'done']);
+
 // Admin status enum
 export const adminStatusEnum = z.enum(['open', 'waiting', 'done']);
 
@@ -92,6 +95,7 @@ export const projectRecordSchema = z.object({
 export const ideaRecordSchema = z.object({
   id: z.string().uuid(),
   title: z.string().min(1).max(200),
+  status: ideaStatusEnum.default('active'),
   oneLiner: z.string().min(1).max(500),
   notes: z.string().max(5000).optional(),
   tags: z.array(z.string().max(50)).optional().default([]),
@@ -197,6 +201,7 @@ export const projectInputSchema = z.object({
 // Create/Update Idea input schema
 export const ideaInputSchema = z.object({
   title: z.string().min(1).max(200),
+  status: ideaStatusEnum.optional().default('active'),
   oneLiner: z.string().min(1).max(500),
   notes: z.string().max(5000).optional(),
   tags: z.array(z.string().max(50)).optional()
@@ -244,6 +249,7 @@ export const extractedProjectSchema = z.object({
 // Extracted Idea fields
 export const extractedIdeaSchema = z.object({
   title: z.string().min(1).max(200),
+  status: ideaStatusEnum.optional().default('active'),
   oneLiner: z.string().min(1).max(500),
   notes: z.string().max(5000).optional().default(''),
   tags: z.array(z.string().max(50)).optional().default([])

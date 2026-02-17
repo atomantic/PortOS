@@ -235,7 +235,7 @@ describe('Apps Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(pm2Service.stopApp).toHaveBeenCalledWith('test-app');
+      expect(pm2Service.stopApp).toHaveBeenCalledWith('test-app', undefined);
     });
 
     it('should return 404 if app not found', async () => {
@@ -262,7 +262,7 @@ describe('Apps Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(pm2Service.restartApp).toHaveBeenCalledWith('test-app');
+      expect(pm2Service.restartApp).toHaveBeenCalledWith('test-app', undefined);
     });
 
     it('should return 404 if app not found', async () => {

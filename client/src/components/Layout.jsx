@@ -39,6 +39,7 @@ import packageJson from '../../package.json';
 import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
+import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import NotificationDropdown from './NotificationDropdown';
 
 const navItems = [
@@ -113,6 +114,9 @@ export default function Layout() {
 
   // Subscribe to server error notifications
   useErrorNotifications();
+
+  // Subscribe to agent completion feedback toasts
+  useAgentFeedbackToast();
 
   // Notifications for user task alerts
   const {
@@ -328,7 +332,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen bg-port-bg flex">
+    <div className="min-h-screen min-h-[100dvh] w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
@@ -424,7 +428,7 @@ export default function Layout() {
       </aside>
 
       {/* Main area */}
-      <div className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
+      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
         <header className="lg:hidden flex items-center justify-between px-3 py-2 border-b border-port-border bg-port-card">
           <button
@@ -459,7 +463,7 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/city');
           return (
-            <main id="main-content" className={`flex-1 overflow-auto ${isFullWidth ? '' : 'p-4 md:p-6'}`}>
+            <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               {isFullWidth ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
             </main>
           );

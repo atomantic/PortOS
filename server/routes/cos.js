@@ -13,6 +13,7 @@ import * as autonomousJobs from '../services/autonomousJobs.js';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
+import * as goalProgress from '../services/goalProgress.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -245,6 +246,31 @@ router.delete('/agents/:id', asyncHandler(async (req, res) => {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
   res.json(result);
+}));
+
+// POST /api/cos/agents/:id/feedback - Submit feedback for completed agent
+router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
+  const { rating, comment } = req.body;
+
+  if (rating === undefined || !['positive', 'negative', 'neutral'].includes(rating)) {
+    throw new ServerError('rating must be positive, negative, or neutral', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await cos.submitAgentFeedback(req.params.id, { rating, comment });
+  if (result?.error) {
+    const isNotFound = result.error === 'Agent not found';
+    throw new ServerError(result.error, {
+      status: isNotFound ? 404 : 400,
+      code: isNotFound ? 'NOT_FOUND' : 'INVALID_STATE'
+    });
+  }
+  res.json(result);
+}));
+
+// GET /api/cos/feedback/stats - Get feedback statistics
+router.get('/feedback/stats', asyncHandler(async (req, res) => {
+  const stats = await cos.getFeedbackStats();
+  res.json(stats);
 }));
 
 // GET /api/cos/reports - List all reports
@@ -539,6 +565,13 @@ router.get('/digest/compare', asyncHandler(async (req, res) => {
 router.get('/schedule', asyncHandler(async (req, res) => {
   const status = await taskSchedule.getScheduleStatus();
   res.json(status);
+}));
+
+// GET /api/cos/upcoming - Get upcoming tasks preview
+router.get('/upcoming', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit) || 10;
+  const upcoming = await taskSchedule.getUpcomingTasks(limit);
+  res.json(upcoming);
 }));
 
 // GET /api/cos/schedule/self-improvement/:taskType - Get interval for self-improvement task
@@ -891,6 +924,13 @@ router.get('/productivity/trends', asyncHandler(async (req, res) => {
   res.json(trends);
 }));
 
+// GET /api/cos/productivity/calendar - Get activity calendar for GitHub-style heatmap
+router.get('/productivity/calendar', asyncHandler(async (req, res) => {
+  const weeks = parseInt(req.query.weeks) || 12;
+  const calendar = await productivity.getActivityCalendar(weeks);
+  res.json(calendar);
+}));
+
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
@@ -1054,6 +1094,19 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       lastEvaluation: todayActivity.lastEvaluation
     }
   });
+}));
+
+// GET /api/cos/goal-progress - Get progress toward user goals
+// Maps completed tasks to goal categories from COS-GOALS.md
+router.get('/goal-progress', asyncHandler(async (req, res) => {
+  const progress = await goalProgress.getGoalProgress();
+  res.json(progress);
+}));
+
+// GET /api/cos/goal-progress/summary - Get compact goal progress for dashboard
+router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
+  const summary = await goalProgress.getGoalProgressSummary();
+  res.json(summary);
 }));
 
 export default router;

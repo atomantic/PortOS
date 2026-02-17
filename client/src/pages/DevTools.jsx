@@ -6,6 +6,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { formatTime, formatRuntime } from '../utils/formatters';
 import { processScreenshotUploads } from '../utils/fileUpload';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 export function HistoryPage() {
   const [history, setHistory] = useState([]);
@@ -66,7 +67,7 @@ export function HistoryPage() {
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-gray-400">Loading history...</div>;
+    return <div className="text-center py-8"><BrailleSpinner text="Loading history" /></div>;
   }
 
   return (
@@ -428,7 +429,7 @@ export function RunsHistoryPage() {
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-gray-400">Loading runs history...</div>;
+    return <div className="text-center py-8"><BrailleSpinner text="Loading runs history" /></div>;
   }
 
   const failedCount = runs.filter(r => r.success === false).length;
@@ -1417,7 +1418,7 @@ export function ProcessesPage() {
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-gray-400">Loading processes...</div>;
+    return <div className="text-center py-8"><BrailleSpinner text="Loading processes" /></div>;
   }
 
   return (
@@ -1901,7 +1902,7 @@ export function GitPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-8 text-gray-400">Loading...</div>
+        <div className="text-center py-8"><BrailleSpinner text="Loading git info" /></div>
       ) : gitInfo && gitInfo.isRepo ? (
         <div className="space-y-6">
           {/* Branch Comparison / Release Status */}
@@ -2153,7 +2154,7 @@ export function UsagePage() {
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-gray-400">Loading usage data...</div>;
+    return <div className="text-center py-8"><BrailleSpinner text="Loading usage data" /></div>;
   }
 
   if (!usage) {

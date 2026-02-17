@@ -61,11 +61,12 @@ export const agentUpdateSchema = agentSchema.partial();
 // PLATFORM ACCOUNT SCHEMAS
 // =============================================================================
 
-export const platformTypeSchema = z.enum(['moltbook']);
+export const platformTypeSchema = z.enum(['moltbook', 'moltworld']);
 
 export const accountCredentialsSchema = z.object({
   apiKey: z.string().min(1),
-  username: z.string().min(1).max(100)
+  username: z.string().min(1).max(100),
+  agentId: z.string().min(1).optional()    // Moltworld-specific agent ID
 });
 
 export const accountStatusSchema = z.enum(['active', 'pending', 'suspended', 'error']);
@@ -92,7 +93,10 @@ export const accountRegistrationSchema = z.object({
 // AUTOMATION SCHEDULE SCHEMAS
 // =============================================================================
 
-export const scheduleActionTypeSchema = z.enum(['post', 'comment', 'vote', 'heartbeat', 'engage', 'monitor']);
+export const scheduleActionTypeSchema = z.enum([
+  'post', 'comment', 'vote', 'heartbeat', 'engage', 'monitor',
+  'mw_explore', 'mw_build', 'mw_say', 'mw_think', 'mw_heartbeat', 'mw_interact'
+]);
 
 export const scheduleActionSchema = z.object({
   type: scheduleActionTypeSchema,
@@ -161,7 +165,8 @@ export const appSchema = z.object({
   icon: z.string().nullable().optional(),
   editorCommand: z.string().optional(),
   description: z.string().optional(),
-  archived: z.boolean().optional().default(false)
+  archived: z.boolean().optional().default(false),
+  pm2Home: z.string().optional() // Custom PM2_HOME path for apps that run in their own PM2 instance
 });
 
 // Partial schema for updates
@@ -287,6 +292,89 @@ export const updateDraftSchema = z.object({
   status: z.enum(['draft', 'published']).optional(),
   publishedPostId: z.string().optional().nullable(),
   publishedAt: z.string().optional().nullable()
+});
+
+// =============================================================================
+// MOLTWORLD TOOL SCHEMAS
+// =============================================================================
+
+export const moltworldJoinSchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  x: z.number().int().min(-240).max(240).optional(),
+  y: z.number().int().min(-240).max(240).optional(),
+  thinking: z.string().max(500).optional(),
+  say: z.string().max(500).optional(),
+  sayTo: z.string().optional()
+});
+
+export const moltworldBuildSchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  x: z.number().int().min(-500).max(500),
+  y: z.number().int().min(-500).max(500),
+  z: z.number().int().min(0).max(100),
+  type: z.enum(['wood', 'stone', 'dirt', 'grass', 'leaves']).optional().default('stone'),
+  action: z.enum(['place', 'remove']).optional().default('place')
+});
+
+export const moltworldExploreSchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  x: z.number().int().min(-240).max(240).optional(),
+  y: z.number().int().min(-240).max(240).optional(),
+  thinking: z.string().max(500).optional()
+});
+
+export const moltworldThinkSchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  thought: z.string().min(1).max(500)
+});
+
+export const moltworldSaySchema = z.object({
+  accountId: z.string().min(1),
+  agentId: z.string().min(1).optional(),
+  message: z.string().min(1).max(500),
+  sayTo: z.string().optional()
+});
+
+// =============================================================================
+// MOLTWORLD WEBSOCKET SCHEMAS
+// =============================================================================
+
+export const moltworldWsConnectSchema = z.object({
+  accountId: z.string().min(1)
+});
+
+export const moltworldWsMoveSchema = z.object({
+  x: z.number().int().min(-240).max(240),
+  y: z.number().int().min(-240).max(240),
+  thought: z.string().max(500).optional()
+});
+
+export const moltworldWsThinkSchema = z.object({
+  thought: z.string().min(1).max(500)
+});
+
+export const moltworldWsNearbySchema = z.object({
+  radius: z.number().int().min(1).max(500).optional()
+});
+
+export const moltworldWsInteractSchema = z.object({
+  to: z.string().min(1),
+  payload: z.record(z.unknown()).optional().default({})
+});
+
+export const moltworldQueueActionTypeSchema = z.enum([
+  'mw_explore', 'mw_build', 'mw_say', 'mw_think', 'mw_heartbeat', 'mw_interact'
+]);
+
+export const moltworldQueueAddSchema = z.object({
+  agentId: z.string().min(1),
+  actionType: moltworldQueueActionTypeSchema,
+  params: z.record(z.unknown()).optional().default({}),
+  scheduledFor: z.string().datetime().optional().nullable()
 });
 
 /**

@@ -66,6 +66,12 @@ export const PROJECT_STATUS_COLORS = {
   done: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
 };
 
+// Idea status colors
+export const IDEA_STATUS_COLORS = {
+  active: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+  done: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+};
+
 // Admin status colors
 export const ADMIN_STATUS_COLORS = {
   open: 'bg-blue-500/20 text-blue-400 border-blue-500/30',

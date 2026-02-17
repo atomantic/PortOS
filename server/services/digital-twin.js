@@ -1138,11 +1138,13 @@ export async function getEnrichmentProgress() {
 
   const progress = {};
   for (const cat of categories) {
+    const config = ENRICHMENT_CATEGORIES[cat];
     const answered = meta.enrichment.questionsAnswered?.[cat] || 0;
-    const baseQuestions = ENRICHMENT_CATEGORIES[cat].questions.length;
+    const baseQuestions = config.questions.length;
     progress[cat] = {
       answered,
       baseQuestions,
+      listBased: !!config.listBased,
       completed: meta.enrichment.completedCategories.includes(cat),
       percentage: Math.min(100, Math.round((answered / baseQuestions) * 100))
     };
@@ -1293,6 +1295,11 @@ export async function saveEnrichmentListDocument(category, content, items) {
     meta.enrichment.listItems = {};
   }
   meta.enrichment.listItems[category] = items;
+
+  // Track items as answered questions so progress displays correctly
+  if (!meta.enrichment.questionsAnswered) meta.enrichment.questionsAnswered = {};
+  meta.enrichment.questionsAnswered[category] = items.length;
+
   meta.enrichment.lastSession = now();
 
   // Ensure document is in meta

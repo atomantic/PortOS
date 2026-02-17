@@ -8,7 +8,8 @@ import {
   X,
   Save,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  CheckCircle2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -16,6 +17,7 @@ import {
   MEMORY_TABS,
   DESTINATIONS,
   PROJECT_STATUS_COLORS,
+  IDEA_STATUS_COLORS,
   ADMIN_STATUS_COLORS,
   formatRelativeTime
 } from '../constants';
@@ -44,7 +46,7 @@ export default function MemoryTab({ onRefresh }) {
         data = await api.getBrainProjects(filters).catch(() => []);
         break;
       case 'ideas':
-        data = await api.getBrainIdeas().catch(() => []);
+        data = await api.getBrainIdeas(filters).catch(() => []);
         break;
       case 'admin':
         data = await api.getBrainAdmin(filters).catch(() => []);
@@ -173,6 +175,36 @@ export default function MemoryTab({ onRefresh }) {
     }
   };
 
+  const handleMarkDone = async (record) => {
+    let result;
+    const update = { status: 'done' };
+    switch (activeType) {
+      case 'projects':
+        result = await api.updateBrainProject(record.id, update).catch(err => {
+          toast.error(err.message);
+          return null;
+        });
+        break;
+      case 'ideas':
+        result = await api.updateBrainIdea(record.id, update).catch(err => {
+          toast.error(err.message);
+          return null;
+        });
+        break;
+      case 'admin':
+        result = await api.updateBrainAdminItem(record.id, update).catch(err => {
+          toast.error(err.message);
+          return null;
+        });
+        break;
+    }
+    if (result) {
+      toast.success('Marked as done');
+      fetchRecords();
+      onRefresh?.();
+    }
+  };
+
   const startEdit = (record) => {
     setEditingId(record.id);
     setEditForm({ ...record });
@@ -255,6 +287,14 @@ export default function MemoryTab({ onRefresh }) {
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
             />
+            <select
+              value={form.status || 'active'}
+              onChange={(e) => setForm({ ...form, status: e.target.value })}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+            >
+              <option value="active">Active</option>
+              <option value="done">Done</option>
+            </select>
             <input
               type="text"
               placeholder="One-liner (core insight)"
@@ -368,7 +408,12 @@ export default function MemoryTab({ onRefresh }) {
 
             {activeType === 'ideas' && (
               <>
-                <h3 className="font-medium text-white">{record.title}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-white">{record.title}</h3>
+                  <span className={`px-2 py-0.5 text-xs rounded border ${IDEA_STATUS_COLORS[record.status || 'active']}`}>
+                    {record.status || 'active'}
+                  </span>
+                </div>
                 <p className="text-sm text-yellow-400 mt-1">{record.oneLiner}</p>
                 {record.notes && <p className="text-sm text-gray-400 mt-1">{record.notes}</p>}
               </>
@@ -397,6 +442,15 @@ export default function MemoryTab({ onRefresh }) {
           </div>
 
           <div className="flex items-center gap-1">
+            {(activeType === 'projects' || activeType === 'ideas' || activeType === 'admin') && record.status !== 'done' && (
+              <button
+                onClick={() => handleMarkDone(record)}
+                className="p-1.5 text-gray-400 hover:text-port-success rounded hover:bg-port-success/20"
+                title="Mark done"
+              >
+                <CheckCircle2 size={14} />
+              </button>
+            )}
             <button
               onClick={() => startEdit(record)}
               className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-port-border/50"
@@ -450,8 +504,8 @@ export default function MemoryTab({ onRefresh }) {
           Add
         </button>
 
-        {/* Status filter for projects/admin */}
-        {(activeType === 'projects' || activeType === 'admin') && (
+        {/* Status filter for projects/ideas/admin */}
+        {(activeType === 'projects' || activeType === 'ideas' || activeType === 'admin') && (
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -464,6 +518,11 @@ export default function MemoryTab({ onRefresh }) {
                 <option value="waiting">Waiting</option>
                 <option value="blocked">Blocked</option>
                 <option value="someday">Someday</option>
+                <option value="done">Done</option>
+              </>
+            ) : activeType === 'ideas' ? (
+              <>
+                <option value="active">Active</option>
                 <option value="done">Done</option>
               </>
             ) : (

@@ -15,10 +15,10 @@ npm run dev
 cd server && npm test
 cd server && npm run test:watch  # Watch mode
 
-# Production
-npm run pm2:start
-npm run pm2:stop
-npm run pm2:logs
+# Production (npm scripts or pm2 directly)
+pm2 start ecosystem.config.cjs
+pm2 stop ecosystem.config.cjs
+pm2 logs
 ```
 
 ## Architecture

@@ -26,7 +26,13 @@ export const MARKER_CATEGORIES = {
   mental_health: { label: 'Mental Health', icon: 'Brain', color: 'violet' },
   bone_health: { label: 'Bone Health', icon: 'Bone', color: 'stone' },
   pharmacogenomics: { label: 'Pharmacogenomics', icon: 'Pill', color: 'fuchsia' },
-  cancer_risk: { label: 'Cancer Predisposition', icon: 'ShieldCheck', color: 'red' },
+  cancer_breast: { label: 'Breast & Ovarian Cancer', icon: 'Ribbon', color: 'pink' },
+  cancer_prostate: { label: 'Prostate Cancer', icon: 'ShieldCheck', color: 'blue' },
+  cancer_colorectal: { label: 'Colorectal Cancer', icon: 'ShieldCheck', color: 'amber' },
+  cancer_lung: { label: 'Lung Cancer', icon: 'Wind', color: 'slate' },
+  cancer_melanoma: { label: 'Melanoma Risk', icon: 'Sun', color: 'stone' },
+  cancer_bladder: { label: 'Bladder Cancer', icon: 'ShieldCheck', color: 'zinc' },
+  cancer_digestive: { label: 'Digestive Cancer', icon: 'ShieldCheck', color: 'lime' },
   hair: { label: 'Hair Loss', icon: 'Scissors', color: 'zinc' },
   hearing: { label: 'Hearing', icon: 'Ear', color: 'slate' },
   pain: { label: 'Pain Sensitivity', icon: 'Zap', color: 'orange' }
@@ -1234,7 +1240,7 @@ export const CURATED_MARKERS = [
     rsid: 'rs61764370',
     gene: 'KRAS (3\'UTR)',
     name: 'KRAS let-7 MicroRNA Binding Variant',
-    category: 'cancer_risk',
+    category: 'tumor_suppression',
     description: 'This variant in the 3\'UTR of KRAS disrupts a let-7 microRNA binding site, increasing KRAS expression. Associated with increased risk for non-small cell lung cancer, ovarian cancer, and triple-negative breast cancer. Particularly relevant for never-smokers with lung cancer.',
     implications: {
       beneficial: 'T/T — normal let-7 regulation of KRAS. Standard cancer risk baseline.',
@@ -1433,6 +1439,664 @@ export const CURATED_MARKERS = [
       { genotypes: ['A/A'], status: 'beneficial' },
       { genotypes: ['G/A', 'A/G'], status: 'beneficial' },
       { genotypes: ['G/G'], status: 'typical' }
+    ]
+  },
+
+  // === BREAST & OVARIAN CANCER ===
+  {
+    rsid: 'rs2981582',
+    gene: 'FGFR2',
+    name: 'FGFR2 Breast Cancer Susceptibility',
+    category: 'cancer_breast',
+    description: 'FGFR2 (Fibroblast Growth Factor Receptor 2) is one of the strongest and most replicated breast cancer GWAS loci. The T allele increases ER-positive breast cancer risk ~1.26x per copy. Stronger association with estrogen receptor-positive disease.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk for breast cancer at this locus.',
+      typical: 'C/T — one risk allele. Mildly elevated breast cancer risk (~1.26x).',
+      concern: 'T/T — two risk alleles. ~1.63x increased breast cancer risk, particularly ER-positive subtypes.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3803662',
+    gene: 'TOX3',
+    name: 'TOX3 Breast Cancer Susceptibility',
+    category: 'cancer_breast',
+    description: 'TOX3 (TNRC9) at 16q12 is a well-replicated breast cancer susceptibility locus. The T allele correlates with lower TOX3 expression, increasing breast cancer risk ~1.20x per copy. Replicated across multiple populations.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk at this locus.',
+      typical: 'C/T — one risk allele. Modestly increased breast cancer risk (~1.20x).',
+      concern: 'T/T — two risk alleles. ~1.40x increased breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs889312',
+    gene: 'MAP3K1',
+    name: 'MAP3K1 Breast Cancer Susceptibility',
+    category: 'cancer_breast',
+    description: 'MAP3K1 at 5q11 encodes a MAPK kinase involved in cell proliferation signaling. The C allele is associated with modestly increased breast cancer risk (~1.13x per copy).',
+    implications: {
+      beneficial: 'A/A — lower genetic risk at this locus.',
+      typical: 'A/C — one risk allele. Mildly increased breast cancer risk.',
+      concern: 'C/C — two risk alleles. ~1.22x increased breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/C', 'C/A'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs13387042',
+    gene: '2q35 intergenic',
+    name: 'Chromosome 2q35 Breast Cancer Locus',
+    category: 'cancer_breast',
+    description: 'Intergenic variant at 2q35 with strong replication across European and Hispanic populations. The A allele increases breast cancer risk ~1.15x per copy.',
+    implications: {
+      beneficial: 'G/G — lower genetic risk at this locus.',
+      typical: 'A/G — one risk allele. Mildly increased breast cancer risk.',
+      concern: 'A/A — two risk alleles. ~1.40x increased breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3817198',
+    gene: 'LSP1',
+    name: 'LSP1 Breast Cancer Susceptibility',
+    category: 'cancer_breast',
+    description: 'LSP1 (Lymphocyte-Specific Protein 1) at 11p15. The C allele modestly increases breast cancer risk.',
+    implications: {
+      beneficial: 'T/T — lower genetic risk at this locus.',
+      typical: 'C/T — one risk allele. Small increase in breast cancer risk.',
+      concern: 'C/C — two risk alleles. ~1.15x increased breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs10941679',
+    gene: '5p12/FGF10',
+    name: '5p12 ER-Positive Breast Cancer Locus',
+    category: 'cancer_breast',
+    description: 'Variant near FGF10/MRPS30 at 5p12. The G allele is associated with increased ER-positive breast cancer risk. Stronger effect in estrogen receptor-positive disease.',
+    implications: {
+      beneficial: 'A/A — lower genetic risk at this locus.',
+      typical: 'A/G — one risk allele. Modestly increased ER+ breast cancer risk.',
+      concern: 'G/G — two risk alleles. ~1.30x increased ER-positive breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs4973768',
+    gene: 'SLC4A7',
+    name: 'SLC4A7 Breast Cancer Susceptibility',
+    category: 'cancer_breast',
+    description: 'SLC4A7 (Solute Carrier Family 4 Member 7) at 3p24. The T allele increases breast cancer risk ~1.11x per copy. Well-replicated in GWAS meta-analyses.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk at this locus.',
+      typical: 'C/T — one risk allele. Small increase in breast cancer risk.',
+      concern: 'T/T — two risk alleles. Modestly increased breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs1045485',
+    gene: 'CASP8',
+    name: 'CASP8 Breast Cancer Protection (D302H)',
+    category: 'cancer_breast',
+    description: 'CASP8 (Caspase-8) D302H variant at 2q33. Unusual marker where the minor C allele is protective, reducing breast cancer risk in a dose-dependent manner (OR ~0.89 per C allele).',
+    implications: {
+      beneficial: 'C/C — protective genotype. Reduced breast cancer risk (~0.74x).',
+      typical: 'C/G — one protective allele. Modestly reduced breast cancer risk.',
+      concern: 'G/G — common genotype. Standard baseline breast cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/G', 'G/C'], status: 'beneficial' },
+      { genotypes: ['G/G'], status: 'typical' }
+    ]
+  },
+  {
+    rsid: 'i4000377',
+    gene: 'BRCA1',
+    name: 'BRCA1 185delAG (Ashkenazi Founder)',
+    category: 'cancer_breast',
+    description: 'Ashkenazi Jewish founder mutation in BRCA1 (185delAG). FDA-approved 23andMe test. Carriers have ~72% lifetime breast cancer risk and ~44% ovarian cancer risk. High-penetrance pathogenic variant.',
+    implications: {
+      beneficial: 'I/I — no deletion detected. Standard population-level risk.',
+      major_concern: 'D/I — deletion carrier. Very high lifetime risk for breast and ovarian cancer. Genetic counseling strongly recommended.'
+    },
+    rules: [
+      { genotypes: ['I/I'], status: 'beneficial' },
+      { genotypes: ['D/I', 'I/D', 'D/D'], status: 'major_concern' }
+    ]
+  },
+  {
+    rsid: 'i4000378',
+    gene: 'BRCA1',
+    name: 'BRCA1 5382insC (Ashkenazi Founder)',
+    category: 'cancer_breast',
+    description: 'Ashkenazi Jewish founder mutation in BRCA1 (5382insC). FDA-approved 23andMe test. Carriers have substantially elevated lifetime breast and ovarian cancer risk. High-penetrance pathogenic variant.',
+    implications: {
+      beneficial: 'I/I — no insertion detected. Standard population-level risk.',
+      major_concern: 'D/I — insertion carrier. Very high lifetime risk for breast and ovarian cancer. Genetic counseling strongly recommended.'
+    },
+    rules: [
+      { genotypes: ['I/I'], status: 'beneficial' },
+      { genotypes: ['D/I', 'I/D', 'D/D'], status: 'major_concern' }
+    ]
+  },
+  {
+    rsid: 'i4000379',
+    gene: 'BRCA2',
+    name: 'BRCA2 6174delT (Ashkenazi Founder)',
+    category: 'cancer_breast',
+    description: 'Ashkenazi Jewish founder mutation in BRCA2 (6174delT). FDA-approved 23andMe test. Carriers have elevated lifetime risk for breast, ovarian, prostate, and pancreatic cancer. High-penetrance pathogenic variant.',
+    implications: {
+      beneficial: 'I/I — no deletion detected. Standard population-level risk.',
+      major_concern: 'D/I — deletion carrier. Elevated lifetime risk for breast, ovarian, prostate, and pancreatic cancer. Genetic counseling strongly recommended.'
+    },
+    rules: [
+      { genotypes: ['I/I'], status: 'beneficial' },
+      { genotypes: ['D/I', 'I/D', 'D/D'], status: 'major_concern' }
+    ]
+  },
+  {
+    rsid: 'rs3814113',
+    gene: 'BNC2',
+    name: 'BNC2 Ovarian Cancer Susceptibility',
+    category: 'cancer_breast',
+    description: 'BNC2 at 9p22 is the strongest GWAS association for high-grade serous ovarian carcinoma. The C allele is protective, reducing ovarian cancer risk.',
+    implications: {
+      beneficial: 'C/C — protective genotype. Reduced ovarian cancer risk.',
+      typical: 'C/T — one protective allele. Modestly reduced ovarian cancer risk.',
+      concern: 'T/T — standard risk genotype for high-grade serous ovarian cancer.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+
+  // === PROSTATE CANCER ===
+  {
+    rsid: 'rs6983267',
+    gene: '8q24/MYC region',
+    name: '8q24 Multi-Cancer Risk Locus',
+    category: 'cancer_prostate',
+    description: 'One of the most replicated multi-cancer variants at 8q24 near MYC. The G allele affects Wnt/TCF4 signaling and increases prostate cancer risk (~1.26x) and colorectal cancer risk (~1.50x). Population attributable risk ~21%.',
+    implications: {
+      beneficial: 'T/T — lower genetic risk at this multi-cancer locus.',
+      typical: 'G/T — one risk allele. Modestly increased prostate and colorectal cancer risk.',
+      concern: 'G/G — two risk alleles. ~1.26x prostate, ~1.50x colorectal cancer risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['G/T', 'T/G'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs1447295',
+    gene: '8q24 (region 1)',
+    name: '8q24 Region 1 Prostate Cancer Locus',
+    category: 'cancer_prostate',
+    description: 'Independent 8q24 signal for prostate cancer risk. The A allele increases risk ~1.22x per copy. Population attributable risk ~9% for prostate cancer.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk at this locus.',
+      typical: 'A/C — one risk allele. Modestly increased prostate cancer risk.',
+      concern: 'A/A — two risk alleles. ~1.44x increased prostate cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['A/C', 'C/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs10993994',
+    gene: 'MSMB',
+    name: 'MSMB Prostate Cancer Susceptibility',
+    category: 'cancer_prostate',
+    description: 'MSMB (Microseminoprotein-Beta) at 10q11. The T risk allele downregulates MSMB expression by ~70%, increasing prostate cancer risk ~1.24x per copy.',
+    implications: {
+      beneficial: 'C/C — normal MSMB expression. Lower prostate cancer risk.',
+      typical: 'C/T — one risk allele. Reduced MSMB expression, modestly increased prostate cancer risk.',
+      concern: 'T/T — significantly reduced MSMB expression (~70% lower). ~1.50x increased prostate cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs4430796',
+    gene: 'HNF1B',
+    name: 'HNF1B Prostate & Endometrial Cancer',
+    category: 'cancer_prostate',
+    description: 'HNF1B (TCF2) at 17q12 is a pleiotropic locus also associated with type 2 diabetes. The A allele increases prostate cancer risk ~1.25x.',
+    implications: {
+      beneficial: 'G/G — lower genetic risk at this locus.',
+      typical: 'A/G — one risk allele. Modestly increased prostate cancer risk.',
+      concern: 'A/A — two risk alleles. ~1.25x increased prostate cancer risk.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs1859962',
+    gene: '17q24.3',
+    name: 'Chromosome 17q24 Prostate Cancer Locus',
+    category: 'cancer_prostate',
+    description: 'Variant at 17q24.3 associated with prostate cancer risk. The G allele increases risk ~1.37x for homozygous carriers.',
+    implications: {
+      beneficial: 'T/T — lower genetic risk at this locus.',
+      typical: 'G/T — one risk allele. Modestly increased prostate cancer risk.',
+      concern: 'G/G — two risk alleles. ~1.37x increased prostate cancer risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['G/T', 'T/G'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs16901979',
+    gene: '8q24 (region 2)',
+    name: '8q24 Region 2 Prostate Cancer Locus',
+    category: 'cancer_prostate',
+    description: 'Independent 8q24 signal from rs6983267 and rs1447295. The A allele increases prostate cancer risk ~1.47x.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk at this locus.',
+      typical: 'A/C — one risk allele. Increased prostate cancer risk.',
+      concern: 'A/A — two risk alleles. ~1.47x increased prostate cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['A/C', 'C/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+
+  // === COLORECTAL CANCER ===
+  {
+    rsid: 'rs4939827',
+    gene: 'SMAD7',
+    name: 'SMAD7 Colorectal Cancer Protection',
+    category: 'cancer_colorectal',
+    description: 'SMAD7 at 18q21 modulates TGF-β signaling. The T allele is protective, reducing colorectal cancer risk ~0.77x per copy. Stronger association with rectal than colon cancer.',
+    implications: {
+      beneficial: 'T/T — protective genotype. Reduced colorectal cancer risk.',
+      typical: 'C/T — one protective allele. Modestly reduced colorectal cancer risk.',
+      concern: 'C/C — standard risk genotype for colorectal cancer.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs16892766',
+    gene: 'EIF3H',
+    name: 'EIF3H Colorectal Cancer Susceptibility',
+    category: 'cancer_colorectal',
+    description: 'EIF3H (Eukaryotic Translation Initiation Factor 3 Subunit H) at 8q23. The C risk allele increases colorectal cancer risk ~1.25x per copy.',
+    implications: {
+      beneficial: 'A/A — lower genetic risk at this locus.',
+      typical: 'A/C — one risk allele. Modestly increased colorectal cancer risk.',
+      concern: 'C/C — two risk alleles. ~1.56x increased colorectal cancer risk.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/C', 'C/A'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3802842',
+    gene: '11q23/LOC120376',
+    name: 'Chromosome 11q23 Colorectal Cancer Locus',
+    category: 'cancer_colorectal',
+    description: 'Variant at 11q23 associated with colorectal cancer. The C allele increases risk, with stronger association for rectal cancer.',
+    implications: {
+      beneficial: 'A/A — lower genetic risk at this locus.',
+      typical: 'A/C — one risk allele. Modestly increased colorectal cancer risk.',
+      concern: 'C/C — two risk alleles. ~1.35x increased colorectal cancer risk.'
+    },
+    rules: [
+      { genotypes: ['A/A'], status: 'beneficial' },
+      { genotypes: ['A/C', 'C/A'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs4779584',
+    gene: 'GREM1',
+    name: 'GREM1 Colorectal Cancer Susceptibility',
+    category: 'cancer_colorectal',
+    description: 'GREM1 (Gremlin 1) at 15q13 encodes a BMP antagonist involved in intestinal stem cell regulation. The T allele increases colorectal cancer risk ~1.26x per copy.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk at this locus.',
+      typical: 'C/T — one risk allele. Modestly increased colorectal cancer risk.',
+      concern: 'T/T — two risk alleles. Increased colorectal cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+
+  // === MELANOMA ===
+  {
+    rsid: 'rs1805008',
+    gene: 'MC1R',
+    name: 'MC1R R160W Melanoma Risk',
+    category: 'cancer_melanoma',
+    description: 'MC1R R160W variant affects melanin switching. The T allele is associated with lighter pigmentation and increased melanoma risk (~1.5-2.0x). Weaker effect than MC1R R151C (rs1805007) but contributes to cumulative melanoma risk.',
+    implications: {
+      beneficial: 'C/C — normal MC1R function at this position. Standard melanoma risk.',
+      typical: 'C/T — one variant. Mildly increased UV sensitivity and melanoma risk.',
+      concern: 'T/T — reduced MC1R function. Increased melanoma risk. Sun protection recommended.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs1408799',
+    gene: 'TYRP1',
+    name: 'TYRP1 Melanoma Susceptibility',
+    category: 'cancer_melanoma',
+    description: 'TYRP1 (Tyrosinase-Related Protein 1) at 9p23 is involved in melanin biosynthesis. The T allele increases melanoma risk ~1.30x.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk for melanoma at this locus.',
+      typical: 'C/T — one risk allele. Modestly increased melanoma risk.',
+      concern: 'T/T — two risk alleles. ~1.30x increased melanoma risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+
+  // === LUNG CANCER ===
+  {
+    rsid: 'rs1051730',
+    gene: 'CHRNA3',
+    name: 'CHRNA3 Lung Cancer & Nicotine Dependence',
+    category: 'cancer_lung',
+    description: 'CHRNA3 (Cholinergic Receptor Nicotinic Alpha 3) at 15q25. The T allele increases smoking intensity, carcinogen exposure per cigarette, and lung cancer risk ~1.30x per copy. Also associated with COPD.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk for lung cancer and nicotine dependence at this locus.',
+      typical: 'C/T — one risk allele. Increased smoking intensity tendency and lung cancer risk (~1.30x).',
+      concern: 'T/T — two risk alleles. ~1.60x lung cancer risk. Higher nicotine dependence. Smoking cessation especially important.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs16969968',
+    gene: 'CHRNA5',
+    name: 'CHRNA5 Lung Cancer & Nicotine Dependence (D398N)',
+    category: 'cancer_lung',
+    description: 'CHRNA5 (Cholinergic Receptor Nicotinic Alpha 5) at 15q25. The A allele (D398N) reduces the aversive effects of nicotine, promoting heavier smoking and increasing lung cancer risk. In strong LD with rs1051730. ~28% frequency in Europeans.',
+    implications: {
+      beneficial: 'G/G — normal nicotinic receptor function. Lower genetic lung cancer risk.',
+      typical: 'A/G — one risk allele. Reduced nicotine aversion, modestly increased lung cancer risk (~1.30x).',
+      concern: 'A/A — two risk alleles. ~1.60x lung cancer risk. Significantly reduced nicotine aversion.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs8034191',
+    gene: 'CHRNA3/5 region',
+    name: 'CHRNA3/5 Region Lung Cancer Locus',
+    category: 'cancer_lung',
+    description: 'Independent signal in the CHRNA3/5 nicotinic receptor gene cluster at 15q25. The C allele increases lung cancer risk ~1.28x per copy.',
+    implications: {
+      beneficial: 'T/T — lower genetic risk for lung cancer at this locus.',
+      typical: 'C/T — one risk allele. Modestly increased lung cancer risk.',
+      concern: 'C/C — two risk alleles. ~1.28x increased lung cancer risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+
+  // === BLADDER CANCER ===
+  {
+    rsid: 'rs1495741',
+    gene: 'NAT2',
+    name: 'NAT2 Slow Acetylator (Bladder Cancer)',
+    category: 'cancer_bladder',
+    description: 'NAT2 at 8p22 determines acetylation status. This tag SNP effectively classifies slow vs rapid acetylators. Slow acetylators (A/A) cannot efficiently detoxify aromatic amines, increasing bladder cancer risk ~1.46x. Especially relevant for smokers and occupational carcinogen exposure.',
+    implications: {
+      beneficial: 'G/G — rapid acetylator. Efficient aromatic amine detoxification. Lower bladder cancer risk.',
+      typical: 'A/G — intermediate acetylator. Moderately efficient detoxification.',
+      concern: 'A/A — slow acetylator. Impaired detoxification of aromatic amines. ~1.46x bladder cancer risk.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs9642880',
+    gene: '8q24',
+    name: '8q24 Bladder Cancer Locus',
+    category: 'cancer_bladder',
+    description: 'Variant at the 8q24 multi-cancer risk region specifically associated with bladder cancer. The G allele increases risk ~1.19x per copy.',
+    implications: {
+      beneficial: 'T/T — lower genetic risk for bladder cancer at this locus.',
+      typical: 'G/T — one risk allele. Modestly increased bladder cancer risk.',
+      concern: 'G/G — two risk alleles. ~1.40x increased bladder cancer risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['G/T', 'T/G'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs710521',
+    gene: 'TP63',
+    name: 'TP63 Bladder Cancer Susceptibility',
+    category: 'cancer_bladder',
+    description: 'TP63 at 3q28 belongs to the p53 gene family and regulates epithelial development. The A allele increases bladder cancer risk ~1.37x for homozygous carriers.',
+    implications: {
+      beneficial: 'G/G — lower genetic risk at this locus.',
+      typical: 'A/G — one risk allele. Modestly increased bladder cancer risk.',
+      concern: 'A/A — two risk alleles. ~1.37x increased bladder cancer risk.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+
+  // === DIGESTIVE CANCER (PANCREATIC & GASTRIC) ===
+  {
+    rsid: 'rs505922',
+    gene: 'ABO',
+    name: 'ABO Blood Group Pancreatic Cancer Risk',
+    category: 'cancer_digestive',
+    description: 'ABO blood group locus at 9q34. The C allele (linked to non-O blood types) increases pancreatic cancer risk ~1.20x per copy. Blood type O is protective. Robustly replicated across diverse populations.',
+    implications: {
+      beneficial: 'T/T — linked to blood type O. Lower pancreatic cancer risk.',
+      typical: 'C/T — intermediate. Modestly increased pancreatic cancer risk.',
+      concern: 'C/C — non-O blood type linkage. ~1.20x per allele increased pancreatic cancer risk.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs3790844',
+    gene: 'NR5A2',
+    name: 'NR5A2 Pancreatic Cancer Protection',
+    category: 'cancer_digestive',
+    description: 'NR5A2 at 1q32 encodes a nuclear receptor that interacts with β-catenin pathway. The T allele is protective, reducing pancreatic cancer risk ~0.77x per copy.',
+    implications: {
+      beneficial: 'T/T — protective genotype. Reduced pancreatic cancer risk.',
+      typical: 'C/T — one protective allele. Modestly reduced pancreatic cancer risk.',
+      concern: 'C/C — standard risk genotype for pancreatic cancer.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs4072037',
+    gene: 'MUC1',
+    name: 'MUC1 Gastric Cancer Susceptibility',
+    category: 'cancer_digestive',
+    description: 'MUC1 (Mucin 1) at 1q22 modulates promoter activity and alternative splicing. The G allele is protective against gastric cancer (OR ~0.70). Strongest association in Asian populations, also replicated in European cohorts.',
+    implications: {
+      beneficial: 'G/G — protective genotype. Reduced gastric cancer risk.',
+      typical: 'A/G — one protective allele. Modestly reduced gastric cancer risk.',
+      concern: 'A/A — standard/higher risk genotype for gastric cancer.'
+    },
+    rules: [
+      { genotypes: ['G/G'], status: 'beneficial' },
+      { genotypes: ['A/G', 'G/A'], status: 'typical' },
+      { genotypes: ['A/A'], status: 'concern' }
+    ]
+  },
+
+  // === MULTI-CANCER TUMOR SUPPRESSORS ===
+  {
+    rsid: 'rs2736100',
+    gene: 'TERT',
+    name: 'TERT Telomerase Multi-Cancer Variant',
+    category: 'tumor_suppression',
+    description: 'TERT (Telomerase Reverse Transcriptase) at 5p15. The C allele increases risk for lung, bladder, thyroid, and glioma (~1.39x), but is inversely associated with breast and colorectal cancer. Direction of effect varies by cancer type. Meta-analysis of 108,248 cases.',
+    implications: {
+      beneficial: 'T/T — lower risk for lung/bladder/thyroid cancers (but may be slightly higher for breast/colorectal).',
+      typical: 'C/T — intermediate. Mixed directional effects depending on cancer type.',
+      concern: 'C/C — increased risk for lung, bladder, thyroid cancer, and glioma. Note: may be protective against breast/colorectal cancer.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs2279744',
+    gene: 'MDM2',
+    name: 'MDM2 SNP309 p53 Pathway Attenuator',
+    category: 'tumor_suppression',
+    description: 'MDM2 SNP309 at 12q15. The G allele increases MDM2 expression, attenuating the p53 tumor suppressor pathway. Associated with earlier cancer onset (~12 years earlier on average) across multiple cancer types including gastric, liver, colorectal, and gynecological cancers.',
+    implications: {
+      beneficial: 'T/T — normal MDM2 expression. p53 pathway functions optimally.',
+      typical: 'T/G — one risk allele. Moderately increased MDM2 expression. ~1.20x cancer risk.',
+      concern: 'G/G — significantly increased MDM2 expression. Attenuated p53 pathway. ~1.54x cancer risk. Earlier age of onset.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['T/G', 'G/T'], status: 'typical' },
+      { genotypes: ['G/G'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs17879961',
+    gene: 'CHEK2',
+    name: 'CHEK2 I157T DNA Damage Response',
+    category: 'tumor_suppression',
+    description: 'CHEK2 (Checkpoint Kinase 2) I157T at 22q12. This missense variant impairs CHEK2 binding to BRCA1 and p53, compromising DNA damage response. Increases breast cancer risk (~1.5-1.6x) and colorectal cancer risk (~1.6x). Higher penetrance for lobular breast cancer (OR ~4.17).',
+    implications: {
+      beneficial: 'T/T — normal CHEK2 function. DNA damage checkpoint intact.',
+      typical: 'C/T — one variant allele. Partially impaired CHEK2/BRCA1 binding. ~1.5x breast cancer risk.',
+      concern: 'C/C — impaired CHEK2 function. Compromised DNA damage response. Enhanced screening recommended.'
+    },
+    rules: [
+      { genotypes: ['T/T'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['C/C'], status: 'concern' }
+    ]
+  },
+
+  // === THYROID CANCER (additions to existing thyroid category) ===
+  {
+    rsid: 'rs944289',
+    gene: 'NKX2-1/PTCSC3',
+    name: 'NKX2-1 Papillary Thyroid Cancer Risk',
+    category: 'thyroid',
+    description: 'NKX2-1 region at 14q13 regulates PTCSC3 long non-coding RNA tumor suppressor expression. The T allele increases papillary thyroid cancer risk ~1.60x for homozygous carriers.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk for papillary thyroid cancer.',
+      typical: 'C/T — one risk allele. Modestly increased thyroid cancer risk.',
+      concern: 'T/T — two risk alleles. ~1.60x increased papillary thyroid cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
+    ]
+  },
+  {
+    rsid: 'rs966423',
+    gene: 'DIRC3',
+    name: 'DIRC3 Papillary Thyroid Cancer Risk',
+    category: 'thyroid',
+    description: 'DIRC3 (Disrupted in Renal Carcinoma 3) at 2q35. The T allele is associated with increased papillary thyroid cancer risk.',
+    implications: {
+      beneficial: 'C/C — lower genetic risk for thyroid cancer at this locus.',
+      typical: 'C/T — one risk allele. Modestly increased thyroid cancer risk.',
+      concern: 'T/T — two risk alleles. Increased papillary thyroid cancer risk.'
+    },
+    rules: [
+      { genotypes: ['C/C'], status: 'beneficial' },
+      { genotypes: ['C/T', 'T/C'], status: 'typical' },
+      { genotypes: ['T/T'], status: 'concern' }
     ]
   }
 ];
