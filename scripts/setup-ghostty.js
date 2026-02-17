@@ -33,18 +33,7 @@ if (!ghosttyInstalled) {
 
 console.log('👻 Setting up Ghostty shell integration...');
 
-// 1. Copy shaders → ~/.config/ghostty/shaders/
-const shaderSrc = join(rootDir, 'shell/shaders');
-const shaderDest = join(home, '.config/ghostty/shaders');
-mkdirSync(shaderDest, { recursive: true });
-
-const shaderFiles = readdirSync(shaderSrc).filter(f => f.endsWith('.glsl'));
-for (const file of shaderFiles) {
-  cpSync(join(shaderSrc, file), join(shaderDest, file));
-}
-console.log(`✅ Copied ${shaderFiles.length} shaders → ${shaderDest}`);
-
-// 2. Copy themes → platform-specific themes directory
+// 1. Copy themes → platform-specific themes directory
 const themeSrc = join(rootDir, 'shell/themes');
 const themeDest = isMac
   ? join(home, 'Library/Application Support/com.mitchellh.ghostty/themes')
@@ -57,23 +46,7 @@ for (const file of themeFiles) {
 }
 console.log(`✅ Copied ${themeFiles.length} themes → ${themeDest}`);
 
-// 3. Clone community shaders if not present
-const communityDir = join(shaderDest, 'community');
-if (!existsSync(communityDir)) {
-  console.log('📦 Cloning community shaders...');
-  try {
-    execSync(`git clone https://github.com/0xhckr/ghostty-shaders "${communityDir}"`, {
-      stdio: 'inherit',
-    });
-    console.log('✅ Community shaders cloned');
-  } catch {
-    console.log('⚠️  Could not clone community shaders (no git or network?) — skipping');
-  }
-} else {
-  console.log('✅ Community shaders already present');
-}
-
-// 4. Add source line to shell rc file
+// 2. Add source line to shell rc file
 const shellRcPath = existsSync(join(home, '.zshrc'))
   ? join(home, '.zshrc')
   : join(home, '.bashrc');
