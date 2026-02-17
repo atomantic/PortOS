@@ -14,6 +14,11 @@ import { runDailyDigest, runWeeklyReview } from './brain.js';
 let schedulerInterval = null;
 let lastCheckTime = null;
 const CHECK_INTERVAL_MS = 60000; // Check every minute
+const FAILURE_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes cooldown after failure
+
+// Track failures to prevent retry spam
+let lastDailyFailure = null;
+let lastWeeklyFailure = null;
 
 // Day name to number mapping
 const DAY_MAP = {
@@ -54,9 +59,20 @@ function isWeeklyReviewTime(settings, now) {
 }
 
 /**
+ * Check if we're in cooldown after a failure
+ */
+function isInCooldown(lastFailure, now) {
+  if (!lastFailure) return false;
+  return (now.getTime() - lastFailure.getTime()) < FAILURE_COOLDOWN_MS;
+}
+
+/**
  * Check if daily digest was missed (should have run today but didn't)
  */
 function isDailyDigestMissed(settings, now) {
+  // Respect cooldown after failure
+  if (isInCooldown(lastDailyFailure, now)) return false;
+
   const { hours, minutes } = parseTime(settings.dailyDigestTime);
 
   // Create target time for today
@@ -78,6 +94,9 @@ function isDailyDigestMissed(settings, now) {
  * Check if weekly review was missed
  */
 function isWeeklyReviewMissed(settings, now) {
+  // Respect cooldown after failure
+  if (isInCooldown(lastWeeklyFailure, now)) return false;
+
   // Never run before — catch up now
   if (!settings.lastWeeklyReview) return true;
 
@@ -104,12 +123,14 @@ async function checkSchedule() {
   if (isDailyDigestTime(settings, now)) {
     console.log('🧠 Scheduler: Running daily digest...');
     runDailyDigest().catch(err => {
+      lastDailyFailure = new Date();
       console.error(`🧠 Scheduler: Daily digest failed: ${err.message}`);
     });
   } else if (isDailyDigestMissed(settings, now)) {
     console.log('🧠 Scheduler: Running missed daily digest (catch-up)...');
     runDailyDigest().catch(err => {
-      console.error(`🧠 Scheduler: Catch-up daily digest failed: ${err.message}`);
+      lastDailyFailure = new Date();
+      console.error(`🧠 Scheduler: Catch-up daily digest failed: ${err.message} (retry in 30min)`);
     });
   }
 
@@ -117,12 +138,14 @@ async function checkSchedule() {
   if (isWeeklyReviewTime(settings, now)) {
     console.log('🧠 Scheduler: Running weekly review...');
     runWeeklyReview().catch(err => {
+      lastWeeklyFailure = new Date();
       console.error(`🧠 Scheduler: Weekly review failed: ${err.message}`);
     });
   } else if (isWeeklyReviewMissed(settings, now)) {
     console.log('🧠 Scheduler: Running missed weekly review (catch-up)...');
     runWeeklyReview().catch(err => {
-      console.error(`🧠 Scheduler: Catch-up weekly review failed: ${err.message}`);
+      lastWeeklyFailure = new Date();
+      console.error(`🧠 Scheduler: Catch-up weekly review failed: ${err.message} (retry in 30min)`);
     });
   }
 }
