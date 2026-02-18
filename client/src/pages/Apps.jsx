@@ -609,7 +609,7 @@ function EditAppModal({ app, onClose, onSave }) {
     }).catch(() => setJiraInstances([]));
   }, []);
 
-  // Fetch JIRA projects when instance changes + default assignee to instance user
+  // Fetch JIRA projects when instance changes
   useEffect(() => {
     if (!formData.jiraInstanceId) {
       setJiraProjects([]);
@@ -619,15 +619,16 @@ function EditAppModal({ app, onClose, onSave }) {
     api.getJiraProjects(formData.jiraInstanceId).then(projects => {
       setJiraProjects(projects || []);
     }).catch(() => setJiraProjects([])).finally(() => setLoadingProjects(false));
+  }, [formData.jiraInstanceId]);
 
-    // Default assignee to the configured JIRA user if not already set
-    if (!formData.jiraAssignee) {
-      const inst = jiraInstances.find(i => i.id === formData.jiraInstanceId);
-      if (inst?.email) {
-        setFormData(prev => ({ ...prev, jiraAssignee: inst.email }));
-      }
+  // Default assignee to the configured JIRA user when instances load or instance changes
+  useEffect(() => {
+    if (!formData.jiraInstanceId || formData.jiraAssignee) return;
+    const inst = jiraInstances.find(i => i.id === formData.jiraInstanceId);
+    if (inst?.email) {
+      setFormData(prev => ({ ...prev, jiraAssignee: inst.email }));
     }
-  }, [formData.jiraInstanceId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [formData.jiraInstanceId, jiraInstances, formData.jiraAssignee]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
