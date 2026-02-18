@@ -307,6 +307,31 @@ export async function getMyCurrentSprintTickets(instanceId, projectKey) {
   }
 }
 
+/**
+ * Get active sprints for a JIRA board
+ */
+export async function getActiveSprints(instanceId, boardId) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const response = await client.get(`/rest/agile/1.0/board/${boardId}/sprint`, {
+    params: { state: 'active' }
+  });
+
+  return response.data.values.map(sprint => ({
+    id: sprint.id,
+    name: sprint.name,
+    state: sprint.state,
+    startDate: sprint.startDate,
+    endDate: sprint.endDate
+  }));
+}
+
 export default {
   getInstances,
   saveInstances,
@@ -318,5 +343,6 @@ export default {
   updateTicket,
   addComment,
   transitionTicket,
-  getMyCurrentSprintTickets
+  getMyCurrentSprintTickets,
+  getActiveSprints
 };

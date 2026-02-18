@@ -218,4 +218,20 @@ router.get('/instances/:instanceId/my-sprint-tickets/:projectKey', async (req, r
   }
 });
 
+/**
+ * GET /api/jira/instances/:instanceId/boards/:boardId/sprints
+ * Get active sprints for a board
+ */
+router.get('/instances/:instanceId/boards/:boardId/sprints', async (req, res, next) => {
+  try {
+    const sprints = await jiraService.getActiveSprints(
+      req.params.instanceId,
+      req.params.boardId
+    );
+    res.json(sprints);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;
