@@ -122,6 +122,11 @@ describe('autonomousJobs', () => {
       expect(job1Idx).toBeGreaterThanOrEqual(0)
       expect(job2Idx).toBeLessThan(job1Idx)
       expect(due[job2Idx].overdueBy).toBeGreaterThan(due[job1Idx].overdueBy)
+
+      // Verify only expected test jobs plus any default jobs are present
+      const testJobIds = new Set(['job-test-1', 'job-1', 'job-2'])
+      const unexpectedJobs = due.filter(j => !testJobIds.has(j.id) && !j.id.startsWith('job-github-'))
+      expect(unexpectedJobs).toHaveLength(0)
     })
   })
 
