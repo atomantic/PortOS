@@ -9,7 +9,7 @@
  * @returns {string} Formatted relative time (e.g., "Just now", "5m ago", "2h ago")
  */
 export function formatTime(timestamp) {
-  if (!timestamp) return 'Unknown';
+  if (timestamp == null || timestamp === '') return 'Unknown';
   const date = new Date(timestamp);
   if (isNaN(date.getTime())) return 'Invalid date';
   const now = new Date();
