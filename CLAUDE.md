@@ -60,6 +60,10 @@ PortOS depends on `portos-ai-toolkit` as an npm module for AI provider managemen
 - The toolkit uses spread in `updateProvider()` so existing providers preserve custom fields, but `createProvider()` has an explicit field list
 - After updating the toolkit, run `npm update portos-ai-toolkit` in PortOS to pull changes
 
+## Scope Boundary
+
+When CoS agents or AI tools work on managed apps outside PortOS, all research, plans, docs, and code for those apps must be written to the target app's own repository/directory -- never to this repo. PortOS stores only its own features, plans, and documentation. If an agent generates a PLAN.md, research doc, or feature spec for another app, it goes in that app's directory.
+
 ## Code Conventions
 
 - **No try/catch** - errors bubble to centralized middleware
