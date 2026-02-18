@@ -353,7 +353,7 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
                   <ChevronDown size={12} className={`transition-transform ${showAppSelector ? 'rotate-180' : ''}`} />
                 </button>
                 {showAppSelector && (
-                  <div className="absolute top-full left-0 mt-1 z-50 w-64 max-w-[calc(100vw-2rem)] max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
+                  <div className="absolute bottom-full left-0 mb-1 z-50 w-64 max-w-[calc(100vw-2rem)] max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
                     <div className="p-2 border-b border-port-border">
                       <span className="text-xs text-gray-400">Select an app to run {taskType} on:</span>
                     </div>
@@ -512,7 +512,48 @@ function PerAppOverrides({ apps, taskTypes }) {
           <p className="text-sm text-gray-400 ml-2 sm:ml-6">
             Enable or disable specific task types per app. Disabled task types will be skipped during scheduled runs for that app.
           </p>
-          <div className="ml-2 sm:ml-6 overflow-x-auto -mx-2 px-2 sm:mx-0 sm:px-0">
+          {/* Mobile: card layout per app */}
+          <div className="ml-2 sm:hidden space-y-2">
+            {activeApps.map(app => {
+              const disabled = overrides[app.id] || [];
+              return (
+                <div key={app.id} className="border border-port-border rounded-lg p-3 bg-port-card/50">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Package size={14} className="text-gray-500 flex-shrink-0" />
+                    <span className="text-sm font-mono text-white truncate">{app.name}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {taskTypes.map(tt => {
+                      const isEnabled = !disabled.includes(tt);
+                      const isUpdating = updating === `${app.id}:${tt}`;
+                      return (
+                        <div key={tt} className="flex items-center justify-between py-1">
+                          <span className="text-xs text-gray-400 font-mono">{tt}</span>
+                          <button
+                            onClick={() => handleToggle(app.id, tt, isEnabled)}
+                            disabled={isUpdating}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 ${
+                              isEnabled ? 'bg-port-accent' : 'bg-gray-600'
+                            } ${isUpdating ? 'opacity-50' : ''}`}
+                            title={`${isEnabled ? 'Disable' : 'Enable'} ${tt} for ${app.name}`}
+                            aria-label={`${isEnabled ? 'Disable' : 'Enable'} ${tt} for ${app.name}`}
+                          >
+                            <span
+                              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                                isEnabled ? 'translate-x-5' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Desktop: table layout */}
+          <div className="hidden sm:block ml-6 overflow-x-auto">
             <table className="w-full text-sm min-w-[400px]">
               <thead>
                 <tr className="border-b border-port-border">
