@@ -26,6 +26,7 @@ import { extractAndStoreMemories } from './memoryExtractor.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { suggestModelTier } from './taskLearning.js';
 import { readJSONFile } from '../lib/fileUtils.js';
+import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, updateExecution, completeExecution, errorExecution, getExecution, getStats as getToolStats } from './toolStateMachine.js';
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
 import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
@@ -221,7 +222,7 @@ async function selectModelForTask(task, provider, agent = {}) {
 /**
  * Create a run entry for usage tracking
  */
-async function createAgentRun(agentId, task, model, provider, workspacePath) {
+async function createAgentRun(agentId, task, model, provider, workspacePath, appName) {
   const runId = uuidv4();
   const runDir = join(RUNS_DIR, runId);
 
@@ -240,7 +241,7 @@ async function createAgentRun(agentId, task, model, provider, workspacePath) {
     providerName: provider.name,
     model: model || provider.defaultModel,
     workspacePath,
-    workspaceName: task.metadata?.app || 'portos',
+    workspaceName: appName || 'portos',
     prompt: (task.description || '').substring(0, 500),
     startTime: new Date().toISOString(),
     endTime: null,
@@ -1232,10 +1233,13 @@ export async function spawnAgentForTask(task) {
     ...(modelSelection.learningReason && { learningReason: modelSelection.learningReason })
   });
 
-  // Determine workspace path
+  // Determine workspace path and resolve app name
   let workspacePath = task.metadata?.app
     ? await getAppWorkspace(task.metadata.app)
     : ROOT_DIR;
+  const resolvedAppName = task.metadata?.app
+    ? (await getAppById(task.metadata.app).catch(() => null))?.name || task.metadata.app
+    : null;
 
   // Check for conflicts with active agents and decide on worktree usage
   let worktreeInfo = null;
@@ -1283,7 +1287,7 @@ export async function spawnAgentForTask(task) {
   await writeFile(join(agentDir, 'prompt.txt'), prompt);
 
   // Create run entry for usage tracking
-  const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath);
+  const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
 
   // Register the agent with model info (include worktree metadata + task metadata for learning)
   await registerAgent(agentId, task.id, {
@@ -1305,6 +1309,7 @@ export async function spawnAgentForTask(task) {
     taskAnalysisType: task.metadata?.analysisType || null,
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,
+    taskAppName: resolvedAppName,
     selfImprovementType: task.metadata?.selfImprovementType || null,
     missionName: task.metadata?.missionName || null,
     missionId: task.metadata?.missionId || null

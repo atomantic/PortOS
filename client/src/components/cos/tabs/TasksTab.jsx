@@ -620,7 +620,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     >
                       <div className="space-y-1.5">
                         {pendingUserTasksLocal.map(task => (
-                          <SortableTaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                          <SortableTaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                         ))}
                       </div>
                     </SortableContext>
@@ -639,7 +639,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -655,7 +655,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                    <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -677,7 +677,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 {showCompletedUserTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedUserTasksLocal.map(task => (
-                      <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} />
+                      <TaskItem key={task.id} task={task} onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                     ))}
                   </div>
                 )}
@@ -708,7 +708,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {pendingSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -724,7 +724,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -740,7 +740,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                    <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                   ))}
                 </div>
               </div>
@@ -762,7 +762,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 {showCompletedSystemTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedSystemTasks.map(task => (
-                      <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} />
+                      <TaskItem key={task.id} task={task} isSystem onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
                     ))}
                   </div>
                 )}
@@ -778,7 +778,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <h3 className="text-lg font-semibold text-yellow-500 mb-3">Awaiting Approval</h3>
           <div className="space-y-2">
             {awaitingApproval.map(task => (
-              <TaskItem key={task.id} task={task} awaitingApproval onRefresh={onRefresh} providers={providers} durations={durations} />
+              <TaskItem key={task.id} task={task} awaitingApproval onRefresh={onRefresh} providers={providers} durations={durations} apps={apps} />
             ))}
           </div>
         </div>

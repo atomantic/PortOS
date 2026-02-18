@@ -2,7 +2,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import TaskItem from './TaskItem';
 
-export default function SortableTaskItem({ task, onRefresh, providers, durations }) {
+export default function SortableTaskItem({ task, onRefresh, providers, durations, apps }) {
   const {
     attributes,
     listeners,
@@ -26,6 +26,7 @@ export default function SortableTaskItem({ task, onRefresh, providers, durations
         onRefresh={onRefresh}
         providers={providers}
         durations={durations}
+        apps={apps}
         dragHandleProps={{ ...attributes, ...listeners }}
       />
     </div>
