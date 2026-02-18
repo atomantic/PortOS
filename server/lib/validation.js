@@ -150,6 +150,19 @@ export const processSchema = z.object({
   description: z.string().optional()
 });
 
+// JIRA integration config for apps
+export const jiraConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  instanceId: z.string().optional(),
+  projectKey: z.string().optional(),
+  boardId: z.string().optional(),
+  issueType: z.string().optional().default('Task'),
+  labels: z.array(z.string()).optional().default([]),
+  assignee: z.string().optional(),
+  epicKey: z.string().optional(),
+  createPR: z.boolean().optional().default(true)
+});
+
 // App schema for registration/update
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
@@ -166,7 +179,9 @@ export const appSchema = z.object({
   editorCommand: z.string().optional(),
   description: z.string().optional(),
   archived: z.boolean().optional().default(false),
-  pm2Home: z.string().optional() // Custom PM2_HOME path for apps that run in their own PM2 instance
+  pm2Home: z.string().optional(), // Custom PM2_HOME path for apps that run in their own PM2 instance
+  disabledTaskTypes: z.array(z.string()).optional(), // Task types disabled for this app (e.g., ['typing', 'accessibility'])
+  jira: jiraConfigSchema.optional().nullable()
 });
 
 // Partial schema for updates

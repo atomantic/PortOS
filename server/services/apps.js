@@ -129,6 +129,7 @@ export async function createApp(appData) {
     icon: appData.icon || null,
     editorCommand: appData.editorCommand || 'code .',
     archived: false,
+    jira: appData.jira || null,
     createdAt: now,
     updatedAt: now
   };
@@ -195,6 +196,44 @@ export async function archiveApp(id) {
  */
 export async function unarchiveApp(id) {
   return updateApp(id, { archived: false });
+}
+
+/**
+ * Get disabled task types for an app
+ */
+export async function getAppDisabledTaskTypes(id) {
+  const app = await getAppById(id);
+  return app?.disabledTaskTypes || [];
+}
+
+/**
+ * Check if a task type is enabled for a specific app
+ */
+export async function isTaskTypeEnabledForApp(id, taskType) {
+  const disabled = await getAppDisabledTaskTypes(id);
+  return !disabled.includes(taskType);
+}
+
+/**
+ * Toggle a task type for a specific app (enable/disable)
+ */
+export async function toggleAppTaskType(id, taskType, enabled) {
+  const data = await loadApps();
+  if (!data.apps[id]) return null;
+
+  const disabledTaskTypes = data.apps[id].disabledTaskTypes || [];
+
+  if (enabled && disabledTaskTypes.includes(taskType)) {
+    data.apps[id].disabledTaskTypes = disabledTaskTypes.filter(t => t !== taskType);
+  } else if (!enabled && !disabledTaskTypes.includes(taskType)) {
+    data.apps[id].disabledTaskTypes = [...disabledTaskTypes, taskType];
+  }
+
+  data.apps[id].updatedAt = new Date().toISOString();
+  await saveApps(data);
+  appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
+
+  return { id, ...data.apps[id] };
 }
 
 /**

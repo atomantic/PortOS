@@ -1,0 +1,34 @@
+# PortOS - Blue accent theme
+background = 0a1628
+foreground = e8eef5
+cursor-color = 3b82f6
+cursor-style = block
+selection-background = 1e3a5f
+selection-foreground = ffffff
+
+# Normal colors (0-7)
+palette = 0=#0f0f0f
+palette = 1=#ef4444
+palette = 2=#22c55e
+palette = 3=#f59e0b
+palette = 4=#3b82f6
+palette = 5=#b080e0
+palette = 6=#50c8d0
+palette = 7=#c8d0e0
+
+# Bright colors (8-15)
+palette = 8=#1a1a1a
+palette = 9=#f07080
+palette = 10=#60e088
+palette = 11=#f0d070
+palette = 12=#6ab4ff
+palette = 13=#c090f0
+palette = 14=#60d8e0
+palette = 15=#e8eef5
+
+# Visual effects
+background-opacity = 0.92
+
+# Window padding
+window-padding-x = 4
+window-padding-y = 2

@@ -101,7 +101,7 @@ export async function getBranch(dir) {
 export async function getCommits(dir, limit = 10) {
   // Validate limit is a positive integer to prevent injection
   const safeLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
-  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%ci"}';
+  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const result = await execGit(['log', format, '-n', String(safeLimit)], dir);
 
   const commits = result.stdout.trim().split('\n').filter(Boolean).map(line => {
@@ -271,7 +271,7 @@ export async function updateBranches(dir) {
  * Get branch comparison (how far ahead headBranch is from baseBranch)
  */
 export async function getBranchComparison(dir, baseBranch = 'main', headBranch = 'dev') {
-  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%ci"}';
+  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const logResult = await execGit(
     ['log', format, `${baseBranch}..${headBranch}`], dir, { ignoreExitCode: true }
   );
@@ -307,6 +307,59 @@ export async function push(dir, branch = null) {
   const args = branch ? ['push', 'origin', branch] : ['push'];
   const result = await execGit(args, dir);
   return { success: true, output: result.stdout + result.stderr };
+}
+
+/**
+ * Create and switch to a new branch
+ */
+export async function createBranch(dir, branchName) {
+  await execGit(['checkout', '-b', branchName], dir);
+  return { success: true, branch: branchName };
+}
+
+/**
+ * Switch to an existing branch
+ */
+export async function checkout(dir, branchName) {
+  await execGit(['checkout', branchName], dir);
+  return { success: true, branch: branchName };
+}
+
+/**
+ * Create a pull request using the `gh` CLI.
+ * Fails gracefully if `gh` is not installed.
+ * @param {string} dir - Working directory (repo root)
+ * @param {object} options - PR options
+ * @param {string} options.title - PR title
+ * @param {string} options.body - PR description
+ * @param {string} options.base - Base branch (target)
+ * @param {string} options.head - Head branch (source)
+ * @returns {Promise<{success: boolean, url?: string, error?: string}>}
+ */
+export async function createPR(dir, { title, body, base, head }) {
+  return new Promise((resolve) => {
+    const args = ['pr', 'create', '--title', title, '--body', body || '', '--base', base, '--head', head];
+    const child = spawn('gh', args, { cwd: dir, shell: false });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => { stdout += data.toString(); });
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        const url = stdout.trim();
+        resolve({ success: true, url });
+      } else {
+        resolve({ success: false, error: stderr || `gh exited with code ${code}` });
+      }
+    });
+
+    child.on('error', (err) => {
+      resolve({ success: false, error: `gh not available: ${err.message}` });
+    });
+  });
 }
 
 /**

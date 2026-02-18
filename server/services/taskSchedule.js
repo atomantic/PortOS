@@ -23,6 +23,7 @@ import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
 import { readJSONFile } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
+import { isTaskTypeEnabledForApp } from './apps.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -310,31 +311,36 @@ Review and improve PortOS documentation:
 
 Commit documentation improvements.`,
 
-  'feature-ideas': `[Self-Improvement] Brainstorm and Implement Feature
+  'feature-ideas': `[Self-Improvement] Feature Review and Development
 
-Think about ways to make PortOS more useful:
+Evaluate existing features and consider new ones to make PortOS more useful:
 
 1. Read data/COS-GOALS.md for context on user goals
-2. Review recent completed tasks to understand patterns
-3. Consider these areas:
-   - User task management improvements
-   - Better progress visualization
-   - New automation capabilities
-   - Enhanced monitoring features
+2. Review recent completed tasks and user feedback to understand patterns
+3. Assess current features:
+   - Are existing features working well toward our goals?
+   - Are there features that could be improved or refined?
+   - Are there features that are underperforming or causing friction?
 
-4. Choose ONE small, high-impact feature to implement:
-   - Something that saves user time
-   - Improves the developer experience
-   - Makes CoS more helpful
+4. Choose ONE action to take (in order of preference):
+   a) IMPROVE an existing feature that isn't meeting its potential
+      - Identify what's not working and why
+      - Make targeted improvements to increase effectiveness
+   b) ADD a new high-impact feature
+      - Something that saves user time, improves the developer experience, or makes CoS more helpful
+   c) ARCHIVE a feature that is not helping our goals
+      - This requires a high bar: document clear evidence of why it's not useful
+      - Check usage patterns, goal alignment, and whether the feature creates noise
+      - Move the feature config to disabled with a reason, don't delete code
 
 5. Implement it:
    - Write clean, tested code
    - Follow existing patterns
    - Update relevant documentation
 
-6. Commit with a clear description of the new feature
+6. Commit with a clear description of the change and rationale
 
-Think creatively but implement practically.`,
+Think critically about what we have before adding more.`,
 
   'accessibility': `[Self-Improvement] Accessibility Audit
 
@@ -963,6 +969,14 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
 
   if (!interval || !interval.enabled) {
     return { shouldRun: false, reason: 'disabled' };
+  }
+
+  // Check per-app task type override
+  if (appId) {
+    const enabledForApp = await isTaskTypeEnabledForApp(appId, taskType);
+    if (!enabledForApp) {
+      return { shouldRun: false, reason: 'disabled-for-app' };
+    }
   }
 
   const key = `app-improve:${taskType}`;

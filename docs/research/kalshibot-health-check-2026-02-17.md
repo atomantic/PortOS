@@ -141,20 +141,25 @@ After the initial health check, some parameters were applied to `config.json` bu
 
 | Parameter | Health Check Target | Current Config | Status |
 |-----------|-------------------|----------------|--------|
-| sniper `maxBetPct` | 0.03 | 0.03 | Applied |
+| sniper `maxBetPct` | 0.02 | 0.02 | Applied (2026-02-18) |
 | sniper `maxContracts` | 100 | 100 | Applied |
-| sniper `settlementRideThreshold` | 1.0 | 0.40 | **NOT applied** |
-| fair-value `edgeThreshold` | 0.25 | 0.15 | **WRONG DIRECTION** (lowered instead of raised) |
+| sniper `settlementRideThreshold` | 1.0 | 1.0 | Applied |
+| fair-value `edgeThreshold` | 0.25 | 0.25 | Applied (2026-02-18) |
 | fair-value `exitEdgeThreshold` | 0.10 | 0.10 | Applied |
-| fair-value `maxSecondsToSettlement` | 180 | 300 | **NOT applied** |
+| fair-value `maxSecondsToSettlement` | 180 | 180 | Applied (2026-02-18) |
+| fair-value `maxBetPct` | 0.02 | 0.02 | Applied (2026-02-18) |
 | fair-value `maxPositions` | 2 | 2 | Applied |
-| gamma-scalper `maxPositions` | 3 | 2 | **NOT applied** |
+| gamma-scalper `maxPositions` | 3 | 3 | Applied (2026-02-18) |
+| gamma-scalper `maxEdgeSanity` | 0.95 | 0.95 | Added (2026-02-18) — per-strategy override |
 
-The coinbase-fair-value `edgeThreshold` being set to 0.15 (lower than the previous 0.20) makes the strategy **more aggressive**, which is the opposite of the intended fix. This must be corrected to 0.25 immediately.
+### Code Changes Applied (2026-02-18)
 
-### Code Changes Needed (Kalshibot repo)
+1. **Strategy evaluation order by risk**: In `simulation-engine.js:634`, enabled strategies are now sorted by `maxBetPct` ascending (cheapest first). Gamma-scalper ($4/trade) gets window priority over fair-value ($50/trade). This would have allowed the +$46 gamma-scalper trade to execute live on 2026-02-16.
+2. **Per-strategy edge sanity override**: In `simulation-engine.js:782`, the edge sanity cap now checks `strategy.params.maxEdgeSanity` before falling back to the global `risk.maxEdgeSanity`. Gamma-scalper's OTM bracket strategy inherently produces high-edge signals (77% in the shadow trade) that were blocked by the global 0.85 cap. Its per-strategy cap is now 0.95.
 
-1. **Strategy evaluation order by risk** (CRITICAL): In `simulation-engine.js:680`, the strategy loop evaluates in config order. Since only one position per settlement window is allowed (line 773-798), the first strategy to claim a window wins. Change the loop to sort enabled strategies by `maxBetPct` ascending (cheapest first), so gamma-scalper ($4/trade) gets priority over fair-value ($50/trade). This single change would have allowed the +$46 gamma-scalper trade to execute live.
+### Code Changes Previously Needed (Kalshibot repo)
+
+1. ~~**Strategy evaluation order by risk** (CRITICAL): In `simulation-engine.js:680`, the strategy loop evaluates in config order. Since only one position per settlement window is allowed (line 773-798), the first strategy to claim a window wins. Change the loop to sort enabled strategies by `maxBetPct` ascending (cheapest first), so gamma-scalper ($4/trade) gets priority over fair-value ($50/trade). This single change would have allowed the +$46 gamma-scalper trade to execute live.~~ DONE
 2. **Per-window exposure cap**: Already implemented at `simulation-engine.js:800-815` with `maxExposurePerWindow: 75`. This was added after the initial analysis — verify it's working correctly.
 3. **Position size audit**: Verify `calculatePositionSize` in `base-strategy.js` correctly enforces `maxBetPct` — Trade 2's $52 cost exceeded the 3% cap of ~$30.
 

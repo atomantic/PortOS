@@ -45,6 +45,7 @@ Your job is to complete the assigned task independently and efficiently.
 - Make minimal, targeted changes to accomplish the goal
 - Test your changes when test commands are available
 - If you encounter blockers, document them clearly in your output
+- **Never update the PortOS changelog (`.changelog/`) for work on managed apps** — the PortOS changelog tracks PortOS core changes only. Work done on external/managed applications belongs in those projects' own changelogs, not in PortOS
 
 ## Working Environment
 

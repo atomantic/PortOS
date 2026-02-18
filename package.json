@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "0.13.20",
+  "version": "0.14.21",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -27,6 +27,8 @@
     "setup": "node scripts/setup-data.js && node scripts/setup-browser.js",
     "setup:data": "node scripts/setup-data.js",
     "setup:browser": "node scripts/setup-browser.js",
+    "setup:ghostty": "node scripts/setup-ghostty.js",
+    "update": "npm install && cd client && npm install && cd ../server && npm install && cd .. && npm run setup && npm run setup:ghostty",
     "test": "cd server && npm test"
   },
   "devDependencies": {

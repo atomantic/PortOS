@@ -14,6 +14,7 @@ import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
 import * as goalProgress from '../services/goalProgress.js';
+import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -113,13 +114,13 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, attachments, position = 'bottom' } = req.body;
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, attachments, position = 'bottom', createJiraTicket, jiraTicketId, jiraTicketUrl } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position };
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position, createJiraTicket, jiraTicketId, jiraTicketUrl };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));
@@ -802,12 +803,13 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
 
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
+  // Manual triggers always bypass approval — the user explicitly requested execution
   const task = await autonomousJobs.generateTaskFromJob(job);
   const result = await cos.addTask({
     description: task.description,
     priority: task.priority,
     context: `Manually triggered autonomous job: ${job.name}`,
-    approvalRequired: !task.autoApprove
+    approvalRequired: false
   }, 'internal');
 
   res.json({ success: true, task: result });
@@ -1107,6 +1109,30 @@ router.get('/goal-progress', asyncHandler(async (req, res) => {
 router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
   const summary = await goalProgress.getGoalProgressSummary();
   res.json(summary);
+}));
+
+// ============================================================
+// Decision Log Routes
+// ============================================================
+
+// GET /api/cos/decisions - Get recent decisions
+router.get('/decisions', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 20;
+  const type = req.query.type || null;
+  const decisions = await decisionLog.getRecentDecisions(limit, type);
+  res.json({ decisions });
+}));
+
+// GET /api/cos/decisions/summary - Get decision summary for dashboard
+router.get('/decisions/summary', asyncHandler(async (req, res) => {
+  const summary = await decisionLog.getDecisionSummary();
+  res.json(summary);
+}));
+
+// GET /api/cos/decisions/patterns - Get decision patterns/insights
+router.get('/decisions/patterns', asyncHandler(async (req, res) => {
+  const patterns = await decisionLog.getDecisionPatterns();
+  res.json(patterns);
 }));
 
 export default router;

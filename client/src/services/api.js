@@ -39,6 +39,7 @@ async function request(endpoint, options = {}) {
 
 // Health
 export const checkHealth = () => request('/health');
+export const getSystemHealth = (options) => request('/health/system', options);
 
 // Apps
 export const getApps = () => request('/apps');
@@ -63,6 +64,11 @@ export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { meth
 export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
 export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
+export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
+export const toggleAppTaskType = (id, taskType, enabled) => request(`/apps/${id}/task-types/${taskType}`, {
+  method: 'PUT',
+  body: JSON.stringify({ enabled })
+});
 export const getAppLogs = (id, lines = 100, processName) => {
   const params = new URLSearchParams({ lines: String(lines) });
   if (processName) params.set('process', processName);
@@ -628,6 +634,15 @@ export const getCosActionableInsights = () => request('/cos/actionable-insights'
 export const getCosGoalProgress = () => request('/cos/goal-progress');
 export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
+// Decision Log
+export const getCosDecisions = (limit = 20, type = null) => {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (type) params.append('type', type);
+  return request(`/cos/decisions?${params}`);
+};
+export const getCosDecisionSummary = (options) => request('/cos/decisions/summary', options);
+export const getCosDecisionPatterns = () => request('/cos/decisions/patterns');
+
 // Task Schedule (Configurable Intervals)
 export const getCosUpcomingTasks = (limit = 10) => request(`/cos/upcoming?limit=${limit}`);
 export const getCosSchedule = () => request('/cos/schedule');
@@ -1141,6 +1156,11 @@ export const updateEpigeneticIntervention = (id, updates) => request(`/digital-t
 export const deleteEpigeneticIntervention = (id) => request(`/digital-twin/genome/epigenetic/${id}`, {
   method: 'DELETE'
 });
+
+// JIRA
+export const getJiraInstances = () => request('/jira/instances');
+export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
+export const getMySprintTickets = (instanceId, projectKey) => request(`/jira/instances/${instanceId}/my-sprint-tickets/${projectKey}`);
 
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');

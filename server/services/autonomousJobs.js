@@ -35,7 +35,8 @@ const JOB_SKILL_MAP = {
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-processing': 'brain-processing',
   'job-project-review': 'project-review',
-  'job-moltworld-exploration': 'moltworld-exploration'
+  'job-moltworld-exploration': 'moltworld-exploration',
+  'job-jira-app-maintenance': 'jira-app-maintenance'
 }
 
 // Time constants
@@ -192,6 +193,40 @@ This will:
 4. Earn SIM tokens by staying online (0.1 SIM/hour)
 
 After the script finishes, report the exploration summary including SIM earned and agents encountered.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-jira-app-maintenance',
+    name: 'JIRA App Maintenance',
+    description: 'Review JIRA tickets assigned to me in current sprint for JIRA-enabled apps, evaluate next steps, and take action (improve tickets, add comments, plan work, or create PRs).',
+    category: 'jira-app-maintenance',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: false,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] JIRA App Maintenance
+
+You are acting as my Chief of Staff, managing JIRA tickets for apps with JIRA integration enabled.
+
+Tasks to perform:
+1. Call GET /api/apps to get all managed apps
+2. Filter for apps with jira.enabled = true
+3. For each JIRA-enabled app:
+   - Call GET /api/jira/:instanceId/my-sprint-tickets/:projectKey to get tickets assigned to me in current sprint
+   - For each ticket, evaluate what needs to be done next:
+     a) Does the ticket need clarification or better requirements? Add a comment with questions
+     b) Is the ticket well-defined and ready to work? Create a CoS task to plan or implement it
+     c) Is the ticket blocked or needs discussion? Add a comment noting blockers
+     d) Should this be worked on now based on priority? Create an agent task to implement and PR
+4. Prioritize tickets marked as HIGH or Blocker
+5. Create CoS tasks for actionable items
+6. Generate a summary report of JIRA maintenance activities
+
+Focus on moving tickets forward. Don't just report - take action by improving ticket quality, creating tasks, or spawning agents to implement solutions.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,

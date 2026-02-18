@@ -263,7 +263,16 @@ export default function AIProviders() {
                         <p>Models: {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}</p>
                       )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-                        <p>Env: {Object.entries(provider.envVars).map(([k, v]) => `${k}=${v}`).join(', ')}</p>
+                        <div className="mt-0.5">
+                          <span>Env:</span>
+                          {Object.entries(provider.envVars).map(([k, v]) => (
+                            <div key={k}>
+                              <code className="ml-1 text-orange-400">
+                                {k}={provider.secretEnvVars?.includes(k) ? '***' : v}
+                              </code>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -400,11 +409,16 @@ export default function AIProviders() {
                     </p>
                   )}
                   {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-                    <p className="text-xs">
-                      Env: {Object.entries(provider.envVars).map(([k, v]) => (
-                        <code key={k} className="ml-1 text-orange-400">{k}={v}</code>
+                    <div className="text-xs mt-1">
+                      <span className="text-gray-400">Env:</span>
+                      {Object.entries(provider.envVars).map(([k, v]) => (
+                        <div key={k}>
+                          <code className="ml-1 text-orange-400">
+                            {k}={provider.secretEnvVars?.includes(k) ? '***' : v}
+                          </code>
+                        </div>
                       ))}
-                    </p>
+                    </div>
                   )}
                 </div>
 
@@ -544,11 +558,13 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     fallbackProvider: provider?.fallbackProvider || '',
     timeout: provider?.timeout || 300000,
     enabled: provider?.enabled !== false,
-    envVars: provider?.envVars || {}
+    envVars: provider?.envVars || {},
+    secretEnvVars: provider?.secretEnvVars || []
   });
 
   const [newEnvKey, setNewEnvKey] = useState('');
   const [newEnvValue, setNewEnvValue] = useState('');
+  const [newEnvSecret, setNewEnvSecret] = useState(false);
 
   const availableModels = formData.models || [];
 
@@ -833,30 +849,54 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <h4 className="text-sm font-medium text-gray-300 mb-3">Environment Variables</h4>
             {Object.entries(formData.envVars).length > 0 && (
               <div className="space-y-2 mb-3">
-                {Object.entries(formData.envVars).map(([key, value]) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <code className="text-xs text-gray-300 bg-port-bg px-2 py-1.5 rounded border border-port-border flex-shrink-0">{key}</code>
-                    <input
-                      type="text"
-                      value={value}
-                      onChange={(e) => setFormData(prev => ({
-                        ...prev,
-                        envVars: { ...prev.envVars, [key]: e.target.value }
-                      }))}
-                      className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setFormData(prev => {
-                        const { [key]: _, ...rest } = prev.envVars;
-                        return { ...prev, envVars: rest };
-                      })}
-                      className="px-2 py-1.5 text-xs text-port-error hover:bg-port-error/20 rounded transition-colors flex-shrink-0"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
+                {Object.entries(formData.envVars).map(([key, value]) => {
+                  const isSecret = formData.secretEnvVars.includes(key);
+                  return (
+                    <div key={key} className="flex items-center gap-2">
+                      <code className="text-xs text-gray-300 bg-port-bg px-2 py-1.5 rounded border border-port-border flex-shrink-0">{key}</code>
+                      <input
+                        type={isSecret ? 'password' : 'text'}
+                        value={value}
+                        onChange={(e) => setFormData(prev => ({
+                          ...prev,
+                          envVars: { ...prev.envVars, [key]: e.target.value }
+                        }))}
+                        className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({
+                          ...prev,
+                          secretEnvVars: isSecret
+                            ? prev.secretEnvVars.filter(k => k !== key)
+                            : [...prev.secretEnvVars, key]
+                        }))}
+                        className={`px-2 py-1.5 text-xs rounded transition-colors flex-shrink-0 ${
+                          isSecret
+                            ? 'text-port-warning bg-port-warning/20 hover:bg-port-warning/30'
+                            : 'text-gray-400 hover:bg-port-border/50'
+                        }`}
+                        title={isSecret ? 'Secret (click to unmask)' : 'Not secret (click to mask)'}
+                      >
+                        {isSecret ? '🔒' : '🔓'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => {
+                          const { [key]: _, ...rest } = prev.envVars;
+                          return {
+                            ...prev,
+                            envVars: rest,
+                            secretEnvVars: prev.secretEnvVars.filter(k => k !== key)
+                          };
+                        })}
+                        className="px-2 py-1.5 text-xs text-port-error hover:bg-port-error/20 rounded transition-colors flex-shrink-0"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div className="flex gap-2">
@@ -868,22 +908,35 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 className="w-1/3 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none font-mono"
               />
               <input
-                type="text"
+                type={newEnvSecret ? 'password' : 'text'}
                 value={newEnvValue}
                 onChange={(e) => setNewEnvValue(e.target.value)}
                 placeholder="value"
                 className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:border-port-accent focus:outline-none"
               />
+              <label className="flex items-center gap-1 text-xs text-gray-400 flex-shrink-0 cursor-pointer" title="Mark as secret (value will be masked on provider list)">
+                <input
+                  type="checkbox"
+                  checked={newEnvSecret}
+                  onChange={(e) => setNewEnvSecret(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-port-border bg-port-bg"
+                />
+                Secret
+              </label>
               <button
                 type="button"
                 onClick={() => {
                   if (newEnvKey.trim()) {
                     setFormData(prev => ({
                       ...prev,
-                      envVars: { ...prev.envVars, [newEnvKey.trim()]: newEnvValue }
+                      envVars: { ...prev.envVars, [newEnvKey.trim()]: newEnvValue },
+                      secretEnvVars: newEnvSecret
+                        ? [...prev.secretEnvVars, newEnvKey.trim()]
+                        : prev.secretEnvVars
                     }));
                     setNewEnvKey('');
                     setNewEnvValue('');
+                    setNewEnvSecret(false);
                   }
                 }}
                 disabled={!newEnvKey.trim()}

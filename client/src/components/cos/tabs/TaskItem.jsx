@@ -88,7 +88,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps }) {
+export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps, apps }) {
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({
     description: task.description,
@@ -183,7 +183,11 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleApprove = async () => {
-    await api.approveCosTask(task.id).catch(err => toast.error(err.message));
+    const result = await api.approveCosTask(task.id).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    if (!result) return;
     toast.success('Task approved');
     onRefresh();
   };
@@ -223,6 +227,11 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm font-mono text-gray-500">{task.id}</span>
+            {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (
+              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded flex-shrink-0" title={task.metadata.app}>
+                {apps.find(a => a.id === task.metadata.app).name}
+              </span>
+            )}
             {/* Duration estimate for pending tasks */}
             {durationEstimate && (
               <span

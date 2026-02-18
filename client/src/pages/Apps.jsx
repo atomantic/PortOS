@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, ChevronDown, ChevronUp, Ticket } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import StatusBadge from '../components/StatusBadge';
@@ -19,6 +19,8 @@ export default function Apps() {
   const [standardizing, setStandardizing] = useState({});
   const [archiving, setArchiving] = useState({});
   const [showArchived, setShowArchived] = useState(false);
+  const [jiraTickets, setJiraTickets] = useState({});
+  const [loadingTickets, setLoadingTickets] = useState({});
 
   const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
@@ -102,8 +104,22 @@ export default function Apps() {
     }
   };
 
-  const toggleExpand = (id) => {
-    setExpandedId(prev => prev === id ? null : id);
+  const toggleExpand = async (id) => {
+    const newExpandedId = expandedId === id ? null : id;
+    setExpandedId(newExpandedId);
+
+    // Fetch JIRA tickets when expanding an app with JIRA enabled
+    if (newExpandedId) {
+      const app = apps.find(a => a.id === newExpandedId);
+      if (app?.jira?.enabled && app.jira.instanceId && app.jira.projectKey) {
+        if (!jiraTickets[id]) {
+          setLoadingTickets(prev => ({ ...prev, [id]: true }));
+          const tickets = await api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey).catch(() => []);
+          setJiraTickets(prev => ({ ...prev, [id]: tickets }));
+          setLoadingTickets(prev => ({ ...prev, [id]: false }));
+        }
+      }
+    }
   };
 
   const handleArchive = async (app) => {
@@ -422,6 +438,87 @@ export default function Apps() {
                       </div>
                     )}
 
+                    {/* JIRA Integration */}
+                    {app.jira?.enabled && (
+                      <div>
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">JIRA Integration</div>
+                        <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-border rounded-lg">
+                          <Ticket size={16} aria-hidden="true" className="text-blue-400 flex-shrink-0" />
+                          <span className="text-sm text-white font-mono">{app.jira.projectKey || '—'}</span>
+                          {app.jira.issueType && (
+                            <span className="text-xs text-gray-400">{app.jira.issueType}</span>
+                          )}
+                          {app.jira.createPR !== false && (
+                            <span className="text-xs text-green-400">+ PR</span>
+                          )}
+                          {app.jira.labels?.length > 0 && (
+                            <span className="text-xs text-cyan-400">{app.jira.labels.join(', ')}</span>
+                          )}
+                        </div>
+
+                        {/* My Sprint Tickets */}
+                        {app.jira.instanceId && app.jira.projectKey && (
+                          <div className="mt-3">
+                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
+                            {loadingTickets[app.id] ? (
+                              <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
+                                <BrailleSpinner text="" />
+                                <span>Loading tickets...</span>
+                              </div>
+                            ) : jiraTickets[app.id]?.length > 0 ? (
+                              <div className="space-y-2">
+                                {jiraTickets[app.id].map(ticket => (
+                                  <a
+                                    key={ticket.key}
+                                    href={ticket.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block px-3 py-2 bg-port-card border border-port-border rounded-lg hover:border-port-accent/50 transition-colors"
+                                  >
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <span className="text-sm font-mono text-port-accent">{ticket.key}</span>
+                                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                            ticket.statusCategory === 'Done' ? 'bg-port-success/20 text-port-success' :
+                                            ticket.statusCategory === 'In Progress' ? 'bg-port-accent/20 text-port-accent' :
+                                            'bg-gray-500/20 text-gray-400'
+                                          }`}>
+                                            {ticket.status}
+                                          </span>
+                                          {ticket.priority && (
+                                            <span className={`text-xs ${
+                                              ticket.priority === 'Highest' || ticket.priority === 'High' ? 'text-port-error' :
+                                              ticket.priority === 'Medium' ? 'text-port-warning' :
+                                              'text-gray-500'
+                                            }`}>
+                                              {ticket.priority}
+                                            </span>
+                                          )}
+                                          {ticket.storyPoints && (
+                                            <span className="text-xs text-cyan-400">{ticket.storyPoints} pts</span>
+                                          )}
+                                        </div>
+                                        <div className="text-sm text-white line-clamp-2">{ticket.summary}</div>
+                                        <div className="text-xs text-gray-500 mt-1">
+                                          {ticket.issueType} • Updated {new Date(ticket.updated).toLocaleDateString()}
+                                        </div>
+                                      </div>
+                                      <ExternalLink size={14} className="text-gray-500 flex-shrink-0 mt-1" />
+                                    </div>
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
+                                No tickets assigned to you in the current sprint
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Quick Actions */}
                     <div className="flex flex-wrap gap-2 pt-2">
                       <button
@@ -484,10 +581,54 @@ function EditAppModal({ app, onClose, onSave }) {
     apiPort: app.apiPort || '',
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
-    editorCommand: app.editorCommand || 'code .'
+    editorCommand: app.editorCommand || 'code .',
+    jiraEnabled: app.jira?.enabled || false,
+    jiraInstanceId: app.jira?.instanceId || '',
+    jiraProjectKey: app.jira?.projectKey || '',
+    jiraBoardId: app.jira?.boardId || '',
+    jiraIssueType: app.jira?.issueType || 'Task',
+    jiraLabels: (app.jira?.labels || []).join(', '),
+    jiraAssignee: app.jira?.assignee || '',
+    jiraEpicKey: app.jira?.epicKey || '',
+    jiraCreatePR: app.jira?.createPR !== false
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [jiraExpanded, setJiraExpanded] = useState(app.jira?.enabled || false);
+  const [jiraInstances, setJiraInstances] = useState([]);
+  const [jiraProjects, setJiraProjects] = useState([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
+
+  // Fetch JIRA instances on mount
+  useEffect(() => {
+    api.getJiraInstances().then(data => {
+      const instances = data?.instances ? Object.values(data.instances) : [];
+      setJiraInstances(instances);
+    }).catch(() => setJiraInstances([]));
+  }, []);
+
+  // Fetch JIRA projects when instance changes
+  useEffect(() => {
+    if (!formData.jiraInstanceId) {
+      setJiraProjects([]);
+      return;
+    }
+    setLoadingProjects(true);
+    api.getJiraProjects(formData.jiraInstanceId).then(projects => {
+      setJiraProjects(projects || []);
+    }).catch(() => setJiraProjects([])).finally(() => setLoadingProjects(false));
+  }, [formData.jiraInstanceId]);
+
+  // Default assignee to the configured JIRA user when instances load or instance changes
+  useEffect(() => {
+    if (!formData.jiraInstanceId || formData.jiraAssignee) return;
+    const inst = jiraInstances.find(i => i.id === formData.jiraInstanceId);
+    if (inst?.email) {
+      setFormData(prev => ({ ...prev, jiraAssignee: inst.email }));
+    }
+  }, [formData.jiraInstanceId, jiraInstances, formData.jiraAssignee]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -504,7 +645,18 @@ function EditAppModal({ app, onClose, onSave }) {
       pm2ProcessNames: formData.pm2ProcessNames
         ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
         : undefined,
-      editorCommand: formData.editorCommand || undefined
+      editorCommand: formData.editorCommand || undefined,
+      jira: formData.jiraEnabled ? {
+        enabled: true,
+        instanceId: formData.jiraInstanceId || undefined,
+        projectKey: formData.jiraProjectKey || undefined,
+        boardId: formData.jiraBoardId || undefined,
+        issueType: formData.jiraIssueType || 'Task',
+        labels: formData.jiraLabels ? formData.jiraLabels.split(',').map(s => s.trim()).filter(Boolean) : [],
+        assignee: formData.jiraAssignee || undefined,
+        epicKey: formData.jiraEpicKey || undefined,
+        createPR: formData.jiraCreatePR
+      } : { enabled: false }
     };
 
     await api.updateApp(app.id, data).catch(err => {
@@ -613,6 +765,213 @@ function EditAppModal({ app, onClose, onSave }) {
               onChange={e => setFormData({ ...formData, editorCommand: e.target.value })}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
             />
+          </div>
+
+          {/* JIRA Integration Section */}
+          <div className="border border-port-border rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setJiraExpanded(prev => !prev)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-port-bg hover:bg-port-border/50 transition-colors"
+            >
+              <span className="text-sm font-medium text-gray-300">JIRA Integration</span>
+              <div className="flex items-center gap-2">
+                {formData.jiraEnabled && (
+                  <span className="text-xs px-2 py-0.5 bg-port-accent/20 text-port-accent rounded">Enabled</span>
+                )}
+                {jiraExpanded ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+              </div>
+            </button>
+
+            {jiraExpanded && (
+              <div className="p-4 space-y-3 border-t border-port-border">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.jiraEnabled}
+                    onChange={e => setFormData({ ...formData, jiraEnabled: e.target.checked })}
+                    className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                  />
+                  <span className="text-sm text-white">Enable JIRA Integration</span>
+                </label>
+
+                {formData.jiraEnabled && (
+                  <>
+                    {jiraInstances.length === 0 ? (
+                      <div className="p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg text-sm text-port-warning">
+                        No JIRA instances configured. <Link to="/jira" className="underline hover:text-white">Configure JIRA</Link> first.
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">JIRA Instance</label>
+                          <select
+                            value={formData.jiraInstanceId}
+                            onChange={e => setFormData({ ...formData, jiraInstanceId: e.target.value, jiraProjectKey: '' })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                          >
+                            <option value="">Select instance...</option>
+                            {jiraInstances.map(inst => (
+                              <option key={inst.id} value={inst.id}>{inst.name} ({inst.baseUrl})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="relative">
+                          <label className="block text-sm text-gray-400 mb-1">Project Key</label>
+                          {loadingProjects ? (
+                            <div className="text-xs text-gray-500">Loading projects...</div>
+                          ) : jiraProjects.length > 0 ? (
+                            <div>
+                              <input
+                                type="text"
+                                value={projectDropdownOpen ? projectSearch : (
+                                  formData.jiraProjectKey
+                                    ? `${formData.jiraProjectKey} - ${jiraProjects.find(p => p.key === formData.jiraProjectKey)?.name || ''}`
+                                    : ''
+                                )}
+                                onChange={e => {
+                                  setProjectSearch(e.target.value);
+                                  if (!projectDropdownOpen) setProjectDropdownOpen(true);
+                                }}
+                                onFocus={() => {
+                                  setProjectDropdownOpen(true);
+                                  setProjectSearch('');
+                                }}
+                                onBlur={() => setTimeout(() => setProjectDropdownOpen(false), 150)}
+                                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                                placeholder="Search projects..."
+                              />
+                              {formData.jiraProjectKey && !projectDropdownOpen && (
+                                <button
+                                  type="button"
+                                  onClick={() => setFormData({ ...formData, jiraProjectKey: '' })}
+                                  className="absolute right-2 top-8 text-gray-500 hover:text-white text-sm"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                              {projectDropdownOpen && (
+                                <div className="absolute z-50 w-full mt-1 bg-port-bg border border-port-border rounded-lg max-h-48 overflow-auto shadow-lg">
+                                  {jiraProjects
+                                    .filter(proj => {
+                                      if (!projectSearch) return true;
+                                      const q = projectSearch.toLowerCase();
+                                      return proj.key.toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
+                                    })
+                                    .sort((a, b) => a.key.localeCompare(b.key))
+                                    .slice(0, 100)
+                                    .map(proj => (
+                                      <button
+                                        key={proj.key}
+                                        type="button"
+                                        onMouseDown={e => {
+                                          e.preventDefault();
+                                          setFormData({ ...formData, jiraProjectKey: proj.key });
+                                          setProjectDropdownOpen(false);
+                                          setProjectSearch('');
+                                        }}
+                                        className={`w-full text-left px-3 py-2 text-sm hover:bg-port-accent/20 ${
+                                          formData.jiraProjectKey === proj.key ? 'bg-port-accent/10 text-port-accent' : 'text-white'
+                                        }`}
+                                      >
+                                        <span className="font-mono">{proj.key}</span>
+                                        <span className="text-gray-400 ml-2">{proj.name}</span>
+                                      </button>
+                                    ))
+                                  }
+                                  {jiraProjects.filter(proj => {
+                                    if (!projectSearch) return true;
+                                    const q = projectSearch.toLowerCase();
+                                    return proj.key.toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
+                                  }).length === 0 && (
+                                    <div className="px-3 py-2 text-sm text-gray-500">No matching projects</div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              value={formData.jiraProjectKey}
+                              onChange={e => setFormData({ ...formData, jiraProjectKey: e.target.value })}
+                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                              placeholder="e.g. CONTECH"
+                            />
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Board ID</label>
+                          <input
+                            type="text"
+                            value={formData.jiraBoardId}
+                            onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                            placeholder="e.g. 11810 (from JIRA board URL rapidView param)"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-1">Issue Type</label>
+                            <input
+                              type="text"
+                              value={formData.jiraIssueType}
+                              onChange={e => setFormData({ ...formData, jiraIssueType: e.target.value })}
+                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                              placeholder="Task"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-1">Assignee</label>
+                            <input
+                              type="text"
+                              value={formData.jiraAssignee}
+                              onChange={e => setFormData({ ...formData, jiraAssignee: e.target.value })}
+                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                              placeholder="Optional"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Labels (comma-separated)</label>
+                          <input
+                            type="text"
+                            value={formData.jiraLabels}
+                            onChange={e => setFormData({ ...formData, jiraLabels: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                            placeholder="e.g. cos-auto, feature"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Epic Key</label>
+                          <input
+                            type="text"
+                            value={formData.jiraEpicKey}
+                            onChange={e => setFormData({ ...formData, jiraEpicKey: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                            placeholder="e.g. CONTECH-100"
+                          />
+                        </div>
+
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.jiraCreatePR}
+                            onChange={e => setFormData({ ...formData, jiraCreatePR: e.target.checked })}
+                            className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                          />
+                          <span className="text-sm text-white">Create Pull Request on completion</span>
+                        </label>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end gap-3 pt-4">

@@ -33,7 +33,8 @@ import {
   SquareTerminal,
   Globe,
   Newspaper,
-  Building2
+  Building2,
+  Ticket
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -58,6 +59,7 @@ const navItems = [
   { to: '/apps', label: 'Apps', icon: Package, single: true },
   { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
   { to: '/browser', label: 'Browser', icon: Globe, single: true },
+  { to: '/jira', label: 'JIRA', icon: Ticket, single: true },
   {
     label: 'Chief of Staff',
     icon: Crown,

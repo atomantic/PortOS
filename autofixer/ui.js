@@ -66,6 +66,50 @@ app.get('/api/status', async (req, res) => {
   })));
 });
 
+// Validate process name against registered apps to prevent command injection
+async function isRegisteredProcess(processName) {
+  const apps = await loadApps();
+  return apps.some(app => (app.pm2ProcessNames || []).includes(processName));
+}
+
+// API: Restart a PM2 process
+app.post('/api/restart/:process', async (req, res) => {
+  const processName = req.params.process;
+  if (!(await isRegisteredProcess(processName))) {
+    return res.status(400).json({ success: false, error: 'Unknown process' });
+  }
+  console.log(`🔄 [Autofixer UI] Restarting process: ${processName}`);
+  const { stdout, stderr } = await exec(`pm2 restart ${processName}`).catch(err => ({
+    stdout: '',
+    stderr: err.message
+  }));
+  if (stderr && !stdout) {
+    console.error(`❌ [Autofixer UI] Restart failed for ${processName}: ${stderr}`);
+    return res.status(500).json({ success: false, error: stderr });
+  }
+  console.log(`✅ [Autofixer UI] Restarted ${processName}`);
+  res.json({ success: true });
+});
+
+// API: Stop a PM2 process
+app.post('/api/stop/:process', async (req, res) => {
+  const processName = req.params.process;
+  if (!(await isRegisteredProcess(processName))) {
+    return res.status(400).json({ success: false, error: 'Unknown process' });
+  }
+  console.log(`⏹️ [Autofixer UI] Stopping process: ${processName}`);
+  const { stdout, stderr } = await exec(`pm2 stop ${processName}`).catch(err => ({
+    stdout: '',
+    stderr: err.message
+  }));
+  if (stderr && !stdout) {
+    console.error(`❌ [Autofixer UI] Stop failed for ${processName}: ${stderr}`);
+    return res.status(500).json({ success: false, error: stderr });
+  }
+  console.log(`✅ [Autofixer UI] Stopped ${processName}`);
+  res.json({ success: true });
+});
+
 // Serve main UI
 app.get('/', async (req, res) => {
   const apps = await loadApps();
@@ -99,37 +143,41 @@ app.get('/', async (req, res) => {
       min-height: 100vh;
     }
 
+    /* Header — stacks vertically on mobile */
     header {
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-      padding: 1rem 1.5rem;
+      padding: 0.75rem 1rem;
       border-bottom: 1px solid #2a2a4a;
       display: flex;
-      justify-content: space-between;
-      align-items: center;
+      flex-direction: column;
+      gap: 0.5rem;
     }
 
     h1 {
-      font-size: 1.25rem;
+      font-size: 1.125rem;
       font-weight: 600;
       display: flex;
       align-items: center;
       gap: 0.5rem;
     }
 
-    h1 span { font-size: 1.5rem; }
+    h1 span { font-size: 1.25rem; }
 
     .nav-links {
       display: flex;
-      gap: 1rem;
+      gap: 0.25rem;
     }
 
     .nav-links a {
       color: #888;
       text-decoration: none;
-      font-size: 0.875rem;
-      padding: 0.5rem 1rem;
+      font-size: 0.8125rem;
+      padding: 0.5rem 0.75rem;
       border-radius: 0.5rem;
       transition: all 0.2s;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
     }
 
     .nav-links a:hover, .nav-links a.active {
@@ -137,17 +185,21 @@ app.get('/', async (req, res) => {
       background: rgba(255,255,255,0.1);
     }
 
+    /* Container — stacked on mobile, side-by-side on tablet+ */
     .container {
-      display: grid;
-      grid-template-columns: 300px 1fr;
-      height: calc(100vh - 60px);
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 100px);
     }
 
+    /* Sidebar — horizontal scrolling strip on mobile */
     .sidebar {
       background: #12121a;
-      border-right: 1px solid #2a2a4a;
-      padding: 1rem;
-      overflow-y: auto;
+      border-bottom: 1px solid #2a2a4a;
+      padding: 0.75rem;
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-shrink: 0;
     }
 
     .sidebar h2 {
@@ -155,22 +207,25 @@ app.get('/', async (req, res) => {
       text-transform: uppercase;
       letter-spacing: 0.1em;
       color: #666;
-      margin-bottom: 0.75rem;
+      margin-bottom: 0.5rem;
     }
 
     .process-list {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       gap: 0.5rem;
     }
 
     .process-item {
-      padding: 0.75rem;
+      padding: 0.625rem 0.75rem;
       background: #1a1a2a;
       border-radius: 0.5rem;
       cursor: pointer;
       transition: all 0.2s;
       border: 1px solid transparent;
+      min-height: 44px;
+      min-width: 140px;
+      flex-shrink: 0;
     }
 
     .process-item:hover {
@@ -184,13 +239,15 @@ app.get('/', async (req, res) => {
 
     .process-name {
       font-weight: 500;
-      font-size: 0.875rem;
+      font-size: 0.8125rem;
+      white-space: nowrap;
     }
 
     .process-app {
-      font-size: 0.75rem;
+      font-size: 0.6875rem;
       color: #666;
-      margin-top: 0.25rem;
+      margin-top: 0.125rem;
+      white-space: nowrap;
     }
 
     .process-status {
@@ -209,36 +266,53 @@ app.get('/', async (req, res) => {
     .main-content {
       display: flex;
       flex-direction: column;
+      flex: 1;
+      min-height: 0;
     }
 
     .toolbar {
-      padding: 0.75rem 1rem;
+      padding: 0.5rem 0.75rem;
       background: #12121a;
       border-bottom: 1px solid #2a2a4a;
       display: flex;
-      justify-content: space-between;
+      flex-wrap: wrap;
       align-items: center;
+      gap: 0.5rem;
     }
 
     .toolbar-left {
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 0.5rem;
+      min-width: 0;
     }
 
     .toolbar-title {
       font-weight: 500;
+      font-size: 0.8125rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .toolbar-buttons {
+      display: flex;
+      gap: 0.375rem;
+      flex-wrap: wrap;
+      margin-left: auto;
     }
 
     .toolbar button {
-      padding: 0.5rem 1rem;
+      padding: 0.5rem 0.75rem;
       background: #2a2a4a;
       color: #e0e0e0;
       border: none;
       border-radius: 0.375rem;
       cursor: pointer;
-      font-size: 0.875rem;
+      font-size: 0.8125rem;
       transition: all 0.2s;
+      min-height: 40px;
+      min-width: 40px;
     }
 
     .toolbar button:hover {
@@ -250,13 +324,69 @@ app.get('/', async (req, res) => {
       color: white;
     }
 
+    .toolbar button.restart-btn {
+      background: #22c55e33;
+      color: #22c55e;
+      border: 1px solid #22c55e44;
+    }
+
+    .toolbar button.restart-btn:hover {
+      background: #22c55e55;
+    }
+
+    .toolbar button.restart-btn:disabled,
+    .toolbar button.stop-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .toolbar button.stop-btn {
+      background: #ef444433;
+      color: #ef4444;
+      border: 1px solid #ef444444;
+    }
+
+    .toolbar button.stop-btn:hover {
+      background: #ef444455;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 0.75rem 1.25rem;
+      border-radius: 0.5rem;
+      font-size: 0.875rem;
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .toast.success {
+      background: #22c55e22;
+      color: #22c55e;
+      border: 1px solid #22c55e44;
+    }
+
+    .toast.error {
+      background: #ef444422;
+      color: #ef4444;
+      border: 1px solid #ef444444;
+    }
+
     #logs {
       flex: 1;
       overflow-y: auto;
-      padding: 1rem;
+      padding: 0.75rem;
       font-family: 'SF Mono', 'Fira Code', monospace;
-      font-size: 0.8125rem;
-      line-height: 1.6;
+      font-size: 0.75rem;
+      line-height: 1.5;
       background: #0a0a0f;
     }
 
@@ -270,7 +400,7 @@ app.get('/', async (req, res) => {
     .log-line.info { color: #a5f3fc; }
 
     .status-bar {
-      padding: 0.5rem 1rem;
+      padding: 0.5rem 0.75rem;
       background: #12121a;
       border-top: 1px solid #2a2a4a;
       font-size: 0.75rem;
@@ -296,6 +426,9 @@ app.get('/', async (req, res) => {
 
     .history-panel {
       display: none;
+      overflow-y: auto;
+      flex: 1;
+      padding: 0.75rem;
     }
 
     .history-panel.active {
@@ -303,12 +436,13 @@ app.get('/', async (req, res) => {
     }
 
     .history-item {
-      padding: 1rem;
+      padding: 0.75rem;
       background: #1a1a2a;
       border-radius: 0.5rem;
       margin-bottom: 0.5rem;
       cursor: pointer;
       transition: all 0.2s;
+      min-height: 44px;
     }
 
     .history-item:hover {
@@ -323,6 +457,7 @@ app.get('/', async (req, res) => {
     .history-item .process {
       font-weight: 500;
       margin-top: 0.25rem;
+      word-break: break-word;
     }
 
     .history-item .result {
@@ -333,10 +468,90 @@ app.get('/', async (req, res) => {
     .history-item .result.success { color: #22c55e; }
     .history-item .result.failed { color: #ef4444; }
 
-    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: #0a0a0f; }
     ::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #3a3a5a; }
+
+    /* Tablet and up (768px+) */
+    @media (min-width: 768px) {
+      header {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.5rem;
+      }
+
+      h1 { font-size: 1.25rem; }
+      h1 span { font-size: 1.5rem; }
+
+      .nav-links { gap: 0.5rem; }
+
+      .nav-links a {
+        font-size: 0.875rem;
+        padding: 0.5rem 1rem;
+      }
+
+      .container {
+        flex-direction: row;
+        height: calc(100vh - 60px);
+      }
+
+      .sidebar {
+        width: 260px;
+        border-right: 1px solid #2a2a4a;
+        border-bottom: none;
+        overflow-x: hidden;
+        overflow-y: auto;
+        padding: 1rem;
+      }
+
+      .process-list {
+        flex-direction: column;
+      }
+
+      .process-item {
+        min-width: unset;
+      }
+
+      .process-name {
+        font-size: 0.875rem;
+        white-space: normal;
+      }
+
+      .process-app {
+        font-size: 0.75rem;
+        white-space: normal;
+      }
+
+      .toolbar {
+        padding: 0.75rem 1rem;
+      }
+
+      .toolbar-title { font-size: 0.875rem; }
+
+      .toolbar button {
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+      }
+
+      #logs {
+        padding: 1rem;
+        font-size: 0.8125rem;
+        line-height: 1.6;
+      }
+
+      .history-panel { padding: 1rem; }
+
+      .history-item { padding: 1rem; }
+    }
+
+    /* Desktop (1024px+) */
+    @media (min-width: 1024px) {
+      .sidebar { width: 300px; }
+
+      .nav-links { gap: 1rem; }
+    }
   </style>
 </head>
 <body>
@@ -362,7 +577,9 @@ app.get('/', async (req, res) => {
         <div class="toolbar-left">
           <span class="toolbar-title" id="currentProcess">Select a process</span>
         </div>
-        <div>
+        <div class="toolbar-buttons">
+          <button id="restartBtn" class="restart-btn" disabled>Restart</button>
+          <button id="stopBtn" class="stop-btn" disabled>Stop</button>
           <button id="clearBtn">Clear</button>
           <button id="pauseBtn">Pause</button>
         </div>
@@ -384,6 +601,8 @@ app.get('/', async (req, res) => {
     </div>
   </div>
 
+  <div id="toast" class="toast"></div>
+
   <script>
     const processList = document.getElementById('processList');
     const logsContainer = document.getElementById('logs');
@@ -394,6 +613,9 @@ app.get('/', async (req, res) => {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const lineCount = document.getElementById('lineCount');
+    const restartBtn = document.getElementById('restartBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const toastEl = document.getElementById('toast');
     const logsTab = document.getElementById('logsTab');
     const historyTab = document.getElementById('historyTab');
 
@@ -460,8 +682,49 @@ app.get('/', async (req, res) => {
       logsContainer.innerHTML = '';
       totalLines = 0;
       lineCount.textContent = '0 lines';
+      restartBtn.disabled = false;
+      stopBtn.disabled = false;
       updateProcessList();
       connect();
+    }
+
+    function showToast(message, type) {
+      toastEl.textContent = message;
+      toastEl.className = 'toast ' + type;
+      requestAnimationFrame(() => toastEl.classList.add('visible'));
+      setTimeout(() => toastEl.classList.remove('visible'), 3000);
+    }
+
+    async function restartProcess() {
+      if (!selectedProcess) return;
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting…';
+      const res = await fetch('/api/restart/' + encodeURIComponent(selectedProcess), { method: 'POST' });
+      const data = await res.json();
+      restartBtn.textContent = 'Restart';
+      restartBtn.disabled = false;
+      if (data.success) {
+        showToast('Restarted ' + selectedProcess, 'success');
+        fetchStatus();
+      } else {
+        showToast('Failed to restart: ' + (data.error || 'unknown error'), 'error');
+      }
+    }
+
+    async function stopProcess() {
+      if (!selectedProcess) return;
+      stopBtn.disabled = true;
+      stopBtn.textContent = 'Stopping…';
+      const res = await fetch('/api/stop/' + encodeURIComponent(selectedProcess), { method: 'POST' });
+      const data = await res.json();
+      stopBtn.textContent = 'Stop';
+      stopBtn.disabled = false;
+      if (data.success) {
+        showToast('Stopped ' + selectedProcess, 'success');
+        fetchStatus();
+      } else {
+        showToast('Failed to stop: ' + (data.error || 'unknown error'), 'error');
+      }
     }
 
     function connect() {
@@ -540,6 +803,9 @@ app.get('/', async (req, res) => {
       pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
       pauseBtn.classList.toggle('pause-active', isPaused);
     });
+
+    restartBtn.addEventListener('click', restartProcess);
+    stopBtn.addEventListener('click', stopProcess);
 
     logsContainer.addEventListener('scroll', () => {
       const isAtBottom = logsContainer.scrollHeight - logsContainer.scrollTop <= logsContainer.clientHeight + 50;
