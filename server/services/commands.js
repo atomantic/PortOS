@@ -147,22 +147,3 @@ export function getAllowedCommands() {
   return Array.from(ALLOWED_COMMANDS).sort();
 }
 
-/**
- * Add a command to the allowlist (runtime only)
- */
-export function addAllowedCommand(command) {
-  ALLOWED_COMMANDS.add(command);
-}
-
-/**
- * Remove a command from the allowlist (runtime only)
- */
-export function removeAllowedCommand(command) {
-  // Don't allow removing core commands
-  const core = ['npm', 'node', 'git', 'pm2'];
-  if (core.includes(command)) {
-    return false;
-  }
-  ALLOWED_COMMANDS.delete(command);
-  return true;
-}

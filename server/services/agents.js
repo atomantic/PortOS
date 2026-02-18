@@ -181,7 +181,7 @@ async function findWindowsProcesses(pattern) {
   // Skip header line
   for (let i = 1; i < lines.length; i++) {
     const parts = lines[i].split(',');
-    if (parts.length >= 6) {
+    if (parts.length >= 7) {
       const command = parts[1];
       const creationDate = parts[2];
       const ppid = parseInt(parts[3]);

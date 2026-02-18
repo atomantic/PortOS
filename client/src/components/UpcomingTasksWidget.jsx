@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Clock,
@@ -10,30 +10,20 @@ import {
   Sparkles
 } from 'lucide-react';
 import * as api from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 /**
  * UpcomingTasksWidget - Shows a preview of upcoming scheduled tasks
  * Helps users understand what the CoS will work on next
  */
 const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
-  const [upcoming, setUpcoming] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadData = async () => {
-      const data = await api.getCosUpcomingTasks(6).catch(() => []);
-      setUpcoming(data);
-      setLoading(false);
-    };
-
-    loadData();
-    // Refresh every 60 seconds
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data: upcoming, loading } = useAutoRefetch(
+    () => api.getCosUpcomingTasks(6).catch(() => []),
+    60000
+  );
 
   // Don't render while loading or if no upcoming tasks
-  if (loading || !upcoming.length) {
+  if (loading || !upcoming?.length) {
     return null;
   }
 
@@ -103,9 +93,9 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
       {/* Task List */}
       <div className="space-y-2">
         {/* Ready Tasks */}
-        {readyTasks.slice(0, 3).map((task) => (
+        {readyTasks.slice(0, 3).map((task, index) => (
           <div
-            key={task.taskType}
+            key={`${task.taskType}-ready-${index}`}
             className="flex items-center gap-3 p-2 rounded-lg bg-port-success/10 border border-port-success/20"
           >
             <span className="text-lg flex-shrink-0" aria-hidden="true">
@@ -150,9 +140,9 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
         ))}
 
         {/* Scheduled Tasks */}
-        {scheduledTasks.slice(0, readyTasks.length > 0 ? 2 : 4).map((task) => (
+        {scheduledTasks.slice(0, readyTasks.length > 0 ? 2 : 4).map((task, index) => (
           <div
-            key={task.taskType}
+            key={`${task.taskType}-scheduled-${index}`}
             className="flex items-center gap-3 p-2 rounded-lg bg-port-bg/50"
           >
             <span className="text-lg flex-shrink-0 opacity-60" aria-hidden="true">

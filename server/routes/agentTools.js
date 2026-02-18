@@ -77,7 +77,7 @@ router.post('/generate-comment', asyncHandler(async (req, res) => {
 
   const post = await client.getPost(data.postId);
   const commentsResponse = await client.getComments(data.postId);
-  const comments = commentsResponse.comments || commentsResponse || [];
+  const comments = commentsResponse?.comments ?? commentsResponse ?? [];
 
   let generated;
   if (data.parentId) {

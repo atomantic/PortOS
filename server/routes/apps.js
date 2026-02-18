@@ -11,6 +11,19 @@ import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
 const router = Router();
 
+/**
+ * Middleware to load app by :id param and attach to req.app
+ * Throws 404 if not found, eliminating repeated null checks across routes
+ */
+const loadApp = asyncHandler(async (req, res, next) => {
+  const app = await appsService.getAppById(req.params.id);
+  if (!app) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  req.loadedApp = app;
+  next();
+});
+
 // GET /api/apps - List all apps
 router.get('/', asyncHandler(async (req, res) => {
   const apps = await appsService.getAllApps();
@@ -40,7 +53,7 @@ router.get('/', asyncHandler(async (req, res) => {
     const statuses = {};
     for (const processName of app.pm2ProcessNames || []) {
       const pm2Proc = pm2Map.get(processName);
-      statuses[processName] = pm2Proc || { name: processName, status: 'not_found', pm2_env: null };
+      statuses[processName] = pm2Proc ?? { name: processName, status: 'not_found', pm2_env: null };
     }
 
     // Compute overall status
@@ -73,12 +86,8 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/apps/:id - Get single app
-router.get('/:id', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
+router.get('/:id', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
 
   // Get PM2 status for each process (using app's custom PM2_HOME if set)
   const statuses = {};
@@ -165,11 +174,8 @@ router.post('/:id/unarchive', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/apps/:id/task-types - Get per-app task type overrides
-router.get('/:id/task-types', asyncHandler(async (req, res) => {
-  const app = await appsService.getAppById(req.params.id);
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
+router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
   res.json({ appId: app.id, appName: app.name, disabledTaskTypes: app.disabledTaskTypes || [] });
 }));
 
@@ -190,12 +196,8 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/apps/:id/start - Start app via PM2
-router.post('/:id/start', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
+router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
 
   const processNames = app.pm2ProcessNames || [app.name.toLowerCase().replace(/\s+/g, '-')];
 
@@ -234,13 +236,8 @@ router.post('/:id/start', asyncHandler(async (req, res, next) => {
 }));
 
 // POST /api/apps/:id/stop - Stop app
-router.post('/:id/stop', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
+router.post('/:id/stop', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
   const results = {};
 
   for (const name of app.pm2ProcessNames || []) {
@@ -257,13 +254,8 @@ router.post('/:id/stop', asyncHandler(async (req, res, next) => {
 }));
 
 // POST /api/apps/:id/restart - Restart app
-router.post('/:id/restart', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
+router.post('/:id/restart', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
   const results = {};
 
   for (const name of app.pm2ProcessNames || []) {
@@ -280,13 +272,8 @@ router.post('/:id/restart', asyncHandler(async (req, res, next) => {
 }));
 
 // GET /api/apps/:id/status - Get PM2 status
-router.get('/:id/status', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
+router.get('/:id/status', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
   const statuses = {};
 
   for (const name of app.pm2ProcessNames || []) {
@@ -299,13 +286,8 @@ router.get('/:id/status', asyncHandler(async (req, res, next) => {
 }));
 
 // GET /api/apps/:id/logs - Get logs
-router.get('/:id/logs', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
+router.get('/:id/logs', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
   const lines = parseInt(req.query.lines) || 100;
   const processName = req.query.process || app.pm2ProcessNames?.[0];
 
@@ -343,12 +325,8 @@ const ALLOWED_EDITORS = new Set([
 ]);
 
 // POST /api/apps/:id/open-editor - Open app in editor
-router.post('/:id/open-editor', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
+router.post('/:id/open-editor', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
 
   if (!existsSync(app.repoPath)) {
     throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
@@ -391,12 +369,8 @@ router.post('/:id/open-editor', asyncHandler(async (req, res, next) => {
 }));
 
 // POST /api/apps/:id/open-folder - Open app folder in file manager
-router.post('/:id/open-folder', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
+router.post('/:id/open-folder', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
 
   if (!existsSync(app.repoPath)) {
     throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
@@ -427,12 +401,8 @@ router.post('/:id/open-folder', asyncHandler(async (req, res, next) => {
 }));
 
 // POST /api/apps/:id/refresh-config - Re-parse ecosystem config for PM2 processes
-router.post('/:id/refresh-config', asyncHandler(async (req, res, next) => {
-  const app = await appsService.getAppById(req.params.id);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
+router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
 
   if (!existsSync(app.repoPath)) {
     throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });

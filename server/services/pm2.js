@@ -1,6 +1,7 @@
 import pm2 from 'pm2';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
+import { extractJSONArray, safeJSONParse } from '../lib/fileUtils.js';
 
 /**
  * Build environment object with optional custom PM2_HOME
@@ -16,6 +17,29 @@ function buildEnv(pm2Home) {
   delete env.PORT;
   delete env.HOST;
   return env;
+}
+
+/**
+ * Spawn a PM2 CLI command with optional custom PM2_HOME
+ * @param {string} action PM2 action (stop, restart, delete)
+ * @param {string} name PM2 process name
+ * @param {string} pm2Home Optional custom PM2_HOME path
+ * @returns {Promise<{success: boolean}>}
+ */
+function spawnPm2Cli(action, name, pm2Home) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('pm2', [action, name], {
+      shell: false,
+      env: buildEnv(pm2Home)
+    });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(stderr || `pm2 ${action} exited with code ${code}`));
+      resolve({ success: true });
+    });
+    child.on('error', reject);
+  });
 }
 
 /**
@@ -75,19 +99,7 @@ export async function startApp(name, options = {}) {
 export async function stopApp(name, pm2Home = null) {
   // Use CLI for custom PM2_HOME
   if (pm2Home) {
-    return new Promise((resolve, reject) => {
-      const child = spawn('pm2', ['stop', name], {
-        shell: false,
-        env: buildEnv(pm2Home)
-      });
-      let stderr = '';
-      child.stderr.on('data', (data) => { stderr += data.toString(); });
-      child.on('close', (code) => {
-        if (code !== 0) return reject(new Error(stderr || `pm2 stop exited with code ${code}`));
-        resolve({ success: true });
-      });
-      child.on('error', reject);
-    });
+    return spawnPm2Cli('stop', name, pm2Home);
   }
 
   return connectAndRun((pm2) => {
@@ -108,19 +120,7 @@ export async function stopApp(name, pm2Home = null) {
 export async function restartApp(name, pm2Home = null) {
   // Use CLI for custom PM2_HOME
   if (pm2Home) {
-    return new Promise((resolve, reject) => {
-      const child = spawn('pm2', ['restart', name], {
-        shell: false,
-        env: buildEnv(pm2Home)
-      });
-      let stderr = '';
-      child.stderr.on('data', (data) => { stderr += data.toString(); });
-      child.on('close', (code) => {
-        if (code !== 0) return reject(new Error(stderr || `pm2 restart exited with code ${code}`));
-        resolve({ success: true });
-      });
-      child.on('error', reject);
-    });
+    return spawnPm2Cli('restart', name, pm2Home);
   }
 
   return connectAndRun((pm2) => {
@@ -141,19 +141,7 @@ export async function restartApp(name, pm2Home = null) {
 export async function deleteApp(name, pm2Home = null) {
   // Use CLI for custom PM2_HOME
   if (pm2Home) {
-    return new Promise((resolve, reject) => {
-      const child = spawn('pm2', ['delete', name], {
-        shell: false,
-        env: buildEnv(pm2Home)
-      });
-      let stderr = '';
-      child.stderr.on('data', (data) => { stderr += data.toString(); });
-      child.on('close', (code) => {
-        if (code !== 0) return reject(new Error(stderr || `pm2 delete exited with code ${code}`));
-        resolve({ success: true });
-      });
-      child.on('error', reject);
-    });
+    return spawnPm2Cli('delete', name, pm2Home);
   }
 
   return connectAndRun((pm2) => {
@@ -184,18 +172,7 @@ export async function getAppStatus(name, pm2Home = null) {
     });
 
     child.on('close', () => {
-      // pm2 jlist may output ANSI codes and warnings before JSON
-      let jsonStart = stdout.indexOf('[{');
-      if (jsonStart < 0) {
-        jsonStart = stdout.lastIndexOf('[]');
-      }
-      const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
-      let processes;
-      try {
-        processes = JSON.parse(pm2Json);
-      } catch {
-        return resolve({ name, status: 'error', pm2_env: null });
-      }
+      const processes = safeJSONParse(extractJSONArray(stdout), []);
       const proc = processes.find(p => p.name === name);
 
       if (!proc) {
@@ -242,15 +219,7 @@ export async function listProcesses(pm2Home = null) {
     });
 
     child.on('close', () => {
-      // pm2 jlist may output ANSI codes and warnings before JSON
-      // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
-      let jsonStart = stdout.indexOf('[{');
-      if (jsonStart < 0) {
-        const emptyMatch = stdout.match(/\[\](?![0-9])/);
-        jsonStart = emptyMatch ? stdout.indexOf(emptyMatch[0]) : -1;
-      }
-      const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
-      const list = JSON.parse(pm2Json);
+      const list = safeJSONParse(extractJSONArray(stdout), []);
       const processes = list.map(proc => ({
         name: proc.name,
         status: proc.pm2_env?.status || 'unknown',

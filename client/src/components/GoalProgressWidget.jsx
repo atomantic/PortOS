@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Target,
@@ -7,27 +7,17 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import * as api from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 /**
  * GoalProgressWidget - Shows progress toward user goals on the dashboard
  * Maps completed CoS tasks to goal categories from COS-GOALS.md
  */
 const GoalProgressWidget = memo(function GoalProgressWidget() {
-  const [progress, setProgress] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadData = async () => {
-      const data = await api.getCosGoalProgressSummary({ silent: true }).catch(() => null);
-      setProgress(data);
-      setLoading(false);
-    };
-
-    loadData();
-    // Refresh every 60 seconds
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data: progress, loading } = useAutoRefetch(
+    () => api.getCosGoalProgressSummary({ silent: true }).catch(() => null),
+    60000
+  );
 
   // Don't render while loading or if no goals
   if (loading || !progress?.goals?.length) {

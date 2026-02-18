@@ -19,6 +19,19 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt'];
+
+/**
+ * Pick only defined values from body for schedule settings updates
+ */
+function pickScheduleSettings(body) {
+  const settings = {};
+  for (const key of SCHEDULE_FIELDS) {
+    if (body[key] !== undefined) settings[key] = body[key];
+  }
+  return settings;
+}
+
 // GET /api/cos - Get CoS status
 router.get('/', asyncHandler(async (req, res) => {
   const status = await cos.getStatus();
@@ -586,17 +599,7 @@ router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res)
 // PUT /api/cos/schedule/self-improvement/:taskType - Update interval for self-improvement task
 router.put('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const { type, enabled, intervalMs, providerId, model, prompt } = req.body;
-
-  const settings = {};
-  if (type !== undefined) settings.type = type;
-  if (enabled !== undefined) settings.enabled = enabled;
-  if (intervalMs !== undefined) settings.intervalMs = intervalMs;
-  if (providerId !== undefined) settings.providerId = providerId;
-  if (model !== undefined) settings.model = model;
-  if (prompt !== undefined) settings.prompt = prompt;
-
-  const result = await taskSchedule.updateSelfImprovementInterval(taskType, settings);
+  const result = await taskSchedule.updateSelfImprovementInterval(taskType, pickScheduleSettings(req.body));
   res.json({ success: true, taskType, interval: result });
 }));
 
@@ -610,17 +613,7 @@ router.get('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) 
 // PUT /api/cos/schedule/app-improvement/:taskType - Update interval for app improvement task
 router.put('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const { type, enabled, intervalMs, providerId, model, prompt } = req.body;
-
-  const settings = {};
-  if (type !== undefined) settings.type = type;
-  if (enabled !== undefined) settings.enabled = enabled;
-  if (intervalMs !== undefined) settings.intervalMs = intervalMs;
-  if (providerId !== undefined) settings.providerId = providerId;
-  if (model !== undefined) settings.model = model;
-  if (prompt !== undefined) settings.prompt = prompt;
-
-  const result = await taskSchedule.updateAppImprovementInterval(taskType, settings);
+  const result = await taskSchedule.updateAppImprovementInterval(taskType, pickScheduleSettings(req.body));
   res.json({ success: true, taskType, interval: result });
 }));
 
@@ -937,9 +930,9 @@ router.get('/productivity/calendar', asyncHandler(async (req, res) => {
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const [tasksData, learningSummary, healthCheck, notificationsModule] = await Promise.all([
-    cos.getAllTasks().catch(() => ({ user: null, cos: null })),
-    taskLearning.getLearningInsights().catch(() => null),
-    cos.runHealthCheck().catch(() => ({ issues: [] })),
+    cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
+    taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
+    cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
     import('../services/notifications.js')
   ]);
 
