@@ -76,7 +76,8 @@ The `selectModelForTask` function routes tasks to appropriate model tiers:
 |---------|---------|-------------|
 | evaluationIntervalMs | 60000 | Task evaluation interval (1 minute) |
 | healthCheckIntervalMs | 900000 | Health check interval (15 minutes) |
-| maxConcurrentAgents | 3 | Max parallel agents |
+| maxConcurrentAgents | 3 | Max parallel agents (global) |
+| maxConcurrentAgentsPerProject | 2 | Max parallel agents per project |
 | maxProcessMemoryMb | 2048 | Memory alert threshold |
 | autoStart | false | Start on server boot |
 | selfImprovementEnabled | true | Allow self-analysis |
