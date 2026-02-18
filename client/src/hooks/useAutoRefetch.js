@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react';
  * Eliminates the repeated useEffect + setInterval pattern across dashboard widgets.
  *
  * @param {Function} fetchFn - Async function that returns data (should handle its own errors)
- * @param {number} intervalMs - Refetch interval in milliseconds
+ * @param {number} intervalMs - Refetch interval in milliseconds (should be constant for the component's lifetime)
  * @returns {{ data: any, loading: boolean }}
  */
 export function useAutoRefetch(fetchFn, intervalMs) {
