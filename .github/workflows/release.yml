@@ -60,7 +60,7 @@ jobs:
             # Use minor version pattern changelog (e.g., v0.10.x.md)
             CHANGELOG=$(cat "$CHANGELOG_FILE_PATTERN")
             # Replace version placeholder with actual version
-            CHANGELOG=$(echo "$CHANGELOG" | sed "s/v${MAJOR_MINOR}.x/v${VERSION}/g" | sed "s/${MAJOR_MINOR}.x/${VERSION}/g")
+            CHANGELOG=$(echo "$CHANGELOG" | sed "s/v${MAJOR_MINOR}.x/v${VERSION}/g" | sed "s/${MAJOR_MINOR}.x/${VERSION}/g" | sed "s/YYYY-MM-DD/$(date +%Y-%m-%d)/g")
           else
             # Fallback: Generate changelog from commits (exclude [skip ci] commits)
             PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
@@ -126,7 +126,7 @@ jobs:
             git mv "$PATTERN_FILE" "$VERSIONED_FILE"
 
             # Replace version placeholders in the renamed file
-            sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g" "$VERSIONED_FILE"
+            sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"
             rm "${VERSIONED_FILE}.bak"
 
             # Commit the renamed and updated changelog
