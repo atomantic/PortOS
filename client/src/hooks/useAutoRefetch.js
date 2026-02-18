@@ -22,10 +22,15 @@ export function useAutoRefetch(fetchFn, intervalMs) {
     let cancelled = false;
 
     const loadData = async () => {
-      const result = await fetchRef.current();
-      if (cancelled) return;
-      setData(result);
-      setLoading(false);
+      try {
+        const result = await fetchRef.current();
+        if (cancelled) return;
+        setData(result);
+        setLoading(false);
+      } catch {
+        // Keep prior data on failure, just clear loading state
+        if (!cancelled) setLoading(false);
+      }
     };
 
     loadData();
