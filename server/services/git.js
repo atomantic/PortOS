@@ -101,7 +101,7 @@ export async function getBranch(dir) {
 export async function getCommits(dir, limit = 10) {
   // Validate limit is a positive integer to prevent injection
   const safeLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
-  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%ci"}';
+  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const result = await execGit(['log', format, '-n', String(safeLimit)], dir);
 
   const commits = result.stdout.trim().split('\n').filter(Boolean).map(line => {
@@ -271,7 +271,7 @@ export async function updateBranches(dir) {
  * Get branch comparison (how far ahead headBranch is from baseBranch)
  */
 export async function getBranchComparison(dir, baseBranch = 'main', headBranch = 'dev') {
-  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%ci"}';
+  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const logResult = await execGit(
     ['log', format, `${baseBranch}..${headBranch}`], dir, { ignoreExitCode: true }
   );
