@@ -202,4 +202,20 @@ router.post('/instances/:instanceId/tickets/:ticketId/transition', async (req, r
   }
 });
 
+/**
+ * GET /api/jira/instances/:instanceId/my-sprint-tickets/:projectKey
+ * Get tickets assigned to current user in active sprint for a project
+ */
+router.get('/instances/:instanceId/my-sprint-tickets/:projectKey', async (req, res, next) => {
+  try {
+    const tickets = await jiraService.getMyCurrentSprintTickets(
+      req.params.instanceId,
+      req.params.projectKey
+    );
+    res.json(tickets);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

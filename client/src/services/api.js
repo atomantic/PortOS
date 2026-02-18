@@ -1157,6 +1157,11 @@ export const deleteEpigeneticIntervention = (id) => request(`/digital-twin/genom
   method: 'DELETE'
 });
 
+// JIRA
+export const getJiraInstances = () => request('/jira/instances');
+export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
+export const getMySprintTickets = (instanceId, projectKey) => request(`/jira/instances/${instanceId}/my-sprint-tickets/${projectKey}`);
+
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
 export const getBrowserConfig = () => request('/browser/config');
