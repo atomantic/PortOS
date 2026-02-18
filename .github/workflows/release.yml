@@ -134,6 +134,7 @@ jobs:
           # Checkout dev and merge main to share the changelog commit history
           git fetch origin dev
           git checkout dev
+          git fetch origin main
           git merge origin/main --no-edit -m "merge: incorporate v${CURRENT_VERSION} changelog archive [skip ci]"
 
           # Update package.json files for next version
