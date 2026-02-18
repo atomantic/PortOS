@@ -46,19 +46,22 @@ for (const file of themeFiles) {
 }
 console.log(`✅ Copied ${themeFiles.length} themes → ${themeDest}`);
 
-// 2. Add source line to shell rc file
-const shellRcPath = existsSync(join(home, '.zshrc'))
-  ? join(home, '.zshrc')
-  : join(home, '.bashrc');
-
+// 2. Add source line to zshrc (ghostty.sh uses zsh-specific hooks)
+const zshrcPath = join(home, '.zshrc');
 const sourceLine = `source "${join(rootDir, 'shell/ghostty.sh')}"`;
-const rcContent = existsSync(shellRcPath) ? readFileSync(shellRcPath, 'utf8') : '';
 
-if (rcContent.includes(sourceLine)) {
-  console.log(`✅ Shell integration already in ${shellRcPath}`);
+if (!existsSync(zshrcPath)) {
+  console.log('⚠️  ~/.zshrc not found — Ghostty shell integration requires zsh');
+  console.log('   To set up manually, add this to your zsh config:');
+  console.log(`   ${sourceLine}`);
 } else {
-  appendFileSync(shellRcPath, `\n# PortOS Ghostty shell integration\n${sourceLine}\n`);
-  console.log(`✅ Added source line to ${shellRcPath}`);
+  const rcContent = readFileSync(zshrcPath, 'utf8');
+  if (rcContent.includes(sourceLine)) {
+    console.log(`✅ Shell integration already in ${zshrcPath}`);
+  } else {
+    appendFileSync(zshrcPath, `\n# PortOS Ghostty shell integration\n${sourceLine}\n`);
+    console.log(`✅ Added source line to ${zshrcPath}`);
+  }
 }
 
 console.log('');

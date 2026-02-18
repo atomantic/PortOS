@@ -34,6 +34,7 @@ export async function getInstances() {
  * Save JIRA instances configuration
  */
 export async function saveInstances(config) {
+  await fs.mkdir(path.dirname(JIRA_CONFIG_FILE), { recursive: true });
   await fs.writeFile(
     JIRA_CONFIG_FILE,
     JSON.stringify(config, null, 2),
@@ -81,9 +82,9 @@ function createJiraClient(instance) {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    httpsAgent: new https.Agent({
-      rejectUnauthorized: false // Allow self-signed certs for internal JIRA
-    }),
+    httpsAgent: instance.allowSelfSigned ? new https.Agent({
+      rejectUnauthorized: false
+    }) : undefined,
     timeout: 30000
   });
 
@@ -181,16 +182,23 @@ export async function createTicket(instanceId, ticketData) {
     issue.fields.assignee = { name: ticketData.assignee };
   }
 
+  // Custom field IDs vary per JIRA instance — use instance config or defaults
+  const fieldIds = {
+    storyPoints: instance.customFields?.storyPoints || 'customfield_10106',
+    epic: instance.customFields?.epic || 'customfield_10101',
+    sprint: instance.customFields?.sprint || 'customfield_10105',
+  };
+
   if (ticketData.storyPoints) {
-    issue.fields.customfield_10106 = ticketData.storyPoints;
+    issue.fields[fieldIds.storyPoints] = ticketData.storyPoints;
   }
 
   if (ticketData.epicKey) {
-    issue.fields.customfield_10101 = ticketData.epicKey;
+    issue.fields[fieldIds.epic] = ticketData.epicKey;
   }
 
   if (ticketData.sprint) {
-    issue.fields.customfield_10105 = ticketData.sprint;
+    issue.fields[fieldIds.sprint] = ticketData.sprint;
   }
 
   if (ticketData.labels && ticketData.labels.length > 0) {
