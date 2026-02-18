@@ -13,11 +13,12 @@
  *   --points       Story points (default: 1)
  *   --sprint       Use current active sprint (default: true)
  *   --no-sprint    Skip sprint assignment
- *   --epic         Override epic key (default: from app config)
+ *   --epic         Epic key (CONTECH-123) or search term ("grace support") to find by name
  *   --assignee     Override assignee (default: from app config)
  *
  * Example:
  *   node scripts/jira-create-ticket.js --app portos --summary "Research MXF video" --points 1
+ *   node scripts/jira-create-ticket.js --app grace --summary "Fix login" --epic "grace support"
  */
 
 import { dirname, join } from 'path';
@@ -54,7 +55,7 @@ function parseArgs() {
   --type         Issue type (Task, Bug, Story, Spike)
   --points       Story points (default: 1)
   --no-sprint    Skip sprint assignment
-  --epic         Override epic key
+  --epic         Epic key (CONTECH-123) or search term ("grace support")
   --assignee     Override assignee`);
         process.exit(0);
     }
@@ -99,6 +100,35 @@ async function getActiveSprintId(instanceId, boardId) {
   return sprint.id;
 }
 
+/**
+ * Resolve an epic from either a key (CONTECH-123) or a search term ("grace support")
+ */
+async function resolveEpic(instanceId, projectKey, epicInput) {
+  if (!epicInput) return undefined;
+
+  // If it looks like a JIRA key (e.g. CONTECH-123), use it directly
+  if (/^[A-Z]+-\d+$/.test(epicInput)) {
+    console.log(`📌 Epic: ${epicInput}`);
+    return epicInput;
+  }
+
+  // Otherwise search for it by name
+  const epics = await jiraService.searchEpics(instanceId, projectKey, epicInput);
+  if (!epics.length) {
+    console.error(`⚠️  No epics found matching "${epicInput}"`);
+    return undefined;
+  }
+
+  if (epics.length === 1) {
+    console.log(`📌 Epic: ${epics[0].key} — ${epics[0].summary}`);
+    return epics[0].key;
+  }
+
+  // Multiple matches — pick the best one (first result, most relevant)
+  console.log(`📌 Epic: ${epics[0].key} — ${epics[0].summary} (${epics.length} matches, using best)`);
+  return epics[0].key;
+}
+
 async function main() {
   const args = parseArgs();
 
@@ -116,6 +146,13 @@ async function main() {
     sprintId = await getActiveSprintId(jira.instanceId, jira.boardId);
   }
 
+  // Resolve epic — CLI arg overrides app config, both support search terms
+  const epicKey = await resolveEpic(
+    jira.instanceId,
+    jira.projectKey,
+    args.epic || jira.epicKey || undefined
+  );
+
   const ticketData = {
     projectKey: jira.projectKey,
     summary: args.summary,
@@ -123,7 +160,7 @@ async function main() {
     issueType: args.type || jira.issueType || 'Task',
     assignee: args.assignee || jira.assignee || undefined,
     storyPoints: args.points,
-    epicKey: args.epic || jira.epicKey || undefined,
+    epicKey,
     labels: jira.labels || [],
     sprint: sprintId || undefined
   };
