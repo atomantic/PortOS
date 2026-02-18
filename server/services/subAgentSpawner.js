@@ -32,6 +32,9 @@ import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thin
 import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
 import { detectConflicts } from './taskConflict.js';
 import { createWorktree, removeWorktree, cleanupOrphanedWorktrees } from './worktreeManager.js';
+import * as jiraService from './jira.js';
+import * as git from './git.js';
+import { executeApiRun, executeCliRun, createRun } from './runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1241,40 +1244,81 @@ export async function spawnAgentForTask(task) {
     ? (await getAppById(task.metadata.app).catch(() => null))?.name || null
     : null;
 
-  // Check for conflicts with active agents and decide on worktree usage
-  let worktreeInfo = null;
-  const { getAgents } = await import('./cos.js');
-  const allAgents = await getAgents();
-  const runningAgents = allAgents.filter(a => a.status === 'running');
+  // JIRA integration: create ticket + feature branch if app has JIRA enabled and task opted in
+  let jiraTicket = null;
+  let jiraBranchName = null;
+  const appData = await getAppDataForTask(task);
 
-  const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
-    emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
-    return { hasConflict: false, recommendation: 'proceed' };
-  });
+  if (appData?.jira?.enabled && task.metadata?.createJiraTicket) {
+    jiraTicket = await createJiraTicketForTask(task, appData);
 
-  if (conflictResult.recommendation === 'worktree') {
-    emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
-      taskId: task.id,
-      conflictingAgents: conflictResult.conflictingAgents,
-      reason: conflictResult.reason
-    });
+    if (jiraTicket) {
+      // Create feature branch: feature/PROJ-123-short-description
+      const slug = (task.description || 'task')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .substring(0, 40);
+      jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
 
-    worktreeInfo = await createWorktree(agentId, workspacePath, task.id).catch(err => {
-      emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
-      return null;
-    });
-
-    if (worktreeInfo) {
-      workspacePath = worktreeInfo.worktreePath;
-      emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
-        agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
+      await git.createBranch(workspacePath, jiraBranchName).catch(err => {
+        emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
+        jiraBranchName = null;
       });
+
+      if (jiraBranchName) {
+        emitLog('success', `Created feature branch ${jiraBranchName}`, { taskId: task.id, ticketId: jiraTicket.ticketId });
+      }
+
+      // Enrich task metadata with JIRA info
+      task.metadata = {
+        ...task.metadata,
+        jiraTicketId: jiraTicket.ticketId,
+        jiraTicketUrl: jiraTicket.ticketUrl,
+        jiraBranch: jiraBranchName,
+        jiraInstanceId: appData.jira.instanceId,
+        jiraCreatePR: appData.jira.createPR !== false
+      };
     }
-  } else if (conflictResult.recommendation === 'proceed') {
-    emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
   }
 
-  // Build the agent prompt (includes worktree context if applicable)
+  // Check for conflicts with active agents and decide on worktree usage
+  // Skip worktree conflict detection if we already created a JIRA feature branch (agent is isolated)
+  let worktreeInfo = null;
+  if (!jiraBranchName) {
+    const { getAgents } = await import('./cos.js');
+    const allAgents = await getAgents();
+    const runningAgents = allAgents.filter(a => a.status === 'running');
+
+    const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {
+      emitLog('warn', `Conflict detection failed: ${err.message}`, { taskId: task.id });
+      return { hasConflict: false, recommendation: 'proceed' };
+    });
+
+    if (conflictResult.recommendation === 'worktree') {
+      emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
+        taskId: task.id,
+        conflictingAgents: conflictResult.conflictingAgents,
+        reason: conflictResult.reason
+      });
+
+      worktreeInfo = await createWorktree(agentId, workspacePath, task.id).catch(err => {
+        emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
+        return null;
+      });
+
+      if (worktreeInfo) {
+        workspacePath = worktreeInfo.worktreePath;
+        emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName}`, {
+          agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName
+        });
+      }
+    } else if (conflictResult.recommendation === 'proceed') {
+      emitLog('debug', `No conflicts for task ${task.id}, using shared workspace`, { taskId: task.id });
+    }
+  }
+
+  // Build the agent prompt (includes worktree and JIRA context if applicable)
   const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo);
 
   // Create agent directory
@@ -1312,10 +1356,16 @@ export async function spawnAgentForTask(task) {
     taskAppName: resolvedAppName,
     selfImprovementType: task.metadata?.selfImprovementType || null,
     missionName: task.metadata?.missionName || null,
-    missionId: task.metadata?.missionId || null
+    missionId: task.metadata?.missionId || null,
+    // JIRA integration metadata
+    jiraTicketId: task.metadata?.jiraTicketId || null,
+    jiraTicketUrl: task.metadata?.jiraTicketUrl || null,
+    jiraBranch: task.metadata?.jiraBranch || null,
+    jiraInstanceId: task.metadata?.jiraInstanceId || null,
+    jiraCreatePR: task.metadata?.jiraCreatePR ?? null
   });
 
-  emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}`, { agentId, taskId: task.id });
+  emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
 
   // Mark the task as in_progress to prevent re-spawning
   const updateResult = await updateTask(task.id, { status: 'in_progress' }, task.taskType || 'user')
@@ -1541,8 +1591,70 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
   // Process memory extraction and app cooldown
   await processAgentCompletion(agentId, task, success, outputBuffer);
 
-  // Clean up worktree if agent was using one
-  await cleanupAgentWorktree(agentId, success);
+  // JIRA integration: push branch, create PR, comment on ticket
+  const jiraTicketId = agent.task?.metadata?.jiraTicketId;
+  const jiraBranch = agent.task?.metadata?.jiraBranch;
+  const jiraInstanceId = agent.task?.metadata?.jiraInstanceId;
+  const jiraCreatePR = agent.task?.metadata?.jiraCreatePR;
+
+  if (jiraTicketId && jiraBranch && success) {
+    // Get workspace from registered agent state (runnerAgents doesn't store it)
+    const { getAgent: getAgentState } = await import('./cos.js');
+    const agentState = await getAgentState(agentId).catch(() => null);
+    const workspace = agentState?.metadata?.workspacePath || ROOT_DIR;
+
+    // Push the feature branch
+    await git.push(workspace, jiraBranch).catch(err => {
+      emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
+    });
+
+    // Create PR if configured (default true when JIRA is enabled)
+    let prUrl = null;
+    if (jiraCreatePR !== false) {
+      const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
+      const targetBranch = devBranch || baseBranch || 'main';
+
+      const prResult = await git.createPR(workspace, {
+        title: `${jiraTicketId}: ${(task.description || 'CoS automated task').substring(0, 100)}`,
+        body: `Resolves ${jiraTicketId}\n\nAutomated PR created by PortOS Chief of Staff.\n\n**Task:** ${task.description || ''}`,
+        base: targetBranch,
+        head: jiraBranch
+      }).catch(err => {
+        emitLog('warn', `Failed to create PR for ${jiraTicketId}: ${err.message}`, { agentId });
+        return null;
+      });
+
+      if (prResult?.success) {
+        prUrl = prResult.url;
+        emitLog('success', `Created PR: ${prUrl}`, { agentId, ticketId: jiraTicketId });
+      }
+    }
+
+    // Comment on JIRA ticket with results
+    if (jiraInstanceId) {
+      const commentLines = [`Agent completed task successfully.`];
+      if (prUrl) {
+        commentLines.push(`\n*Pull Request:* ${prUrl}`);
+      } else if (jiraBranch) {
+        commentLines.push(`\n*Branch:* \`${jiraBranch}\``);
+      }
+      await jiraService.addComment(jiraInstanceId, jiraTicketId, commentLines.join('\n')).catch(err => {
+        emitLog('warn', `Failed to comment on JIRA ticket ${jiraTicketId}: ${err.message}`, { agentId });
+      });
+    }
+
+    // Checkout back to original branch
+    const { devBranch: dev, baseBranch: base } = await git.getRepoBranches(workspace).catch(() => ({ devBranch: null, baseBranch: null }));
+    const returnBranch = dev || base || 'main';
+    await git.checkout(workspace, returnBranch).catch(err => {
+      emitLog('warn', `Failed to checkout back to ${returnBranch}: ${err.message}`, { agentId });
+    });
+  }
+
+  // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
+  if (!jiraBranch) {
+    await cleanupAgentWorktree(agentId, success);
+  }
 
   runnerAgents.delete(agentId);
 }
@@ -2169,6 +2281,17 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 **Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
+  // Build JIRA context section if applicable
+  const jiraSection = task.metadata?.jiraTicketId ? `
+## JIRA Integration
+This task is tracked by JIRA ticket **${task.metadata.jiraTicketId}**.
+- **Ticket URL**: ${task.metadata.jiraTicketUrl}
+${task.metadata.jiraBranch ? `- **Branch**: \`${task.metadata.jiraBranch}\`` : ''}
+
+Include the ticket ID (${task.metadata.jiraTicketId}) in your commit messages, e.g. \`${task.metadata.jiraTicketId}: description of change\`.
+${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch branches.' : ''}
+` : '';
+
   // Detect and load task-type-specific skill template (only when matched)
   const matchedSkill = detectSkillTemplate(task);
   const skillSection = matchedSkill
@@ -2186,6 +2309,7 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
     claudeMdSection,
     digitalTwinSection,
     worktreeSection,
+    jiraSection,
     compactionSection,
     skillSection,
     soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
@@ -2214,6 +2338,7 @@ ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}
+${jiraSection}
 ${compactionSection}
 ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}
 ## Instructions
@@ -2229,6 +2354,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
+${task.metadata?.app ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
 
 ## Working Directory
 You are working in the project directory. Use the available tools to explore, modify, and test code.
@@ -2258,6 +2384,108 @@ async function getAppWorkspace(appName) {
   // Object format - keys are app IDs
   const app = apps[appName] || Object.values(apps).find(a => a.name === appName);
   return app?.repoPath || ROOT_DIR;
+}
+
+/**
+ * Get full app data for a task (including jira config).
+ * Returns the app object or null if not found.
+ */
+async function getAppDataForTask(task) {
+  const appName = task?.metadata?.app;
+  if (!appName) return null;
+
+  const appsFile = join(ROOT_DIR, 'data/apps.json');
+  const data = await readJSONFile(appsFile, null);
+  if (!data) return null;
+
+  const apps = data.apps || data;
+
+  if (Array.isArray(apps)) {
+    return apps.find(a => a.name === appName || a.id === appName) || null;
+  }
+
+  return apps[appName] || Object.values(apps).find(a => a.name === appName) || null;
+}
+
+/**
+ * Generate a concise JIRA ticket title from a task description using AI.
+ * Falls back to truncated description on failure.
+ */
+async function generateJiraTitle(description) {
+  const fallback = `[CoS] ${(description || 'Automated task').substring(0, 120)}`;
+
+  const provider = await getActiveProvider().catch(() => null);
+  if (!provider) return fallback;
+
+  const model = provider.defaultModel || provider.models?.[0];
+  if (!model) return fallback;
+
+  const prompt = `Generate a concise JIRA ticket title (max 80 chars) for this task. Output ONLY the title text, nothing else.\n\nTask: ${description}`;
+
+  const { runId } = await createRun({ providerId: provider.id, model, prompt, source: 'jira-title' }).catch(() => ({}));
+  if (!runId) return fallback;
+
+  let title = '';
+
+  await new Promise((resolve) => {
+    const onData = (data) => { title += typeof data === 'string' ? data : (data?.text || ''); };
+    const onDone = () => resolve();
+
+    if (provider.type === 'cli') {
+      executeCliRun(runId, provider, prompt, process.cwd(), onData, onDone, 30000);
+    } else {
+      executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onDone);
+    }
+  }).catch(() => {});
+
+  title = title.trim().replace(/^["']|["']$/g, '');
+  return title || fallback;
+}
+
+/**
+ * Create a JIRA ticket for a task if the app has JIRA integration enabled.
+ * Non-blocking — returns null on failure.
+ * @returns {Promise<{ticketId: string, ticketUrl: string}|null>}
+ */
+async function createJiraTicketForTask(task, app) {
+  const jira = app?.jira;
+  if (!jira?.enabled || !jira.instanceId || !jira.projectKey) return null;
+
+  const summary = await generateJiraTitle(task.description);
+  const description = [
+    `Automated task created by PortOS Chief of Staff.`,
+    ``,
+    `*Task ID:* ${task.id}`,
+    `*Priority:* ${task.priority || 'MEDIUM'}`,
+    `*App:* ${app.name || task.metadata?.app || 'unknown'}`,
+    ``,
+    `{quote}`,
+    task.description || '',
+    `{quote}`
+  ].join('\n');
+
+  const result = await jiraService.createTicket(jira.instanceId, {
+    projectKey: jira.projectKey,
+    summary,
+    description,
+    issueType: jira.issueType || 'Task',
+    labels: jira.labels || [],
+    assignee: jira.assignee,
+    epicKey: jira.epicKey
+  }).catch(err => {
+    emitLog('warn', `Failed to create JIRA ticket: ${err.message}`, { taskId: task.id, app: app.name });
+    return null;
+  });
+
+  if (!result?.ticketId) return null;
+
+  emitLog('success', `Created JIRA ticket ${result.ticketId}`, {
+    taskId: task.id,
+    ticketId: result.ticketId,
+    ticketUrl: result.url
+  });
+
+  return { ticketId: result.ticketId, ticketUrl: result.url };
 }
 
 /**
