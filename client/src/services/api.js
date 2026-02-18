@@ -39,6 +39,7 @@ async function request(endpoint, options = {}) {
 
 // Health
 export const checkHealth = () => request('/health');
+export const getSystemHealth = (options) => request('/health/system', options);
 
 // Apps
 export const getApps = () => request('/apps');

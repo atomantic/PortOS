@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import AppTile from '../components/AppTile';
 import BrailleSpinner from '../components/BrailleSpinner';
+import SystemHealthWidget from '../components/SystemHealthWidget';
 import CosDashboardWidget from '../components/CosDashboardWidget';
 import GoalProgressWidget from '../components/GoalProgressWidget';
 import UpcomingTasksWidget from '../components/UpcomingTasksWidget';
@@ -89,6 +90,11 @@ export default function Dashboard() {
           {error}
         </div>
       )}
+
+      {/* System Health Widget */}
+      <div className="mb-6">
+        <SystemHealthWidget />
+      </div>
 
       {/* CoS Status Widget */}
       <div className="mb-6">
