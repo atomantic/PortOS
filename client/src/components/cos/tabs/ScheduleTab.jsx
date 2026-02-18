@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw, Package } from 'lucide-react';
+import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw, Package, Settings2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 
@@ -455,6 +455,121 @@ function TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onRes
   );
 }
 
+function PerAppOverrides({ apps, taskTypes }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [overrides, setOverrides] = useState({}); // { appId: [disabledTaskType, ...] }
+  const [updating, setUpdating] = useState(null); // 'appId:taskType' while toggling
+
+  const activeApps = apps?.filter(app => !app.archived) || [];
+
+  const fetchOverrides = useCallback(async () => {
+    const results = {};
+    await Promise.all(activeApps.map(async (app) => {
+      const data = await api.getAppTaskTypes(app.id).catch(() => null);
+      if (data) {
+        results[app.id] = data.disabledTaskTypes || [];
+      }
+    }));
+    setOverrides(results);
+  }, [activeApps.map(a => a.id).join(',')]);
+
+  useEffect(() => {
+    if (activeApps.length > 0) fetchOverrides();
+  }, [fetchOverrides]);
+
+  const handleToggle = async (appId, taskType, currentlyEnabled) => {
+    const key = `${appId}:${taskType}`;
+    setUpdating(key);
+    const result = await api.toggleAppTaskType(appId, taskType, !currentlyEnabled).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    if (result?.success) {
+      setOverrides(prev => ({ ...prev, [appId]: result.disabledTaskTypes }));
+      const appName = activeApps.find(a => a.id === appId)?.name || appId;
+      toast.success(`${!currentlyEnabled ? 'Enabled' : 'Disabled'} ${taskType} for ${appName}`);
+    }
+    setUpdating(null);
+  };
+
+  if (activeApps.length === 0 || taskTypes.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex items-center gap-2 w-full text-left"
+      >
+        {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+        <Settings2 size={18} className="text-gray-400" />
+        <h3 className="text-lg font-semibold text-white">Per-App Task Type Overrides</h3>
+        <span className="text-xs text-gray-500">
+          {activeApps.length} apps
+        </span>
+      </button>
+      {!collapsed && (
+        <>
+          <p className="text-sm text-gray-400 ml-6">
+            Enable or disable specific task types per app. Disabled task types will be skipped during scheduled runs for that app.
+          </p>
+          <div className="ml-6 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-port-border">
+                  <th className="text-left py-2 pr-4 text-gray-400 font-medium sticky left-0 bg-port-bg min-w-[140px]">App</th>
+                  {taskTypes.map(tt => (
+                    <th key={tt} className="px-2 py-2 text-gray-400 font-medium text-center whitespace-nowrap">
+                      <span className="text-xs">{tt}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {activeApps.map(app => {
+                  const disabled = overrides[app.id] || [];
+                  return (
+                    <tr key={app.id} className="border-b border-port-border/50 hover:bg-port-card/30">
+                      <td className="py-2 pr-4 text-white font-mono text-xs sticky left-0 bg-port-bg">
+                        <div className="flex items-center gap-1.5">
+                          <Package size={12} className="text-gray-500 flex-shrink-0" />
+                          <span className="truncate max-w-[120px]" title={app.name}>{app.name}</span>
+                        </div>
+                      </td>
+                      {taskTypes.map(tt => {
+                        const isEnabled = !disabled.includes(tt);
+                        const isUpdating = updating === `${app.id}:${tt}`;
+                        return (
+                          <td key={tt} className="px-2 py-2 text-center">
+                            <button
+                              onClick={() => handleToggle(app.id, tt, isEnabled)}
+                              disabled={isUpdating}
+                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                isEnabled ? 'bg-port-accent' : 'bg-gray-600'
+                              } ${isUpdating ? 'opacity-50' : ''}`}
+                              title={`${isEnabled ? 'Disable' : 'Enable'} ${tt} for ${app.name}`}
+                              aria-label={`${isEnabled ? 'Disable' : 'Enable'} ${tt} for ${app.name}`}
+                            >
+                              <span
+                                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                                  isEnabled ? 'translate-x-5' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function ScheduleTab({ apps }) {
   const [schedule, setSchedule] = useState(null);
   const [providers, setProviders] = useState(null);
@@ -612,6 +727,11 @@ export default function ScheduleTab({ apps }) {
         category="appImprovement"
         providers={providers}
         apps={apps}
+      />
+
+      <PerAppOverrides
+        apps={apps}
+        taskTypes={Object.keys(schedule.appImprovement || {})}
       />
 
       {schedule.lastUpdated && (

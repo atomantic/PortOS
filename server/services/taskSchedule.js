@@ -23,6 +23,7 @@ import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
 import { readJSONFile } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
+import { isTaskTypeEnabledForApp } from './apps.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -968,6 +969,14 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
 
   if (!interval || !interval.enabled) {
     return { shouldRun: false, reason: 'disabled' };
+  }
+
+  // Check per-app task type override
+  if (appId) {
+    const enabledForApp = await isTaskTypeEnabledForApp(appId, taskType);
+    if (!enabledForApp) {
+      return { shouldRun: false, reason: 'disabled-for-app' };
+    }
   }
 
   const key = `app-improve:${taskType}`;
