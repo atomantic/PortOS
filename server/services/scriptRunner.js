@@ -8,6 +8,7 @@
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import { writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import Cron from 'croner';

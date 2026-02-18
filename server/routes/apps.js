@@ -12,7 +12,7 @@ import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 const router = Router();
 
 /**
- * Middleware to load app by :id param and attach to req.app
+ * Middleware to load app by :id param and attach to req.loadedApp
  * Throws 404 if not found, eliminating repeated null checks across routes
  */
 const loadApp = asyncHandler(async (req, res, next) => {

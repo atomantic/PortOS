@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 /**
  * Hook for auto-refetching data on an interval.
@@ -11,10 +11,16 @@ import { useState, useEffect } from 'react';
 export function useAutoRefetch(fetchFn, intervalMs) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const fetchRef = useRef(fetchFn);
+
+  // Keep ref current so interval callbacks don't capture stale closures
+  useEffect(() => {
+    fetchRef.current = fetchFn;
+  }, [fetchFn]);
 
   useEffect(() => {
     const loadData = async () => {
-      const result = await fetchFn();
+      const result = await fetchRef.current();
       setData(result);
       setLoading(false);
     };
@@ -22,7 +28,7 @@ export function useAutoRefetch(fetchFn, intervalMs) {
     loadData();
     const interval = setInterval(loadData, intervalMs);
     return () => clearInterval(interval);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [intervalMs]);
 
   return { data, loading };
 }
