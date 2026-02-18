@@ -19,15 +19,21 @@ export function useAutoRefetch(fetchFn, intervalMs) {
   }, [fetchFn]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadData = async () => {
       const result = await fetchRef.current();
+      if (cancelled) return;
       setData(result);
       setLoading(false);
     };
 
     loadData();
     const interval = setInterval(loadData, intervalMs);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [intervalMs]);
 
   return { data, loading };

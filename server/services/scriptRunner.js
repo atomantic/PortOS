@@ -45,7 +45,8 @@ const ALLOWED_SCRIPT_COMMANDS = new Set([
 const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
 
 // Patterns matching sensitive environment variable values in command output (e.g., pm2 jlist)
-const SENSITIVE_ENV_PATTERN = /("[^"]*(?:KEY|SECRET|TOKEN|PASS|PASSWORD|APIKEY|API_KEY|APISEC|API_SEC|MACAROON|CERT|CREDENTIAL|AUTH)[^"]*":\s*)"[^"]+"/gi;
+// Keys must be underscore-delimited segments to avoid false positives like "monkey" or "keymetrics"
+const SENSITIVE_ENV_PATTERN = /("(?:[a-z0-9]+_)*(?:KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|MACAROON|CERT|CREDENTIAL|AUTH)(?:_[a-z0-9]+)*":\s*)"[^"]+"/gi;
 
 /**
  * Redact sensitive env vars from command output before persisting.
@@ -372,10 +373,11 @@ export async function executeScript(scriptId) {
     child.on('close', async (code) => {
       const duration = Date.now() - startTime;
       const fullOutput = output + (error ? `\n[stderr]\n${error}` : '');
+      const redactedOutput = redactSensitiveOutput(fullOutput);
 
       // Update script state
       script.lastRun = new Date().toISOString();
-      script.lastOutput = redactSensitiveOutput(fullOutput.substring(0, 10000));
+      script.lastOutput = redactedOutput.substring(0, 10000);
       script.lastExitCode = code;
       script.runCount = (script.runCount || 0) + 1;
 
@@ -400,7 +402,7 @@ export async function executeScript(scriptId) {
           description: script.triggerPrompt,
           taskType: 'internal',
           metadata: {
-            context: `Script Output:\n\`\`\`\n${fullOutput.substring(0, 5000)}\n\`\`\``,
+            context: `Script Output:\n\`\`\`\n${redactedOutput.substring(0, 5000)}\n\`\`\``,
             source: 'script',
             scriptId,
             scriptName: script.name
@@ -413,13 +415,13 @@ export async function executeScript(scriptId) {
         name: script.name,
         exitCode: code,
         duration,
-        outputLength: fullOutput.length
+        outputLength: redactedOutput.length
       });
 
       resolve({
         success: code === 0,
         exitCode: code,
-        output: fullOutput,
+        output: redactedOutput,
         duration
       });
     });
