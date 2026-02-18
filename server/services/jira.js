@@ -264,6 +264,49 @@ export async function transitionTicket(instanceId, ticketId, transitionId) {
   return { success: true };
 }
 
+/**
+ * Get tickets assigned to user in current sprint for a project
+ */
+export async function getMyCurrentSprintTickets(instanceId, projectKey) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+
+  // JQL to find tickets assigned to current user in active sprint for the project
+  const jql = `project = "${projectKey}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY priority DESC, updated DESC`;
+
+  try {
+    const response = await client.get('/rest/api/2/search', {
+      params: {
+        jql,
+        fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106',
+        maxResults: 50
+      }
+    });
+
+    return response.data.issues.map(issue => ({
+      key: issue.key,
+      summary: issue.fields.summary,
+      status: issue.fields.status.name,
+      statusCategory: issue.fields.status.statusCategory?.name,
+      priority: issue.fields.priority?.name,
+      issueType: issue.fields.issuetype?.name,
+      storyPoints: issue.fields.customfield_10106,
+      updated: issue.fields.updated,
+      url: `${instance.baseUrl}/browse/${issue.key}`
+    }));
+  } catch (error) {
+    console.error(`❌ Failed to fetch JIRA tickets: ${error.message}`);
+    // Return empty array on error to avoid breaking the UI
+    return [];
+  }
+}
+
 export default {
   getInstances,
   saveInstances,
@@ -274,5 +317,6 @@ export default {
   createTicket,
   updateTicket,
   addComment,
-  transitionTicket
+  transitionTicket,
+  getMyCurrentSprintTickets
 };
