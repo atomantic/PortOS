@@ -65,10 +65,10 @@ describe('autonomousJobs', () => {
     it('never-run enabled job is always due', async () => {
       const due = await getDueJobs()
 
-      expect(due).toHaveLength(1)
-      expect(due[0].id).toBe('job-test-1')
-      expect(due[0].reason).toBe('never-run')
-      expect(due[0].overdueBy).toBeGreaterThan(0)
+      const testJob = due.find(j => j.id === 'job-test-1')
+      expect(testJob).toBeDefined()
+      expect(testJob.reason).toBe('never-run')
+      expect(testJob.overdueBy).toBeGreaterThan(0)
     })
 
     it('recently-run job is NOT due', async () => {
@@ -85,7 +85,7 @@ describe('autonomousJobs', () => {
 
       const due = await getDueJobs()
 
-      expect(due).toHaveLength(0)
+      expect(due.find(j => j.id === 'job-test-1')).toBeUndefined()
     })
 
     it('jobs sort by most overdue first', async () => {
@@ -115,10 +115,13 @@ describe('autonomousJobs', () => {
 
       const due = await getDueJobs()
 
-      expect(due).toHaveLength(2)
-      expect(due[0].id).toBe('job-2')
-      expect(due[1].id).toBe('job-1')
-      expect(due[0].overdueBy).toBeGreaterThan(due[1].overdueBy)
+      // Verify relative ordering: more overdue jobs should come first
+      const job2Idx = due.findIndex(j => j.id === 'job-2')
+      const job1Idx = due.findIndex(j => j.id === 'job-1')
+      expect(job2Idx).toBeGreaterThanOrEqual(0)
+      expect(job1Idx).toBeGreaterThanOrEqual(0)
+      expect(job2Idx).toBeLessThan(job1Idx)
+      expect(due[job2Idx].overdueBy).toBeGreaterThan(due[job1Idx].overdueBy)
     })
   })
 
