@@ -74,7 +74,7 @@ export async function deleteInstance(instanceId) {
  * Create axios client for JIRA instance
  */
 function createJiraClient(instance) {
-  return axios.create({
+  const client = axios.create({
     baseURL: instance.baseUrl,
     headers: {
       'Authorization': `Bearer ${instance.apiToken}`,
@@ -86,6 +86,18 @@ function createJiraClient(instance) {
     }),
     timeout: 30000
   });
+
+  // Detect expired token (JIRA returns HTML login page instead of JSON)
+  client.interceptors.response.use(response => {
+    if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE')) {
+      const err = new Error('JIRA token expired — received login page instead of JSON. Regenerate your PAT.');
+      err.status = 401;
+      throw err;
+    }
+    return response;
+  });
+
+  return client;
 }
 
 /**
@@ -332,6 +344,35 @@ export async function getActiveSprints(instanceId, boardId) {
   }));
 }
 
+/**
+ * Search for epics in a JIRA project by name
+ */
+export async function searchEpics(instanceId, projectKey, query) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const jql = `project = "${projectKey}" AND issuetype = Epic AND summary ~ "${query}" ORDER BY updated DESC`;
+
+  const response = await client.get('/rest/api/2/search', {
+    params: {
+      jql,
+      fields: 'summary,status',
+      maxResults: 10
+    }
+  });
+
+  return response.data.issues.map(issue => ({
+    key: issue.key,
+    summary: issue.fields.summary,
+    status: issue.fields.status.name
+  }));
+}
+
 export default {
   getInstances,
   saveInstances,
@@ -344,5 +385,6 @@ export default {
   addComment,
   transitionTicket,
   getMyCurrentSprintTickets,
-  getActiveSprints
+  getActiveSprints,
+  searchEpics
 };

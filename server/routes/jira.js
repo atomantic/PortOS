@@ -234,4 +234,21 @@ router.get('/instances/:instanceId/boards/:boardId/sprints', async (req, res, ne
   }
 });
 
+/**
+ * GET /api/jira/instances/:instanceId/projects/:projectKey/epics?q=search
+ * Search for epics by name in a project
+ */
+router.get('/instances/:instanceId/projects/:projectKey/epics', async (req, res, next) => {
+  try {
+    const epics = await jiraService.searchEpics(
+      req.params.instanceId,
+      req.params.projectKey,
+      req.query.q || ''
+    );
+    res.json(epics);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;
