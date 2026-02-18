@@ -66,6 +66,50 @@ app.get('/api/status', async (req, res) => {
   })));
 });
 
+// Validate process name against registered apps to prevent command injection
+async function isRegisteredProcess(processName) {
+  const apps = await loadApps();
+  return apps.some(app => (app.pm2ProcessNames || []).includes(processName));
+}
+
+// API: Restart a PM2 process
+app.post('/api/restart/:process', async (req, res) => {
+  const processName = req.params.process;
+  if (!(await isRegisteredProcess(processName))) {
+    return res.status(400).json({ success: false, error: 'Unknown process' });
+  }
+  console.log(`🔄 [Autofixer UI] Restarting process: ${processName}`);
+  const { stdout, stderr } = await exec(`pm2 restart ${processName}`).catch(err => ({
+    stdout: '',
+    stderr: err.message
+  }));
+  if (stderr && !stdout) {
+    console.error(`❌ [Autofixer UI] Restart failed for ${processName}: ${stderr}`);
+    return res.status(500).json({ success: false, error: stderr });
+  }
+  console.log(`✅ [Autofixer UI] Restarted ${processName}`);
+  res.json({ success: true });
+});
+
+// API: Stop a PM2 process
+app.post('/api/stop/:process', async (req, res) => {
+  const processName = req.params.process;
+  if (!(await isRegisteredProcess(processName))) {
+    return res.status(400).json({ success: false, error: 'Unknown process' });
+  }
+  console.log(`⏹️ [Autofixer UI] Stopping process: ${processName}`);
+  const { stdout, stderr } = await exec(`pm2 stop ${processName}`).catch(err => ({
+    stdout: '',
+    stderr: err.message
+  }));
+  if (stderr && !stdout) {
+    console.error(`❌ [Autofixer UI] Stop failed for ${processName}: ${stderr}`);
+    return res.status(500).json({ success: false, error: stderr });
+  }
+  console.log(`✅ [Autofixer UI] Stopped ${processName}`);
+  res.json({ success: true });
+});
+
 // Serve main UI
 app.get('/', async (req, res) => {
   const apps = await loadApps();
@@ -279,6 +323,62 @@ app.get('/', async (req, res) => {
       color: white;
     }
 
+    .toolbar button.restart-btn {
+      background: #22c55e33;
+      color: #22c55e;
+      border: 1px solid #22c55e44;
+    }
+
+    .toolbar button.restart-btn:hover {
+      background: #22c55e55;
+    }
+
+    .toolbar button.restart-btn:disabled,
+    .toolbar button.stop-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .toolbar button.stop-btn {
+      background: #ef444433;
+      color: #ef4444;
+      border: 1px solid #ef444444;
+    }
+
+    .toolbar button.stop-btn:hover {
+      background: #ef444455;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 0.75rem 1.25rem;
+      border-radius: 0.5rem;
+      font-size: 0.875rem;
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .toast.success {
+      background: #22c55e22;
+      color: #22c55e;
+      border: 1px solid #22c55e44;
+    }
+
+    .toast.error {
+      background: #ef444422;
+      color: #ef4444;
+      border: 1px solid #ef444444;
+    }
+
     #logs {
       flex: 1;
       overflow-y: auto;
@@ -477,6 +577,8 @@ app.get('/', async (req, res) => {
           <span class="toolbar-title" id="currentProcess">Select a process</span>
         </div>
         <div class="toolbar-buttons">
+          <button id="restartBtn" class="restart-btn" disabled>Restart</button>
+          <button id="stopBtn" class="stop-btn" disabled>Stop</button>
           <button id="clearBtn">Clear</button>
           <button id="pauseBtn">Pause</button>
         </div>
@@ -498,6 +600,8 @@ app.get('/', async (req, res) => {
     </div>
   </div>
 
+  <div id="toast" class="toast"></div>
+
   <script>
     const processList = document.getElementById('processList');
     const logsContainer = document.getElementById('logs');
@@ -508,6 +612,9 @@ app.get('/', async (req, res) => {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const lineCount = document.getElementById('lineCount');
+    const restartBtn = document.getElementById('restartBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const toastEl = document.getElementById('toast');
     const logsTab = document.getElementById('logsTab');
     const historyTab = document.getElementById('historyTab');
 
@@ -574,8 +681,49 @@ app.get('/', async (req, res) => {
       logsContainer.innerHTML = '';
       totalLines = 0;
       lineCount.textContent = '0 lines';
+      restartBtn.disabled = false;
+      stopBtn.disabled = false;
       updateProcessList();
       connect();
+    }
+
+    function showToast(message, type) {
+      toastEl.textContent = message;
+      toastEl.className = 'toast ' + type;
+      requestAnimationFrame(() => toastEl.classList.add('visible'));
+      setTimeout(() => toastEl.classList.remove('visible'), 3000);
+    }
+
+    async function restartProcess() {
+      if (!selectedProcess) return;
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting…';
+      const res = await fetch('/api/restart/' + encodeURIComponent(selectedProcess), { method: 'POST' });
+      const data = await res.json();
+      restartBtn.textContent = 'Restart';
+      restartBtn.disabled = false;
+      if (data.success) {
+        showToast('Restarted ' + selectedProcess, 'success');
+        fetchStatus();
+      } else {
+        showToast('Failed to restart: ' + (data.error || 'unknown error'), 'error');
+      }
+    }
+
+    async function stopProcess() {
+      if (!selectedProcess) return;
+      stopBtn.disabled = true;
+      stopBtn.textContent = 'Stopping…';
+      const res = await fetch('/api/stop/' + encodeURIComponent(selectedProcess), { method: 'POST' });
+      const data = await res.json();
+      stopBtn.textContent = 'Stop';
+      stopBtn.disabled = false;
+      if (data.success) {
+        showToast('Stopped ' + selectedProcess, 'success');
+        fetchStatus();
+      } else {
+        showToast('Failed to stop: ' + (data.error || 'unknown error'), 'error');
+      }
     }
 
     function connect() {
@@ -654,6 +802,9 @@ app.get('/', async (req, res) => {
       pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
       pauseBtn.classList.toggle('pause-active', isPaused);
     });
+
+    restartBtn.addEventListener('click', restartProcess);
+    stopBtn.addEventListener('click', stopProcess);
 
     logsContainer.addEventListener('scroll', () => {
       const isAtBottom = logsContainer.scrollHeight - logsContainer.scrollTop <= logsContainer.clientHeight + 50;
