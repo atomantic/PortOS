@@ -1238,7 +1238,7 @@ export async function spawnAgentForTask(task) {
     ? await getAppWorkspace(task.metadata.app)
     : ROOT_DIR;
   const resolvedAppName = task.metadata?.app
-    ? (await getAppById(task.metadata.app).catch(() => null))?.name || task.metadata.app
+    ? (await getAppById(task.metadata.app).catch(() => null))?.name || null
     : null;
 
   // Check for conflicts with active agents and decide on worktree usage
