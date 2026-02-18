@@ -70,6 +70,7 @@ export const AUTONOMY_LEVELS = [
     params: {
       evaluationIntervalMs: 300000,      // 5 min
       maxConcurrentAgents: 1,
+      maxConcurrentAgentsPerProject: 1,
       selfImprovementEnabled: false,
       appImprovementEnabled: false,
       proactiveMode: false,
@@ -86,6 +87,7 @@ export const AUTONOMY_LEVELS = [
     params: {
       evaluationIntervalMs: 120000,      // 2 min
       maxConcurrentAgents: 2,
+      maxConcurrentAgentsPerProject: 1,
       selfImprovementEnabled: true,
       appImprovementEnabled: false,
       proactiveMode: false,
@@ -102,6 +104,7 @@ export const AUTONOMY_LEVELS = [
     params: {
       evaluationIntervalMs: 60000,       // 1 min
       maxConcurrentAgents: 3,
+      maxConcurrentAgentsPerProject: 2,
       selfImprovementEnabled: true,
       appImprovementEnabled: true,
       proactiveMode: false,
@@ -118,6 +121,7 @@ export const AUTONOMY_LEVELS = [
     params: {
       evaluationIntervalMs: 30000,       // 30 sec
       maxConcurrentAgents: 5,
+      maxConcurrentAgentsPerProject: 3,
       selfImprovementEnabled: true,
       appImprovementEnabled: true,
       proactiveMode: true,

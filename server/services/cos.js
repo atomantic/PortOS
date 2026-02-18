@@ -88,6 +88,7 @@ const DEFAULT_CONFIG = {
   evaluationIntervalMs: 60000,             // 1 minute - stay active, check frequently
   healthCheckIntervalMs: 900000,           // 15 minutes
   maxConcurrentAgents: 3,
+  maxConcurrentAgentsPerProject: 2,        // Per-project limit (prevents one project hogging all slots)
   maxProcessMemoryMb: 2048,                // Alert if any process exceeds this
   maxTotalProcesses: 50,                   // Alert if total PM2 processes exceed this
   mcpServers: [
@@ -493,6 +494,30 @@ async function resetOrphanedTasks() {
 }
 
 /**
+ * Count running agents grouped by project (app ID).
+ * Agents without an app (self-improvement, PortOS tasks) are grouped under '_self'.
+ */
+function countRunningAgentsByProject(agents) {
+  const counts = {};
+  for (const agent of Object.values(agents)) {
+    if (agent.status !== 'running') continue;
+    const project = agent.metadata?.taskApp || agent.metadata?.app || '_self';
+    counts[project] = (counts[project] || 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * Check if a task would exceed the per-project concurrency limit.
+ * Returns true if the task can be spawned (within limit), false otherwise.
+ */
+function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
+  const project = task.metadata?.app || '_self';
+  const current = agentsByProject[project] || 0;
+  return current < perProjectLimit;
+}
+
+/**
  * Evaluate tasks and decide what to spawn
  *
  * Priority order:
@@ -521,9 +546,11 @@ export async function evaluateTasks() {
   // Get both user and CoS tasks
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
-  // Count running agents and available slots
+  // Count running agents and available slots (global + per-project)
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
   const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
+  const agentsByProject = countRunningAgentsByProject(state.agents);
 
   if (availableSlots <= 0) {
     emitLog('warn', `Max concurrent agents reached (${runningAgents}/${state.config.maxConcurrentAgents})`);
@@ -532,6 +559,20 @@ export async function evaluateTasks() {
   }
 
   const tasksToSpawn = [];
+  // Track per-project counts including tasks we're about to spawn in this batch
+  const spawnProjectCounts = { ...agentsByProject };
+
+  // Helper: check if a task can spawn (within both global and per-project limits)
+  const canSpawnTask = (task) => {
+    if (tasksToSpawn.length >= availableSlots) return false;
+    const project = task.metadata?.app || '_self';
+    return (spawnProjectCounts[project] || 0) < perProjectLimit;
+  };
+  // Helper: track a spawned task's project
+  const trackSpawn = (task) => {
+    const project = task.metadata?.app || '_self';
+    spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
+  };
 
   // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
   const taskSchedule = await import('./taskSchedule.js');
@@ -594,8 +635,9 @@ export async function evaluateTasks() {
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
       }
 
-      if (task) {
+      if (task && canSpawnTask(task)) {
         tasksToSpawn.push(task);
+        trackSpawn(task);
       }
     }
   }
@@ -604,7 +646,13 @@ export async function evaluateTasks() {
   const pendingUserTasks = userTaskData.grouped?.pending || [];
   for (const task of pendingUserTasks) {
     if (tasksToSpawn.length >= availableSlots) break;
-    tasksToSpawn.push({ ...task, taskType: 'user' });
+    const userTask = { ...task, taskType: 'user' };
+    if (!canSpawnTask(userTask)) {
+      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${task.metadata?.app || '_self'}`);
+      continue;
+    }
+    tasksToSpawn.push(userTask);
+    trackSpawn(userTask);
   }
 
   // Priority 2: Auto-approved system tasks (if slots available)
@@ -623,7 +671,13 @@ export async function evaluateTasks() {
         }
       }
 
-      tasksToSpawn.push({ ...task, taskType: 'internal' });
+      const sysTask = { ...task, taskType: 'internal' };
+      if (!canSpawnTask(sysTask)) {
+        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${appId || '_self'}`);
+        continue;
+      }
+      tasksToSpawn.push(sysTask);
+      trackSpawn(sysTask);
     }
   }
 
@@ -647,7 +701,7 @@ export async function evaluateTasks() {
     for (const missionTask of missionTasks) {
       if (tasksToSpawn.length >= availableSlots) break;
       // Convert mission task to COS task format
-      tasksToSpawn.push({
+      const cosTask = {
         id: missionTask.id,
         description: missionTask.description,
         priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
@@ -655,7 +709,10 @@ export async function evaluateTasks() {
         metadata: missionTask.metadata,
         taskType: 'internal',
         approvalRequired: !missionTask.autoApprove
-      });
+      };
+      if (!canSpawnTask(cosTask)) continue;
+      tasksToSpawn.push(cosTask);
+      trackSpawn(cosTask);
       emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
         missionId: missionTask.metadata?.missionId,
         appId: missionTask.metadata?.appId
@@ -673,7 +730,9 @@ export async function evaluateTasks() {
     for (const job of dueJobs) {
       if (tasksToSpawn.length >= availableSlots) break;
       const task = await generateTaskFromJob(job);
+      if (!canSpawnTask(task)) continue;
       tasksToSpawn.push(task);
+      trackSpawn(task);
       emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
         jobId: job.id,
         category: job.category
@@ -690,8 +749,9 @@ export async function evaluateTasks() {
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
       const idleTask = await generateIdleReviewTask(state);
-      if (idleTask) {
+      if (idleTask && canSpawnTask(idleTask)) {
         tasksToSpawn.push(idleTask);
+        trackSpawn(idleTask);
       }
     }
   }
@@ -2882,6 +2942,15 @@ async function tryImmediateSpawn(task) {
     return;
   }
 
+  // Check per-project limit
+  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
+  const agentsByProject = countRunningAgentsByProject(state.agents);
+  if (!isWithinProjectLimit(task, agentsByProject, perProjectLimit)) {
+    const project = task.metadata?.app || '_self';
+    emitLog('debug', `⏳ Queued task ${task.id} - per-project limit reached for ${project} (${agentsByProject[project] || 0}/${perProjectLimit})`);
+    return;
+  }
+
   emitLog('info', `⚡ Immediate spawn: ${task.id} (${task.priority || 'MEDIUM'})`, {
     taskId: task.id,
     availableSlots
@@ -2905,11 +2974,15 @@ async function dequeueNextTask() {
 
   if (availableSlots <= 0) return;
 
+  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
+  const agentsByProject = countRunningAgentsByProject(state.agents);
+
   // Check user tasks first (highest priority)
   const userTaskData = await getUserTasks();
   const pendingUserTasks = userTaskData.grouped?.pending || [];
 
   for (const task of pendingUserTasks) {
+    if (!isWithinProjectLimit(task, agentsByProject, perProjectLimit)) continue;
     emitLog('info', `⚡ Dequeue on slot free: ${task.id} (${task.priority || 'MEDIUM'})`, {
       taskId: task.id,
       availableSlots
@@ -2928,6 +3001,7 @@ async function dequeueNextTask() {
       const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
       if (onCooldown) continue;
     }
+    if (!isWithinProjectLimit(task, agentsByProject, perProjectLimit)) continue;
     emitLog('info', `⚡ Dequeue system task on slot free: ${task.id}`, { taskId: task.id, availableSlots });
     cosEvents.emit('task:ready', { ...task, taskType: 'internal' });
     return;

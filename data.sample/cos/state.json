@@ -6,6 +6,7 @@
     "evaluationIntervalMs": 60000,
     "healthCheckIntervalMs": 900000,
     "maxConcurrentAgents": 3,
+    "maxConcurrentAgentsPerProject": 2,
     "maxProcessMemoryMb": 2048,
     "maxTotalProcesses": 50,
     "mcpServers": [

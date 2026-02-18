@@ -29,6 +29,7 @@ const LEVEL_COLORS = {
 const PARAM_LABELS = {
   evaluationIntervalMs: 'Eval',
   maxConcurrentAgents: 'Agents',
+  maxConcurrentAgentsPerProject: 'Per Project',
   selfImprovementEnabled: 'Self',
   appImprovementEnabled: 'App',
   proactiveMode: 'Proactive',
@@ -136,6 +137,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     evaluationIntervalMs: config?.evaluationIntervalMs || 60000,
     healthCheckIntervalMs: config?.healthCheckIntervalMs || 900000,
     maxConcurrentAgents: config?.maxConcurrentAgents || 3,
+    maxConcurrentAgentsPerProject: config?.maxConcurrentAgentsPerProject || 2,
     maxProcessMemoryMb: config?.maxProcessMemoryMb || 2048,
     autoStart: config?.autoStart || false,
     selfImprovementEnabled: config?.selfImprovementEnabled ?? true,
@@ -230,7 +232,16 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           type="number"
           inputValue={formData.maxConcurrentAgents}
           onChange={v => setFormData(f => ({ ...f, maxConcurrentAgents: v }))}
-          tooltip="Maximum number of AI agents that can run simultaneously"
+          tooltip="Maximum total number of AI agents that can run simultaneously across all projects"
+        />
+        <ConfigRow
+          label="Max Agents Per Project"
+          value={formData.maxConcurrentAgentsPerProject}
+          editing={editing}
+          type="number"
+          inputValue={formData.maxConcurrentAgentsPerProject}
+          onChange={v => setFormData(f => ({ ...f, maxConcurrentAgentsPerProject: v }))}
+          tooltip="Maximum agents per individual project — prevents one project from using all available slots"
         />
         <ConfigRow
           label="Max Process Memory"
