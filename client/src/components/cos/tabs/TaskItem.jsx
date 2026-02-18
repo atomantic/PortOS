@@ -183,7 +183,11 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleApprove = async () => {
-    await api.approveCosTask(task.id).catch(err => toast.error(err.message));
+    const result = await api.approveCosTask(task.id).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    if (!result) return;
     toast.success('Task approved');
     onRefresh();
   };
