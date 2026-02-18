@@ -9,12 +9,11 @@
  * - Future account management automation
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const DATA_FILE = join(PATHS.digitalTwin, 'social-accounts.json');
 
@@ -135,14 +134,7 @@ async function loadAccounts() {
 
   await ensureDir(PATHS.digitalTwin);
 
-  if (!existsSync(DATA_FILE)) {
-    cache = { accounts: {} };
-    cacheTimestamp = now;
-    return cache;
-  }
-
-  const content = await readFile(DATA_FILE, 'utf-8');
-  cache = JSON.parse(content);
+  cache = await readJSONFile(DATA_FILE, { accounts: {} });
   cacheTimestamp = now;
   return cache;
 }

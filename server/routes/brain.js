@@ -642,7 +642,9 @@ router.post('/links', asyncHandler(async (req, res) => {
 
   // If GitHub repo and auto-clone enabled, start clone in background
   if (isGitHubRepo && autoClone !== false) {
-    cloneRepoInBackground(link.id, url);
+    cloneRepoInBackground(link.id, url).catch(err => {
+      console.error(`❌ Background clone setup failed for ${link.id}: ${err.message}`);
+    });
   }
 
   res.status(201).json(link);

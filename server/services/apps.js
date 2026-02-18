@@ -1,9 +1,8 @@
-import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
@@ -36,14 +35,7 @@ async function loadApps() {
 
   await ensureDataDir();
 
-  if (!existsSync(APPS_FILE)) {
-    appsCache = { apps: {} };
-    cacheTimestamp = now;
-    return appsCache;
-  }
-
-  const content = await readFile(APPS_FILE, 'utf-8');
-  appsCache = JSON.parse(content);
+  appsCache = await readJSONFile(APPS_FILE, { apps: {} });
   cacheTimestamp = now;
   return appsCache;
 }
@@ -103,7 +95,7 @@ export async function getActiveApps() {
  */
 export async function getAppById(id) {
   const data = await loadApps();
-  const app = data.apps[id];
+  const app = data?.apps?.[id];
   return app ? { id, ...app } : null;
 }
 
