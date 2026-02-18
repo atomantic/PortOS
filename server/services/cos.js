@@ -3182,6 +3182,10 @@ export async function approveTask(taskId) {
   await writeFile(filePath, markdown);
 
   cosEvents.emit('tasks:changed', { type: 'internal', action: 'approved', task: tasks[taskIndex] });
+
+  // Immediately attempt to spawn the newly approved task
+  setImmediate(() => dequeueNextTask());
+
   return tasks[taskIndex];
 }
 

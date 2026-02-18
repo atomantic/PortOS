@@ -803,12 +803,13 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
 
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
+  // Manual triggers always bypass approval — the user explicitly requested execution
   const task = await autonomousJobs.generateTaskFromJob(job);
   const result = await cos.addTask({
     description: task.description,
     priority: task.priority,
     context: `Manually triggered autonomous job: ${job.name}`,
-    approvalRequired: !task.autoApprove
+    approvalRequired: false
   }, 'internal');
 
   res.json({ success: true, task: result });
