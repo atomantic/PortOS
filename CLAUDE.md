@@ -137,14 +137,12 @@ When you merge to `main`, the GitHub Actions workflow automatically:
 1. Reads `.changelog/v0.10.x.md`
 2. Replaces all instances of `0.10.x` with actual version (e.g., `0.10.5`)
 3. Creates the GitHub release with substituted changelog
-4. Checks out dev branch
-5. Renames `v0.10.x.md` → `v0.10.5.md` using `git mv` (preserves git history)
-6. Commits the renamed file to dev: `"docs: archive changelog for v0.10.5 [skip ci]"`
-7. Cherry-picks that commit to main
-8. Bumps dev to next minor version (e.g., 0.11.0)
+4. Archives the changelog on `main`: renames `v0.10.x.md` → `v0.10.5.md` using `git mv`
+5. Checks out dev branch and merges main into dev (shared commit history avoids future conflicts)
+6. Bumps dev to next minor version (e.g., 0.11.0)
 
 **Result:**
-- Both `dev` and `main` have `.changelog/v0.10.5.md` matching the tagged release
+- Both `dev` and `main` have `.changelog/v0.10.5.md` via shared commit ancestry
 - Git history shows: `v0.10.x.md` → `v0.10.5.md` (rename)
 - You create `.changelog/v0.11.x.md` to start the next development cycle
 
