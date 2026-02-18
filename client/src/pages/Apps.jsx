@@ -585,6 +585,7 @@ function EditAppModal({ app, onClose, onSave }) {
     jiraEnabled: app.jira?.enabled || false,
     jiraInstanceId: app.jira?.instanceId || '',
     jiraProjectKey: app.jira?.projectKey || '',
+    jiraBoardId: app.jira?.boardId || '',
     jiraIssueType: app.jira?.issueType || 'Task',
     jiraLabels: (app.jira?.labels || []).join(', '),
     jiraAssignee: app.jira?.assignee || '',
@@ -648,6 +649,7 @@ function EditAppModal({ app, onClose, onSave }) {
         enabled: true,
         instanceId: formData.jiraInstanceId || undefined,
         projectKey: formData.jiraProjectKey || undefined,
+        boardId: formData.jiraBoardId || undefined,
         issueType: formData.jiraIssueType || 'Task',
         labels: formData.jiraLabels ? formData.jiraLabels.split(',').map(s => s.trim()).filter(Boolean) : [],
         assignee: formData.jiraAssignee || undefined,
@@ -896,6 +898,17 @@ function EditAppModal({ app, onClose, onSave }) {
                               placeholder="e.g. CONTECH"
                             />
                           )}
+                        </div>
+
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Board ID</label>
+                          <input
+                            type="text"
+                            value={formData.jiraBoardId}
+                            onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                            placeholder="e.g. 11810 (from JIRA board URL rapidView param)"
+                          />
                         </div>
 
                         <div className="grid grid-cols-2 gap-3">
