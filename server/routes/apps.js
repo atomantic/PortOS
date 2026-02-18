@@ -164,6 +164,31 @@ router.post('/:id/unarchive', asyncHandler(async (req, res) => {
   res.json(app);
 }));
 
+// GET /api/apps/:id/task-types - Get per-app task type overrides
+router.get('/:id/task-types', asyncHandler(async (req, res) => {
+  const app = await appsService.getAppById(req.params.id);
+  if (!app) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ appId: app.id, appName: app.name, disabledTaskTypes: app.disabledTaskTypes || [] });
+}));
+
+// PUT /api/apps/:id/task-types/:taskType - Toggle a task type for an app
+router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await appsService.toggleAppTaskType(req.params.id, req.params.taskType, enabled);
+  if (!result) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  console.log(`📋 ${enabled ? 'Enabled' : 'Disabled'} task type ${req.params.taskType} for ${result.name}`);
+  res.json({ success: true, appId: result.id, taskType: req.params.taskType, enabled, disabledTaskTypes: result.disabledTaskTypes || [] });
+}));
+
 // POST /api/apps/:id/start - Start app via PM2
 router.post('/:id/start', asyncHandler(async (req, res, next) => {
   const app = await appsService.getAppById(req.params.id);

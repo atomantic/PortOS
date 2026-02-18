@@ -64,6 +64,11 @@ export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { meth
 export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
 export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
+export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
+export const toggleAppTaskType = (id, taskType, enabled) => request(`/apps/${id}/task-types/${taskType}`, {
+  method: 'PUT',
+  body: JSON.stringify({ enabled })
+});
 export const getAppLogs = (id, lines = 100, processName) => {
   const params = new URLSearchParams({ lines: String(lines) });
   if (processName) params.set('process', processName);
