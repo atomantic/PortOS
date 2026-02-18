@@ -139,9 +139,9 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
     : null;
 
   return (
-    <div className="border border-port-border rounded-lg overflow-hidden">
+    <div className="border border-port-border rounded-lg">
       <div
-        className="flex items-center gap-3 p-3 bg-port-card hover:bg-port-card/80 cursor-pointer"
+        className={`flex items-center gap-3 p-3 bg-port-card hover:bg-port-card/80 cursor-pointer ${expanded ? 'rounded-t-lg' : 'rounded-lg'}`}
         onClick={() => setExpanded(!expanded)}
       >
         <button
@@ -353,7 +353,7 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
                   <ChevronDown size={12} className={`transition-transform ${showAppSelector ? 'rotate-180' : ''}`} />
                 </button>
                 {showAppSelector && (
-                  <div className="absolute top-full left-0 mt-1 z-50 w-64 max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
+                  <div className="absolute top-full left-0 mt-1 z-50 w-64 max-w-[calc(100vw-2rem)] max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
                     <div className="p-2 border-b border-port-border">
                       <span className="text-xs text-gray-400">Select an app to run {taskType} on:</span>
                     </div>
@@ -432,10 +432,10 @@ function TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onRes
         </span>
       </button>
       {description && !collapsed && (
-        <p className="text-sm text-gray-400 ml-6">{description}</p>
+        <p className="text-sm text-gray-400 ml-2 sm:ml-6">{description}</p>
       )}
       {!collapsed && (
-        <div className="space-y-2 ml-6">
+        <div className="space-y-2 ml-2 sm:ml-6">
           {taskEntries.map(([taskType, config]) => (
             <TaskTypeRow
               key={taskType}
@@ -509,11 +509,11 @@ function PerAppOverrides({ apps, taskTypes }) {
       </button>
       {!collapsed && (
         <>
-          <p className="text-sm text-gray-400 ml-6">
+          <p className="text-sm text-gray-400 ml-2 sm:ml-6">
             Enable or disable specific task types per app. Disabled task types will be skipped during scheduled runs for that app.
           </p>
-          <div className="ml-6 overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="ml-2 sm:ml-6 overflow-x-auto -mx-2 px-2 sm:mx-0 sm:px-0">
+            <table className="w-full text-sm min-w-[400px]">
               <thead>
                 <tr className="border-b border-port-border">
                   <th className="text-left py-2 pr-4 text-gray-400 font-medium sticky left-0 bg-port-bg min-w-[140px]">App</th>
