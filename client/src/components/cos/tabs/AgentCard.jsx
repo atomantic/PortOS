@@ -273,6 +273,11 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
             <Cpu size={16} aria-hidden="true" className={`flex-shrink-0 ${completed ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
             <span className="font-mono text-sm text-gray-400 truncate">{agent.id}</span>
+            {agent.metadata?.taskApp && (
+              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded flex-shrink-0" title={agent.metadata.workspacePath || agent.metadata.taskApp}>
+                {agent.metadata.workspaceName || agent.metadata.taskApp}
+              </span>
+            )}
             {isSystemAgent && (
               <span className="px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded flex-shrink-0">SYS</span>
             )}
