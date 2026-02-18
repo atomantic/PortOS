@@ -275,7 +275,7 @@ app.get('/', async (req, res) => {
       background: #12121a;
       border-bottom: 1px solid #2a2a4a;
       display: flex;
-      justify-content: space-between;
+      flex-wrap: wrap;
       align-items: center;
       gap: 0.5rem;
     }
@@ -298,7 +298,8 @@ app.get('/', async (req, res) => {
     .toolbar-buttons {
       display: flex;
       gap: 0.375rem;
-      flex-shrink: 0;
+      flex-wrap: wrap;
+      margin-left: auto;
     }
 
     .toolbar button {
