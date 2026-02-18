@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark } from 'lucide-react';
+import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -34,6 +34,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(true);
+  const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const fileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
 
@@ -138,6 +139,18 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     providers?.filter(p => p.enabled) || [],
     [providers]
   );
+
+  // Check if selected app has JIRA configured
+  const selectedApp = useMemo(() =>
+    apps?.find(a => a.id === newTask.app),
+    [apps, newTask.app]
+  );
+  const appHasJira = selectedApp?.jira?.enabled;
+
+  // Auto-toggle JIRA checkbox when app selection changes
+  useEffect(() => {
+    setCreateJiraTicket(!!apps?.find(a => a.id === newTask.app)?.jira?.enabled);
+  }, [newTask.app, apps]);
 
   // Split user tasks by status (only pending tasks are sortable)
   const pendingUserTasksLocal = useMemo(() =>
@@ -271,6 +284,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
       app: newTask.app || undefined,
+      createJiraTicket: createJiraTicket || undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -291,6 +305,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     setAttachments([]);
     setAddToTop(false);
     setEnhancePrompt(false);
+    setCreateJiraTicket(false);
     onRefresh();
   };
 
@@ -416,7 +431,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 />
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-3 items-center">
                 <div className="flex-1">
                   <label htmlFor="task-app" className="sr-only">Target application</label>
                   <select
@@ -431,6 +446,20 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     ))}
                   </select>
                 </div>
+                {appHasJira && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={createJiraTicket}
+                      onChange={(e) => setCreateJiraTicket(e.target.checked)}
+                      className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                    />
+                    <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                      <Ticket size={14} className="text-blue-400" />
+                      Create JIRA ticket
+                    </span>
+                  </label>
+                )}
               </div>
               <div className="flex gap-3">
                 <div>

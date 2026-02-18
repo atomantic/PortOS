@@ -310,6 +310,59 @@ export async function push(dir, branch = null) {
 }
 
 /**
+ * Create and switch to a new branch
+ */
+export async function createBranch(dir, branchName) {
+  await execGit(['checkout', '-b', branchName], dir);
+  return { success: true, branch: branchName };
+}
+
+/**
+ * Switch to an existing branch
+ */
+export async function checkout(dir, branchName) {
+  await execGit(['checkout', branchName], dir);
+  return { success: true, branch: branchName };
+}
+
+/**
+ * Create a pull request using the `gh` CLI.
+ * Fails gracefully if `gh` is not installed.
+ * @param {string} dir - Working directory (repo root)
+ * @param {object} options - PR options
+ * @param {string} options.title - PR title
+ * @param {string} options.body - PR description
+ * @param {string} options.base - Base branch (target)
+ * @param {string} options.head - Head branch (source)
+ * @returns {Promise<{success: boolean, url?: string, error?: string}>}
+ */
+export async function createPR(dir, { title, body, base, head }) {
+  return new Promise((resolve) => {
+    const args = ['pr', 'create', '--title', title, '--body', body || '', '--base', base, '--head', head];
+    const child = spawn('gh', args, { cwd: dir, shell: false });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => { stdout += data.toString(); });
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        const url = stdout.trim();
+        resolve({ success: true, url });
+      } else {
+        resolve({ success: false, error: stderr || `gh exited with code ${code}` });
+      }
+    });
+
+    child.on('error', (err) => {
+      resolve({ success: false, error: `gh not available: ${err.message}` });
+    });
+  });
+}
+
+/**
  * Detect base and dev branches from local branch list
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */

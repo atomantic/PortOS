@@ -2884,6 +2884,9 @@ export async function addTask(taskData, taskType = 'user') {
   if (taskData.model) metadata.model = taskData.model;
   if (taskData.provider) metadata.provider = taskData.provider;
   if (taskData.app) metadata.app = taskData.app;
+  if (taskData.createJiraTicket) metadata.createJiraTicket = true;
+  if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
+  if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
   if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
   if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
 

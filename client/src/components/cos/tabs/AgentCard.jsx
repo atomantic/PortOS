@@ -12,7 +12,8 @@ import {
   Brain,
   ThumbsUp,
   ThumbsDown,
-  MessageSquare
+  MessageSquare,
+  ExternalLink
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import MarkdownOutput from '../MarkdownOutput';
@@ -406,6 +407,27 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           )}
         </div>
         <p className="text-white text-sm mb-2">{agent.metadata?.taskDescription || agent.taskId}</p>
+
+        {/* JIRA ticket info */}
+        {agent.metadata?.jiraTicketId && (
+          <div className="flex items-center gap-2 mb-2">
+            <span className="px-2 py-0.5 text-xs bg-blue-500/20 text-blue-400 rounded font-mono">
+              {agent.metadata.jiraTicketId}
+            </span>
+            {agent.metadata?.jiraTicketUrl && (
+              <a
+                href={agent.metadata.jiraTicketUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                title="Open JIRA ticket in new tab"
+              >
+                View ticket
+                <ExternalLink size={12} aria-hidden="true" />
+              </a>
+            )}
+          </div>
+        )}
 
         {/* Live activity feed for running agents */}
         {!completed && recentActivity.length > 0 && (

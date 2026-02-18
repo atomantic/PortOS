@@ -129,6 +129,7 @@ export async function createApp(appData) {
     icon: appData.icon || null,
     editorCommand: appData.editorCommand || 'code .',
     archived: false,
+    jira: appData.jira || null,
     createdAt: now,
     updatedAt: now
   };
