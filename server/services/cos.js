@@ -64,6 +64,40 @@ export function emitLog(level, message, data = {}, prefix = '') {
 // In-memory daemon state
 let daemonRunning = false;
 
+// In-memory cache of completed agents loaded from disk metadata files
+// Keyed by agentId, lazy-loaded on first getAgents() call
+let completedAgentCache = null;
+
+// Load completed agent metadata from disk into the cache.
+// Reads all data/cos/agents/{id}/metadata.json files.
+// Only called once (lazy init), then kept in sync via completeAgent/deleteAgent.
+async function loadCompletedAgentCache() {
+  if (completedAgentCache) return completedAgentCache;
+
+  completedAgentCache = new Map();
+  if (!existsSync(AGENTS_DIR)) return completedAgentCache;
+
+  const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
+  const metadataReads = entries
+    .filter(e => e.isDirectory() && e.name.startsWith('agent-'))
+    .map(async (entry) => {
+      const metaPath = join(AGENTS_DIR, entry.name, 'metadata.json');
+      if (!existsSync(metaPath)) return;
+      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      if (!content) return;
+      const agent = JSON.parse(content);
+      if (agent?.id && agent.status === 'completed') {
+        // Strip output array from cache to save memory — full output read on demand
+        const { output, ...agentWithoutOutput } = agent;
+        completedAgentCache.set(agent.id, agentWithoutOutput);
+      }
+    });
+
+  await Promise.all(metadataReads);
+  console.log(`📂 Loaded ${completedAgentCache.size} completed agents from disk`);
+  return completedAgentCache;
+}
+
 // Mutex lock for state operations to prevent race conditions
 let stateLock = Promise.resolve();
 async function withStateLock(fn) {
@@ -2287,6 +2321,12 @@ export async function completeAgent(agentId, result = {}) {
       JSON.stringify(state.agents[agentId], null, 2)
     );
 
+    // Update in-memory cache so completed agents survive state resets
+    if (completedAgentCache) {
+      const { output, ...agentWithoutOutput } = state.agents[agentId];
+      completedAgentCache.set(agentId, agentWithoutOutput);
+    }
+
     return state.agents[agentId];
   });
 }
@@ -2324,11 +2364,22 @@ export async function appendAgentOutput(agentId, line) {
 }
 
 /**
- * Get all agents
+ * Get all agents — merges in-memory state (running agents) with
+ * persisted completed agents from disk metadata files.
  */
 export async function getAgents() {
   const state = await loadState();
-  return Object.values(state.agents);
+  const cache = await loadCompletedAgentCache();
+
+  // Start with all agents from state (running + any completed still in state)
+  const merged = { ...Object.fromEntries([...cache.entries()]) };
+
+  // State agents override cache (they have fresher data for running agents)
+  for (const [id, agent] of Object.entries(state.agents)) {
+    merged[id] = agent;
+  }
+
+  return Object.values(merged);
 }
 
 /**
@@ -2336,7 +2387,13 @@ export async function getAgents() {
  */
 export async function getAgent(agentId) {
   const state = await loadState();
-  const agent = state.agents[agentId];
+  let agent = state.agents[agentId];
+
+  // Fall back to disk metadata if not in state
+  if (!agent) {
+    const cache = await loadCompletedAgentCache();
+    agent = cache.get(agentId) ?? null;
+  }
   if (!agent) return null;
 
   // For completed agents, read full output from file
@@ -2458,18 +2515,30 @@ export async function cleanupZombieAgents() {
 }
 
 /**
- * Delete a single agent from state
+ * Delete a single agent from state and disk
  */
 export async function deleteAgent(agentId) {
   return withStateLock(async () => {
     const state = await loadState();
 
-    if (!state.agents[agentId]) {
+    // Check both state and cache
+    const inState = !!state.agents[agentId];
+    const inCache = completedAgentCache?.has(agentId);
+    if (!inState && !inCache) {
       return { error: 'Agent not found' };
     }
 
     delete state.agents[agentId];
     await saveState(state);
+
+    // Remove from cache
+    completedAgentCache?.delete(agentId);
+
+    // Remove metadata files from disk
+    const agentDir = join(AGENTS_DIR, agentId);
+    if (existsSync(agentDir)) {
+      await rm(agentDir, { recursive: true }).catch(() => {});
+    }
 
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
     return { success: true, agentId };
@@ -2833,22 +2902,39 @@ function formatRelativeTime(timestamp) {
 }
 
 /**
- * Clear completed agents from state (keep in files)
+ * Clear completed agents from state, cache, and disk
  */
 export async function clearCompletedAgents() {
   return withStateLock(async () => {
     const state = await loadState();
+    const cache = await loadCompletedAgentCache();
 
-    const toRemove = Object.keys(state.agents).filter(
+    // Collect IDs from both state and cache
+    const stateCompleted = Object.keys(state.agents).filter(
       id => state.agents[id].status === 'completed'
     );
+    const cacheCompleted = [...cache.keys()];
+    const allCompleted = [...new Set([...stateCompleted, ...cacheCompleted])];
 
-    for (const id of toRemove) {
+    // Remove from state
+    for (const id of stateCompleted) {
       delete state.agents[id];
     }
-
     await saveState(state);
-    return { cleared: toRemove.length };
+
+    // Clear cache
+    cache.clear();
+
+    // Remove metadata files from disk
+    const removals = allCompleted.map(id => {
+      const agentDir = join(AGENTS_DIR, id);
+      return existsSync(agentDir)
+        ? rm(agentDir, { recursive: true }).catch(() => {})
+        : Promise.resolve();
+    });
+    await Promise.all(removals);
+
+    return { cleared: allCompleted.length };
   });
 }
 
