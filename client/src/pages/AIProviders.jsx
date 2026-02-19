@@ -549,7 +549,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     command: provider?.command || '',
     args: provider?.args?.join(' ') || '',
     endpoint: provider?.endpoint || '',
-    apiKey: provider?.apiKey || '',
+    apiKey: '',
     models: provider?.models || [],
     defaultModel: provider?.defaultModel || '',
     lightModel: provider?.lightModel || '',
@@ -579,6 +579,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
       args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
       timeout: parseInt(formData.timeout)
     };
+
+    // Only send apiKey if user entered a new value (avoid overwriting existing key with empty string)
+    if (!data.apiKey && provider) {
+      delete data.apiKey;
+    }
 
     if (provider) {
       await api.updateProvider(provider.id, data);
@@ -667,7 +672,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   type="password"
                   value={formData.apiKey}
                   onChange={(e) => setFormData(prev => ({ ...prev, apiKey: e.target.value }))}
-                  placeholder="Optional"
+                  placeholder={provider?.hasApiKey ? 'Key set — leave blank to keep' : 'Optional'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
                 />
               </div>
