@@ -73,10 +73,11 @@ A thought capture and knowledge management system:
 git clone https://github.com/atomantic/PortOS.git
 cd PortOS
 ./setup.sh
-npm run dev
+pm2 start ecosystem.config.cjs
+pm2 save
 ```
 
-Access PortOS at http://localhost:5555 (or via Tailscale at http://[your-machine]:5555)
+Access PortOS at http://localhost:5555 (or via Tailscale at http://[your-machine]:5555). PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm2 save` + `pm2 startup`).
 
 ## Network Access
 
