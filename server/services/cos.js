@@ -76,11 +76,17 @@ let completedAgentCache = null;
 async function loadCompletedAgentCache() {
   if (completedAgentCache) return completedAgentCache;
 
-  completedAgentCache = new Map();
-  if (!existsSync(AGENTS_DIR)) return completedAgentCache;
+  if (!existsSync(AGENTS_DIR)) {
+    completedAgentCache = new Map();
+    return completedAgentCache;
+  }
 
+  // Build into a local Map — only assign to module-level cache on success
+  // so a failed load can be retried on the next call
+  const cache = new Map();
   const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
   let recovered = 0;
+  let skipped = 0;
   const metadataReads = entries
     .filter(e => e.isDirectory() && e.name.startsWith('agent-'))
     .map(async (entry) => {
@@ -90,15 +96,16 @@ async function loadCompletedAgentCache() {
 
       if (existsSync(metaPath)) {
         const content = await readFile(metaPath, 'utf-8').catch(() => null);
-        if (!content) return;
-        const raw = JSON.parse(content);
+        if (!content) { skipped++; return; }
+        let raw;
+        try { raw = JSON.parse(content); } catch { skipped++; return; }
 
         // Normalize legacy format: agentId → id, missing status → completed
         const id = raw.id || raw.agentId || agentId;
-        const status = raw.status || (raw.completedAt ? 'completed' : 'completed');
+        const status = raw.status || 'completed';
         if (status !== 'running') {
           const { output, ...rest } = raw;
-          completedAgentCache.set(id, { ...rest, id, status });
+          cache.set(id, { ...rest, id, status });
         }
         return;
       }
@@ -123,15 +130,19 @@ async function loadCompletedAgentCache() {
 
       // Persist the reconstructed metadata so future loads are fast
       await writeFile(metaPath, JSON.stringify(reconstructed, null, 2)).catch(() => {});
-      completedAgentCache.set(agentId, reconstructed);
+      cache.set(agentId, reconstructed);
       recovered++;
     });
 
-  await Promise.all(metadataReads);
-  const msg = recovered > 0
-    ? `📂 Loaded ${completedAgentCache.size} completed agents from disk (recovered ${recovered} missing metadata)`
-    : `📂 Loaded ${completedAgentCache.size} completed agents from disk`;
-  console.log(msg);
+  // Use allSettled so individual file errors don't abort the entire load
+  await Promise.allSettled(metadataReads);
+
+  // Only assign to module-level cache after successful build
+  completedAgentCache = cache;
+  const parts = [`📂 Loaded ${cache.size} completed agents from disk`];
+  if (recovered > 0) parts.push(`recovered ${recovered} missing metadata`);
+  if (skipped > 0) parts.push(`skipped ${skipped} unreadable`);
+  console.log(parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(', ')})` : parts[0]);
   return completedAgentCache;
 }
 
