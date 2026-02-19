@@ -898,6 +898,7 @@ export async function resetTaskTypeLearning(taskType) {
   }
 
   // Subtract model tier contributions using routing accuracy data (before deleting it)
+  data.byModelTier ??= {};
   const routingData = data.routingAccuracy?.[taskType];
   if (routingData) {
     for (const [tier, counts] of Object.entries(routingData)) {
