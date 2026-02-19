@@ -55,7 +55,7 @@ const DEFAULT_JOBS = [
     category: 'github-maintenance',
     interval: 'weekly',
     intervalMs: WEEK,
-    enabled: true,
+    enabled: false,
     priority: 'MEDIUM',
     autonomyLevel: 'manager',
     promptTemplate: `[Autonomous Job] GitHub Repo Maintenance
