@@ -295,9 +295,18 @@ async function saveState(state) {
 export async function getStatus() {
   const state = await loadState();
   const provider = await getActiveProvider();
+  const cache = await loadCompletedAgentCache();
 
-  // Count active agents
+  // Count active agents from state
   const activeAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+
+  // Derive tasksCompleted from actual completed agents on disk + state,
+  // since state.stats.tasksCompleted can drift after state resets
+  const completedIds = new Set(cache.keys());
+  for (const [id, agent] of Object.entries(state.agents)) {
+    if (agent.status === 'completed') completedIds.add(id);
+  }
+  const tasksCompleted = Math.max(state.stats.tasksCompleted, completedIds.size);
 
   return {
     running: daemonRunning,
@@ -305,7 +314,7 @@ export async function getStatus() {
     pausedAt: state.pausedAt,
     pauseReason: state.pauseReason,
     config: state.config,
-    stats: state.stats,
+    stats: { ...state.stats, tasksCompleted },
     activeAgents,
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
