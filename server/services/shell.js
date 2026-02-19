@@ -5,6 +5,27 @@ import { v4 as uuidv4 } from 'uuid';
 // Store active shell sessions
 const shellSessions = new Map();
 
+// Allowlist of safe environment variable prefixes to pass to PTY sessions
+// Prevents leaking secrets (API keys, tokens) to the shell
+const SAFE_ENV_PREFIXES = [
+  'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LC_', 'TERM',
+  'COLORTERM', 'EDITOR', 'VISUAL', 'HOSTNAME', 'PWD', 'OLDPWD', 'TMPDIR',
+  'XDG_', 'SSH_AUTH_SOCK', 'DISPLAY', 'HOMEBREW_', 'NVM_', 'FNM_', 'NODE_',
+  'NPM_', 'VOLTA_', 'GOPATH', 'GOROOT', 'CARGO_', 'RUSTUP_', 'PYENV_',
+  'VIRTUAL_ENV', 'CONDA_', 'JAVA_HOME', 'ANDROID_', 'DOCKER_', 'COMPOSE_',
+  'KUBECONFIG', 'LESS', 'PAGER', 'MANPATH', 'INFOPATH', 'ZDOTDIR', 'STARSHIP_'
+];
+
+function buildSafeEnv() {
+  const safeEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (SAFE_ENV_PREFIXES.some(prefix => key === prefix || key.startsWith(prefix))) {
+      safeEnv[key] = value;
+    }
+  }
+  return safeEnv;
+}
+
 /**
  * Get the default shell for the current OS
  */
@@ -35,7 +56,7 @@ export function createShellSession(socket, options = {}) {
       rows,
       cwd,
       env: {
-        ...process.env,
+        ...buildSafeEnv(),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor'
       }
