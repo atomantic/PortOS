@@ -27,11 +27,13 @@ export const DECISION_TYPES = {
   TASK_SKIPPED: 'task_skipped',           // Task skipped due to poor success rate
   TASK_SWITCHED: 'task_switched',          // Switched to alternative task
   INTERVAL_ADJUSTED: 'interval_adjusted',  // Interval changed by learning system
-  COOLDOWN_ACTIVE: 'cooldown_active',      // Task still in cooldown
+  COOLDOWN_ACTIVE: 'cooldown_active',      // Task/app still in cooldown period
   NOT_DUE: 'not_due',                       // Task not due based on schedule
   QUEUE_FULL: 'queue_full',                 // Too many tasks in queue
+  CAPACITY_FULL: 'capacity_full',           // Max concurrent agents reached (global or per-project)
   TASK_SELECTED: 'task_selected',           // Task was selected to run
-  REHABILITATION: 'rehabilitation'          // Skipped task type retried
+  REHABILITATION: 'rehabilitation',         // Skipped task type retried
+  IDLE: 'idle'                              // No work available after full evaluation
 };
 
 // Default data structure
@@ -145,12 +147,14 @@ export async function getDecisionSummary() {
     byType[d.type] = (byType[d.type] || 0) + 1;
   }
 
-  // Get impactful decisions (skips, switches, adjustments)
+  // Get impactful decisions (skips, switches, capacity issues, cooldowns)
   const impactfulTypes = [
     DECISION_TYPES.TASK_SKIPPED,
     DECISION_TYPES.TASK_SWITCHED,
     DECISION_TYPES.INTERVAL_ADJUSTED,
-    DECISION_TYPES.REHABILITATION
+    DECISION_TYPES.REHABILITATION,
+    DECISION_TYPES.CAPACITY_FULL,
+    DECISION_TYPES.COOLDOWN_ACTIVE
   ];
 
   const impactfulDecisions = recentDecisions

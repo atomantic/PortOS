@@ -588,6 +588,11 @@ export async function evaluateTasks() {
 
   if (availableSlots <= 0) {
     emitLog('warn', `Max concurrent agents reached (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    await recordDecision(
+      DECISION_TYPES.CAPACITY_FULL,
+      `All ${state.config.maxConcurrentAgents} agent slots occupied`,
+      { running: runningAgents, max: state.config.maxConcurrentAgents }
+    );
     cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
     return;
   }
@@ -682,7 +687,13 @@ export async function evaluateTasks() {
     if (tasksToSpawn.length >= availableSlots) break;
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawnTask(userTask)) {
-      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${task.metadata?.app || '_self'}`);
+      const project = task.metadata?.app || '_self';
+      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${project}`);
+      await recordDecision(
+        DECISION_TYPES.CAPACITY_FULL,
+        `User task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
+        { taskId: task.id, project, limit: perProjectLimit }
+      );
       continue;
     }
     tasksToSpawn.push(userTask);
@@ -701,13 +712,24 @@ export async function evaluateTasks() {
         const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
         if (onCooldown) {
           emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
+          await recordDecision(
+            DECISION_TYPES.COOLDOWN_ACTIVE,
+            `System task ${task.id} skipped — app ${appId} on cooldown (${Math.round(state.config.appReviewCooldownMs / 60000)}min window)`,
+            { taskId: task.id, appId, cooldownMs: state.config.appReviewCooldownMs }
+          );
           continue;
         }
       }
 
       const sysTask = { ...task, taskType: 'internal' };
       if (!canSpawnTask(sysTask)) {
-        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${appId || '_self'}`);
+        const sysProject = appId || '_self';
+        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${sysProject}`);
+        await recordDecision(
+          DECISION_TYPES.CAPACITY_FULL,
+          `System task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${sysProject}`,
+          { taskId: task.id, project: sysProject, limit: perProjectLimit }
+        );
         continue;
       }
       tasksToSpawn.push(sysTask);
@@ -878,7 +900,18 @@ export async function evaluateTasks() {
   }
 
   if (tasksToSpawn.length === 0) {
-    emitLog('info', 'No tasks to process - idle');
+    const awaitingCount = cosTaskData.awaitingApproval?.length || 0;
+    const idleReason = awaitingCount > 0
+      ? `${awaitingCount} task(s) awaiting approval, none auto-approved`
+      : hasPendingUserTasks
+        ? 'User tasks exist but all on cooldown or at capacity'
+        : 'No user tasks, system tasks, or idle work available';
+    emitLog('info', `No tasks to process - idle: ${idleReason}`);
+    await recordDecision(
+      DECISION_TYPES.IDLE,
+      idleReason,
+      { pendingUser: pendingUserCount, pendingSystem: pendingSystemCount, awaitingApproval: awaitingCount, runningAgents }
+    );
     cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
   }
 }
