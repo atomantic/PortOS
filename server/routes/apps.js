@@ -5,7 +5,7 @@ import * as appsService from '../services/apps.js';
 import { notifyAppsChanged } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { logAction } from '../services/history.js';
-import { validate, appSchema, appUpdateSchema } from '../lib/validation.js';
+import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
@@ -101,33 +101,15 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
 
 // POST /api/apps - Create new app
 router.post('/', asyncHandler(async (req, res, next) => {
-  const validation = validate(appSchema, req.body);
-
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const app = await appsService.createApp(validation.data);
+  const data = validateRequest(appSchema, req.body);
+  const app = await appsService.createApp(data);
   res.status(201).json(app);
 }));
 
 // PUT /api/apps/:id - Update app
 router.put('/:id', asyncHandler(async (req, res, next) => {
-  const validation = validate(appUpdateSchema, req.body);
-
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const app = await appsService.updateApp(req.params.id, validation.data);
+  const data = validateRequest(appUpdateSchema, req.body);
+  const app = await appsService.updateApp(req.params.id, data);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
@@ -176,23 +158,33 @@ router.post('/:id/unarchive', asyncHandler(async (req, res) => {
 // GET /api/apps/:id/task-types - Get per-app task type overrides
 router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  res.json({ appId: app.id, appName: app.name, disabledTaskTypes: app.disabledTaskTypes || [] });
+  const overrides = await appsService.getAppTaskTypeOverrides(app.id);
+  res.json({ appId: app.id, appName: app.name, taskTypeOverrides: overrides });
 }));
 
-// PUT /api/apps/:id/task-types/:taskType - Toggle a task type for an app
+// PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
-  const { enabled } = req.body;
-  if (typeof enabled !== 'boolean') {
-    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  const { enabled, interval } = req.body;
+  if (typeof enabled !== 'boolean' && interval === undefined) {
+    throw new ServerError('enabled (boolean) or interval (string|null) required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await appsService.toggleAppTaskType(req.params.id, req.params.taskType, enabled);
+  // Validate interval against allowed values
+  if (interval !== undefined) {
+    const allowedIntervals = ['rotation', 'daily', 'weekly', 'once', 'on-demand'];
+    if (interval !== null && (typeof interval !== 'string' || !allowedIntervals.includes(interval))) {
+      throw new ServerError('interval must be one of rotation|daily|weekly|once|on-demand or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval });
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  console.log(`📋 ${enabled ? 'Enabled' : 'Disabled'} task type ${req.params.taskType} for ${result.name}`);
-  res.json({ success: true, appId: result.id, taskType: req.params.taskType, enabled, disabledTaskTypes: result.disabledTaskTypes || [] });
+  const action = typeof enabled === 'boolean' ? (enabled ? 'Enabled' : 'Disabled') : 'Updated interval for';
+  console.log(`📋 ${action} task type ${req.params.taskType} for ${result.name}`);
+  res.json({ success: true, appId: result.id, taskType: req.params.taskType, enabled, interval, taskTypeOverrides: result.taskTypeOverrides || {} });
 }));
 
 // POST /api/apps/:id/start - Start app via PM2

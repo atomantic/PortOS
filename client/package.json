@@ -1,6 +1,6 @@
 {
   "name": "portos-client",
-  "version": "0.15.15",
+  "version": "0.16.15",
   "private": true,
   "type": "module",
   "scripts": {

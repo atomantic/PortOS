@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, platformAccountSchema, accountRegistrationSchema } from '../lib/validation.js';
+import { validateRequest, platformAccountSchema, accountRegistrationSchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { logAction } from '../services/history.js';
@@ -56,10 +56,7 @@ router.post('/', asyncHandler(async (req, res) => {
   // or a direct account creation (with existing credentials)
   if (req.body.credentials) {
     // Direct account creation with credentials
-    const { success, data, errors } = validate(platformAccountSchema, req.body);
-    if (!success) {
-      return res.status(422).json({ errors });
-    }
+    const data = validateRequest(platformAccountSchema, req.body);
 
     // Verify agent exists
     const agent = await agentPersonalities.getAgentById(data.agentId);
@@ -76,10 +73,7 @@ router.post('/', asyncHandler(async (req, res) => {
     res.status(201).json(account);
   } else {
     // Registration request - create new account on platform
-    const { success, data, errors } = validate(accountRegistrationSchema, req.body);
-    if (!success) {
-      return res.status(422).json({ errors });
-    }
+    const data = validateRequest(accountRegistrationSchema, req.body);
 
     // Verify agent exists
     const agent = await agentPersonalities.getAgentById(data.agentId);

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
 import { readJSONFile } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp } from './apps.js';
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -965,9 +965,9 @@ export async function shouldRunSelfImprovementTask(taskType) {
  */
 export async function shouldRunAppImprovementTask(taskType, appId) {
   const schedule = await loadSchedule();
-  const interval = schedule.appImprovement[taskType];
+  const globalInterval = schedule.appImprovement[taskType];
 
-  if (!interval || !interval.enabled) {
+  if (!globalInterval || !globalInterval.enabled) {
     return { shouldRun: false, reason: 'disabled' };
   }
 
@@ -978,6 +978,10 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
       return { shouldRun: false, reason: 'disabled-for-app' };
     }
   }
+
+  // Determine effective interval type: per-app override takes precedence over global
+  const perAppInterval = appId ? await getAppTaskTypeInterval(appId, taskType) : null;
+  const effectiveType = perAppInterval || globalInterval.type;
 
   const key = `app-improve:${taskType}`;
   const execution = schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
@@ -998,7 +1002,7 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
     return result;
   };
 
-  switch (interval.type) {
+  switch (effectiveType) {
     case INTERVAL_TYPES.ROTATION:
       return { shouldRun: true, reason: 'rotation' };
 
@@ -1044,7 +1048,7 @@ export async function shouldRunAppImprovementTask(taskType, appId) {
       return { shouldRun: false, reason: 'on-demand-only' };
 
     case INTERVAL_TYPES.CUSTOM: {
-      const baseInterval = interval.intervalMs || DAY;
+      const baseInterval = globalInterval.intervalMs || DAY;
       const learningAdjustment = await getPerformanceAdjustedInterval(taskType, 'appImprovement', baseInterval);
       const adjustedInterval = learningAdjustment.adjustedIntervalMs;
 
@@ -1334,6 +1338,10 @@ export async function getScheduleStatus() {
   }
 
   // Add execution status to each app improvement task type
+  // Fetch active apps once for per-app override aggregation
+  const activeApps = await getActiveApps().catch(() => []);
+  const totalAppCount = activeApps.length;
+
   for (const [taskType, interval] of Object.entries(schedule.appImprovement)) {
     const execution = schedule.executions[`app-improve:${taskType}`] || { lastRun: null, count: 0, perApp: {} };
 
@@ -1341,11 +1349,33 @@ export async function getScheduleStatus() {
     const baseInterval = interval.type === 'daily' ? DAY : interval.type === 'weekly' ? WEEK : (interval.intervalMs || DAY);
     const learningInfo = await getPerformanceAdjustedInterval(taskType, 'appImprovement', baseInterval);
 
+    // Build per-app overrides map and count enabled apps
+    // Preload all overrides in parallel to avoid sequential awaits
+    const appOverrides = {};
+    let enabledAppCount = 0;
+    const allOverrides = await Promise.all(activeApps.map(app => getAppTaskTypeOverrides(app.id)));
+    for (let i = 0; i < activeApps.length; i++) {
+      const override = allOverrides[i][taskType];
+      if (override) {
+        appOverrides[activeApps[i].id] = {
+          enabled: override.enabled !== false,
+          interval: override.interval || null
+        };
+      }
+      // App is enabled if no override or override.enabled !== false
+      if (!override || override.enabled !== false) {
+        enabledAppCount++;
+      }
+    }
+
     status.appImprovement[taskType] = {
       ...interval,
       globalLastRun: execution.lastRun,
       globalRunCount: execution.count,
       perAppCount: Object.keys(execution.perApp).length,
+      appOverrides,
+      enabledAppCount,
+      totalAppCount,
       // Learning adjustment fields
       learningAdjusted: learningInfo.adjusted,
       learningMultiplier: learningInfo.multiplier,

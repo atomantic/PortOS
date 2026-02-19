@@ -246,6 +246,7 @@ export default function ChiefOfStaff() {
       socket.off('cos:status');
       socket.off('cos:tasks:user:changed');
       socket.off('cos:agent:spawned');
+      socket.off('cos:agent:updated');
       socket.off('cos:agent:output');
       socket.off('cos:agent:completed');
       socket.off('cos:health:check');

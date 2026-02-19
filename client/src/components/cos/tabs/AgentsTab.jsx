@@ -5,10 +5,13 @@ import * as api from '../../../services/api';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
 
+const PAGE_SIZE = 50;
+
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {
   const [resumingAgent, setResumingAgent] = useState(null);
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // Fetch duration estimates for progress indicators
   useEffect(() => {
@@ -71,6 +74,11 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
       return description.includes(q) || model.includes(q) || id.includes(q) || error.includes(q);
     });
   }, [completedAgents, searchQuery]);
+
+  // Reset visible count when search changes
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [searchQuery]);
 
   return (
     <div className="space-y-6">
@@ -150,13 +158,16 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
             </div>
           )}
           <div className="space-y-2">
-            {(searchQuery ? filteredCompletedAgents : filteredCompletedAgents.slice(0, 15)).map(agent => (
+            {filteredCompletedAgents.slice(0, visibleCount).map(agent => (
               <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} onFeedbackChange={onRefresh} />
             ))}
-            {!searchQuery && completedAgents.length > 15 && (
-              <div className="text-center text-sm text-gray-500 py-2">
-                + {completedAgents.length - 15} more completed agents
-              </div>
+            {filteredCompletedAgents.length > visibleCount && (
+              <button
+                onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
+                className="w-full py-2 text-sm text-port-accent hover:text-white bg-port-card border border-port-border rounded-lg transition-colors"
+              >
+                Show more ({filteredCompletedAgents.length - visibleCount} remaining)
+              </button>
             )}
             {searchQuery && filteredCompletedAgents.length === 0 && (
               <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">

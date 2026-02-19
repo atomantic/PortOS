@@ -21,6 +21,10 @@ pm2 stop ecosystem.config.cjs
 pm2 logs
 ```
 
+## Security Model
+
+PortOS is a single-user, internal tool running on a private network behind Tailscale VPN. It is not exposed to the public internet. As such, it intentionally omits authentication, CORS restrictions, rate limiting, and HTTPS — these are non-issues for its deployment context. Do not add these or flag their absence as security concerns.
+
 ## Architecture
 
 PortOS is a monorepo with Express.js server (port 5554) and React/Vite client (port 5555). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.

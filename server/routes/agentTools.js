@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  validate,
+  validateRequest,
   generatePostSchema,
   generateCommentSchema,
   publishPostSchema,
@@ -52,10 +52,7 @@ async function getClientAndAgent(accountId, agentId) {
 
 // POST /generate-post - Preview AI-generated post (doesn't publish)
 router.post('/generate-post', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(generatePostSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(generatePostSchema, req.body);
 
   console.log(`🛠️ POST /api/agents/tools/generate-post agent=${data.agentId}`);
 
@@ -66,10 +63,7 @@ router.post('/generate-post', asyncHandler(async (req, res) => {
 
 // POST /generate-comment - Preview AI-generated comment
 router.post('/generate-comment', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(generateCommentSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(generateCommentSchema, req.body);
 
   console.log(`🛠️ POST /api/agents/tools/generate-comment agent=${data.agentId} post=${data.postId}`);
 
@@ -94,10 +88,7 @@ router.post('/generate-comment', asyncHandler(async (req, res) => {
 
 // POST /publish-post - Publish a post to Moltbook
 router.post('/publish-post', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(publishPostSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(publishPostSchema, req.body);
 
   console.log(`🛠️ POST /api/agents/tools/publish-post agent=${data.agentId} submolt=${data.submolt}`);
 
@@ -124,10 +115,7 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
 
 // POST /publish-comment - Publish a comment to Moltbook
 router.post('/publish-comment', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(publishCommentSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(publishCommentSchema, req.body);
 
   console.log(`🛠️ POST /api/agents/tools/publish-comment agent=${data.agentId} post=${data.postId}`);
 
@@ -159,10 +147,7 @@ router.post('/publish-comment', asyncHandler(async (req, res) => {
 
 // POST /engage - One-click autonomous engagement cycle
 router.post('/engage', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(engageSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(engageSchema, req.body);
 
   console.log(`🛠️ POST /api/agents/tools/engage agent=${data.agentId}`);
 
@@ -406,10 +391,7 @@ router.get('/published', asyncHandler(async (req, res) => {
 
 // POST /check-posts - Check engagement on published posts and respond
 router.post('/check-posts', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(checkPostsSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(checkPostsSchema, req.body);
 
   console.log(`👀 POST /api/agents/tools/check-posts agent=${data.agentId} days=${data.days}`);
 
@@ -551,10 +533,7 @@ router.get('/drafts', asyncHandler(async (req, res) => {
 
 // POST /drafts - Create a draft
 router.post('/drafts', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(createDraftSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(createDraftSchema, req.body);
 
   console.log(`🛠️ POST /api/agents/tools/drafts agent=${data.agentId} type=${data.type}`);
   const draft = await agentDrafts.createDraft(data.agentId, data);
@@ -569,10 +548,7 @@ router.put('/drafts/:draftId', asyncHandler(async (req, res) => {
     throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const { success, data, errors } = validate(updateDraftSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(updateDraftSchema, req.body);
 
   console.log(`🛠️ PUT /api/agents/tools/drafts/${draftId} agent=${agentId}`);
   const updated = await agentDrafts.updateDraft(agentId, draftId, data);

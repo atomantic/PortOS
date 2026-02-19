@@ -5,7 +5,7 @@
  * spawns sub-agents, and orchestrates task completion.
  */
 
-import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
+import { readFile, writeFile, mkdir, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -18,9 +18,10 @@ import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleRev
 import { getActiveApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
-import { formatDuration } from '../lib/fileUtils.js';
+import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
@@ -64,19 +65,90 @@ export function emitLog(level, message, data = {}, prefix = '') {
 // In-memory daemon state
 let daemonRunning = false;
 
-// Mutex lock for state operations to prevent race conditions
-let stateLock = Promise.resolve();
-async function withStateLock(fn) {
-  const release = stateLock;
-  let resolve;
-  stateLock = new Promise(r => { resolve = r; });
-  await release;
-  try {
-    return await fn();
-  } finally {
-    resolve();
+// In-memory cache of completed agents loaded from disk metadata files
+// Keyed by agentId, lazy-loaded on first getAgents() call
+let completedAgentCache = null;
+
+// Load completed agent metadata from disk into the cache.
+// Reads all data/cos/agents/{id}/metadata.json files.
+// Handles legacy formats (agentId instead of id, missing status) and
+// reconstructs minimal metadata for directories with no metadata.json.
+// Only called once (lazy init), then kept in sync via completeAgent/deleteAgent.
+async function loadCompletedAgentCache() {
+  if (completedAgentCache) return completedAgentCache;
+
+  if (!existsSync(AGENTS_DIR)) {
+    completedAgentCache = new Map();
+    return completedAgentCache;
   }
+
+  // Build into a local Map — only assign to module-level cache on success
+  // so a failed load can be retried on the next call
+  const cache = new Map();
+  const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
+  let recovered = 0;
+  let skipped = 0;
+  const metadataReads = entries
+    .filter(e => e.isDirectory() && e.name.startsWith('agent-'))
+    .map(async (entry) => {
+      const agentId = entry.name;
+      const agentDir = join(AGENTS_DIR, agentId);
+      const metaPath = join(agentDir, 'metadata.json');
+
+      if (existsSync(metaPath)) {
+        const content = await readFile(metaPath, 'utf-8').catch(() => null);
+        if (!content) { skipped++; return; }
+        let raw;
+        try { raw = JSON.parse(content); } catch { skipped++; return; }
+
+        // Normalize legacy format: agentId → id, missing status → completed
+        const id = raw.id || raw.agentId || agentId;
+        const status = raw.status || 'completed';
+        if (status !== 'running') {
+          const { output, ...rest } = raw;
+          cache.set(id, { ...rest, id, status });
+        }
+        return;
+      }
+
+      // No metadata.json — reconstruct from directory contents
+      const promptPath = join(agentDir, 'prompt.txt');
+      const outputPath = join(agentDir, 'output.txt');
+      const hasPrompt = existsSync(promptPath);
+      const hasOutput = existsSync(outputPath);
+
+      // Use file modification time as best-guess completedAt
+      const dirStat = await stat(agentDir).catch(() => null);
+      const completedAt = dirStat?.mtime?.toISOString() ?? new Date().toISOString();
+
+      const reconstructed = {
+        id: agentId,
+        status: 'completed',
+        completedAt,
+        result: { success: hasOutput, recovered: true },
+        metadata: { description: hasPrompt ? 'Recovered from disk (no metadata)' : 'Recovered (prompt-only)' }
+      };
+
+      // Persist the reconstructed metadata so future loads are fast
+      await writeFile(metaPath, JSON.stringify(reconstructed, null, 2)).catch(() => {});
+      cache.set(agentId, reconstructed);
+      recovered++;
+    });
+
+  // Use allSettled so individual file errors don't abort the entire load
+  await Promise.allSettled(metadataReads);
+
+  // Only assign to module-level cache after successful build
+  completedAgentCache = cache;
+  const parts = [`📂 Loaded ${cache.size} completed agents from disk`];
+  if (recovered > 0) parts.push(`recovered ${recovered} missing metadata`);
+  if (skipped > 0) parts.push(`skipped ${skipped} unreadable`);
+  console.log(parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(', ')})` : parts[0]);
+  return completedAgentCache;
 }
+
+// Mutex lock for state operations to prevent race conditions
+const withStateLock = createMutex();
 
 /**
  * Default configuration
@@ -188,7 +260,8 @@ async function loadState() {
     return { ...DEFAULT_STATE };
   }
 
-  const state = JSON.parse(content);
+  const state = safeJSONParse(content, null, { logError: true, context: 'CoS state' });
+  if (!state) return { ...DEFAULT_STATE };
 
   // Merge with defaults to ensure all fields exist
   return {
@@ -213,9 +286,18 @@ async function saveState(state) {
 export async function getStatus() {
   const state = await loadState();
   const provider = await getActiveProvider();
+  const cache = await loadCompletedAgentCache();
 
-  // Count active agents
+  // Count active agents from state
   const activeAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+
+  // Derive tasksCompleted from actual completed agents on disk + state,
+  // since state.stats.tasksCompleted can drift after state resets
+  const completedIds = new Set(cache.keys());
+  for (const [id, agent] of Object.entries(state.agents)) {
+    if (agent.status === 'completed') completedIds.add(id);
+  }
+  const tasksCompleted = Math.max(state.stats.tasksCompleted, completedIds.size);
 
   return {
     running: daemonRunning,
@@ -223,7 +305,7 @@ export async function getStatus() {
     pausedAt: state.pausedAt,
     pauseReason: state.pauseReason,
     config: state.config,
-    stats: state.stats,
+    stats: { ...state.stats, tasksCompleted },
     activeAgents,
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
@@ -554,6 +636,11 @@ export async function evaluateTasks() {
 
   if (availableSlots <= 0) {
     emitLog('warn', `Max concurrent agents reached (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    await recordDecision(
+      DECISION_TYPES.CAPACITY_FULL,
+      `All ${state.config.maxConcurrentAgents} agent slots occupied`,
+      { running: runningAgents, max: state.config.maxConcurrentAgents }
+    );
     cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
     return;
   }
@@ -648,7 +735,13 @@ export async function evaluateTasks() {
     if (tasksToSpawn.length >= availableSlots) break;
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawnTask(userTask)) {
-      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${task.metadata?.app || '_self'}`);
+      const project = task.metadata?.app || '_self';
+      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${project}`);
+      await recordDecision(
+        DECISION_TYPES.CAPACITY_FULL,
+        `User task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
+        { taskId: task.id, project, limit: perProjectLimit }
+      );
       continue;
     }
     tasksToSpawn.push(userTask);
@@ -667,13 +760,24 @@ export async function evaluateTasks() {
         const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
         if (onCooldown) {
           emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
+          await recordDecision(
+            DECISION_TYPES.COOLDOWN_ACTIVE,
+            `System task ${task.id} skipped — app ${appId} on cooldown (${Math.round(state.config.appReviewCooldownMs / 60000)}min window)`,
+            { taskId: task.id, appId, cooldownMs: state.config.appReviewCooldownMs }
+          );
           continue;
         }
       }
 
       const sysTask = { ...task, taskType: 'internal' };
       if (!canSpawnTask(sysTask)) {
-        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${appId || '_self'}`);
+        const sysProject = appId || '_self';
+        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${sysProject}`);
+        await recordDecision(
+          DECISION_TYPES.CAPACITY_FULL,
+          `System task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${sysProject}`,
+          { taskId: task.id, project: sysProject, limit: perProjectLimit }
+        );
         continue;
       }
       tasksToSpawn.push(sysTask);
@@ -844,7 +948,18 @@ export async function evaluateTasks() {
   }
 
   if (tasksToSpawn.length === 0) {
-    emitLog('info', 'No tasks to process - idle');
+    const awaitingCount = cosTaskData.awaitingApproval?.length || 0;
+    const idleReason = awaitingCount > 0
+      ? `${awaitingCount} task(s) awaiting approval, none auto-approved`
+      : hasPendingUserTasks
+        ? 'User tasks exist but all on cooldown or at capacity'
+        : 'No user tasks, system tasks, or idle work available';
+    emitLog('info', `No tasks to process - idle: ${idleReason}`);
+    await recordDecision(
+      DECISION_TYPES.IDLE,
+      idleReason,
+      { pendingUser: pendingUserCount, pendingSystem: pendingSystemCount, awaitingApproval: awaitingCount, runningAgents }
+    );
     cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
   }
 }
@@ -2051,7 +2166,7 @@ export async function runHealthCheck() {
     jsonStart = emptyMatch ? pm2Output.indexOf(emptyMatch[0]) : -1;
   }
   const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
-  const pm2Processes = JSON.parse(pm2Json);
+  const pm2Processes = safeJSONParse(pm2Json, [], { logError: true, context: 'pm2 process list' });
 
   metrics.pm2 = {
     total: pm2Processes.length,
@@ -2191,7 +2306,7 @@ export async function getScript(name) {
 
   const content = await readFile(scriptPath, 'utf-8');
   const metadata = existsSync(metaPath)
-    ? JSON.parse(await readFile(metaPath, 'utf-8'))
+    ? safeJSONParse(await readFile(metaPath, 'utf-8'), {}, { logError: true, context: `script metadata ${name}` })
     : {};
 
   return { name, content, metadata };
@@ -2287,6 +2402,12 @@ export async function completeAgent(agentId, result = {}) {
       JSON.stringify(state.agents[agentId], null, 2)
     );
 
+    // Update in-memory cache so completed agents survive state resets
+    if (completedAgentCache) {
+      const { output, ...agentWithoutOutput } = state.agents[agentId];
+      completedAgentCache.set(agentId, agentWithoutOutput);
+    }
+
     return state.agents[agentId];
   });
 }
@@ -2324,11 +2445,22 @@ export async function appendAgentOutput(agentId, line) {
 }
 
 /**
- * Get all agents
+ * Get all agents — merges in-memory state (running agents) with
+ * persisted completed agents from disk metadata files.
  */
 export async function getAgents() {
   const state = await loadState();
-  return Object.values(state.agents);
+  const cache = await loadCompletedAgentCache();
+
+  // Start with all agents from state (running + any completed still in state)
+  const merged = { ...Object.fromEntries([...cache.entries()]) };
+
+  // State agents override cache (they have fresher data for running agents)
+  for (const [id, agent] of Object.entries(state.agents)) {
+    merged[id] = agent;
+  }
+
+  return Object.values(merged);
 }
 
 /**
@@ -2336,7 +2468,13 @@ export async function getAgents() {
  */
 export async function getAgent(agentId) {
   const state = await loadState();
-  const agent = state.agents[agentId];
+  let agent = state.agents[agentId];
+
+  // Fall back to disk metadata if not in state
+  if (!agent) {
+    const cache = await loadCompletedAgentCache();
+    agent = cache.get(agentId) ?? null;
+  }
   if (!agent) return null;
 
   // For completed agents, read full output from file
@@ -2449,6 +2587,18 @@ export async function cleanupZombieAgents() {
 
     if (cleaned.length > 0) {
       await saveState(state);
+
+      // Persist zombie-cleaned agents to disk and update cache so they survive state resets
+      for (const agentId of cleaned) {
+        const agentDir = join(AGENTS_DIR, agentId);
+        await mkdir(agentDir, { recursive: true });
+        const { output, ...agentWithoutOutput } = state.agents[agentId];
+        await writeFile(join(agentDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+        if (completedAgentCache) {
+          completedAgentCache.set(agentId, agentWithoutOutput);
+        }
+      }
+
       console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);
       cosEvents.emit('agents:changed', { action: 'zombie-cleanup', cleaned });
     }
@@ -2458,18 +2608,31 @@ export async function cleanupZombieAgents() {
 }
 
 /**
- * Delete a single agent from state
+ * Delete a single agent from state and disk
  */
 export async function deleteAgent(agentId) {
   return withStateLock(async () => {
     const state = await loadState();
 
-    if (!state.agents[agentId]) {
+    // Check state, cache, and disk (ensure cache is initialized)
+    const inState = !!state.agents[agentId];
+    const cache = await loadCompletedAgentCache();
+    const inCache = cache.has(agentId);
+    if (!inState && !inCache) {
       return { error: 'Agent not found' };
     }
 
     delete state.agents[agentId];
     await saveState(state);
+
+    // Remove from cache
+    completedAgentCache?.delete(agentId);
+
+    // Remove metadata files from disk
+    const agentDir = join(AGENTS_DIR, agentId);
+    if (existsSync(agentDir)) {
+      await rm(agentDir, { recursive: true }).catch(() => {});
+    }
 
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
     return { success: true, agentId };
@@ -2631,7 +2794,7 @@ export async function getReport(date) {
   }
 
   const content = await readFile(reportFile, 'utf-8');
-  return JSON.parse(content);
+  return safeJSONParse(content, null, { logError: true, context: `report ${date}` });
 }
 
 /**
@@ -2833,22 +2996,39 @@ function formatRelativeTime(timestamp) {
 }
 
 /**
- * Clear completed agents from state (keep in files)
+ * Clear completed agents from state, cache, and disk
  */
 export async function clearCompletedAgents() {
   return withStateLock(async () => {
     const state = await loadState();
+    const cache = await loadCompletedAgentCache();
 
-    const toRemove = Object.keys(state.agents).filter(
+    // Collect IDs from both state and cache
+    const stateCompleted = Object.keys(state.agents).filter(
       id => state.agents[id].status === 'completed'
     );
+    const cacheCompleted = [...cache.keys()];
+    const allCompleted = [...new Set([...stateCompleted, ...cacheCompleted])];
 
-    for (const id of toRemove) {
+    // Remove from state
+    for (const id of stateCompleted) {
       delete state.agents[id];
     }
-
     await saveState(state);
-    return { cleared: toRemove.length };
+
+    // Clear cache
+    cache.clear();
+
+    // Remove metadata files from disk
+    const removals = allCompleted.map(id => {
+      const agentDir = join(AGENTS_DIR, id);
+      return existsSync(agentDir)
+        ? rm(agentDir, { recursive: true }).catch(() => {})
+        : Promise.resolve();
+    });
+    await Promise.all(removals);
+
+    return { cleared: allCompleted.length };
   });
 }
 

@@ -6,7 +6,7 @@ import { Router } from 'express';
 import * as memory from '../services/memory.js';
 import * as embeddings from '../services/memoryEmbeddings.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   memoryCreateSchema,
   memoryUpdateSchema,
@@ -81,12 +81,7 @@ router.get('/embeddings/status', asyncHandler(async (req, res) => {
 
 // POST /api/memory/search - Semantic search
 router.post('/search', asyncHandler(async (req, res) => {
-  const validation = validate(memorySearchSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', { status: 400, errors: validation.errors });
-  }
-
-  const { query, types, categories, tags, minRelevance, limit, offset } = validation.data;
+  const { query, types, categories, tags, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
 
   // Generate query embedding
   const queryEmbedding = await embeddings.generateQueryEmbedding(query, { types, categories });
@@ -109,38 +104,25 @@ router.post('/search', asyncHandler(async (req, res) => {
 
 // POST /api/memory - Create a new memory
 router.post('/', asyncHandler(async (req, res) => {
-  const validation = validate(memoryCreateSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', { status: 400, errors: validation.errors });
-  }
+  const data = validateRequest(memoryCreateSchema, req.body);
 
   // Generate embedding for the memory
-  const embedding = await embeddings.generateMemoryEmbedding(validation.data);
+  const embedding = await embeddings.generateMemoryEmbedding(data);
 
-  const created = await memory.createMemory(validation.data, embedding);
+  const created = await memory.createMemory(data, embedding);
   res.status(201).json(created);
 }));
 
 // POST /api/memory/consolidate - Consolidate similar memories
 router.post('/consolidate', asyncHandler(async (req, res) => {
-  const validation = validate(memoryConsolidateSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', { status: 400, errors: validation.errors });
-  }
-
-  const { similarityThreshold, dryRun } = validation.data;
+  const { similarityThreshold, dryRun } = validateRequest(memoryConsolidateSchema, req.body);
   const result = await memory.consolidateMemories(similarityThreshold, dryRun);
   res.json(result);
 }));
 
 // POST /api/memory/link - Link two memories
 router.post('/link', asyncHandler(async (req, res) => {
-  const validation = validate(memoryLinkSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', { status: 400, errors: validation.errors });
-  }
-
-  const { sourceId, targetId } = validation.data;
+  const { sourceId, targetId } = validateRequest(memoryLinkSchema, req.body);
   const result = await memory.linkMemories(sourceId, targetId);
   res.json(result);
 }));
@@ -176,18 +158,14 @@ router.get('/:id/related', asyncHandler(async (req, res) => {
 
 // PUT /api/memory/:id - Update a memory
 router.put('/:id', asyncHandler(async (req, res) => {
-  const validation = validate(memoryUpdateSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', { status: 400, errors: validation.errors });
-  }
-
-  const updated = await memory.updateMemory(req.params.id, validation.data);
+  const data = validateRequest(memoryUpdateSchema, req.body);
+  const updated = await memory.updateMemory(req.params.id, data);
   if (!updated) {
     throw new ServerError('Memory not found', { status: 404 });
   }
 
   // Regenerate embedding if content changed
-  if (validation.data.content) {
+  if (data.content) {
     const embedding = await embeddings.generateMemoryEmbedding(updated);
     if (embedding) {
       await memory.updateMemoryEmbedding(updated.id, embedding);

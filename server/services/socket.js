@@ -15,6 +15,16 @@ import { brainEvents } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
 import { queueEvents } from './moltworldQueue.js';
 import * as shellService from './shell.js';
+import {
+  validateSocketData,
+  detectStartSchema,
+  standardizeStartSchema,
+  logsSubscribeSchema,
+  errorRecoverSchema,
+  shellInputSchema,
+  shellResizeSchema,
+  shellStopSchema
+} from '../lib/socketValidation.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -34,13 +44,18 @@ export function initSocket(io) {
     console.log(`🔌 Client connected: ${socket.id}`);
 
     // Handle streaming app detection
-    socket.on('detect:start', async ({ path }) => {
-      console.log(`🔍 Starting detection: ${path}`);
-      await streamDetection(socket, path);
+    socket.on('detect:start', async (rawData) => {
+      const data = validateSocketData(detectStartSchema, rawData, socket, 'detect:start');
+      if (!data) return;
+      console.log(`🔍 Starting detection: ${data.path}`);
+      await streamDetection(socket, data.path);
     });
 
     // Handle PM2 standardization
-    socket.on('standardize:start', async ({ repoPath, providerId }) => {
+    socket.on('standardize:start', async (rawData) => {
+      const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
+      if (!data) return;
+      const { repoPath, providerId } = data;
       console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
       const emit = (step, status, data = {}) => {
@@ -110,7 +125,11 @@ export function initSocket(io) {
     });
 
     // Handle log streaming requests
-    socket.on('logs:subscribe', ({ processName, lines = 100 }) => {
+    socket.on('logs:subscribe', (rawData) => {
+      const data = validateSocketData(logsSubscribeSchema, rawData, socket, 'logs:subscribe');
+      if (!data) return;
+      const { processName, lines } = data;
+
       // Clean up any existing stream for this socket
       cleanupStream(socket.id);
 
@@ -220,7 +239,10 @@ export function initSocket(io) {
     });
 
     // Handle error recovery requests (can trigger auto-fix agents)
-    socket.on('error:recover', async ({ code, context }) => {
+    socket.on('error:recover', async (rawData) => {
+      const data = validateSocketData(errorRecoverSchema, rawData, socket, 'error:recover');
+      if (!data) return;
+      const { code, context } = data;
       console.log(`🔧 Error recovery requested: ${code}`);
 
       // Create auto-fix task
@@ -245,18 +267,24 @@ export function initSocket(io) {
       }
     });
 
-    socket.on('shell:input', ({ sessionId, data }) => {
-      if (!shellService.writeToSession(sessionId, data)) {
-        socket.emit('shell:error', { sessionId, error: 'Session not found' });
+    socket.on('shell:input', (rawData) => {
+      const validated = validateSocketData(shellInputSchema, rawData, socket, 'shell:input');
+      if (!validated) return;
+      if (!shellService.writeToSession(validated.sessionId, validated.data)) {
+        socket.emit('shell:error', { sessionId: validated.sessionId, error: 'Session not found' });
       }
     });
 
-    socket.on('shell:resize', ({ sessionId, cols, rows }) => {
-      shellService.resizeSession(sessionId, cols, rows);
+    socket.on('shell:resize', (rawData) => {
+      const validated = validateSocketData(shellResizeSchema, rawData, socket, 'shell:resize');
+      if (!validated) return;
+      shellService.resizeSession(validated.sessionId, validated.cols, validated.rows);
     });
 
-    socket.on('shell:stop', ({ sessionId }) => {
-      shellService.killSession(sessionId);
+    socket.on('shell:stop', (rawData) => {
+      const validated = validateSocketData(shellStopSchema, rawData, socket, 'shell:stop');
+      if (!validated) return;
+      shellService.killSession(validated.sessionId);
     });
 
     // Cleanup on disconnect
