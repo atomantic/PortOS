@@ -5,7 +5,7 @@
  * and verifying the model can correctly interpret them.
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, resolve, extname } from 'path';
 import { fileURLToPath } from 'url';
@@ -206,10 +206,9 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
  */
 export async function runVisionTestSuite(providerId = 'lmstudio', model) {
   const results = [];
-  const screenshotFiles = await import('fs').then(fs =>
-    fs.readdirSync(SCREENSHOTS_DIR).filter(f =>
-      /\.(png|jpg|jpeg|gif|webp)$/i.test(f)
-    )
+  const allFiles = await readdir(SCREENSHOTS_DIR).catch(() => []);
+  const screenshotFiles = allFiles.filter(f =>
+    /\.(png|jpg|jpeg|gif|webp)$/i.test(f)
   );
 
   if (screenshotFiles.length === 0) {

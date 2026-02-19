@@ -4,7 +4,7 @@
  */
 
 import { Router } from 'express';
-import { writeFile, mkdir, unlink } from 'fs/promises';
+import { writeFile, mkdir, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, resolve, basename, extname } from 'path';
 import { fileURLToPath } from 'url';
@@ -191,16 +191,14 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
 
 // GET /api/attachments - List all attachments (for debugging)
 router.get('/', asyncHandler(async (req, res) => {
-  const { readdirSync, statSync } = await import('fs');
-
   if (!existsSync(ATTACHMENTS_DIR)) {
     return res.json({ attachments: [] });
   }
 
-  const files = readdirSync(ATTACHMENTS_DIR);
-  const attachments = files.map(filename => {
+  const files = await readdir(ATTACHMENTS_DIR);
+  const attachments = await Promise.all(files.map(async filename => {
     const filepath = join(ATTACHMENTS_DIR, filename);
-    const stats = statSync(filepath);
+    const stats = await stat(filepath);
     const ext = getExtension(filename);
     return {
       filename,
@@ -209,7 +207,7 @@ router.get('/', asyncHandler(async (req, res) => {
       mimeType: ALLOWED_EXTENSIONS[ext] || 'application/octet-stream',
       createdAt: stats.birthtime
     };
-  });
+  }));
 
   res.json({ attachments });
 }));

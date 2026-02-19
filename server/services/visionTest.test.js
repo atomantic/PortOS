@@ -6,21 +6,21 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn()
 }));
 
-// Mock fs/promises for image loading
+// Mock fs/promises for image loading and directory listing
 vi.mock('fs/promises', () => ({
-  readFile: vi.fn()
+  readFile: vi.fn(),
+  readdir: vi.fn()
 }));
 
 // Mock fs for existsSync
 vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-  readdirSync: vi.fn()
+  existsSync: vi.fn()
 }));
 
 // Import mocked modules
 import { getProviderById } from './providers.js';
-import { readFile } from 'fs/promises';
-import { existsSync, readdirSync } from 'fs';
+import { readFile, readdir } from 'fs/promises';
+import { existsSync } from 'fs';
 
 describe('Vision Test Service', () => {
   const mockProvider = {
@@ -218,7 +218,7 @@ describe('Vision Test Service', () => {
 
   describe('runVisionTestSuite', () => {
     it('should return error when no screenshots available', async () => {
-      readdirSync.mockReturnValue([]);
+      readdir.mockResolvedValue([]);
 
       const result = await runVisionTestSuite('lmstudio');
 
@@ -227,7 +227,7 @@ describe('Vision Test Service', () => {
     });
 
     it('should run multiple tests on available screenshots', async () => {
-      readdirSync.mockReturnValue(['test1.png', 'test2.jpg']);
+      readdir.mockResolvedValue(['test1.png', 'test2.jpg']);
       getProviderById.mockResolvedValue(mockProvider);
       existsSync.mockReturnValue(true);
       readFile.mockResolvedValue(mockImageBuffer);
