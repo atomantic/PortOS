@@ -2614,9 +2614,10 @@ export async function deleteAgent(agentId) {
   return withStateLock(async () => {
     const state = await loadState();
 
-    // Check both state and cache
+    // Check state, cache, and disk (ensure cache is initialized)
     const inState = !!state.agents[agentId];
-    const inCache = completedAgentCache?.has(agentId);
+    const cache = await loadCompletedAgentCache();
+    const inCache = cache.has(agentId);
     if (!inState && !inCache) {
       return { error: 'Agent not found' };
     }
