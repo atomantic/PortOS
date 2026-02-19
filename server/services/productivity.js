@@ -321,14 +321,14 @@ export async function getProductivityInsights() {
   // Find best hours (highest success rate with at least 5 tasks)
   const hourlyEntries = Object.entries(data.hourlyPatterns || {})
     .filter(([, p]) => p.tasks >= 5)
-    .map(([hour, p]) => ({ hour: parseInt(hour), ...p }))
+    .map(([hour, p]) => ({ hour: parseInt(hour, 10), ...p }))
     .sort((a, b) => b.successRate - a.successRate);
 
   // Find best days
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const dailyEntries = Object.entries(data.dailyPatterns || {})
     .filter(([, p]) => p.tasks >= 3)
-    .map(([day, p]) => ({ day: parseInt(day), dayName: dayNames[parseInt(day)], ...p }))
+    .map(([day, p]) => ({ day: parseInt(day, 10), dayName: dayNames[parseInt(day, 10)], ...p }))
     .sort((a, b) => b.successRate - a.successRate);
 
   const insights = [];
