@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  validate,
+  validateRequest,
   moltworldWsConnectSchema,
   moltworldWsMoveSchema,
   moltworldWsThinkSchema,
@@ -21,10 +21,7 @@ const router = Router();
 
 // POST /connect — Connect the WebSocket relay
 router.post('/connect', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldWsConnectSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldWsConnectSchema, req.body);
 
   console.log(`🌐 POST /api/agents/tools/moltworld/ws/connect account=${data.accountId}`);
   await moltworldWs.connect(data.accountId);
@@ -45,10 +42,7 @@ router.get('/status', asyncHandler(async (req, res) => {
 
 // POST /move — Send move via WebSocket
 router.post('/move', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldWsMoveSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldWsMoveSchema, req.body);
 
   console.log(`🌐 POST /api/agents/tools/moltworld/ws/move (${data.x}, ${data.y})`);
   moltworldWs.sendMove(data.x, data.y, data.thought);
@@ -57,10 +51,7 @@ router.post('/move', asyncHandler(async (req, res) => {
 
 // POST /think — Send think via WebSocket
 router.post('/think', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldWsThinkSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldWsThinkSchema, req.body);
 
   console.log(`🌐 POST /api/agents/tools/moltworld/ws/think`);
   moltworldWs.sendThink(data.thought);
@@ -69,10 +60,7 @@ router.post('/think', asyncHandler(async (req, res) => {
 
 // POST /nearby — Request nearby agents via WebSocket
 router.post('/nearby', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldWsNearbySchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldWsNearbySchema, req.body);
 
   console.log(`🌐 POST /api/agents/tools/moltworld/ws/nearby`);
   moltworldWs.sendNearby(data.radius);
@@ -81,10 +69,7 @@ router.post('/nearby', asyncHandler(async (req, res) => {
 
 // POST /interact — Send interaction via WebSocket
 router.post('/interact', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldWsInteractSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldWsInteractSchema, req.body);
 
   console.log(`🌐 POST /api/agents/tools/moltworld/ws/interact to=${data.to}`);
   moltworldWs.sendInteract(data.to, data.payload);

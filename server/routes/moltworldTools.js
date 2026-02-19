@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema } from '../lib/validation.js';
+import { validateRequest, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
@@ -44,10 +44,7 @@ async function getClientAndAgent(accountId, agentId) {
 
 // POST /join — Move agent in the world (also heartbeat)
 router.post('/join', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldJoinSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldJoinSchema, req.body);
 
   console.log(`🌍 POST /api/agents/tools/moltworld/join account=${data.accountId}`);
 
@@ -78,10 +75,7 @@ router.post('/join', asyncHandler(async (req, res) => {
 
 // POST /build — Place or remove blocks
 router.post('/build', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldBuildSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldBuildSchema, req.body);
 
   console.log(`🧱 POST /api/agents/tools/moltworld/build account=${data.accountId}`);
 
@@ -112,10 +106,7 @@ router.post('/build', asyncHandler(async (req, res) => {
 
 // POST /explore — Move to coordinates and think
 router.post('/explore', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldExploreSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldExploreSchema, req.body);
 
   console.log(`🌍 POST /api/agents/tools/moltworld/explore agent=${data.agentId}`);
 
@@ -150,10 +141,7 @@ router.post('/explore', asyncHandler(async (req, res) => {
 
 // POST /think — Send a thought
 router.post('/think', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldThinkSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldThinkSchema, req.body);
 
   console.log(`💭 POST /api/agents/tools/moltworld/think account=${data.accountId}`);
 
@@ -177,10 +165,7 @@ router.post('/think', asyncHandler(async (req, res) => {
 
 // POST /say — Send a message (wraps join with say/sayTo params)
 router.post('/say', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldSaySchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldSaySchema, req.body);
 
   console.log(`💬 POST /api/agents/tools/moltworld/say account=${data.accountId}`);
 
@@ -262,10 +247,7 @@ router.get('/queue/:agentId', asyncHandler(async (req, res) => {
 
 // POST /queue — Add action to queue
 router.post('/queue', asyncHandler(async (req, res) => {
-  const { success, data, errors } = validate(moltworldQueueAddSchema, req.body);
-  if (!success) {
-    throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR', context: { errors } });
-  }
+  const data = validateRequest(moltworldQueueAddSchema, req.body);
   console.log(`📋 POST /api/agents/tools/moltworld/queue agentId=${data.agentId} action=${data.actionType}`);
   const item = moltworldQueue.addAction(data.agentId, data.actionType, data.params, data.scheduledFor);
   res.json(item);

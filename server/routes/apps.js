@@ -5,7 +5,7 @@ import * as appsService from '../services/apps.js';
 import { notifyAppsChanged } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { logAction } from '../services/history.js';
-import { validate, appSchema, appUpdateSchema } from '../lib/validation.js';
+import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
@@ -101,33 +101,15 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
 
 // POST /api/apps - Create new app
 router.post('/', asyncHandler(async (req, res, next) => {
-  const validation = validate(appSchema, req.body);
-
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const app = await appsService.createApp(validation.data);
+  const data = validateRequest(appSchema, req.body);
+  const app = await appsService.createApp(data);
   res.status(201).json(app);
 }));
 
 // PUT /api/apps/:id - Update app
 router.put('/:id', asyncHandler(async (req, res, next) => {
-  const validation = validate(appUpdateSchema, req.body);
-
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const app = await appsService.updateApp(req.params.id, validation.data);
+  const data = validateRequest(appUpdateSchema, req.body);
+  const app = await appsService.updateApp(req.params.id, data);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });

@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/validation.js';
+import { validateRequest, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/validation.js';
 import * as automationScheduler from '../services/automationScheduler.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
@@ -55,10 +55,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   console.log('📅 POST /api/agents/schedules');
 
-  const { success, data, errors } = validate(automationScheduleSchema, req.body);
-  if (!success) {
-    return res.status(422).json({ errors });
-  }
+  const data = validateRequest(automationScheduleSchema, req.body);
 
   // Verify agent exists
   const agent = await agentPersonalities.getAgentById(data.agentId);
@@ -92,11 +89,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   console.log(`📅 PUT /api/agents/schedules/${id}`);
 
-  const { success, data, errors } = validate(automationScheduleUpdateSchema, req.body);
-  if (!success) {
-    return res.status(422).json({ errors });
-  }
-
+  const data = validateRequest(automationScheduleUpdateSchema, req.body);
   const schedule = await automationScheduler.updateSchedule(id, data);
   if (!schedule) {
     throw new ServerError('Schedule not found', { status: 404, code: 'NOT_FOUND' });

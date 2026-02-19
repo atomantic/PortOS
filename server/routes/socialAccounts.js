@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, socialAccountSchema, socialAccountUpdateSchema } from '../lib/validation.js';
+import { validate, validateRequest, socialAccountSchema, socialAccountUpdateSchema } from '../lib/validation.js';
 import * as socialAccounts from '../services/socialAccounts.js';
 
 const router = Router();
@@ -51,16 +51,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // POST / - Create a social account
 router.post('/', asyncHandler(async (req, res) => {
-  const validation = validate(socialAccountSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const account = await socialAccounts.createAccount(validation.data);
+  const data = validateRequest(socialAccountSchema, req.body);
+  const account = await socialAccounts.createAccount(data);
   res.status(201).json(account);
 }));
 
@@ -94,16 +86,8 @@ router.post('/bulk', asyncHandler(async (req, res) => {
 
 // PUT /:id - Update a social account
 router.put('/:id', asyncHandler(async (req, res) => {
-  const validation = validate(socialAccountUpdateSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const account = await socialAccounts.updateAccount(req.params.id, validation.data);
+  const data = validateRequest(socialAccountUpdateSchema, req.body);
+  const account = await socialAccounts.updateAccount(req.params.id, data);
   if (!account) {
     throw new ServerError('Social account not found', { status: 404, code: 'NOT_FOUND' });
   }

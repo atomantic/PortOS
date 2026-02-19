@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ServerError } from './errorHandler.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -412,4 +413,22 @@ export function validate(schema, data) {
       message: e.message
     }))
   };
+}
+
+/**
+ * Validate data against a Zod schema, throwing on failure.
+ * Returns parsed data on success, throws ServerError on failure.
+ */
+export function validateRequest(schema, data) {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data;
+  const errors = result.error.errors.map(e => ({
+    path: e.path.join('.'),
+    message: e.message
+  }));
+  throw new ServerError('Validation failed', {
+    status: 400,
+    code: 'VALIDATION_ERROR',
+    context: { details: errors }
+  });
 }
