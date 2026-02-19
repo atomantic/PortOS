@@ -30,9 +30,23 @@ const MAX_HISTORY = 500
 function validateCronFieldRange(expr, min, max) {
   if (expr === '*') return true
 
-  // Extract all numeric values from the expression
-  const nums = expr.split(/[,\-\/]/).filter(p => p !== '*').map(Number)
-  return nums.every(n => !isNaN(n) && n >= min && n <= max)
+  // Parse each comma-separated part, handling range (a-b) and step (*/n or a-b/n) syntax
+  for (const part of expr.split(',')) {
+    const [rangeExpr, stepStr] = part.split('/')
+    // Validate step value if present
+    if (stepStr !== undefined) {
+      const step = Number(stepStr)
+      if (isNaN(step) || step < 1) return false
+    }
+    // Skip wildcard base (e.g. */5)
+    if (rangeExpr === '*') continue
+    // Handle range (a-b) or single value
+    const bounds = rangeExpr.split('-').map(Number)
+    if (bounds.some(n => isNaN(n) || n < min || n > max)) return false
+    // Validate range order
+    if (bounds.length === 2 && bounds[0] > bounds[1]) return false
+  }
+  return true
 }
 
 // Maximum iterations for cron search loop (1 year in minutes)
