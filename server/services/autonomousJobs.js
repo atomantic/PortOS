@@ -270,6 +270,7 @@ function createDefaultJobsData() {
     lastUpdated: now,
     jobs: DEFAULT_JOBS.map(j => ({
       ...j,
+      lastRun: now,  // Prevent immediate execution on first startup
       createdAt: now,
       updatedAt: now
     }))
@@ -287,6 +288,7 @@ function mergeWithDefaults(loaded) {
     if (!existingIds.has(defaultJob.id)) {
       loaded.jobs.push({
         ...defaultJob,
+        lastRun: now,  // Prevent immediate execution when adding new defaults
         createdAt: now,
         updatedAt: now
       })
