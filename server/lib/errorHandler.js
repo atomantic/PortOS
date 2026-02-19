@@ -104,10 +104,27 @@ function getErrorCode(status) {
 }
 
 /**
+ * Strip sensitive fields from error context before broadcasting to clients.
+ * Full context is still available in server-side console logs.
+ */
+function sanitizeContext(context) {
+  if (!context || typeof context !== 'object') return context;
+  const sensitive = ['apiKey', 'token', 'secret', 'password', 'credential', 'authorization', 'bearer', 'envVars', 'secretEnvVars'];
+  const sanitized = {};
+  for (const [key, value] of Object.entries(context)) {
+    if (sensitive.some(s => key.toLowerCase().includes(s))) continue;
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
+/**
  * Emit error event via Socket.IO to alert UI
  */
 export function emitErrorEvent(io, error) {
   errorEvents.emit('error', error);
+
+  const safeContext = sanitizeContext(error.context);
 
   // Broadcast to all connected clients
   io.emit('error:occurred', {
@@ -116,7 +133,7 @@ export function emitErrorEvent(io, error) {
     status: error.status,
     severity: error.severity,
     timestamp: error.timestamp,
-    context: error.context,
+    context: safeContext,
     canAutoFix: error.canAutoFix
   });
 
@@ -126,7 +143,7 @@ export function emitErrorEvent(io, error) {
       message: error.message,
       code: error.code,
       timestamp: error.timestamp,
-      context: error.context
+      context: safeContext
     });
   }
 }
