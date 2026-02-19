@@ -1350,13 +1350,14 @@ export async function getScheduleStatus() {
     const learningInfo = await getPerformanceAdjustedInterval(taskType, 'appImprovement', baseInterval);
 
     // Build per-app overrides map and count enabled apps
+    // Preload all overrides in parallel to avoid sequential awaits
     const appOverrides = {};
     let enabledAppCount = 0;
-    for (const app of activeApps) {
-      const overrides = await getAppTaskTypeOverrides(app.id);
-      const override = overrides[taskType];
+    const allOverrides = await Promise.all(activeApps.map(app => getAppTaskTypeOverrides(app.id)));
+    for (let i = 0; i < activeApps.length; i++) {
+      const override = allOverrides[i][taskType];
       if (override) {
-        appOverrides[app.id] = {
+        appOverrides[activeApps[i].id] = {
           enabled: override.enabled !== false,
           interval: override.interval || null
         };
