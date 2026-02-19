@@ -109,13 +109,24 @@ function getErrorCode(status) {
  */
 function sanitizeContext(context) {
   if (!context || typeof context !== 'object') return context;
-  const sensitive = ['apiKey', 'token', 'secret', 'password', 'credential', 'authorization', 'bearer', 'envVars', 'secretEnvVars'];
-  const sanitized = {};
-  for (const [key, value] of Object.entries(context)) {
-    if (sensitive.some(s => key.toLowerCase().includes(s))) continue;
-    sanitized[key] = value;
+  const sensitive = ['apikey', 'token', 'secret', 'password', 'credential', 'authorization', 'bearer', 'envvars', 'secretenvvars'];
+  const visited = new WeakSet();
+
+  function sanitize(value) {
+    if (value === null || typeof value !== 'object') return value;
+    if (visited.has(value)) return undefined;
+    visited.add(value);
+    if (Array.isArray(value)) return value.map(sanitize).filter(v => v !== undefined);
+    const result = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (sensitive.some(s => key.toLowerCase().includes(s))) continue;
+      const sanitized = sanitize(val);
+      if (sanitized !== undefined) result[key] = sanitized;
+    }
+    return result;
   }
-  return sanitized;
+
+  return sanitize(context);
 }
 
 /**
