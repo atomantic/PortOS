@@ -21,6 +21,24 @@ const eventHistory = []
 const MAX_HISTORY = 500
 
 /**
+ * Validate that all numeric values in a cron field fall within the allowed range
+ * @param {string} expr - Cron field expression
+ * @param {number} min - Minimum allowed value
+ * @param {number} max - Maximum allowed value
+ * @returns {boolean} - True if all values are within range
+ */
+function validateCronFieldRange(expr, min, max) {
+  if (expr === '*') return true
+
+  // Extract all numeric values from the expression
+  const nums = expr.split(/[,\-\/]/).filter(p => p !== '*').map(Number)
+  return nums.every(n => !isNaN(n) && n >= min && n <= max)
+}
+
+// Maximum iterations for cron search loop (1 year in minutes)
+const MAX_CRON_ITERATIONS = 525960
+
+/**
  * Parse cron expression to next execution time
  * Supports: minute hour dayOfMonth month dayOfWeek
  *
@@ -31,7 +49,7 @@ const MAX_HISTORY = 500
  *
  * @param {string} cronExpr - Cron expression
  * @param {Date} from - Starting point (default: now)
- * @returns {Date} - Next execution time
+ * @returns {Date|null} - Next execution time, or null if invalid/no match
  */
 function parseCronToNextRun(cronExpr, from = new Date()) {
   const parts = cronExpr.trim().split(/\s+/)
@@ -40,6 +58,21 @@ function parseCronToNextRun(cronExpr, from = new Date()) {
   }
 
   const [minuteExpr, hourExpr, dayOfMonthExpr, monthExpr, dayOfWeekExpr] = parts
+
+  // Validate cron field ranges before entering the search loop
+  const fieldRanges = [
+    [minuteExpr, 0, 59, 'minute'],
+    [hourExpr, 0, 23, 'hour'],
+    [dayOfMonthExpr, 1, 31, 'dayOfMonth'],
+    [monthExpr, 1, 12, 'month'],
+    [dayOfWeekExpr, 0, 7, 'dayOfWeek']
+  ]
+  for (const [expr, min, max, name] of fieldRanges) {
+    if (!validateCronFieldRange(expr, min, max)) {
+      console.error(`❌ Invalid cron ${name} field "${expr}" in expression: ${cronExpr}`)
+      return null
+    }
+  }
 
   // Simple implementation - find next matching time
   const next = new Date(from)
@@ -50,7 +83,12 @@ function parseCronToNextRun(cronExpr, from = new Date()) {
   const maxDate = new Date(from)
   maxDate.setFullYear(maxDate.getFullYear() + 2)
 
+  let iterations = 0
   while (next < maxDate) {
+    if (++iterations > MAX_CRON_ITERATIONS) {
+      console.error(`❌ Cron search exceeded ${MAX_CRON_ITERATIONS} iterations for: ${cronExpr}`)
+      return null
+    }
     if (matchesCronField(next.getMonth() + 1, monthExpr) &&
         matchesCronField(next.getDate(), dayOfMonthExpr) &&
         matchesCronField(next.getDay(), dayOfWeekExpr) &&
