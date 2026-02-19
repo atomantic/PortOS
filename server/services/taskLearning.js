@@ -897,8 +897,29 @@ export async function resetTaskTypeLearning(taskType) {
     }
   }
 
-  // Clean up routing accuracy data for this task type
-  if (data.routingAccuracy) {
+  // Subtract model tier contributions using routing accuracy data (before deleting it)
+  const routingData = data.routingAccuracy?.[taskType];
+  if (routingData) {
+    for (const [tier, counts] of Object.entries(routingData)) {
+      const tierMetrics = data.byModelTier[tier];
+      if (tierMetrics) {
+        const tierTotal = counts.succeeded + counts.failed;
+        tierMetrics.completed = Math.max(0, tierMetrics.completed - tierTotal);
+        tierMetrics.succeeded = Math.max(0, tierMetrics.succeeded - counts.succeeded);
+        tierMetrics.failed = Math.max(0, tierMetrics.failed - counts.failed);
+        // Estimate duration contribution using task type's avg duration per agent
+        if (tierTotal > 0 && metrics.avgDurationMs > 0) {
+          tierMetrics.totalDurationMs = Math.max(0, tierMetrics.totalDurationMs - (metrics.avgDurationMs * tierTotal));
+        }
+        tierMetrics.avgDurationMs = tierMetrics.completed > 0
+          ? Math.round(tierMetrics.totalDurationMs / tierMetrics.completed)
+          : 0;
+        // Clean up empty tiers
+        if (tierMetrics.completed <= 0) {
+          delete data.byModelTier[tier];
+        }
+      }
+    }
     delete data.routingAccuracy[taskType];
   }
 
@@ -1171,6 +1192,18 @@ function generateErrorInsight(category, percentage) {
       message: `${percentage}% of failures due to tool execution errors`,
       implication: 'Add explicit error handling instructions for tool usage'
     },
+    'startup-failure': {
+      message: `${percentage}% of failures due to agent startup failure`,
+      implication: 'Agents failing immediately - check provider availability and system resources'
+    },
+    'turn-limit': {
+      message: `${percentage}% of failures due to agent turn limit`,
+      implication: 'Tasks are too large for the turn budget; break into smaller subtasks'
+    },
+    'billing-error': {
+      message: `${percentage}% of failures due to billing/subscription issues`,
+      implication: 'Provider account needs attention - check subscription status'
+    },
     'unknown': {
       message: `${percentage}% of failures have unknown causes`,
       implication: 'Review agent output logs for patterns not yet categorized'
@@ -1204,6 +1237,18 @@ function generatePromptHint(category, taskType) {
     'spawn-error': {
       hint: 'Add environment prerequisites',
       example: 'Prerequisites: Ensure npm install has been run and dev server is started'
+    },
+    'startup-failure': {
+      hint: 'Add provider availability check',
+      example: 'Before starting work, verify the AI provider responds to a simple test prompt'
+    },
+    'turn-limit': {
+      hint: 'Reduce task scope to fit within turn budget',
+      example: 'Focus on ONE specific file or component per task instead of broad analysis'
+    },
+    'usage-limit': {
+      hint: 'Use a lighter model or reduce token consumption',
+      example: 'Use targeted file reads instead of full codebase scans to reduce token usage'
     }
   };
 

@@ -503,13 +503,14 @@ const ERROR_PATTERNS = [
     })
   },
   {
-    pattern: /(?:hit your usage limit|usage limit|quota exceeded|Upgrade to Pro)/i,
+    // Catches both "hit your usage limit" and session limits like "hit your limit · resets 6am"
+    pattern: /(?:hit your (?:usage )?limit|usage.?limit|quota exceeded|Upgrade to Pro|plan.?limit|daily.?limit|session.?limit)/i,
     category: 'usage-limit',
     actionable: true, // Need to switch provider
     extract: (match, output) => {
       // Try to extract the wait time from the message
-      // e.g., "try again in 1 day 1 hour 33 minutes"
-      const timeMatch = output.match(/try again in\s+(.+?)(?:\.|$)/i);
+      // e.g., "try again in 1 day 1 hour 33 minutes" or "resets 6am (America/Los_Angeles)"
+      const timeMatch = output.match(/(?:try again in|resets?)\s+(.+?)(?:\.|·|\n|$)/im);
       const waitTime = timeMatch ? timeMatch[1].trim() : null;
       return {
         message: `Usage limit exceeded${waitTime ? ` - retry in ${waitTime}` : ''}`,
@@ -793,6 +794,26 @@ const ERROR_PATTERNS = [
     })
   },
 
+  // ===== Limit & Billing Errors =====
+  {
+    pattern: /(?:maximum|max).*(?:turns?|iterations?|steps?)|turn.?limit|max.?turns|stopped after \d+ turns/i,
+    category: 'turn-limit',
+    actionable: false,
+    extract: () => ({
+      message: 'Agent reached turn limit',
+      suggestedFix: 'Task exceeded the maximum number of agent turns. Break into smaller subtasks or increase turn limit.'
+    })
+  },
+  {
+    pattern: /(?:billing|subscription|payment).?(?:error|issue|required|expired|failed)/i,
+    category: 'billing-error',
+    actionable: true,
+    extract: () => ({
+      message: 'Billing/subscription issue',
+      suggestedFix: 'Provider billing or subscription problem. Check provider account status.'
+    })
+  },
+
   // ===== Safety & Content Errors =====
   {
     pattern: /content.?(?:filter|policy)|safety.?(?:filter|block)|harmful.?content/i,
@@ -809,6 +830,16 @@ const ERROR_PATTERNS = [
  * Analyze agent failure output and categorize the error
  */
 function analyzeAgentFailure(output, task, model) {
+  // Agent produced no meaningful output — likely failed to start
+  if (!output || output.trim().length < 50) {
+    return {
+      category: 'startup-failure',
+      actionable: false,
+      message: 'Agent failed to start or produced no output',
+      suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.'
+    };
+  }
+
   for (const errorDef of ERROR_PATTERNS) {
     const match = output.match(errorDef.pattern);
     if (match) {
