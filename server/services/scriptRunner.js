@@ -8,11 +8,12 @@
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { writeFile, readFile, mkdir, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
+import { writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import Cron from 'croner';
 import { cosEvents } from './cosEvents.js';
+import { readJSONFile } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,6 +43,19 @@ const ALLOWED_SCRIPT_COMMANDS = new Set([
 // Shell metacharacters that could be used for command injection
 // Security: Reject any command containing these to prevent injection via pipes, chaining, etc.
 const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
+
+// Patterns matching sensitive environment variable values in command output (e.g., pm2 jlist)
+// Keys must be underscore-delimited segments to avoid false positives like "monkey" or "keymetrics"
+const SENSITIVE_ENV_PATTERN = /("(?:[a-z0-9]+_)*(?:KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|MACAROON|CERT|CREDENTIAL|AUTH)(?:_[a-z0-9]+)*":\s*)"[^"]+"/gi;
+
+/**
+ * Redact sensitive env vars from command output before persisting.
+ * Matches JSON key-value pairs where the key contains secret-like words.
+ */
+function redactSensitiveOutput(output) {
+  if (!output) return output;
+  return output.replace(SENSITIVE_ENV_PATTERN, '$1"[REDACTED]"');
+}
 
 /**
  * Validate a script command against the allowlist
@@ -126,11 +140,7 @@ async function ensureScriptsDir() {
  * Load scripts state
  */
 async function loadScriptsState() {
-  if (!existsSync(SCRIPTS_STATE_FILE)) {
-    return { scripts: {} };
-  }
-  const content = await readFile(SCRIPTS_STATE_FILE, 'utf-8');
-  return JSON.parse(content);
+  return readJSONFile(SCRIPTS_STATE_FILE, { scripts: {} });
 }
 
 /**
@@ -363,10 +373,11 @@ export async function executeScript(scriptId) {
     child.on('close', async (code) => {
       const duration = Date.now() - startTime;
       const fullOutput = output + (error ? `\n[stderr]\n${error}` : '');
+      const redactedOutput = redactSensitiveOutput(fullOutput);
 
       // Update script state
       script.lastRun = new Date().toISOString();
-      script.lastOutput = fullOutput.substring(0, 10000); // Limit stored output
+      script.lastOutput = redactedOutput.substring(0, 10000);
       script.lastExitCode = code;
       script.runCount = (script.runCount || 0) + 1;
 
@@ -391,7 +402,7 @@ export async function executeScript(scriptId) {
           description: script.triggerPrompt,
           taskType: 'internal',
           metadata: {
-            context: `Script Output:\n\`\`\`\n${fullOutput.substring(0, 5000)}\n\`\`\``,
+            context: `Script Output:\n\`\`\`\n${redactedOutput.substring(0, 5000)}\n\`\`\``,
             source: 'script',
             scriptId,
             scriptName: script.name
@@ -404,13 +415,13 @@ export async function executeScript(scriptId) {
         name: script.name,
         exitCode: code,
         duration,
-        outputLength: fullOutput.length
+        outputLength: redactedOutput.length
       });
 
       resolve({
         success: code === 0,
         exitCode: code,
-        output: fullOutput,
+        output: redactedOutput,
         duration
       });
     });

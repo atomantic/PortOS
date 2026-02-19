@@ -60,7 +60,7 @@ jobs:
             # Use minor version pattern changelog (e.g., v0.10.x.md)
             CHANGELOG=$(cat "$CHANGELOG_FILE_PATTERN")
             # Replace version placeholder with actual version
-            CHANGELOG=$(echo "$CHANGELOG" | sed "s/v${MAJOR_MINOR}.x/v${VERSION}/g" | sed "s/${MAJOR_MINOR}.x/${VERSION}/g")
+            CHANGELOG=$(echo "$CHANGELOG" | sed "s/v${MAJOR_MINOR}.x/v${VERSION}/g" | sed "s/${MAJOR_MINOR}.x/${VERSION}/g" | sed "s/YYYY-MM-DD/$(date +%Y-%m-%d)/g")
           else
             # Fallback: Generate changelog from commits (exclude [skip ci] commits)
             PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
@@ -113,36 +113,29 @@ jobs:
           NEW_MINOR=$((MINOR + 1))
           NEW_VERSION="$MAJOR.$NEW_MINOR.0"
 
-          # Checkout dev branch
-          git fetch origin dev
-          git checkout dev
-
-          # Rename and version the changelog file
+          # Archive changelog on main first (single source of truth)
+          # This avoids cherry-pick divergence that causes merge conflicts on the next PR
           PATTERN_FILE=".changelog/v${MAJOR_MINOR}.x.md"
           VERSIONED_FILE=".changelog/v${CURRENT_VERSION}.md"
 
           if [ -f "$PATTERN_FILE" ]; then
-            # Rename the file (preserves git history)
+            # Rename and version the changelog file on main
             git mv "$PATTERN_FILE" "$VERSIONED_FILE"
 
             # Replace version placeholders in the renamed file
-            sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g" "$VERSIONED_FILE"
+            sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"
             rm "${VERSIONED_FILE}.bak"
 
-            # Commit the renamed and updated changelog
             git add "$VERSIONED_FILE"
             git commit -m "docs: archive changelog for v${CURRENT_VERSION} [skip ci]"
-
-            # Capture the changelog commit hash before switching branches
-            CHANGELOG_COMMIT=$(git rev-parse HEAD)
-            git push origin dev
-
-            # Merge changelog back to main (without triggering CI)
-            git checkout main
-            git cherry-pick "$CHANGELOG_COMMIT"
             git push origin main
-            git checkout dev
           fi
+
+          # Checkout dev and merge main to share the changelog commit history
+          git fetch origin dev
+          git checkout dev
+          git fetch origin main
+          git merge origin/main -m "merge: incorporate v${CURRENT_VERSION} changelog archive [skip ci]"
 
           # Update package.json files for next version
           npm version $NEW_VERSION --no-git-tag-version

@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, memo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   CheckCircle,
@@ -15,40 +15,26 @@ import {
   Activity
 } from 'lucide-react';
 import * as api from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard
  * Shows today's progress, streak status, learning health, CoS running state, and recent tasks
  */
 const CosDashboardWidget = memo(function CosDashboardWidget() {
-  const [summary, setSummary] = useState(null);
-  const [learningSummary, setLearningSummary] = useState(null);
-  const [recentTasks, setRecentTasks] = useState(null);
-  const [activityCalendar, setActivityCalendar] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: dashData, loading } = useAutoRefetch(async () => {
+    const silent = { silent: true };
+    const [summary, learningSummary, recentTasks, activityCalendar] = await Promise.all([
+      api.getCosQuickSummary(silent).catch(() => null),
+      api.getCosLearningSummary(silent).catch(() => null),
+      api.getCosRecentTasks(5, silent).catch(() => null),
+      api.getCosActivityCalendar(8, silent).catch(() => null)
+    ]);
+    return { summary, learningSummary, recentTasks, activityCalendar };
+  }, 30000);
+
+  const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
   const [tasksExpanded, setTasksExpanded] = useState(false);
-
-  useEffect(() => {
-    const loadData = async () => {
-      const silent = { silent: true };
-      const [quickData, learningData, tasksData, calendarData] = await Promise.all([
-        api.getCosQuickSummary(silent).catch(() => null),
-        api.getCosLearningSummary(silent).catch(() => null),
-        api.getCosRecentTasks(5, silent).catch(() => null),
-        api.getCosActivityCalendar(8, silent).catch(() => null)
-      ]);
-      setSummary(quickData);
-      setLearningSummary(learningData);
-      setRecentTasks(tasksData);
-      setActivityCalendar(calendarData);
-      setLoading(false);
-    };
-
-    loadData();
-    // Refresh every 30 seconds
-    const interval = setInterval(loadData, 30000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Don't render while loading
   if (loading) {

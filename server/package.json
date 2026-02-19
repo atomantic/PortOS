@@ -1,6 +1,6 @@
 {
   "name": "portos-server",
-  "version": "0.14.21",
+  "version": "0.15.15",
   "private": true,
   "type": "module",
   "scripts": {

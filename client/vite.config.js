@@ -1,7 +1,12 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), 'VITE_');
+  const API_HOST = env.VITE_API_HOST || 'localhost';
+  const API_TARGET = `http://${API_HOST}:5554`;
+
+  return {
   plugins: [react()],
   server: {
     host: '0.0.0.0',
@@ -9,11 +14,11 @@ export default defineConfig({
     open: false,
     proxy: {
       '/api': {
-        target: 'http://localhost:5554',
+        target: API_TARGET,
         changeOrigin: true
       },
       '/socket.io': {
-        target: 'http://localhost:5554',
+        target: API_TARGET,
         changeOrigin: true,
         ws: true
       }
@@ -39,4 +44,5 @@ export default defineConfig({
     // Increase chunk size warning limit (icons are large)
     chunkSizeWarningLimit: 600
   }
+};
 });

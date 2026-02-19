@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "0.14.21",
+  "version": "0.15.15",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -22,7 +22,6 @@
     "pm2:restart": "pm2 restart ecosystem.config.cjs",
     "pm2:logs": "pm2 logs",
     "pm2:status": "pm2 status",
-    "pm2:kill": "pm2 kill",
     "install:all": "npm install && cd client && npm install && cd ../server && npm install && cd .. && npm run setup",
     "setup": "node scripts/setup-data.js && node scripts/setup-browser.js",
     "setup:data": "node scripts/setup-data.js",
@@ -35,13 +34,13 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^8.2.2",
-    "pm2": "^6.0.14",
+    "pm2": "^5.4.3",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "vite": "^6.0.6"
   },
   "dependencies": {
-    "express": "^5.2.1",
-    "portos-ai-toolkit": "github:atomantic/portos-ai-toolkit#ac13168156f81c90dab57702c0de3f97de7970a9"
+    "express": "^4.21.2",
+    "portos-ai-toolkit": "^0.5.0"
   }
 }

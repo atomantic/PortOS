@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, memo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Eye,
@@ -12,28 +12,18 @@ import {
   Zap
 } from 'lucide-react';
 import * as api from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 /**
  * DecisionLogWidget - Shows transparency into CoS decision-making
  * Displays why tasks were skipped, intervals adjusted, or alternatives chosen
  */
 const DecisionLogWidget = memo(function DecisionLogWidget() {
-  const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: summary, loading } = useAutoRefetch(
+    () => api.getCosDecisionSummary({ silent: true }).catch(() => null),
+    60000
+  );
   const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    const loadData = async () => {
-      const data = await api.getCosDecisionSummary({ silent: true }).catch(() => null);
-      setSummary(data);
-      setLoading(false);
-    };
-
-    loadData();
-    // Refresh every 60 seconds
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Don't render while loading or if no data
   if (loading || !summary) {
