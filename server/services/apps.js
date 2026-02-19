@@ -242,7 +242,7 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   if (!data.apps[id]) return null;
 
   // Migrate legacy format if needed
-  migrateTaskTypeOverrides(data.apps[id]);
+  await migrateTaskTypeOverrides(id);
 
   const overrides = data.apps[id].taskTypeOverrides || {};
   const existing = overrides[taskType] || {};
