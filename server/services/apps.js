@@ -192,26 +192,29 @@ export async function unarchiveApp(id) {
 
 /**
  * Migrate app from legacy disabledTaskTypes array to taskTypeOverrides object.
- * Called lazily when accessing task type data.
+ * Persists changes immediately so migration only runs once per app.
  */
-function migrateTaskTypeOverrides(app) {
-  if (!app.disabledTaskTypes || app.taskTypeOverrides) return app;
+async function migrateTaskTypeOverrides(id) {
+  const data = await loadApps();
+  const app = data?.apps?.[id];
+  if (!app?.disabledTaskTypes || app.taskTypeOverrides) return;
   const overrides = {};
   for (const taskType of app.disabledTaskTypes) {
     overrides[taskType] = { enabled: false };
   }
   app.taskTypeOverrides = overrides;
   delete app.disabledTaskTypes;
-  return app;
+  await saveApps(data);
+  console.log(`📋 Migrated ${id} from disabledTaskTypes to taskTypeOverrides`);
 }
 
 /**
  * Get task type overrides for an app
  */
 export async function getAppTaskTypeOverrides(id) {
+  await migrateTaskTypeOverrides(id);
   const app = await getAppById(id);
   if (!app) return {};
-  migrateTaskTypeOverrides(app);
   return app.taskTypeOverrides || {};
 }
 
