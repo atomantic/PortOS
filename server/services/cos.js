@@ -5,7 +5,7 @@
  * spawns sub-agents, and orchestrates task completion.
  */
 
-import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
+import { readFile, writeFile, mkdir, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -70,6 +70,8 @@ let completedAgentCache = null;
 
 // Load completed agent metadata from disk into the cache.
 // Reads all data/cos/agents/{id}/metadata.json files.
+// Handles legacy formats (agentId instead of id, missing status) and
+// reconstructs minimal metadata for directories with no metadata.json.
 // Only called once (lazy init), then kept in sync via completeAgent/deleteAgent.
 async function loadCompletedAgentCache() {
   if (completedAgentCache) return completedAgentCache;
@@ -78,23 +80,58 @@ async function loadCompletedAgentCache() {
   if (!existsSync(AGENTS_DIR)) return completedAgentCache;
 
   const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
+  let recovered = 0;
   const metadataReads = entries
     .filter(e => e.isDirectory() && e.name.startsWith('agent-'))
     .map(async (entry) => {
-      const metaPath = join(AGENTS_DIR, entry.name, 'metadata.json');
-      if (!existsSync(metaPath)) return;
-      const content = await readFile(metaPath, 'utf-8').catch(() => null);
-      if (!content) return;
-      const agent = JSON.parse(content);
-      if (agent?.id && agent.status === 'completed') {
-        // Strip output array from cache to save memory — full output read on demand
-        const { output, ...agentWithoutOutput } = agent;
-        completedAgentCache.set(agent.id, agentWithoutOutput);
+      const agentId = entry.name;
+      const agentDir = join(AGENTS_DIR, agentId);
+      const metaPath = join(agentDir, 'metadata.json');
+
+      if (existsSync(metaPath)) {
+        const content = await readFile(metaPath, 'utf-8').catch(() => null);
+        if (!content) return;
+        const raw = JSON.parse(content);
+
+        // Normalize legacy format: agentId → id, missing status → completed
+        const id = raw.id || raw.agentId || agentId;
+        const status = raw.status || (raw.completedAt ? 'completed' : 'completed');
+        if (status !== 'running') {
+          const { output, ...rest } = raw;
+          completedAgentCache.set(id, { ...rest, id, status });
+        }
+        return;
       }
+
+      // No metadata.json — reconstruct from directory contents
+      const promptPath = join(agentDir, 'prompt.txt');
+      const outputPath = join(agentDir, 'output.txt');
+      const hasPrompt = existsSync(promptPath);
+      const hasOutput = existsSync(outputPath);
+
+      // Use file modification time as best-guess completedAt
+      const dirStat = await stat(agentDir).catch(() => null);
+      const completedAt = dirStat?.mtime?.toISOString() ?? new Date().toISOString();
+
+      const reconstructed = {
+        id: agentId,
+        status: 'completed',
+        completedAt,
+        result: { success: hasOutput, recovered: true },
+        metadata: { description: hasPrompt ? 'Recovered from disk (no metadata)' : 'Recovered (prompt-only)' }
+      };
+
+      // Persist the reconstructed metadata so future loads are fast
+      await writeFile(metaPath, JSON.stringify(reconstructed, null, 2)).catch(() => {});
+      completedAgentCache.set(agentId, reconstructed);
+      recovered++;
     });
 
   await Promise.all(metadataReads);
-  console.log(`📂 Loaded ${completedAgentCache.size} completed agents from disk`);
+  const msg = recovered > 0
+    ? `📂 Loaded ${completedAgentCache.size} completed agents from disk (recovered ${recovered} missing metadata)`
+    : `📂 Loaded ${completedAgentCache.size} completed agents from disk`;
+  console.log(msg);
   return completedAgentCache;
 }
 
@@ -2539,6 +2576,18 @@ export async function cleanupZombieAgents() {
 
     if (cleaned.length > 0) {
       await saveState(state);
+
+      // Persist zombie-cleaned agents to disk and update cache so they survive state resets
+      for (const agentId of cleaned) {
+        const agentDir = join(AGENTS_DIR, agentId);
+        await mkdir(agentDir, { recursive: true });
+        const { output, ...agentWithoutOutput } = state.agents[agentId];
+        await writeFile(join(agentDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+        if (completedAgentCache) {
+          completedAgentCache.set(agentId, agentWithoutOutput);
+        }
+      }
+
       console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);
       cosEvents.emit('agents:changed', { action: 'zombie-cleanup', cleaned });
     }
