@@ -169,6 +169,14 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     throw new ServerError('enabled (boolean) or interval (string|null) required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  // Validate interval against allowed values
+  if (interval !== undefined) {
+    const allowedIntervals = ['rotation', 'daily', 'weekly', 'once', 'on-demand'];
+    if (interval !== null && (typeof interval !== 'string' || !allowedIntervals.includes(interval))) {
+      throw new ServerError('interval must be one of rotation|daily|weekly|once|on-demand or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+
   const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval });
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
