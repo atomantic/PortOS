@@ -191,36 +191,72 @@ export async function unarchiveApp(id) {
 }
 
 /**
- * Get disabled task types for an app
+ * Migrate app from legacy disabledTaskTypes array to taskTypeOverrides object.
+ * Called lazily when accessing task type data.
  */
-export async function getAppDisabledTaskTypes(id) {
+function migrateTaskTypeOverrides(app) {
+  if (!app.disabledTaskTypes || app.taskTypeOverrides) return app;
+  const overrides = {};
+  for (const taskType of app.disabledTaskTypes) {
+    overrides[taskType] = { enabled: false };
+  }
+  app.taskTypeOverrides = overrides;
+  delete app.disabledTaskTypes;
+  return app;
+}
+
+/**
+ * Get task type overrides for an app
+ */
+export async function getAppTaskTypeOverrides(id) {
   const app = await getAppById(id);
-  return app?.disabledTaskTypes || [];
+  if (!app) return {};
+  migrateTaskTypeOverrides(app);
+  return app.taskTypeOverrides || {};
 }
 
 /**
  * Check if a task type is enabled for a specific app
  */
 export async function isTaskTypeEnabledForApp(id, taskType) {
-  const disabled = await getAppDisabledTaskTypes(id);
-  return !disabled.includes(taskType);
+  const overrides = await getAppTaskTypeOverrides(id);
+  return overrides[taskType]?.enabled !== false;
 }
 
 /**
- * Toggle a task type for a specific app (enable/disable)
+ * Get per-app interval for a task type (null = inherit global)
  */
-export async function toggleAppTaskType(id, taskType, enabled) {
+export async function getAppTaskTypeInterval(appId, taskType) {
+  const overrides = await getAppTaskTypeOverrides(appId);
+  return overrides[taskType]?.interval || null;
+}
+
+/**
+ * Update a task type override for a specific app (enable/disable + optional interval)
+ */
+export async function updateAppTaskTypeOverride(id, taskType, { enabled, interval } = {}) {
   const data = await loadApps();
   if (!data.apps[id]) return null;
 
-  const disabledTaskTypes = data.apps[id].disabledTaskTypes || [];
+  // Migrate legacy format if needed
+  migrateTaskTypeOverrides(data.apps[id]);
 
-  if (enabled && disabledTaskTypes.includes(taskType)) {
-    data.apps[id].disabledTaskTypes = disabledTaskTypes.filter(t => t !== taskType);
-  } else if (!enabled && !disabledTaskTypes.includes(taskType)) {
-    data.apps[id].disabledTaskTypes = [...disabledTaskTypes, taskType];
+  const overrides = data.apps[id].taskTypeOverrides || {};
+  const existing = overrides[taskType] || {};
+
+  const updated = { ...existing };
+  if (typeof enabled === 'boolean') updated.enabled = enabled;
+  if (interval !== undefined) updated.interval = interval;
+
+  // If override matches "inherit everything" defaults, remove the entry
+  if (updated.enabled !== false && !updated.interval) {
+    delete overrides[taskType];
+  } else {
+    overrides[taskType] = updated;
   }
 
+  data.apps[id].taskTypeOverrides = overrides;
+  delete data.apps[id].disabledTaskTypes; // Remove legacy field
   data.apps[id].updatedAt = new Date().toISOString();
   await saveApps(data);
   appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });

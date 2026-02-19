@@ -176,23 +176,25 @@ router.post('/:id/unarchive', asyncHandler(async (req, res) => {
 // GET /api/apps/:id/task-types - Get per-app task type overrides
 router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  res.json({ appId: app.id, appName: app.name, disabledTaskTypes: app.disabledTaskTypes || [] });
+  const overrides = await appsService.getAppTaskTypeOverrides(app.id);
+  res.json({ appId: app.id, appName: app.name, taskTypeOverrides: overrides });
 }));
 
-// PUT /api/apps/:id/task-types/:taskType - Toggle a task type for an app
+// PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
-  const { enabled } = req.body;
-  if (typeof enabled !== 'boolean') {
-    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  const { enabled, interval } = req.body;
+  if (typeof enabled !== 'boolean' && interval === undefined) {
+    throw new ServerError('enabled (boolean) or interval (string|null) required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await appsService.toggleAppTaskType(req.params.id, req.params.taskType, enabled);
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval });
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  console.log(`📋 ${enabled ? 'Enabled' : 'Disabled'} task type ${req.params.taskType} for ${result.name}`);
-  res.json({ success: true, appId: result.id, taskType: req.params.taskType, enabled, disabledTaskTypes: result.disabledTaskTypes || [] });
+  const action = typeof enabled === 'boolean' ? (enabled ? 'Enabled' : 'Disabled') : 'Updated interval for';
+  console.log(`📋 ${action} task type ${req.params.taskType} for ${result.name}`);
+  res.json({ success: true, appId: result.id, taskType: req.params.taskType, enabled, interval, taskTypeOverrides: result.taskTypeOverrides || {} });
 }));
 
 // POST /api/apps/:id/start - Start app via PM2

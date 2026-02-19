@@ -180,7 +180,11 @@ export const appSchema = z.object({
   description: z.string().optional(),
   archived: z.boolean().optional().default(false),
   pm2Home: z.string().optional(), // Custom PM2_HOME path for apps that run in their own PM2 instance
-  disabledTaskTypes: z.array(z.string()).optional(), // Task types disabled for this app (e.g., ['typing', 'accessibility'])
+  disabledTaskTypes: z.array(z.string()).optional(), // Legacy: migrated to taskTypeOverrides
+  taskTypeOverrides: z.record(z.object({
+    enabled: z.boolean().optional(),
+    interval: z.string().nullable().optional()
+  })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
   jira: jiraConfigSchema.optional().nullable()
 });
 
