@@ -27,6 +27,7 @@ router.get('/instances', async (req, res, next) => {
             baseUrl: instance.baseUrl,
             email: instance.email,
             hasApiToken: !!instance.apiToken,
+            tokenUpdatedAt: instance.tokenUpdatedAt,
             createdAt: instance.createdAt,
             updatedAt: instance.updatedAt
           }
@@ -69,6 +70,7 @@ router.post('/instances', async (req, res, next) => {
       baseUrl: instance.baseUrl,
       email: instance.email,
       hasApiToken: true,
+      tokenUpdatedAt: instance.tokenUpdatedAt,
       createdAt: instance.createdAt,
       updatedAt: instance.updatedAt
     };

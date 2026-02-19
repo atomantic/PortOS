@@ -48,13 +48,16 @@ export async function saveInstances(config) {
 export async function upsertInstance(instanceId, instanceData) {
   const config = await getInstances();
 
+  const existing = config.instances[instanceId];
+
   config.instances[instanceId] = {
     id: instanceId,
     name: instanceData.name,
     baseUrl: instanceData.baseUrl,
     email: instanceData.email,
     apiToken: instanceData.apiToken, // PAT (Personal Access Token)
-    createdAt: config.instances[instanceId]?.createdAt || new Date().toISOString(),
+    tokenUpdatedAt: new Date().toISOString(),
+    createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
