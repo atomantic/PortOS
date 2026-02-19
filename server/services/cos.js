@@ -21,7 +21,7 @@ import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedu
 import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
-import { formatDuration } from '../lib/fileUtils.js';
+import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
@@ -260,7 +260,8 @@ async function loadState() {
     return { ...DEFAULT_STATE };
   }
 
-  const state = JSON.parse(content);
+  const state = safeJSONParse(content, null, { logError: true, context: 'CoS state' });
+  if (!state) return { ...DEFAULT_STATE };
 
   // Merge with defaults to ensure all fields exist
   return {
@@ -2165,7 +2166,7 @@ export async function runHealthCheck() {
     jsonStart = emptyMatch ? pm2Output.indexOf(emptyMatch[0]) : -1;
   }
   const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
-  const pm2Processes = JSON.parse(pm2Json);
+  const pm2Processes = safeJSONParse(pm2Json, [], { logError: true, context: 'pm2 process list' });
 
   metrics.pm2 = {
     total: pm2Processes.length,
@@ -2305,7 +2306,7 @@ export async function getScript(name) {
 
   const content = await readFile(scriptPath, 'utf-8');
   const metadata = existsSync(metaPath)
-    ? JSON.parse(await readFile(metaPath, 'utf-8'))
+    ? safeJSONParse(await readFile(metaPath, 'utf-8'), {}, { logError: true, context: `script metadata ${name}` })
     : {};
 
   return { name, content, metadata };
@@ -2792,7 +2793,7 @@ export async function getReport(date) {
   }
 
   const content = await readFile(reportFile, 'utf-8');
-  return JSON.parse(content);
+  return safeJSONParse(content, null, { logError: true, context: `report ${date}` });
 }
 
 /**

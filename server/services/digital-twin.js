@@ -1244,17 +1244,19 @@ Respond in JSON format:
   // Parse the JSON response
   const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
   if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[1]);
-    return {
-      category,
-      items,
-      itemAnalysis: parsed.itemAnalysis || [],
-      patterns: parsed.patterns || [],
-      personalityInsights: parsed.personalityInsights || {},
-      suggestedDocument: parsed.suggestedDocument || '',
-      targetDoc: config.targetDoc,
-      targetCategory: config.targetCategory
-    };
+    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'enrichment analysis' });
+    if (parsed) {
+      return {
+        category,
+        items,
+        itemAnalysis: parsed.itemAnalysis || [],
+        patterns: parsed.patterns || [],
+        personalityInsights: parsed.personalityInsights || {},
+        suggestedDocument: parsed.suggestedDocument || '',
+        targetDoc: config.targetDoc,
+        targetCategory: config.targetCategory
+      };
+    }
   }
 
   // Fallback if JSON parsing fails
@@ -1706,14 +1708,14 @@ function parseContradictionResponse(response) {
   // Try to extract JSON from the response
   const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
   if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[1]);
-    return { issues: parsed.issues || [], summary: parsed.summary };
+    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'contradiction analysis' });
+    if (parsed) return { issues: parsed.issues || [], summary: parsed.summary };
   }
 
   // Fallback: try direct JSON parse
   if (response.trim().startsWith('{') || response.trim().startsWith('[')) {
-    const parsed = JSON.parse(response);
-    return { issues: parsed.issues || parsed || [], summary: parsed.summary };
+    const parsed = safeJSONParse(response, null, { logError: true, context: 'contradiction analysis fallback' });
+    if (parsed) return { issues: parsed.issues || parsed || [], summary: parsed.summary };
   }
 
   return { issues: [], rawResponse: response };
@@ -1751,14 +1753,14 @@ function parseGeneratedTests(response) {
   // Try to extract JSON from the response
   const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
   if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[1]);
-    return { tests: parsed.tests || parsed || [] };
+    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'generated tests' });
+    if (parsed) return { tests: parsed.tests || parsed || [] };
   }
 
   // Fallback: try direct JSON parse
   if (response.trim().startsWith('{') || response.trim().startsWith('[')) {
-    const parsed = JSON.parse(response);
-    return { tests: parsed.tests || parsed || [] };
+    const parsed = safeJSONParse(response, null, { logError: true, context: 'generated tests fallback' });
+    if (parsed) return { tests: parsed.tests || parsed || [] };
   }
 
   return { tests: [], rawResponse: response };
@@ -1796,11 +1798,13 @@ function parseWritingAnalysis(response) {
   // Try to extract JSON
   const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
   if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[1]);
-    return {
-      analysis: parsed.analysis || parsed,
-      suggestedContent: parsed.suggestedContent || parsed.document || ''
-    };
+    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'writing analysis' });
+    if (parsed) {
+      return {
+        analysis: parsed.analysis || parsed,
+        suggestedContent: parsed.suggestedContent || parsed.document || ''
+      };
+    }
   }
 
   // Extract markdown content for document if present
@@ -2021,11 +2025,13 @@ export async function calculateConfidence(providerId, model) {
 function parseConfidenceResponse(response) {
   const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
   if (jsonMatch) {
-    return JSON.parse(jsonMatch[1]);
+    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'confidence response' });
+    if (parsed) return parsed;
   }
 
   if (response.trim().startsWith('{')) {
-    return JSON.parse(response);
+    const parsed = safeJSONParse(response, null, { logError: true, context: 'confidence response fallback' });
+    if (parsed) return parsed;
   }
 
   return { error: 'Failed to parse confidence response' };
@@ -2292,7 +2298,8 @@ function parseCSVLine(line) {
  * Spotify exports: endTime, artistName, trackName, msPlayed
  */
 function parseSpotifyJSON(jsonData) {
-  const data = JSON.parse(jsonData);
+  const data = safeJSONParse(jsonData, null, { logError: true, context: 'Spotify JSON import' });
+  if (!data) return [];
 
   // Handle both array format and object with streams array
   const streams = Array.isArray(data) ? data : (data.streams || data);
@@ -2594,21 +2601,25 @@ async function analyzeWithPrompt(prompt, providerId, model, source, parsedData) 
 function parseImportAnalysisResponse(response, source, parsedData) {
   const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
   if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[1]);
-    return {
-      source,
-      itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
-      ...parsed
-    };
+    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'import analysis' });
+    if (parsed) {
+      return {
+        source,
+        itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
+        ...parsed
+      };
+    }
   }
 
   if (response.trim().startsWith('{')) {
-    const parsed = JSON.parse(response);
-    return {
-      source,
-      itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
-      ...parsed
-    };
+    const parsed = safeJSONParse(response, null, { logError: true, context: 'import analysis fallback' });
+    if (parsed) {
+      return {
+        source,
+        itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
+        ...parsed
+      };
+    }
   }
 
   return {
