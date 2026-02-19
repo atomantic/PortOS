@@ -130,8 +130,8 @@ async function findUnixProcesses(pattern) {
   for (const line of lines) {
     const parts = line.trim().split(/\s+/);
     if (parts.length >= 6) {
-      const pid = parseInt(parts[0]);
-      const ppid = parseInt(parts[1]);
+      const pid = parseInt(parts[0], 10);
+      const ppid = parseInt(parts[1], 10);
       const cpu = parseFloat(parts[2]);
       const mem = parseFloat(parts[3]);
       const etime = parts[4];
@@ -184,10 +184,10 @@ async function findWindowsProcesses(pattern) {
     if (parts.length >= 7) {
       const command = parts[1];
       const creationDate = parts[2];
-      const ppid = parseInt(parts[3]);
+      const ppid = parseInt(parts[3], 10);
       const cpu = parseFloat(parts[4]) || 0;
-      const memory = parseInt(parts[5]) / 1024 / 1024; // Convert to MB
-      const pid = parseInt(parts[6]);
+      const memory = parseInt(parts[5], 10) / 1024 / 1024; // Convert to MB
+      const pid = parseInt(parts[6], 10);
 
       const startTime = parseWindowsDate(creationDate);
       const runtime = Date.now() - startTime;
@@ -212,13 +212,13 @@ async function findWindowsProcesses(pattern) {
  * Parse Unix elapsed time format (HH:MM:SS or MM:SS or SS)
  */
 function parseElapsedTime(etime) {
-  const parts = etime.split(':').map(p => parseInt(p.replace(/-/g, '')));
+  const parts = etime.split(':').map(p => parseInt(p.replace(/-/g, ''), 10));
 
   if (etime.includes('-')) {
     // Days-HH:MM:SS format
     const [days, rest] = etime.split('-');
-    const timeParts = rest.split(':').map(p => parseInt(p));
-    const d = parseInt(days);
+    const timeParts = rest.split(':').map(p => parseInt(p, 10));
+    const d = parseInt(days, 10);
     const [h, m, s] = timeParts.length === 3 ? timeParts : [0, ...timeParts];
     return ((d * 24 + h) * 60 + m) * 60 * 1000 + s * 1000;
   }
@@ -240,12 +240,12 @@ function parseElapsedTime(etime) {
 function parseWindowsDate(dateStr) {
   if (!dateStr) return Date.now();
   // Format: YYYYMMDDHHmmss.ffffff
-  const year = parseInt(dateStr.substring(0, 4));
-  const month = parseInt(dateStr.substring(4, 6)) - 1;
-  const day = parseInt(dateStr.substring(6, 8));
-  const hour = parseInt(dateStr.substring(8, 10));
-  const min = parseInt(dateStr.substring(10, 12));
-  const sec = parseInt(dateStr.substring(12, 14));
+  const year = parseInt(dateStr.substring(0, 4), 10);
+  const month = parseInt(dateStr.substring(4, 6), 10) - 1;
+  const day = parseInt(dateStr.substring(6, 8), 10);
+  const hour = parseInt(dateStr.substring(8, 10), 10);
+  const min = parseInt(dateStr.substring(10, 12), 10);
+  const sec = parseInt(dateStr.substring(12, 14), 10);
   return new Date(year, month, day, hour, min, sec).getTime();
 }
 
@@ -321,8 +321,8 @@ export async function getProcessInfo(pid) {
 
     const parts = lines[1].trim().split(/\s+/);
     return {
-      pid: parseInt(parts[0]),
-      ppid: parseInt(parts[1]),
+      pid: parseInt(parts[0], 10),
+      ppid: parseInt(parts[1], 10),
       cpu: parseFloat(parts[2]),
       memory: parseFloat(parts[3]),
       runtime: parseElapsedTime(parts[4]),

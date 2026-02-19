@@ -132,9 +132,9 @@ export async function getDiffStats(dir) {
   const deletionsMatch = statsLine.match(/(\d+) deletions?/);
 
   return {
-    files: filesMatch ? parseInt(filesMatch[1]) : 0,
-    insertions: insertionsMatch ? parseInt(insertionsMatch[1]) : 0,
-    deletions: deletionsMatch ? parseInt(deletionsMatch[1]) : 0
+    files: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+    insertions: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
+    deletions: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0
   };
 }
 
@@ -293,9 +293,9 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
     ahead: commits.length,
     commits,
     stats: {
-      files: filesMatch ? parseInt(filesMatch[1]) : 0,
-      insertions: insertionsMatch ? parseInt(insertionsMatch[1]) : 0,
-      deletions: deletionsMatch ? parseInt(deletionsMatch[1]) : 0
+      files: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+      insertions: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
+      deletions: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0
     }
   };
 }
