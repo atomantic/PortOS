@@ -142,6 +142,69 @@ Templates allow creating new apps from pre-configured project structures.
 
 ---
 
+## Security Hardening (from audit 2025-02-19)
+
+PortOS is an internal/VPN app so auth, CORS, rate limiting, and HTTPS are out of scope. These items address real bugs, crash risks, and secret leaks that matter regardless of network posture.
+
+### S1: Patch npm dependency CVEs
+- Run `npm audit fix` in server/ and client/
+- systeminformation (command injection), lodash (prototype pollution), qs (DoS)
+- **Complexity:** Simple
+
+### S2: Sanitize provider API responses
+- Strip `apiKey` and `secretEnvVars` from all provider GET endpoints
+- Return `hasApiKey: boolean` instead of the actual key
+- **Files:** `server/routes/providers.js`, portos-ai-toolkit provider routes
+- **Complexity:** Simple
+
+### S3: Whitelist env vars in PTY shell spawn
+- Replace `...process.env` spread with explicit allowlist so secrets aren't accessible via `env` command in terminal
+- **File:** `server/services/shell.js:21-69`
+- **Complexity:** Simple
+
+### S4: Fix mutex lock bug + extract shared utility
+- `cos.js` `withStateLock` is missing `try/finally` — if `fn()` throws, the lock is never released (deadlock)
+- `memory.js` has identical pattern duplicated — extract to `lib/asyncMutex.js`
+- **Files:** `server/services/cos.js:150-161`, `server/services/memory.js:47-56`
+- **Complexity:** Medium
+
+### S5: Add Zod validation to Socket.IO events
+- `shell:start`, `shell:input`, `logs:subscribe`, PM2 commands accept raw input
+- Add Zod schemas matching the HTTP route validation patterns
+- **File:** `server/services/socket.js:32-307`
+- **Complexity:** Medium
+
+### S6: Sanitize error context in Socket.IO broadcasts
+- Error handler broadcasts full `context` object to all clients which may contain secrets
+- Filter sensitive fields before emitting `error:occurred`
+- **File:** `server/lib/errorHandler.js:113-121`
+- **Complexity:** Simple
+
+### S7: Guard unprotected JSON.parse calls
+- 10+ locations call `JSON.parse` on external/file data without try-catch
+- Wrap in safe parser or add try-catch
+- **Files:** `server/services/digital-twin.js` (11 locations), `server/services/cos.js:273`, `server/lib/taskParser.js:106`
+- **Complexity:** Simple
+
+### S8: Add iteration limit to cron parser
+- `eventScheduler.js` loops minute-by-minute for up to 2 years — invalid cron expressions cause CPU spin
+- Add max iteration count and validate cron fields upfront
+- **File:** `server/services/eventScheduler.js:53-62`
+- **Complexity:** Simple
+
+### S9: Extract validation boilerplate to helper
+- Same 6-line validation-error block duplicated 74+ times across all route files
+- Extract to `lib/validation.js` `validateRequest(schema, data)` helper
+- **Files:** All `server/routes/*.js`
+- **Complexity:** Simple (but wide)
+
+### S10: Fix parseInt missing radix
+- Several parseInt calls lack explicit radix 10
+- **Files:** `server/services/agents.js:243-248`, `server/services/git.js`, `server/services/productivity.js`, `server/services/eventScheduler.js`
+- **Complexity:** Simple
+
+---
+
 ## Next Actions
 
 1. **M42 P1: Identity Orchestrator & Chronotype** - Create identity.json, chronotype.json, identity service, derive chronotype from 5 genome sleep markers. See [Identity System](./docs/features/identity-system.md)
