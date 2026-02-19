@@ -3,7 +3,7 @@ import * as genomeService from '../services/genome.js';
 import * as clinvarService from '../services/clinvar.js';
 import * as epigeneticService from '../services/epigenetic.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   genomeUploadSchema,
   genomeSearchSchema,
@@ -24,16 +24,8 @@ router.get('/', asyncHandler(async (req, res) => {
 
 // POST /api/digital-twin/genome/upload — Upload genome file
 router.post('/upload', asyncHandler(async (req, res) => {
-  const validation = validate(genomeUploadSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await genomeService.uploadGenome(validation.data.content, validation.data.filename);
+  const data = validateRequest(genomeUploadSchema, req.body);
+  const result = await genomeService.uploadGenome(data.content, data.filename);
   if (result.error) {
     throw new ServerError(result.error, {
       status: 400,
@@ -59,46 +51,22 @@ router.post('/scan', asyncHandler(async (req, res) => {
 
 // POST /api/digital-twin/genome/search — Search SNP by rsid
 router.post('/search', asyncHandler(async (req, res) => {
-  const validation = validate(genomeSearchSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await genomeService.searchSNP(validation.data.rsid);
+  const data = validateRequest(genomeSearchSchema, req.body);
+  const result = await genomeService.searchSNP(data.rsid);
   res.json(result);
 }));
 
 // POST /api/digital-twin/genome/markers — Save a marker
 router.post('/markers', asyncHandler(async (req, res) => {
-  const validation = validate(genomeSaveMarkerSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const marker = await genomeService.saveMarker(validation.data);
+  const data = validateRequest(genomeSaveMarkerSchema, req.body);
+  const marker = await genomeService.saveMarker(data);
   res.status(201).json(marker);
 }));
 
 // PUT /api/digital-twin/genome/markers/:id/notes — Update marker notes
 router.put('/markers/:id/notes', asyncHandler(async (req, res) => {
-  const validation = validate(genomeUpdateNotesSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await genomeService.updateMarkerNotes(req.params.id, validation.data.notes);
+  const data = validateRequest(genomeUpdateNotesSchema, req.body);
+  const result = await genomeService.updateMarkerNotes(req.params.id, data.notes);
   if (result.error) {
     throw new ServerError(result.error, {
       status: 404,
@@ -200,31 +168,15 @@ router.get('/epigenetic/compliance', asyncHandler(async (req, res) => {
 
 // POST /api/digital-twin/genome/epigenetic — Add intervention
 router.post('/epigenetic', asyncHandler(async (req, res) => {
-  const validation = validate(epigeneticAddInterventionSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await epigeneticService.addIntervention(validation.data);
+  const data = validateRequest(epigeneticAddInterventionSchema, req.body);
+  const result = await epigeneticService.addIntervention(data);
   res.status(201).json(result);
 }));
 
 // POST /api/digital-twin/genome/epigenetic/:id/log — Log daily entry
 router.post('/epigenetic/:id/log', asyncHandler(async (req, res) => {
-  const validation = validate(epigeneticLogEntrySchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await epigeneticService.logEntry(req.params.id, validation.data);
+  const data = validateRequest(epigeneticLogEntrySchema, req.body);
+  const result = await epigeneticService.logEntry(req.params.id, data);
   if (result.error) {
     throw new ServerError(result.error, {
       status: 404,
@@ -237,16 +189,8 @@ router.post('/epigenetic/:id/log', asyncHandler(async (req, res) => {
 
 // PUT /api/digital-twin/genome/epigenetic/:id — Update intervention
 router.put('/epigenetic/:id', asyncHandler(async (req, res) => {
-  const validation = validate(epigeneticUpdateInterventionSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await epigeneticService.updateIntervention(req.params.id, validation.data);
+  const data = validateRequest(epigeneticUpdateInterventionSchema, req.body);
+  const result = await epigeneticService.updateIntervention(req.params.id, data);
   if (result.error) {
     throw new ServerError(result.error, {
       status: 404,

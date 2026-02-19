@@ -13,7 +13,7 @@ import { Router } from 'express';
 import * as digitalTwinService from '../services/digital-twin.js';
 import * as tasteService from '../services/taste-questionnaire.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   createDocumentInputSchema,
   updateDocumentInputSchema,
@@ -85,16 +85,8 @@ router.get('/documents/:id', asyncHandler(async (req, res) => {
  * Create a new document
  */
 router.post('/documents', asyncHandler(async (req, res) => {
-  const validation = validate(createDocumentInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const document = await digitalTwinService.createDocument(validation.data);
+  const data = validateRequest(createDocumentInputSchema, req.body);
+  const document = await digitalTwinService.createDocument(data);
   res.status(201).json(document);
 }));
 
@@ -103,16 +95,8 @@ router.post('/documents', asyncHandler(async (req, res) => {
  * Update a document
  */
 router.put('/documents/:id', asyncHandler(async (req, res) => {
-  const validation = validate(updateDocumentInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const document = await digitalTwinService.updateDocument(req.params.id, validation.data);
+  const data = validateRequest(updateDocumentInputSchema, req.body);
+  const document = await digitalTwinService.updateDocument(req.params.id, data);
   if (!document) {
     throw new ServerError('Document not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -149,16 +133,7 @@ router.get('/tests', asyncHandler(async (req, res) => {
  * Run behavioral tests against a single provider/model
  */
 router.post('/tests/run', asyncHandler(async (req, res) => {
-  const validation = validate(runTestsInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { providerId, model, testIds } = validation.data;
+  const { providerId, model, testIds } = validateRequest(runTestsInputSchema, req.body);
   const result = await digitalTwinService.runTests(providerId, model, testIds);
   res.json(result);
 }));
@@ -168,16 +143,7 @@ router.post('/tests/run', asyncHandler(async (req, res) => {
  * Run behavioral tests against multiple providers/models
  */
 router.post('/tests/run-multi', asyncHandler(async (req, res) => {
-  const validation = validate(runMultiTestsInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { providers, testIds } = validation.data;
+  const { providers, testIds } = validateRequest(runMultiTestsInputSchema, req.body);
   const io = req.app.get('io');
 
   // Run tests for each provider in parallel
@@ -206,16 +172,8 @@ router.post('/tests/run-multi', asyncHandler(async (req, res) => {
  * Get test run history
  */
 router.get('/tests/history', asyncHandler(async (req, res) => {
-  const validation = validate(testHistoryQuerySchema, req.query);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const history = await digitalTwinService.getTestHistory(validation.data.limit);
+  const data = validateRequest(testHistoryQuerySchema, req.query);
+  const history = await digitalTwinService.getTestHistory(data.limit);
   res.json(history);
 }));
 
@@ -246,16 +204,7 @@ router.get('/enrich/progress', asyncHandler(async (req, res) => {
  * Get next question for a category
  */
 router.post('/enrich/question', asyncHandler(async (req, res) => {
-  const validation = validate(enrichmentQuestionInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { category, providerOverride, modelOverride, skipIndices } = validation.data;
+  const { category, providerOverride, modelOverride, skipIndices } = validateRequest(enrichmentQuestionInputSchema, req.body);
   const question = await digitalTwinService.generateEnrichmentQuestion(category, providerOverride, modelOverride, skipIndices);
   res.json(question);
 }));
@@ -265,16 +214,8 @@ router.post('/enrich/question', asyncHandler(async (req, res) => {
  * Submit answer and update digital twin documents
  */
 router.post('/enrich/answer', asyncHandler(async (req, res) => {
-  const validation = validate(enrichmentAnswerInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await digitalTwinService.processEnrichmentAnswer(validation.data);
+  const data = validateRequest(enrichmentAnswerInputSchema, req.body);
+  const result = await digitalTwinService.processEnrichmentAnswer(data);
   res.json(result);
 }));
 
@@ -283,16 +224,7 @@ router.post('/enrich/answer', asyncHandler(async (req, res) => {
  * Analyze a list of items (books, movies, music) and generate document content
  */
 router.post('/enrich/analyze-list', asyncHandler(async (req, res) => {
-  const validation = validate(analyzeListInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { category, items, providerId, model } = validation.data;
+  const { category, items, providerId, model } = validateRequest(analyzeListInputSchema, req.body);
   const result = await digitalTwinService.analyzeEnrichmentList(category, items, providerId, model);
   res.json(result);
 }));
@@ -302,16 +234,7 @@ router.post('/enrich/analyze-list', asyncHandler(async (req, res) => {
  * Save analyzed list content to document
  */
 router.post('/enrich/save-list', asyncHandler(async (req, res) => {
-  const validation = validate(saveListDocumentInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { category, content, items } = validation.data;
+  const { category, content, items } = validateRequest(saveListDocumentInputSchema, req.body);
   const result = await digitalTwinService.saveEnrichmentListDocument(category, content, items);
   res.json(result);
 }));
@@ -321,16 +244,8 @@ router.post('/enrich/save-list', asyncHandler(async (req, res) => {
  * Get previously saved list items for a category
  */
 router.get('/enrich/list-items/:category', asyncHandler(async (req, res) => {
-  const validation = validate(getListItemsInputSchema, { category: req.params.category });
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const items = await digitalTwinService.getEnrichmentListItems(validation.data.category);
+  const data = validateRequest(getListItemsInputSchema, { category: req.params.category });
+  const items = await digitalTwinService.getEnrichmentListItems(data.category);
   res.json(items);
 }));
 
@@ -352,16 +267,7 @@ router.get('/export/formats', asyncHandler(async (req, res) => {
  * Export soul in specified format
  */
 router.post('/export', asyncHandler(async (req, res) => {
-  const validation = validate(exportInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { format, documentIds, includeDisabled } = validation.data;
+  const { format, documentIds, includeDisabled } = validateRequest(exportInputSchema, req.body);
   const exported = await digitalTwinService.exportDigitalTwin(format, documentIds, includeDisabled);
   res.json(exported);
 }));
@@ -384,16 +290,8 @@ router.get('/settings', asyncHandler(async (req, res) => {
  * Update digital twin settings
  */
 router.put('/settings', asyncHandler(async (req, res) => {
-  const validation = validate(settingsUpdateInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const settings = await digitalTwinService.updateSettings(validation.data);
+  const data = validateRequest(settingsUpdateInputSchema, req.body);
+  const settings = await digitalTwinService.updateSettings(data);
   res.json(settings);
 }));
 
@@ -415,16 +313,7 @@ router.get('/validate/completeness', asyncHandler(async (req, res) => {
  * Detect contradictions in digital twin documents using AI
  */
 router.post('/validate/contradictions', asyncHandler(async (req, res) => {
-  const validation = validate(contradictionInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { providerId, model } = validation.data;
+  const { providerId, model } = validateRequest(contradictionInputSchema, req.body);
   const result = await digitalTwinService.detectContradictions(providerId, model);
   res.json(result);
 }));
@@ -434,16 +323,7 @@ router.post('/validate/contradictions', asyncHandler(async (req, res) => {
  * Generate behavioral tests from soul content
  */
 router.post('/tests/generate', asyncHandler(async (req, res) => {
-  const validation = validate(generateTestsInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { providerId, model } = validation.data;
+  const { providerId, model } = validateRequest(generateTestsInputSchema, req.body);
   const result = await digitalTwinService.generateDynamicTests(providerId, model);
   res.json(result);
 }));
@@ -453,16 +333,7 @@ router.post('/tests/generate', asyncHandler(async (req, res) => {
  * Analyze writing samples to extract communication patterns
  */
 router.post('/analyze-writing', asyncHandler(async (req, res) => {
-  const validation = validate(writingAnalysisInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { samples, providerId, model } = validation.data;
+  const { samples, providerId, model } = validateRequest(writingAnalysisInputSchema, req.body);
   const result = await digitalTwinService.analyzeWritingSamples(samples, providerId, model);
   res.json(result);
 }));
@@ -485,16 +356,7 @@ router.get('/traits', asyncHandler(async (req, res) => {
  * Analyze documents to extract personality traits using AI
  */
 router.post('/traits/analyze', asyncHandler(async (req, res) => {
-  const validation = validate(analyzeTraitsInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { providerId, model, forceReanalyze } = validation.data;
+  const { providerId, model, forceReanalyze } = validateRequest(analyzeTraitsInputSchema, req.body);
   const result = await digitalTwinService.analyzeTraits(providerId, model, forceReanalyze);
   res.json(result);
 }));
@@ -504,16 +366,8 @@ router.post('/traits/analyze', asyncHandler(async (req, res) => {
  * Manually update personality traits
  */
 router.put('/traits', asyncHandler(async (req, res) => {
-  const validation = validate(updateTraitsInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const traits = await digitalTwinService.updateTraits(validation.data);
+  const data = validateRequest(updateTraitsInputSchema, req.body);
+  const traits = await digitalTwinService.updateTraits(data);
   res.json({ traits });
 }));
 
@@ -531,16 +385,7 @@ router.get('/confidence', asyncHandler(async (req, res) => {
  * Calculate confidence scores (optionally with AI analysis)
  */
 router.post('/confidence/calculate', asyncHandler(async (req, res) => {
-  const validation = validate(calculateConfidenceInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { providerId, model } = validation.data;
+  const { providerId, model } = validateRequest(calculateConfidenceInputSchema, req.body);
   const result = await digitalTwinService.calculateConfidence(providerId, model);
   res.json(result);
 }));
@@ -563,16 +408,7 @@ router.get('/gaps', asyncHandler(async (req, res) => {
  * Analyze a pasted personality assessment and update twin profile
  */
 router.post('/interview/analyze', asyncHandler(async (req, res) => {
-  const validation = validate(analyzeAssessmentInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { content, providerId, model } = validation.data;
+  const { content, providerId, model } = validateRequest(analyzeAssessmentInputSchema, req.body);
   const result = await digitalTwinService.analyzeAssessment(content, providerId, model);
 
   if (result.error) {
@@ -603,16 +439,7 @@ router.get('/import/sources', asyncHandler(async (req, res) => {
  * Analyze imported external data
  */
 router.post('/import/analyze', asyncHandler(async (req, res) => {
-  const validation = validate(importDataInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { source, data, providerId, model } = validation.data;
+  const { source, data, providerId, model } = validateRequest(importDataInputSchema, req.body);
   const result = await digitalTwinService.analyzeImportedData(source, data, providerId, model);
 
   if (result.error) {
@@ -693,15 +520,7 @@ router.get('/taste/:section/next', asyncHandler(async (req, res) => {
  * Submit an answer for a taste question
  */
 router.post('/taste/answer', asyncHandler(async (req, res) => {
-  const validation = validate(tasteAnswerInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const { section, questionId, answer } = validation.data;
+  const { section, questionId, answer } = validateRequest(tasteAnswerInputSchema, req.body);
   const result = await tasteService.submitAnswer(section, questionId, answer);
   res.json(result);
 }));
@@ -727,15 +546,7 @@ router.get('/taste/:section/responses', asyncHandler(async (req, res) => {
  * Generate a taste profile summary (section or overall)
  */
 router.post('/taste/summary', asyncHandler(async (req, res) => {
-  const validation = validate(tasteSummaryInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const { section, providerId, model } = validation.data;
+  const { section, providerId, model } = validateRequest(tasteSummaryInputSchema, req.body);
 
   const result = section
     ? await tasteService.generateSectionSummary(section, providerId, model)

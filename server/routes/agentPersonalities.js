@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, agentSchema, agentUpdateSchema } from '../lib/validation.js';
+import { validateRequest, agentSchema, agentUpdateSchema } from '../lib/validation.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { generateAgentPersonality } from '../services/agentPersonalityGenerator.js';
 import { logAction } from '../services/history.js';
@@ -42,11 +42,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   console.log('🤖 POST /api/agents/personalities');
 
-  const { success, data, errors } = validate(agentSchema, req.body);
-  if (!success) {
-    return res.status(422).json({ errors });
-  }
-
+  const data = validateRequest(agentSchema, req.body);
   const agent = await agentPersonalities.createAgent(data);
   await logAction('create', 'agent-personality', agent.id, { name: agent.name });
 
@@ -58,11 +54,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   console.log(`🤖 PUT /api/agents/personalities/${id}`);
 
-  const { success, data, errors } = validate(agentUpdateSchema, req.body);
-  if (!success) {
-    return res.status(422).json({ errors });
-  }
-
+  const data = validateRequest(agentUpdateSchema, req.body);
   const agent = await agentPersonalities.updateAgent(id, data);
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });

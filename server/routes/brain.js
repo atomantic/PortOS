@@ -14,7 +14,7 @@ import { existsSync } from 'fs';
 import * as brainService from '../services/brain.js';
 import { getProviderById } from '../services/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   captureInputSchema,
   resolveReviewInputSchema,
@@ -43,16 +43,7 @@ const router = Router();
  * Capture a thought, classify it, and store it
  */
 router.post('/capture', asyncHandler(async (req, res) => {
-  const validation = validate(captureInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { text, providerOverride, modelOverride } = validation.data;
+  const { text, providerOverride, modelOverride } = validateRequest(captureInputSchema, req.body);
   const result = await brainService.captureThought(text, providerOverride, modelOverride);
   res.json(result);
 }));
@@ -62,16 +53,8 @@ router.post('/capture', asyncHandler(async (req, res) => {
  * Get inbox log entries with optional filters
  */
 router.get('/inbox', asyncHandler(async (req, res) => {
-  const validation = validate(inboxQuerySchema, req.query);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const entries = await brainService.getInboxLog(validation.data);
+  const data = validateRequest(inboxQuerySchema, req.query);
+  const entries = await brainService.getInboxLog(data);
   const counts = await brainService.getInboxLogCounts();
   res.json({ entries, counts });
 }));
@@ -93,16 +76,7 @@ router.get('/inbox/:id', asyncHandler(async (req, res) => {
  * Resolve a needs_review inbox item
  */
 router.post('/review/resolve', asyncHandler(async (req, res) => {
-  const validation = validate(resolveReviewInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { inboxLogId, destination, editedExtracted } = validation.data;
+  const { inboxLogId, destination, editedExtracted } = validateRequest(resolveReviewInputSchema, req.body);
   const result = await brainService.resolveReview(inboxLogId, destination, editedExtracted);
   res.json(result);
 }));
@@ -112,16 +86,7 @@ router.post('/review/resolve', asyncHandler(async (req, res) => {
  * Fix/correct a filed inbox item
  */
 router.post('/fix', asyncHandler(async (req, res) => {
-  const validation = validate(fixInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { inboxLogId, newDestination, updatedFields, note } = validation.data;
+  const { inboxLogId, newDestination, updatedFields, note } = validateRequest(fixInputSchema, req.body);
   const result = await brainService.fixClassification(inboxLogId, newDestination, updatedFields, note);
   res.json(result);
 }));
@@ -153,16 +118,8 @@ router.post('/inbox/:id/done', asyncHandler(async (req, res) => {
  * Update an inbox entry (edit captured text)
  */
 router.put('/inbox/:id', asyncHandler(async (req, res) => {
-  const validation = validate(updateInboxInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const result = await brainService.updateInboxEntry(req.params.id, validation.data);
+  const data = validateRequest(updateInboxInputSchema, req.body);
+  const result = await brainService.updateInboxEntry(req.params.id, data);
   if (!result) {
     throw new ServerError('Inbox entry not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -199,28 +156,14 @@ router.get('/people/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/people', asyncHandler(async (req, res) => {
-  const validation = validate(peopleInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const person = await brainService.createPerson(validation.data);
+  const data = validateRequest(peopleInputSchema, req.body);
+  const person = await brainService.createPerson(data);
   res.status(201).json(person);
 }));
 
 router.put('/people/:id', asyncHandler(async (req, res) => {
-  const validation = validate(peopleInputSchema.partial(), req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const person = await brainService.updatePerson(req.params.id, validation.data);
+  const data = validateRequest(peopleInputSchema.partial(), req.body);
+  const person = await brainService.updatePerson(req.params.id, data);
   if (!person) {
     throw new ServerError('Person not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -255,28 +198,14 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/projects', asyncHandler(async (req, res) => {
-  const validation = validate(projectInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const project = await brainService.createProject(validation.data);
+  const data = validateRequest(projectInputSchema, req.body);
+  const project = await brainService.createProject(data);
   res.status(201).json(project);
 }));
 
 router.put('/projects/:id', asyncHandler(async (req, res) => {
-  const validation = validate(projectInputSchema.partial(), req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const project = await brainService.updateProject(req.params.id, validation.data);
+  const data = validateRequest(projectInputSchema.partial(), req.body);
+  const project = await brainService.updateProject(req.params.id, data);
   if (!project) {
     throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -311,28 +240,14 @@ router.get('/ideas/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ideas', asyncHandler(async (req, res) => {
-  const validation = validate(ideaInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const idea = await brainService.createIdea(validation.data);
+  const data = validateRequest(ideaInputSchema, req.body);
+  const idea = await brainService.createIdea(data);
   res.status(201).json(idea);
 }));
 
 router.put('/ideas/:id', asyncHandler(async (req, res) => {
-  const validation = validate(ideaInputSchema.partial(), req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const idea = await brainService.updateIdea(req.params.id, validation.data);
+  const data = validateRequest(ideaInputSchema.partial(), req.body);
+  const idea = await brainService.updateIdea(req.params.id, data);
   if (!idea) {
     throw new ServerError('Idea not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -367,28 +282,14 @@ router.get('/admin/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/admin', asyncHandler(async (req, res) => {
-  const validation = validate(adminInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const item = await brainService.createAdminItem(validation.data);
+  const data = validateRequest(adminInputSchema, req.body);
+  const item = await brainService.createAdminItem(data);
   res.status(201).json(item);
 }));
 
 router.put('/admin/:id', asyncHandler(async (req, res) => {
-  const validation = validate(adminInputSchema.partial(), req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-  const item = await brainService.updateAdminItem(req.params.id, validation.data);
+  const data = validateRequest(adminInputSchema.partial(), req.body);
+  const item = await brainService.updateAdminItem(req.params.id, data);
   if (!item) {
     throw new ServerError('Admin item not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -483,19 +384,12 @@ router.get('/settings', asyncHandler(async (req, res) => {
  * Update brain settings
  */
 router.put('/settings', asyncHandler(async (req, res) => {
-  const validation = validate(settingsUpdateInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
+  const data = validateRequest(settingsUpdateInputSchema, req.body);
 
   // Validate provider and model if provided
-  if (validation.data.defaultProvider || validation.data.defaultModel) {
-    const providerId = validation.data.defaultProvider;
-    const modelId = validation.data.defaultModel;
+  if (data.defaultProvider || data.defaultModel) {
+    const providerId = data.defaultProvider;
+    const modelId = data.defaultModel;
 
     // Get current settings to use existing provider if only model is being updated
     const currentSettings = await brainService.loadMeta();
@@ -528,7 +422,7 @@ router.put('/settings', asyncHandler(async (req, res) => {
     }
   }
 
-  const settings = await brainService.updateMeta(validation.data);
+  const settings = await brainService.updateMeta(data);
   res.json(settings);
 }));
 
@@ -550,16 +444,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
  * Get all links with optional filters
  */
 router.get('/links', asyncHandler(async (req, res) => {
-  const validation = validate(linksQuerySchema, req.query);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { linkType, isGitHubRepo, limit, offset } = validation.data;
+  const { linkType, isGitHubRepo, limit, offset } = validateRequest(linksQuerySchema, req.query);
   let links = await brainService.getLinks();
 
   // Apply filters
@@ -597,16 +482,7 @@ router.get('/links/:id', asyncHandler(async (req, res) => {
  * Create a new link (quick-add with URL)
  */
 router.post('/links', asyncHandler(async (req, res) => {
-  const validation = validate(linkInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const { url, title, description, linkType, tags, autoClone } = validation.data;
+  const { url, title, description, linkType, tags, autoClone } = validateRequest(linkInputSchema, req.body);
 
   // Check if URL already exists
   const existing = await brainService.getLinkByUrl(url);
@@ -680,16 +556,8 @@ async function cloneRepoInBackground(linkId, url) {
  * Update a link
  */
 router.put('/links/:id', asyncHandler(async (req, res) => {
-  const validation = validate(linkUpdateInputSchema, req.body);
-  if (!validation.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: validation.errors }
-    });
-  }
-
-  const link = await brainService.updateLink(req.params.id, validation.data);
+  const data = validateRequest(linkUpdateInputSchema, req.body);
+  const link = await brainService.updateLink(req.params.id, data);
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
