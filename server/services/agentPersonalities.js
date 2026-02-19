@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 
 const AGENTS_DIR = PATHS.agentPersonalities;
 const AGENTS_FILE = join(AGENTS_DIR, 'agents.json');
@@ -44,7 +44,7 @@ async function loadAgents() {
   }
 
   const content = await readFile(AGENTS_FILE, 'utf-8');
-  cache = JSON.parse(content);
+  cache = safeJSONParse(content, { agents: {} }, { context: 'agentPersonalities' });
   cacheTimestamp = now;
   return cache;
 }

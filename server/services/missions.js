@@ -9,6 +9,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
+import { safeJSONParse } from '../lib/fileUtils.js'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'missions')
 
@@ -40,8 +41,8 @@ async function loadMissions() {
     const filePath = path.join(DATA_DIR, file)
     const content = await fs.readFile(filePath, 'utf-8').catch(() => null)
     if (content) {
-      const mission = JSON.parse(content)
-      missions.push(mission)
+      const mission = safeJSONParse(content, null, { context: `mission:${file}` })
+      if (mission) missions.push(mission)
     }
   }
 
