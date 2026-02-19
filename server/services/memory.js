@@ -15,6 +15,7 @@ import { findTopK, findAboveThreshold, clusterBySimilarity, cosineSimilarity } f
 import * as notifications from './notifications.js';
 import { readJSONFile } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
+import { createMutex } from '../lib/asyncMutex.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -44,16 +45,7 @@ let indexCache = null;
 let embeddingsCache = null;
 
 // Mutex lock for state operations
-let memoryLock = Promise.resolve();
-async function withMemoryLock(fn) {
-  const release = memoryLock;
-  let resolve;
-  memoryLock = new Promise(r => { resolve = r; });
-  await release;
-  const result = await fn();
-  resolve();
-  return result;
-}
+const withMemoryLock = createMutex();
 
 /**
  * Ensure memory directories exist

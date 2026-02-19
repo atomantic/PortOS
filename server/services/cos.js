@@ -18,6 +18,7 @@ import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleRev
 import { getActiveApps } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
 import { formatDuration } from '../lib/fileUtils.js';
@@ -147,18 +148,7 @@ async function loadCompletedAgentCache() {
 }
 
 // Mutex lock for state operations to prevent race conditions
-let stateLock = Promise.resolve();
-async function withStateLock(fn) {
-  const release = stateLock;
-  let resolve;
-  stateLock = new Promise(r => { resolve = r; });
-  await release;
-  try {
-    return await fn();
-  } finally {
-    resolve();
-  }
-}
+const withStateLock = createMutex();
 
 /**
  * Default configuration
