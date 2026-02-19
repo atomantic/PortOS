@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
