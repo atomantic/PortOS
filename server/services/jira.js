@@ -48,13 +48,16 @@ export async function saveInstances(config) {
 export async function upsertInstance(instanceId, instanceData) {
   const config = await getInstances();
 
+  const existing = config.instances[instanceId];
+
   config.instances[instanceId] = {
     id: instanceId,
     name: instanceData.name,
     baseUrl: instanceData.baseUrl,
     email: instanceData.email,
     apiToken: instanceData.apiToken, // PAT (Personal Access Token)
-    createdAt: config.instances[instanceId]?.createdAt || new Date().toISOString(),
+    tokenUpdatedAt: (instanceData.apiToken !== existing?.apiToken) ? new Date().toISOString() : (existing?.tokenUpdatedAt || new Date().toISOString()),
+    createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
@@ -265,6 +268,44 @@ export async function addComment(instanceId, ticketId, comment) {
 }
 
 /**
+ * Get available transitions for a JIRA ticket
+ */
+export async function getTransitions(instanceId, ticketId) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const response = await client.get(`/rest/api/2/issue/${ticketId}/transitions`);
+
+  return response.data.transitions.map(t => ({
+    id: t.id,
+    name: t.name,
+    to: t.to?.name
+  }));
+}
+
+/**
+ * Delete a JIRA ticket
+ */
+export async function deleteTicket(instanceId, ticketId) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  await client.delete(`/rest/api/2/issue/${ticketId}`);
+
+  return { success: true, ticketId };
+}
+
+/**
  * Transition JIRA ticket (change status)
  */
 export async function transitionTicket(instanceId, ticketId, transitionId) {
@@ -391,6 +432,8 @@ export default {
   createTicket,
   updateTicket,
   addComment,
+  getTransitions,
+  deleteTicket,
   transitionTicket,
   getMyCurrentSprintTickets,
   getActiveSprints,

@@ -27,6 +27,7 @@ router.get('/instances', async (req, res, next) => {
             baseUrl: instance.baseUrl,
             email: instance.email,
             hasApiToken: !!instance.apiToken,
+            tokenUpdatedAt: instance.tokenUpdatedAt,
             createdAt: instance.createdAt,
             updatedAt: instance.updatedAt
           }
@@ -69,6 +70,7 @@ router.post('/instances', async (req, res, next) => {
       baseUrl: instance.baseUrl,
       email: instance.email,
       hasApiToken: true,
+      tokenUpdatedAt: instance.tokenUpdatedAt,
       createdAt: instance.createdAt,
       updatedAt: instance.updatedAt
     };
@@ -169,6 +171,38 @@ router.post('/instances/:instanceId/tickets/:ticketId/comments', async (req, res
       comment
     );
 
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/jira/instances/:instanceId/tickets/:ticketId/transitions
+ * Get available transitions for a ticket
+ */
+router.get('/instances/:instanceId/tickets/:ticketId/transitions', async (req, res, next) => {
+  try {
+    const transitions = await jiraService.getTransitions(
+      req.params.instanceId,
+      req.params.ticketId
+    );
+    res.json(transitions);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/jira/instances/:instanceId/tickets/:ticketId
+ * Delete a JIRA ticket
+ */
+router.delete('/instances/:instanceId/tickets/:ticketId', async (req, res, next) => {
+  try {
+    const result = await jiraService.deleteTicket(
+      req.params.instanceId,
+      req.params.ticketId
+    );
     res.json(result);
   } catch (error) {
     next(error);

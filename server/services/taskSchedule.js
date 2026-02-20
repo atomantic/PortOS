@@ -381,7 +381,111 @@ Check PortOS dependencies for updates and security vulnerabilities:
    - Run npm run build in client/
    - Verify the app starts correctly
 
-7. Commit with clear changelog of what was updated and why`
+7. Commit with clear changelog of what was updated and why`,
+
+  'release-check': `[Self-Improvement] Release Check — dev → main
+
+Check if the dev branch has accumulated enough work for a release, and if so, create a PR to main, get Copilot review, iterate on feedback, and merge.
+
+## Step 1: Evaluate Readiness
+
+Read the current changelog and version:
+- \`cat .changelog/v*.x.md\` (the one with literal "x", not a resolved version)
+- \`node -p "require('./package.json').version"\`
+
+Count substantive entries (lines starting with "###" or "- **" under Features, Fixes, Improvements sections). If fewer than 2 substantive entries exist, stop and report: "Not enough work accumulated for a release." Do NOT create a PR.
+
+## Step 2: Verify Clean State
+
+Run these checks (stop if any fail):
+1. \`git fetch origin\` and ensure dev is up to date: \`git status -uno\` should show "Your branch is up to date"
+2. \`cd server && npm test\` — all tests must pass
+3. \`cd client && npm run build\` — build must succeed
+
+## Step 3: Create or Find PR
+
+Check for existing PR: \`gh pr list --base main --head dev --state open --json number,url\`
+
+If a PR exists, use it. If not, create one:
+\`\`\`bash
+gh pr create --base main --head dev --title "Release $(node -p \\"require('./package.json').version\\")" --body "$(cat .changelog/v*.x.md | head -60)"
+\`\`\`
+
+Capture the PR number and URL.
+
+## Step 4: Request Copilot Review
+
+Try the API method first:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/requested_reviewers \\
+  --method POST \\
+  --input - <<< '{"reviewers":["copilot-pull-request-reviewer"]}'
+\`\`\`
+
+If you get a 422 error, fall back to Playwright browser automation:
+1. Navigate to the PR URL
+2. Take a browser_snapshot
+3. Click the Reviewers gear icon
+4. Look for and click the Copilot review request button/option
+
+## Step 5: Poll for Review Completion
+
+Poll every 15 seconds until a Copilot review appears:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/reviews --jq '.[].state'
+\`\`\`
+
+Wait until you see a review from "copilot-pull-request-reviewer" or "github-actions[bot]" with state APPROVED or CHANGES_REQUESTED. Timeout after 5 minutes of polling.
+
+## Step 6: Address Feedback Loop (max 5 iterations)
+
+For each iteration:
+
+### 6a. Fetch unresolved review threads
+
+Use gh api graphql with a POST body file (to avoid shell escaping issues with GraphQL variables):
+
+\`\`\`bash
+echo '{"query":"query{repository(owner:\\"atomantic\\",name:\\"PortOS\\"){pullRequest(number:PR_NUM){reviewThreads(first:100){nodes{isResolved,comments(first:10){nodes{body,path,line,author{login}}}}}}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 6b. If unresolved threads exist:
+- Read each referenced file path
+- Apply the suggested fixes
+- Run \`cd server && npm test\` to verify
+- Commit changes: \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
+- Push: \`git pull --rebase --autostash && git push\`
+
+### 6c. Resolve threads via GraphQL mutation:
+
+For each thread, get the threadId from the GraphQL response above and resolve it:
+\`\`\`bash
+echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 6d. Request another Copilot review (repeat Step 4)
+### 6e. Poll again (repeat Step 5)
+
+If after 5 iterations there are still unresolved threads, stop and report what remains.
+
+## Step 7: Merge
+
+Once review is clean (APPROVED or no unresolved threads):
+\`\`\`bash
+gh pr merge PR_NUM --merge
+\`\`\`
+
+If merge fails (e.g., branch protections), try: \`gh pr merge PR_NUM --merge --admin\`
+
+## Step 8: Report
+
+Summarize:
+- Version released
+- Key changes (from changelog)
+- Number of review iterations needed
+- Any unresolved issues
+
+IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`
 };
 
 // Default interval settings for self-improvement task types
@@ -397,7 +501,8 @@ const DEFAULT_SELF_IMPROVEMENT_INTERVALS = {
   'documentation': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
   'feature-ideas': { type: INTERVAL_TYPES.DAILY, enabled: true, providerId: null, model: null, prompt: null },
   'accessibility': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null }
+  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
+  'release-check': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null }
 };
 
 // Default prompts for app improvement task types (templates with {appName} and {repoPath} variables)
@@ -1569,7 +1674,8 @@ function getTaskTypeDescription(taskType) {
     'documentation': 'Update documentation',
     'feature-ideas': 'Brainstorm and implement features',
     'accessibility': 'Accessibility audit',
-    'dependency-updates': 'Update dependencies'
+    'dependency-updates': 'Update dependencies',
+    'release-check': 'Check dev for release readiness'
   };
   return descriptions[taskType] || taskType.replace(/-/g, ' ');
 }

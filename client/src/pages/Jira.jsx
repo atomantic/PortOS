@@ -2,6 +2,17 @@ import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 
+const TOKEN_LIFETIME_DAYS = 30;
+const TOKEN_WARN_DAYS = 5;
+
+function getTokenExpiry(tokenUpdatedAt) {
+  if (!tokenUpdatedAt) return null;
+  const updated = new Date(tokenUpdatedAt);
+  const expiresAt = new Date(updated.getTime() + TOKEN_LIFETIME_DAYS * 86400000);
+  const daysLeft = Math.ceil((expiresAt - Date.now()) / 86400000);
+  return { daysLeft, expiresAt };
+}
+
 export default function Jira() {
   const [instances, setInstances] = useState({});
   const [loading, setLoading] = useState(true);
@@ -338,6 +349,25 @@ export default function Jira() {
                   <p className="text-gray-500 text-sm">
                     API Token: {instance.hasApiToken ? '✓ Configured' : '✗ Not set'}
                   </p>
+                  {instance.hasApiToken && (() => {
+                    const expiry = getTokenExpiry(instance.tokenUpdatedAt);
+                    if (!expiry) return (
+                      <p className="text-yellow-400 text-sm mt-1">
+                        Token age unknown — re-save to start tracking expiry
+                      </p>
+                    );
+                    if (expiry.daysLeft <= 0) return (
+                      <p className="text-red-400 text-sm font-medium mt-1">
+                        Token likely expired — regenerate your PAT
+                      </p>
+                    );
+                    if (expiry.daysLeft <= TOKEN_WARN_DAYS) return (
+                      <p className="text-yellow-400 text-sm font-medium mt-1">
+                        Token expires in {expiry.daysLeft} day{expiry.daysLeft !== 1 ? 's' : ''} — regenerate soon
+                      </p>
+                    );
+                    return null;
+                  })()}
                 </div>
 
                 <div className="flex flex-wrap gap-2 sm:flex-nowrap">

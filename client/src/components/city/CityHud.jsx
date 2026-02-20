@@ -99,21 +99,11 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
   const location = useLocation();
   const [time, setTime] = useState(new Date());
   const [uptimeSeconds, setUptimeSeconds] = useState(0);
-  const [scanLine, setScanLine] = useState(0);
-
   useEffect(() => {
     const interval = setInterval(() => {
       setTime(new Date());
       setUptimeSeconds(prev => prev + 1);
     }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Animated scan line in the vitals panel
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setScanLine(prev => (prev + 1) % 100);
-    }, 50);
     return () => clearInterval(interval);
   }, []);
 
@@ -159,10 +149,9 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
           <HudCorner position="bl" />
           <HudCorner position="br" />
 
-          {/* Animated scan line */}
+          {/* Animated scan line (CSS-only, no React re-renders) */}
           <div
-            className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none"
-            style={{ top: `${scanLine}%` }}
+            className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none animate-scanline"
           />
 
           <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider mb-1">

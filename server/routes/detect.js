@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { existsSync, statSync } from 'fs';
-import { readFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -28,7 +28,7 @@ router.post('/repo', asyncHandler(async (req, res) => {
   }
 
   // Check if it's a directory
-  const stats = statSync(path);
+  const stats = await stat(path);
   if (!stats.isDirectory()) {
     return res.json({
       valid: false,

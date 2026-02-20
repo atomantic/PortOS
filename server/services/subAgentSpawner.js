@@ -1292,6 +1292,17 @@ export async function spawnAgentForTask(task) {
         .substring(0, 40);
       jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
 
+      // For managed apps, ensure we start from the latest default branch
+      if (task.metadata?.app) {
+        await git.fetchOrigin(workspacePath).catch(() => {});
+        const { baseBranch: defaultBranch } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+        if (defaultBranch) {
+          await git.checkout(workspacePath, defaultBranch).catch(() => {});
+          // Fast-forward to latest origin
+          try { execSync(`git merge --ff-only origin/${defaultBranch}`, { cwd: workspacePath, stdio: 'ignore' }); } catch (err) { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); }
+        }
+      }
+
       await git.createBranch(workspacePath, jiraBranchName).catch(err => {
         emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
         jiraBranchName = null;
@@ -1313,10 +1324,34 @@ export async function spawnAgentForTask(task) {
     }
   }
 
-  // Check for conflicts with active agents and decide on worktree usage
-  // Skip worktree conflict detection if we already created a JIRA feature branch (agent is isolated)
+  // Ensure clean workspace for managed apps before agent starts.
+  // For managed apps, always use a worktree based on the latest default branch
+  // to prevent cross-agent contamination (dirty state, stale branches, other agents' commits).
   let worktreeInfo = null;
-  if (!jiraBranchName) {
+  const isManagedApp = !!task.metadata?.app;
+
+  if (isManagedApp && !jiraBranchName) {
+    // Managed apps always get an isolated worktree based on the latest default branch
+    const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+    emitLog('info', `🌳 Managed app task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
+      taskId: task.id, app: task.metadata.app, baseBranch: detectedBase
+    });
+
+    worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
+      baseBranch: detectedBase || undefined
+    }).catch(err => {
+      emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
+      return null;
+    });
+
+    if (worktreeInfo) {
+      workspacePath = worktreeInfo.worktreePath;
+      emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName} (base: ${worktreeInfo.baseBranch})`, {
+        agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
+      });
+    }
+  } else if (!jiraBranchName) {
+    // Non-managed (PortOS) tasks: use worktree only when conflict is detected
     const { getAgents } = await import('./cos.js');
     const allAgents = await getAgents();
     const runningAgents = allAgents.filter(a => a.status === 'running');
@@ -2308,6 +2343,7 @@ async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null)
 You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
 - **Branch**: \`${worktreeInfo.branchName}\`
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
+${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
 **Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
@@ -2386,6 +2422,12 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
 ${task.metadata?.app ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
+
+## Git Hygiene (CRITICAL)
+- **Before starting work**, run \`git status\` to verify a clean working tree. If there are uncommitted changes from a previous agent or manual work, **stash or discard them** before proceeding — do NOT commit someone else's changes.
+- **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
+- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.
+- If the working tree is dirty with changes unrelated to your task, run \`git stash\` to set them aside before starting.
 
 ## Working Directory
 You are working in the project directory. Use the available tools to explore, modify, and test code.

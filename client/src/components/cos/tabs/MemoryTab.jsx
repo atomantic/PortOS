@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Trash2, X, Check, XCircle, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
@@ -9,14 +10,23 @@ import MemoryGraph from './MemoryGraph';
 import MemoryEditModal from './MemoryEditModal';
 
 export default function MemoryTab({ apps = [] }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [memories, setMemories] = useState([]);
   const [pendingMemories, setPendingMemories] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState(null);
-  const [view, setView] = useState('list'); // list, timeline, graph
   const [filters, setFilters] = useState({ types: [] });
+
+  const view = searchParams.get('view') || 'list';
+  const setView = useCallback((v) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('view', v);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [editingMemory, setEditingMemory] = useState(null);
 

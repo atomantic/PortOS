@@ -15,6 +15,7 @@ import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
 import * as lmStudioManager from './lmStudioManager.js'
+import { safeJSONParse } from '../lib/fileUtils.js'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'cos')
 const EVOLUTION_FILE = path.join(DATA_DIR, 'evolution.json')
@@ -63,7 +64,7 @@ async function loadState() {
   const exists = await fs.access(EVOLUTION_FILE).then(() => true).catch(() => false)
   if (exists) {
     const content = await fs.readFile(EVOLUTION_FILE, 'utf-8')
-    evolutionState = JSON.parse(content)
+    evolutionState = safeJSONParse(content, { ...DEFAULT_STATE }, { context: 'cosEvolution' })
   } else {
     evolutionState = { ...DEFAULT_STATE }
   }

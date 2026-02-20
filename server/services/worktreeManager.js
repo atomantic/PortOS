@@ -46,12 +46,17 @@ function execGit(args, cwd) {
  * Creates a new branch and worktree directory that the agent can work in
  * without disturbing the main workspace.
  *
+ * For managed apps, the worktree is based on the latest remote default branch
+ * (main/master) to ensure a clean starting point free from other agents' changes.
+ *
  * @param {string} agentId - The agent identifier (used for branch/directory naming)
  * @param {string} sourceWorkspace - The original git repository path
  * @param {string} taskId - Task identifier (included in branch name for traceability)
- * @returns {{ worktreePath: string, branchName: string }} paths for the new worktree
+ * @param {object} options - Optional configuration
+ * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
+ * @returns {{ worktreePath: string, branchName: string, baseBranch: string }} paths for the new worktree
  */
-export async function createWorktree(agentId, sourceWorkspace, taskId) {
+export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
   if (!existsSync(WORKTREES_DIR)) {
     await mkdir(WORKTREES_DIR, { recursive: true });
   }
@@ -59,18 +64,35 @@ export async function createWorktree(agentId, sourceWorkspace, taskId) {
   const branchName = `cos/${taskId}/${agentId}`;
   const worktreePath = join(WORKTREES_DIR, agentId);
 
-  // Get the current branch to base the worktree on
-  const currentBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).trim();
+  // Fetch latest from origin so we base off up-to-date refs
+  await execGit(['fetch', 'origin'], sourceWorkspace).catch(err => {
+    console.log(`⚠️ Worktree fetch failed (will use local refs): ${err.message}`);
+  });
 
-  // Create worktree with a new branch based on current HEAD
+  // Determine the base: explicit option > detected default branch > current HEAD
+  let baseBranch = options.baseBranch;
+  if (!baseBranch) {
+    const mainExists = (await execGit(['branch', '--list', 'main'], sourceWorkspace)).trim();
+    const masterExists = (await execGit(['branch', '--list', 'master'], sourceWorkspace)).trim();
+    if (mainExists) baseBranch = 'main';
+    else if (masterExists) baseBranch = 'master';
+    else baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).trim();
+  }
+
+  // Prefer the remote ref (freshest state) if available
+  const baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
+    .then(() => `origin/${baseBranch}`)
+    .catch(() => baseBranch);
+
+  // Create worktree with a new branch based on the latest default branch
   await execGit(
-    ['worktree', 'add', '-b', branchName, worktreePath, currentBranch],
+    ['worktree', 'add', '-b', branchName, worktreePath, baseRef],
     sourceWorkspace
   );
 
-  console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName})`);
+  console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 
-  return { worktreePath, branchName };
+  return { worktreePath, branchName, baseBranch };
 }
 
 /**

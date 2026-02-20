@@ -5,7 +5,7 @@
  * spawns sub-agents, and orchestrates task completion.
  */
 
-import { readFile, writeFile, mkdir, readdir, rm, stat } from 'fs/promises';
+import { readFile, writeFile, rename, mkdir, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -277,7 +277,9 @@ async function loadState() {
  */
 async function saveState(state) {
   await ensureDirectories();
-  await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
+  const tmpFile = `${STATE_FILE}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(state, null, 2));
+  await rename(tmpFile, STATE_FILE);
 }
 
 /**
@@ -344,9 +346,12 @@ export async function start() {
 
   emitLog('info', 'Starting Chief of Staff daemon...');
 
-  const state = await loadState();
-  state.running = true;
-  await saveState(state);
+  const state = await withStateLock(async () => {
+    const s = await loadState();
+    s.running = true;
+    await saveState(s);
+    return s;
+  });
 
   daemonRunning = true;
 
@@ -409,9 +414,11 @@ export async function stop() {
   cancelEvent('cos-evaluation');
   cancelEvent('cos-health-check');
 
-  const state = await loadState();
-  state.running = false;
-  await saveState(state);
+  await withStateLock(async () => {
+    const state = await loadState();
+    state.running = false;
+    await saveState(state);
+  });
 
   daemonRunning = false;
   cosEvents.emit('status', { running: false });
@@ -423,46 +430,51 @@ export async function stop() {
  * Daemon stays running but skips evaluations
  */
 export async function pause(reason = null) {
-  const state = await loadState();
+  return withStateLock(async () => {
+    const state = await loadState();
 
-  if (state.paused) {
-    return { success: false, error: 'Already paused' };
-  }
+    if (state.paused) {
+      return { success: false, error: 'Already paused' };
+    }
 
-  state.paused = true;
-  state.pausedAt = new Date().toISOString();
-  state.pauseReason = reason;
-  await saveState(state);
+    state.paused = true;
+    state.pausedAt = new Date().toISOString();
+    state.pauseReason = reason;
+    await saveState(state);
 
-  emitLog('info', `CoS paused${reason ? `: ${reason}` : ''}`);
-  cosEvents.emit('status:paused', { paused: true, pausedAt: state.pausedAt, reason });
-  return { success: true, pausedAt: state.pausedAt };
+    emitLog('info', `CoS paused${reason ? `: ${reason}` : ''}`);
+    cosEvents.emit('status:paused', { paused: true, pausedAt: state.pausedAt, reason });
+    return { success: true, pausedAt: state.pausedAt };
+  });
 }
 
 /**
  * Resume the CoS daemon from pause
  */
 export async function resume() {
-  const state = await loadState();
+  const result = await withStateLock(async () => {
+    const state = await loadState();
 
-  if (!state.paused) {
-    return { success: false, error: 'Not paused' };
-  }
+    if (!state.paused) {
+      return { success: false, error: 'Not paused' };
+    }
 
-  state.paused = false;
-  state.pausedAt = null;
-  state.pauseReason = null;
-  await saveState(state);
+    state.paused = false;
+    state.pausedAt = null;
+    state.pauseReason = null;
+    await saveState(state);
 
-  emitLog('info', 'CoS resumed');
-  cosEvents.emit('status:resumed', { paused: false });
+    emitLog('info', 'CoS resumed');
+    cosEvents.emit('status:resumed', { paused: false });
+    return { success: true };
+  });
 
-  // Trigger immediate evaluation on resume
-  if (daemonRunning) {
+  // Trigger immediate evaluation on resume (outside lock to avoid holding it)
+  if (result.success && daemonRunning) {
     setTimeout(() => evaluateTasks(), 500);
   }
 
-  return { success: true };
+  return result;
 }
 
 /**
