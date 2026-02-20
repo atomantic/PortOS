@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 /**
  * Gather project context for AI analysis
@@ -198,7 +199,9 @@ function parseAiResponse(response) {
     jsonStr = objectMatch[0];
   }
 
-  return JSON.parse(jsonStr);
+  const parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'AI app detection' });
+  if (!parsed) throw new Error('Failed to parse AI detection response');
+  return parsed;
 }
 
 /**

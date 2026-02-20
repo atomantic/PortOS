@@ -5,6 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const execAsync = promisify(exec);
 
@@ -260,7 +261,9 @@ function parseAnalysisResponse(response) {
     jsonStr = objectMatch[0];
   }
 
-  return JSON.parse(jsonStr);
+  const parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'PM2 standardizer analysis' });
+  if (!parsed) throw new Error('Failed to parse LLM analysis response');
+  return parsed;
 }
 
 /**

@@ -10,7 +10,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 import * as eventScheduler from './eventScheduler.js';
 import * as agentActivity from './agentActivity.js';
 
@@ -48,7 +48,7 @@ async function loadSchedules() {
   }
 
   const content = await readFile(SCHEDULES_FILE, 'utf-8');
-  cache = JSON.parse(content);
+  cache = safeJSONParse(content, { schedules: {} }, { logError: true, context: 'automation schedules' });
   cacheTimestamp = now;
   return cache;
 }

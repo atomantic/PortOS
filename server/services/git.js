@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 /**
  * Execute a git command safely using spawn (prevents shell injection)
@@ -104,9 +105,9 @@ export async function getCommits(dir, limit = 10) {
   const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const result = await execGit(['log', format, '-n', String(safeLimit)], dir);
 
-  const commits = result.stdout.trim().split('\n').filter(Boolean).map(line => {
-    return JSON.parse(line);
-  });
+  const commits = result.stdout.trim().split('\n').filter(Boolean)
+    .map(line => safeJSONParse(line, null))
+    .filter(Boolean);
 
   return commits;
 }
@@ -279,7 +280,8 @@ export async function getBranchComparison(dir, baseBranch = 'main', headBranch =
   const commits = logResult.stdout.trim()
     .split('\n')
     .filter(Boolean)
-    .map(line => JSON.parse(line));
+    .map(line => safeJSONParse(line, null))
+    .filter(Boolean);
 
   const statResult = await execGit(
     ['diff', '--stat', `${baseBranch}...${headBranch}`], dir, { ignoreExitCode: true }

@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getStageTemplate } from './promptService.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -197,7 +198,8 @@ function parseLLMResponse(response) {
     console.log('⚠️ Extracted JSON appears malformed');
     return { memories: [], rejected: [], parseError: true };
   }
-  parsed = JSON.parse(jsonStr);
+  parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'memory classification' });
+  if (!parsed) return { memories: [], rejected: [], parseError: true };
 
   // Validate structure
   if (!Array.isArray(parsed.memories)) {

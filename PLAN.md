@@ -180,11 +180,10 @@ PortOS is an internal/VPN app so auth, CORS, rate limiting, and HTTPS are out of
 - **File:** `server/lib/errorHandler.js:113-121`
 - **Complexity:** Simple
 
-### S7: Guard unprotected JSON.parse calls
-- 10+ locations call `JSON.parse` on external/file data without try-catch
-- Wrap in safe parser or add try-catch
-- **Files:** `server/services/digital-twin.js` (11 locations), `server/services/cos.js:273`, `server/lib/taskParser.js:106`
-- **Complexity:** Simple
+### ~~S7: Guard unprotected JSON.parse calls~~ ✅
+- ~~10+ locations call `JSON.parse` on external/file data without try-catch~~
+- Fixed: replaced bare `JSON.parse` with `safeJSONParse` from `lib/fileUtils.js` in 7 files (8 call sites): `agentContentGenerator.js`, `pm2Standardizer.js`, `automationScheduler.js`, `git.js` (2), `aiDetect.js`, `memoryClassifier.js`, `clinvar.js`
+- `digital-twin.js` and `cos.js` were already using `safeJSONParse`
 
 ### S8: Add iteration limit to cron parser
 - `eventScheduler.js` loops minute-by-minute for up to 2 years — invalid cron expressions cause CPU spin

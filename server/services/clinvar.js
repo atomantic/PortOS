@@ -4,7 +4,7 @@ import { join } from 'path';
 import { createGunzip } from 'zlib';
 import { createInterface } from 'readline';
 import { pipeline } from 'stream/promises';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 
 const GENOME_DIR = PATHS.digitalTwin;
 const CLINVAR_GZ = join(GENOME_DIR, 'clinvar-raw.txt.gz');
@@ -293,7 +293,8 @@ async function loadClinvarIndex() {
   const raw = await readFile(CLINVAR_INDEX, 'utf-8').catch(() => null);
   if (!raw) return null;
 
-  clinvarIndex = JSON.parse(raw);
+  clinvarIndex = safeJSONParse(raw, null, { logError: true, context: 'ClinVar index' });
+  if (!clinvarIndex) return null;
   console.log(`🧬 ClinVar index loaded: ${Object.keys(clinvarIndex).length.toLocaleString()} variants`);
   return clinvarIndex;
 }

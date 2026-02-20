@@ -8,6 +8,7 @@
 import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import * as agentActivity from './agentActivity.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 /**
  * Parse JSON from AI response text (handles markdown blocks, extra text)
@@ -31,7 +32,9 @@ export function parseAIJsonResponse(text) {
     jsonStr = objectMatch[0];
   }
 
-  return JSON.parse(jsonStr);
+  const parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'AI JSON response' });
+  if (!parsed) throw new Error('AI returned invalid JSON');
+  return parsed;
 }
 
 /**
