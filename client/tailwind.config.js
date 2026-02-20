@@ -21,6 +21,9 @@ export default {
           '100%': { top: '100%' },
         },
       },
+      animation: {
+        scanline: 'scanline 5s linear infinite',
+      },
     },
   },
   plugins: [],

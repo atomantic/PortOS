@@ -1299,7 +1299,7 @@ export async function spawnAgentForTask(task) {
         if (defaultBranch) {
           await git.checkout(workspacePath, defaultBranch).catch(() => {});
           // Fast-forward to latest origin
-          try { execSync(`git merge --ff-only origin/${defaultBranch}`, { cwd: workspacePath, stdio: 'ignore' }); } catch {};
+          try { execSync(`git merge --ff-only origin/${defaultBranch}`, { cwd: workspacePath, stdio: 'ignore' }); } catch (err) { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); }
         }
       }
 

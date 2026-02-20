@@ -56,7 +56,7 @@ export async function upsertInstance(instanceId, instanceData) {
     baseUrl: instanceData.baseUrl,
     email: instanceData.email,
     apiToken: instanceData.apiToken, // PAT (Personal Access Token)
-    tokenUpdatedAt: new Date().toISOString(),
+    tokenUpdatedAt: (instanceData.apiToken !== existing?.apiToken) ? new Date().toISOString() : (existing?.tokenUpdatedAt || new Date().toISOString()),
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

@@ -151,7 +151,7 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
           {/* Animated scan line (CSS-only, no React re-renders) */}
           <div
-            className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none animate-[scanline_5s_linear_infinite]"
+            className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none animate-scanline"
           />
 
           <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider mb-1">

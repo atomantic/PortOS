@@ -41,17 +41,25 @@ function parseArgs() {
   const args = process.argv.slice(2);
   const parsed = {};
 
+  const requireValue = (flag) => {
+    if (i + 1 >= args.length) {
+      console.error(`❌ Missing value for ${flag}`);
+      process.exit(1);
+    }
+    return args[++i];
+  };
+
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case '--app': parsed.app = args[++i]; break;
-      case '--ticket': parsed.ticket = args[++i]; break;
-      case '--summary': parsed.summary = args[++i]; break;
-      case '--description': parsed.description = args[++i]; break;
-      case '--comment': parsed.comment = args[++i]; break;
-      case '--points': parsed.points = parseInt(args[++i]) || undefined; break;
-      case '--assignee': parsed.assignee = args[++i]; break;
-      case '--labels': parsed.labels = args[++i].split(',').map(l => l.trim()); break;
-      case '--transition': parsed.transition = args[++i]; break;
+      case '--app': parsed.app = requireValue('--app'); break;
+      case '--ticket': parsed.ticket = requireValue('--ticket'); break;
+      case '--summary': parsed.summary = requireValue('--summary'); break;
+      case '--description': parsed.description = requireValue('--description'); break;
+      case '--comment': parsed.comment = requireValue('--comment'); break;
+      case '--points': parsed.points = parseInt(requireValue('--points')) || undefined; break;
+      case '--assignee': parsed.assignee = requireValue('--assignee'); break;
+      case '--labels': parsed.labels = requireValue('--labels').split(',').map(l => l.trim()); break;
+      case '--transition': parsed.transition = requireValue('--transition'); break;
       case '--transitions': parsed.listTransitions = true; break;
       case '--delete': parsed.delete = true; break;
       case '--help': case '-h':

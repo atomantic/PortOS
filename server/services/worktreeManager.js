@@ -72,9 +72,10 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
   // Determine the base: explicit option > detected default branch > current HEAD
   let baseBranch = options.baseBranch;
   if (!baseBranch) {
-    const branches = (await execGit(['branch', '--list'], sourceWorkspace)).trim();
-    if (branches.includes('main')) baseBranch = 'main';
-    else if (branches.includes('master')) baseBranch = 'master';
+    const mainExists = (await execGit(['branch', '--list', 'main'], sourceWorkspace)).trim();
+    const masterExists = (await execGit(['branch', '--list', 'master'], sourceWorkspace)).trim();
+    if (mainExists) baseBranch = 'main';
+    else if (masterExists) baseBranch = 'master';
     else baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).trim();
   }
 
