@@ -436,23 +436,29 @@ echo '{"query":"query{repository(owner:\\"atomantic\\",name:\\"PortOS\\"){pullRe
 
 ### 5b. If no unresolved threads: skip to Step 6 (Merge).
 
-### 5c. If unresolved threads exist:
-- Read each referenced file path
-- Apply the suggested fixes
-- Run \`cd server && npm test\` to verify
-- Commit changes: \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
-- Push: \`git pull --rebase --autostash && git push\`
+### 5c. If unresolved threads exist, evaluate each one:
 
-### 5d. Resolve threads via GraphQL mutation:
+For each comment, read the referenced file and critically evaluate the suggestion:
+- **If the suggestion is valid and improves the code**: apply the fix
+- **If the suggestion is a false positive, overly pedantic, or would make the code worse**: do NOT change the code
+
+Either way, resolve every thread — the goal is zero unresolved threads before merge.
+
+After evaluating all threads:
+- If any code changes were made: run \`cd server && npm test\` to verify, then commit and push:
+  \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
+  \`git pull --rebase --autostash && git push\`
+
+### 5d. Resolve ALL threads via GraphQL mutation (both fixed and dismissed):
 
 For each thread, use the thread node id from 5a:
 \`\`\`bash
 echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_NODE_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
 \`\`\`
 
-### 5e. Wait for new Copilot review (repeat Step 4)
+### 5e. Wait for new Copilot review if code was pushed (repeat Step 4)
 
-The push in 5c automatically triggers a new Copilot review. Poll for it, then loop back to 5a.
+If you pushed changes in 5c, the push automatically triggers a new Copilot review. Poll for it, then loop back to 5a. If no code changes were made (all threads were false positives), skip straight to Step 6.
 
 If after 5 iterations there are still unresolved threads, stop and report what remains.
 
