@@ -1055,11 +1055,12 @@ router.get('/recent-tasks', asyncHandler(async (req, res) => {
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
 // Combines today's activity, streak status, next job, and pending approvals into one efficient call
 router.get('/quick-summary', asyncHandler(async (req, res) => {
-  const [todayActivity, productivityData, tasksData, jobStats] = await Promise.all([
+  const [todayActivity, productivityData, tasksData, jobStats, velocityData] = await Promise.all([
     cos.getTodayActivity(),
     productivity.getProductivitySummary(),
     cos.getAllTasks(),
-    autonomousJobs.getJobStats()
+    autonomousJobs.getJobStats(),
+    productivity.getVelocityMetrics()
   ]);
 
   // Count pending approvals from system tasks
@@ -1082,6 +1083,12 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       longest: productivityData.longestStreak,
       weekly: productivityData.weeklyStreak,
       lastActive: productivityData.lastActive
+    },
+    velocity: {
+      percentage: velocityData.velocity,
+      label: velocityData.velocityLabel,
+      avgPerDay: velocityData.avgPerDay,
+      historicalDays: velocityData.historicalDays
     },
     nextJob: jobStats.nextDue,
     queue: {

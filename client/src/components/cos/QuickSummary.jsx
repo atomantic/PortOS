@@ -7,7 +7,10 @@ import {
   ListTodo,
   Zap,
   AlertCircle,
-  Timer
+  Timer,
+  TrendingUp,
+  TrendingDown,
+  Minus
 } from 'lucide-react';
 import * as api from '../../services/api';
 
@@ -36,13 +39,45 @@ export default function QuickSummary() {
     return null;
   }
 
-  const { today, streak, nextJob, queue } = summary;
+  const { today, streak, nextJob, queue, velocity } = summary;
 
   // Only show if there's meaningful data to display
   const hasActivity = today.completed > 0 || today.running > 0 || streak.current > 0 || queue.total > 0;
   if (!hasActivity && !nextJob) {
     return null;
   }
+
+  // Velocity indicator helper
+  const getVelocityDisplay = () => {
+    if (!velocity?.percentage || velocity.historicalDays < 3) return null;
+
+    const { percentage, label } = velocity;
+    let icon = Minus;
+    let color = 'text-gray-400';
+    let bgColor = 'bg-gray-500/10';
+
+    if (label === 'exceptional') {
+      icon = TrendingUp;
+      color = 'text-emerald-400';
+      bgColor = 'bg-emerald-500/20';
+    } else if (label === 'above-average') {
+      icon = TrendingUp;
+      color = 'text-port-success';
+      bgColor = 'bg-port-success/15';
+    } else if (label === 'on-track') {
+      icon = Minus;
+      color = 'text-port-accent';
+      bgColor = 'bg-port-accent/15';
+    } else if (label === 'slow' || label === 'light') {
+      icon = TrendingDown;
+      color = 'text-port-warning';
+      bgColor = 'bg-port-warning/15';
+    }
+
+    return { icon, color, bgColor, percentage };
+  };
+
+  const velocityDisplay = getVelocityDisplay();
 
   // Format time until next job
   const formatTimeUntil = (isoDate) => {
@@ -93,6 +128,18 @@ export default function QuickSummary() {
             {streak.current >= 3 && (
               <Zap size={12} className="text-yellow-400" />
             )}
+          </div>
+        )}
+
+        {/* Velocity */}
+        {velocityDisplay && (
+          <div className="flex items-center gap-1.5">
+            <velocityDisplay.icon size={14} className={velocityDisplay.color} />
+            <span className="text-gray-400">Pace:</span>
+            <span className={`font-medium ${velocityDisplay.color} px-1.5 py-0.5 rounded ${velocityDisplay.bgColor}`}>
+              {velocityDisplay.percentage}%
+            </span>
+            <span className="text-gray-500 text-xs">vs avg</span>
           </div>
         )}
 

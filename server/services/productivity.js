@@ -421,6 +421,58 @@ export async function getProductivitySummary() {
 }
 
 /**
+ * Get velocity metrics - how today compares to historical average
+ * @returns {Object} Velocity data including today's count, average, and relative performance
+ */
+export async function getVelocityMetrics() {
+  const data = await loadProductivity();
+  const dailyHistory = data.dailyHistory || {};
+  const today = getDateString();
+
+  // Get today's stats
+  const todayStats = dailyHistory[today] || { tasks: 0, successes: 0, failures: 0 };
+
+  // Calculate historical daily average (excluding today)
+  const historicalDays = Object.entries(dailyHistory)
+    .filter(([date]) => date !== today)
+    .map(([, stats]) => stats);
+
+  // Only count days with at least 1 task for average (active days)
+  const activeDays = historicalDays.filter(d => d.tasks > 0);
+  const avgTasksPerDay = activeDays.length > 0
+    ? activeDays.reduce((sum, d) => sum + d.tasks, 0) / activeDays.length
+    : 0;
+
+  // Calculate velocity: how today compares to average
+  // null if no history, percentage otherwise
+  let velocity = null;
+  let velocityLabel = null;
+
+  if (avgTasksPerDay > 0 && todayStats.tasks > 0) {
+    velocity = Math.round((todayStats.tasks / avgTasksPerDay) * 100);
+    if (velocity >= 150) velocityLabel = 'exceptional';
+    else if (velocity >= 120) velocityLabel = 'above-average';
+    else if (velocity >= 80) velocityLabel = 'on-track';
+    else if (velocity >= 50) velocityLabel = 'slow';
+    else velocityLabel = 'light';
+  } else if (todayStats.tasks > 0 && avgTasksPerDay === 0) {
+    // First active day ever
+    velocity = 100;
+    velocityLabel = 'first-day';
+  }
+
+  return {
+    today: todayStats.tasks,
+    todaySuccesses: todayStats.successes,
+    todayFailures: todayStats.failures,
+    avgPerDay: Math.round(avgTasksPerDay * 10) / 10,
+    historicalDays: activeDays.length,
+    velocity,
+    velocityLabel
+  };
+}
+
+/**
  * Get daily task trends for visualization
  * Returns last N days of task completion data with trend analysis
  */
