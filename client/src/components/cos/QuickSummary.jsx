@@ -3,14 +3,15 @@ import {
   CheckCircle,
   Clock,
   Flame,
-  Calendar,
   ListTodo,
   Zap,
-  AlertCircle,
   Timer,
   TrendingUp,
   TrendingDown,
-  Minus
+  Minus,
+  ChevronDown,
+  ChevronRight,
+  Award
 } from 'lucide-react';
 import * as api from '../../services/api';
 
@@ -21,6 +22,7 @@ import * as api from '../../services/api';
 export default function QuickSummary() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showAccomplishments, setShowAccomplishments] = useState(false);
 
   useEffect(() => {
     const loadSummary = async () => {
@@ -174,6 +176,34 @@ export default function QuickSummary() {
           </div>
         )}
       </div>
+
+      {/* Today's Accomplishments - expandable list */}
+      {today.accomplishments?.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-port-border/50">
+          <button
+            onClick={() => setShowAccomplishments(!showAccomplishments)}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors w-full"
+            aria-expanded={showAccomplishments}
+            aria-controls="accomplishments-list"
+          >
+            {showAccomplishments ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <Award size={12} className="text-port-success" />
+            <span>{today.accomplishments.length} task{today.accomplishments.length !== 1 ? 's' : ''} completed today</span>
+          </button>
+          {showAccomplishments && (
+            <ul id="accomplishments-list" className="mt-2 space-y-1 text-xs">
+              {today.accomplishments.map((item) => (
+                <li key={item.id} className="flex items-start gap-2 pl-5">
+                  <CheckCircle size={10} className="text-port-success mt-0.5 shrink-0" />
+                  <span className="text-gray-300 line-clamp-1" title={item.description}>
+                    {item.description}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }

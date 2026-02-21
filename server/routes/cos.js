@@ -1076,7 +1076,8 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       failed: todayActivity.stats.failed,
       running: todayActivity.stats.running,
       successRate: todayActivity.stats.successRate,
-      timeWorked: todayActivity.time.combined
+      timeWorked: todayActivity.time.combined,
+      accomplishments: todayActivity.accomplishments || []
     },
     streak: {
       current: productivityData.currentStreak,
