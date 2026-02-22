@@ -125,7 +125,8 @@ describe('autonomousJobs', () => {
 
       // Verify only expected test jobs plus any default jobs are present
       const testJobIds = new Set(['job-test-1', 'job-1', 'job-2'])
-      const unexpectedJobs = due.filter(j => !testJobIds.has(j.id) && !j.id.startsWith('job-github-'))
+      const defaultJobPrefixes = ['job-github-', 'job-brain-', 'job-daily-', 'job-project-', 'job-moltworld-', 'job-jira-', 'job-autobiography-']
+      const unexpectedJobs = due.filter(j => !testJobIds.has(j.id) && !defaultJobPrefixes.some(p => j.id.startsWith(p)))
       expect(unexpectedJobs).toHaveLength(0)
     })
   })

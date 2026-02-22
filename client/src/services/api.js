@@ -1076,6 +1076,33 @@ export const resetTasteSection = (section) => request(`/digital-twin/taste/${sec
   method: 'DELETE'
 });
 
+// Digital Twin - Autobiography
+export const getAutobiographyStats = () => request('/digital-twin/autobiography');
+export const getAutobiographyConfig = () => request('/digital-twin/autobiography/config');
+export const updateAutobiographyConfig = (config) => request('/digital-twin/autobiography/config', {
+  method: 'PUT',
+  body: JSON.stringify(config)
+});
+export const getAutobiographyThemes = () => request('/digital-twin/autobiography/themes');
+export const getAutobiographyPrompt = () => request('/digital-twin/autobiography/prompt');
+export const getAutobiographyPromptById = (id) => request(`/digital-twin/autobiography/prompt/${id}`);
+export const getAutobiographyStories = (theme = null) =>
+  request(`/digital-twin/autobiography/stories${theme ? `?theme=${theme}` : ''}`);
+export const saveAutobiographyStory = (promptId, content) => request('/digital-twin/autobiography/stories', {
+  method: 'POST',
+  body: JSON.stringify({ promptId, content })
+});
+export const updateAutobiographyStory = (id, content) => request(`/digital-twin/autobiography/stories/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify({ content })
+});
+export const deleteAutobiographyStory = (id) => request(`/digital-twin/autobiography/stories/${id}`, {
+  method: 'DELETE'
+});
+export const triggerAutobiographyPrompt = () => request('/digital-twin/autobiography/trigger', {
+  method: 'POST'
+});
+
 // Digital Twin - Assessment Analyzer
 export const analyzeAssessment = (content, providerId, model) =>
   request('/digital-twin/interview/analyze', {

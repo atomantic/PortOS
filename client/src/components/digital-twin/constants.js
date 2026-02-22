@@ -24,7 +24,8 @@ import {
   AlertOctagon,
   Fingerprint,
   Globe,
-  Dna
+  Dna,
+  PenLine
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -37,6 +38,7 @@ export const TABS = [
   { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'interview', label: 'Interview', icon: MessageSquare },
+  { id: 'autobiography', label: 'Autobiography', icon: PenLine },
   { id: 'import', label: 'Import', icon: Upload },
   { id: 'export', label: 'Export', icon: Download }
 ];

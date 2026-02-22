@@ -13,6 +13,7 @@ import TasteTab from '../components/digital-twin/tabs/TasteTab';
 import AccountsTab from '../components/digital-twin/tabs/AccountsTab';
 import InterviewTab from '../components/digital-twin/tabs/InterviewTab';
 import GenomeTab from '../components/digital-twin/tabs/GenomeTab';
+import AutobiographyTab from '../components/digital-twin/tabs/AutobiographyTab';
 import ImportTab from '../components/digital-twin/tabs/ImportTab';
 import ExportTab from '../components/digital-twin/tabs/ExportTab';
 
@@ -63,6 +64,8 @@ export default function DigitalTwin() {
         return <GenomeTab />;
       case 'interview':
         return <InterviewTab onRefresh={fetchData} />;
+      case 'autobiography':
+        return <AutobiographyTab onRefresh={fetchData} />;
       case 'import':
         return <ImportTab onRefresh={fetchData} />;
       case 'export':

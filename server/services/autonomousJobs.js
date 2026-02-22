@@ -36,7 +36,8 @@ const JOB_SKILL_MAP = {
   'job-brain-processing': 'brain-processing',
   'job-project-review': 'project-review',
   'job-moltworld-exploration': 'moltworld-exploration',
-  'job-jira-app-maintenance': 'jira-app-maintenance'
+  'job-jira-app-maintenance': 'jira-app-maintenance',
+  'job-autobiography-prompt': 'autobiography-prompt'
 }
 
 // Time constants
@@ -227,6 +228,28 @@ Tasks to perform:
 6. Generate a summary report of JIRA maintenance activities
 
 Focus on moving tickets forward. Don't just report - take action by improving ticket quality, creating tasks, or spawning agents to implement solutions.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-autobiography-prompt',
+    name: 'Autobiography Story Prompt',
+    description: 'Send a notification prompting the user to write a 5-minute autobiographical story based on a thematic prompt.',
+    category: 'autobiography-prompt',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: true,
+    priority: 'LOW',
+    autonomyLevel: 'assistant',
+    promptTemplate: `[Autonomous Job] Autobiography Story Prompt
+
+This job triggers a notification asking the user to write a short autobiographical story.
+
+Call POST /api/digital-twin/autobiography/trigger to check if a prompt is due and send a notification.
+
+This is a lightweight job — it simply checks timing and sends a notification if due. No AI processing needed.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
