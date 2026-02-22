@@ -11,7 +11,8 @@ import {
   Minus,
   ChevronDown,
   ChevronRight,
-  Award
+  Award,
+  Hourglass
 } from 'lucide-react';
 import * as api from '../../services/api';
 
@@ -159,6 +160,22 @@ export default function QuickSummary() {
                 <span className="text-port-warning">{queue.pendingApprovals} approval{queue.pendingApprovals !== 1 ? 's' : ''}</span>
               )}
             </span>
+          </div>
+        )}
+
+        {/* Queue Estimate */}
+        {queue.estimate?.taskCount > 0 && (
+          <div className="flex items-center gap-1.5" title={`Based on ${queue.estimate.confidence}% historical data`}>
+            <Hourglass size={14} className="text-purple-400" />
+            <span className="text-gray-400">ETA:</span>
+            <span className="font-medium text-purple-300">
+              {queue.estimate.formatted}
+            </span>
+            {queue.estimate.runningCount > 0 && (
+              <span className="text-gray-500 text-xs">
+                ({queue.estimate.runningCount} active)
+              </span>
+            )}
           </div>
         )}
 

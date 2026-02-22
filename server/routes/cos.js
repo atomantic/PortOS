@@ -1069,6 +1069,18 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
   // Count pending user tasks
   const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
 
+  // Combine all pending tasks for queue estimate
+  const allPendingTasks = [
+    ...(tasksData.user?.grouped?.pending || []),
+    ...(tasksData.cos?.grouped?.pending || [])
+  ];
+
+  // Get queue completion estimate
+  const queueEstimate = await taskLearning.estimateQueueCompletion(
+    allPendingTasks,
+    todayActivity.stats.running
+  );
+
   res.json({
     today: {
       completed: todayActivity.stats.completed,
@@ -1095,7 +1107,8 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
     queue: {
       pendingApprovals,
       pendingUserTasks,
-      total: pendingApprovals + pendingUserTasks
+      total: pendingApprovals + pendingUserTasks,
+      estimate: queueEstimate
     },
     status: {
       running: todayActivity.isRunning,
