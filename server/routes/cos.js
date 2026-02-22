@@ -505,6 +505,12 @@ router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) 
   res.json(recommendations);
 }));
 
+// POST /api/cos/learning/recalculate-model-tiers - Rebuild byModelTier from routingAccuracy
+router.post('/learning/recalculate-model-tiers', asyncHandler(async (req, res) => {
+  const result = await taskLearning.recalculateModelTierMetrics();
+  res.json({ success: true, ...result });
+}));
+
 // ============================================================
 // Weekly Digest Routes
 // ============================================================

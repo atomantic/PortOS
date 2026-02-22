@@ -1037,6 +1037,96 @@ export async function getAllTaskDurations() {
 }
 
 /**
+ * Recalculate byModelTier from routingAccuracy data.
+ *
+ * The byModelTier aggregate accumulates raw counts over time, including
+ * historical failures from before routingAccuracy tracking existed.
+ * This creates drift — e.g., the "heavy" tier can show 0% success from
+ * old misconfigured runs even though recent routing data is clean.
+ *
+ * This function rebuilds byModelTier entirely from routingAccuracy
+ * (the authoritative per-task-type per-tier source of truth) and uses
+ * byTaskType average durations to estimate timing.
+ *
+ * Called on init to self-heal and exposed for manual triggering.
+ *
+ * @returns {Object} Summary of changes made
+ */
+export async function recalculateModelTierMetrics() {
+  const data = await loadLearningData();
+  const routingData = data.routingAccuracy || {};
+  const oldTiers = data.byModelTier || {};
+
+  const newTiers = {};
+
+  for (const [taskType, tiers] of Object.entries(routingData)) {
+    const taskMetrics = data.byTaskType?.[taskType];
+    const avgDurationPerAgent = taskMetrics?.avgDurationMs || 0;
+
+    for (const [tier, counts] of Object.entries(tiers)) {
+      const total = (counts.succeeded || 0) + (counts.failed || 0);
+      if (total === 0) continue;
+
+      if (!newTiers[tier]) {
+        newTiers[tier] = {
+          completed: 0,
+          succeeded: 0,
+          failed: 0,
+          totalDurationMs: 0,
+          avgDurationMs: 0
+        };
+      }
+
+      newTiers[tier].completed += total;
+      newTiers[tier].succeeded += counts.succeeded || 0;
+      newTiers[tier].failed += counts.failed || 0;
+      newTiers[tier].totalDurationMs += avgDurationPerAgent * total;
+    }
+  }
+
+  // Calculate averages
+  for (const metrics of Object.values(newTiers)) {
+    metrics.avgDurationMs = metrics.completed > 0
+      ? Math.round(metrics.totalDurationMs / metrics.completed)
+      : 0;
+  }
+
+  // Build change summary
+  const changes = [];
+  const allTierKeys = new Set([...Object.keys(oldTiers), ...Object.keys(newTiers)]);
+  for (const tier of allTierKeys) {
+    const oldSuccessRate = oldTiers[tier]?.completed > 0
+      ? Math.round((oldTiers[tier].succeeded / oldTiers[tier].completed) * 100)
+      : null;
+    const newSuccessRate = newTiers[tier]?.completed > 0
+      ? Math.round((newTiers[tier].succeeded / newTiers[tier].completed) * 100)
+      : null;
+
+    if (oldSuccessRate !== newSuccessRate || oldTiers[tier]?.completed !== newTiers[tier]?.completed) {
+      changes.push({
+        tier,
+        old: { completed: oldTiers[tier]?.completed || 0, successRate: oldSuccessRate },
+        new: { completed: newTiers[tier]?.completed || 0, successRate: newSuccessRate }
+      });
+    }
+  }
+
+  if (changes.length > 0) {
+    data.byModelTier = newTiers;
+    await saveLearningData(data);
+
+    const summary = changes.map(c =>
+      `${c.tier}: ${c.old.completed}@${c.old.successRate ?? 0}% → ${c.new.completed}@${c.new.successRate ?? 0}%`
+    ).join(', ');
+    emitLog('info', `Recalculated model tier metrics from routing accuracy: ${summary}`, {
+      changes: changes.length
+    }, '📚 TaskLearning');
+  }
+
+  return { recalculated: changes.length > 0, changes };
+}
+
+/**
  * Initialize learning system - listen for agent completions
  */
 export function initTaskLearning() {
@@ -1052,6 +1142,11 @@ export function initTaskLearning() {
     await recordTaskCompletion(agent, task).catch(err => {
       console.error(`❌ 📚 TaskLearning: Failed to record completion: ${err.message}`);
     });
+  });
+
+  // Self-heal model tier metrics on startup
+  recalculateModelTierMetrics().catch(err => {
+    console.error(`❌ 📚 TaskLearning: Failed to recalculate model tiers: ${err.message}`);
   });
 
   emitLog('info', 'Task Learning System initialized', {}, '📚 TaskLearning');

@@ -32,7 +32,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 import { readFile, writeFile } from 'fs/promises';
-import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier } from './taskLearning.js';
+import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier, recalculateModelTierMetrics } from './taskLearning.js';
 
 const makeLearningData = (overrides = {}) => ({
   version: 1,
@@ -547,5 +547,132 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
 
     const result = await suggestModelTier('new-task');
     expect(result).toBeNull();
+  });
+});
+
+describe('TaskLearning - recalculateModelTierMetrics', () => {
+  let savedData;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    savedData = null;
+    writeFile.mockImplementation(async (_path, content) => {
+      savedData = JSON.parse(content);
+    });
+  });
+
+  it('should rebuild byModelTier from routingAccuracy data', async () => {
+    const data = makeLearningData({
+      byModelTier: {
+        heavy: {
+          completed: 650, succeeded: 3, failed: 647,
+          totalDurationMs: 19500000, avgDurationMs: 30000
+        },
+        medium: {
+          completed: 200, succeeded: 150, failed: 50,
+          totalDurationMs: 40000000, avgDurationMs: 200000
+        }
+      },
+      byTaskType: {
+        'user-task': {
+          completed: 40, succeeded: 30, failed: 10,
+          totalDurationMs: 4000000, avgDurationMs: 100000,
+          successRate: 75
+        },
+        'internal-task': {
+          completed: 20, succeeded: 18, failed: 2,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 90
+        }
+      },
+      routingAccuracy: {
+        'user-task': {
+          medium: { succeeded: 25, failed: 5, lastAttempt: '2026-01-26T00:00:00.000Z' },
+          low: { succeeded: 8, failed: 0, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        },
+        'internal-task': {
+          medium: { succeeded: 15, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await recalculateModelTierMetrics();
+
+    expect(result.recalculated).toBe(true);
+    expect(result.changes.length).toBeGreaterThan(0);
+
+    // heavy tier should be gone (not in routingAccuracy)
+    expect(savedData.byModelTier.heavy).toBeUndefined();
+
+    // medium tier should reflect routing accuracy: 25+15=40 succeeded, 5+1=6 failed
+    expect(savedData.byModelTier.medium.completed).toBe(46);
+    expect(savedData.byModelTier.medium.succeeded).toBe(40);
+    expect(savedData.byModelTier.medium.failed).toBe(6);
+
+    // low tier: 8 succeeded, 0 failed
+    expect(savedData.byModelTier.low.completed).toBe(8);
+    expect(savedData.byModelTier.low.succeeded).toBe(8);
+    expect(savedData.byModelTier.low.failed).toBe(0);
+  });
+
+  it('should not save when nothing changes', async () => {
+    const data = makeLearningData({
+      byModelTier: {
+        medium: { completed: 3, succeeded: 2, failed: 1, totalDurationMs: 300000, avgDurationMs: 100000 }
+      },
+      routingAccuracy: {
+        'user-task': {
+          medium: { succeeded: 2, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await recalculateModelTierMetrics();
+
+    expect(result.recalculated).toBe(false);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it('should handle empty routingAccuracy', async () => {
+    const data = makeLearningData({
+      byModelTier: {
+        heavy: { completed: 100, succeeded: 1, failed: 99, totalDurationMs: 100000, avgDurationMs: 1000 }
+      },
+      routingAccuracy: {}
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await recalculateModelTierMetrics();
+
+    expect(result.recalculated).toBe(true);
+    // All tiers should be cleared since no routing accuracy data exists
+    expect(savedData.byModelTier).toEqual({});
+  });
+
+  it('should estimate durations from task type averages', async () => {
+    const data = makeLearningData({
+      byModelTier: {},
+      byTaskType: {
+        'user-task': {
+          completed: 10, succeeded: 8, failed: 2,
+          totalDurationMs: 1000000, avgDurationMs: 100000,
+          successRate: 80
+        }
+      },
+      routingAccuracy: {
+        'user-task': {
+          medium: { succeeded: 5, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    await recalculateModelTierMetrics();
+
+    // 6 agents × 100000ms avg = 600000ms total, 600000/6 = 100000ms avg
+    expect(savedData.byModelTier.medium.totalDurationMs).toBe(600000);
+    expect(savedData.byModelTier.medium.avgDurationMs).toBe(100000);
   });
 });
