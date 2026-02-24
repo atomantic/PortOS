@@ -37,7 +37,8 @@ const JOB_SKILL_MAP = {
   'job-project-review': 'project-review',
   'job-moltworld-exploration': 'moltworld-exploration',
   'job-jira-app-maintenance': 'jira-app-maintenance',
-  'job-autobiography-prompt': 'autobiography-prompt'
+  'job-autobiography-prompt': 'autobiography-prompt',
+  'job-jira-ticket-implementation': 'jira-ticket-implementation'
 }
 
 // Time constants
@@ -254,6 +255,45 @@ This is a lightweight job — it simply checks timing and sends a notification i
     runCount: 0,
     createdAt: null,
     updatedAt: null
+  },
+  {
+    id: 'job-jira-ticket-implementation',
+    name: 'JIRA Ticket Implementation',
+    description: 'For JIRA-connected apps, pick up the next ready ticket from sprint, implement it in a git worktree, create a merge request, and move the ticket to In Review.',
+    category: 'jira-ticket-implementation',
+    interval: 'daily',
+    intervalMs: DAY,
+    scheduledTime: '09:00',
+    weekdaysOnly: true,
+    enabled: false,
+    priority: 'HIGH',
+    autonomyLevel: 'yolo',
+    promptTemplate: `[Autonomous Job] JIRA Ticket Implementation
+
+You are acting as my Chief of Staff, implementing JIRA tickets for apps with JIRA integration enabled.
+
+This job runs Monday-Friday and focuses on actually implementing tickets, not just reviewing them.
+
+Tasks to perform:
+1. Call GET /api/apps to find JIRA-enabled apps
+2. For each app with jira.enabled = true and jira.instanceId + jira.projectKey set:
+   - Call GET /api/jira/:instanceId/my-sprint-tickets/:projectKey
+   - Filter for tickets in "To Do" or "Ready" status that are well-defined
+   - Select the highest priority ticket that is ready to implement
+3. For the selected ticket:
+   - Create a git worktree using the worktree manager
+   - Implement the ticket requirements
+   - Commit changes and push the branch
+   - Create a merge request using gh CLI
+   - Transition the ticket to "In Review" status
+   - Add a comment to JIRA with the MR link
+4. Generate a summary report of work completed
+
+Focus on tickets that are ready to implement. Skip tickets that need clarification.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
   }
 ]
 
@@ -373,6 +413,15 @@ function isScheduledTimeMet(scheduledTime) {
 }
 
 /**
+ * Check if today is a weekday (Monday-Friday).
+ * @returns {boolean}
+ */
+function isWeekday() {
+  const day = new Date().getDay()
+  return day >= 1 && day <= 5
+}
+
+/**
  * Get jobs that are due to run
  * @returns {Promise<Array>} Due jobs with reason
  */
@@ -388,6 +437,9 @@ async function getDueJobs() {
     if (timeSinceLastRun >= job.intervalMs) {
       // If job has a scheduledTime, only mark due if we've passed that time today
       if (!isScheduledTimeMet(job.scheduledTime)) continue
+
+      // If job is weekdaysOnly, skip weekends
+      if (job.weekdaysOnly && !isWeekday()) continue
 
       due.push({
         ...job,
@@ -420,6 +472,7 @@ async function createJob(jobData) {
     interval: jobData.interval || 'weekly',
     intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
     scheduledTime: jobData.scheduledTime || null,
+    weekdaysOnly: jobData.weekdaysOnly || false,
     enabled: jobData.enabled !== undefined ? jobData.enabled : false,
     priority: jobData.priority || 'MEDIUM',
     autonomyLevel: jobData.autonomyLevel || 'manager',
@@ -452,7 +505,7 @@ async function updateJob(jobId, updates) {
 
   const updatableFields = [
     'name', 'description', 'category', 'interval', 'intervalMs',
-    'scheduledTime', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
+    'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
   ]
 
   for (const field of updatableFields) {
@@ -757,6 +810,7 @@ export {
   getJobStats,
   getNextDueJob,
   isScheduledTimeMet,
+  isWeekday,
   INTERVAL_OPTIONS,
   loadJobSkillTemplate,
   saveJobSkillTemplate,
