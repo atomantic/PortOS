@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Default theme CSS vars (Midnight) — overridden by JS on load */
+:root {
+  --port-bg: 15 15 15;
+  --port-card: 26 26 26;
+  --port-border: 42 42 42;
+  --port-accent: 59 130 246;
+  --port-success: 34 197 94;
+  --port-warning: 245 158 11;
+  --port-error: 239 68 68;
+  --port-text: 229 229 229;
+  --port-text-muted: 163 163 163;
+  --port-focus-ring: 59 130 246;
+}
+
 /* Geist Pixel font for CyberCity */
 @font-face {
   font-family: 'GeistPixelSquare';
@@ -34,8 +48,8 @@ html, body, #root {
 }
 
 body {
-  background-color: #0f0f0f;
-  color: #e5e5e5;
+  background-color: rgb(var(--port-bg));
+  color: rgb(var(--port-text));
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
@@ -46,7 +60,7 @@ body {
 
 /* Accessibility: Global focus styles for keyboard navigation */
 *:focus-visible {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid rgb(var(--port-focus-ring));
   outline-offset: 2px;
 }
 
@@ -60,9 +74,9 @@ button:focus-visible,
 a:focus-visible,
 [role="button"]:focus-visible,
 [tabindex="0"]:focus-visible {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid rgb(var(--port-focus-ring));
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 4px rgb(var(--port-focus-ring) / 0.2);
 }
 
 /* Accessibility: Ensure disabled elements are perceivable but not interactive */
@@ -90,7 +104,7 @@ a:focus-visible,
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: rgb(var(--port-card));
 }
 
 ::-webkit-scrollbar-thumb {

@@ -588,7 +588,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
       {/* Expanded output view */}
       {expanded && (
-        <div className="border-t border-port-border bg-port-bg/50 p-3 max-h-96 overflow-y-auto">
+        <div className="border-t border-port-border bg-port-bg/50 p-3">
           {loadingOutput ? (
             <div className="flex items-center gap-2 text-gray-500 text-sm">
               <Loader2 size={14} aria-hidden="true" className="animate-spin" />

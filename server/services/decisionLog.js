@@ -202,7 +202,10 @@ export async function getDecisionSummary() {
       skipped: byType[DECISION_TYPES.TASK_SKIPPED] || 0,
       switched: byType[DECISION_TYPES.TASK_SWITCHED] || 0,
       adjusted: byType[DECISION_TYPES.INTERVAL_ADJUSTED] || 0,
-      selected: byType[DECISION_TYPES.TASK_SELECTED] || 0
+      selected: byType[DECISION_TYPES.TASK_SELECTED] || 0,
+      capacityFull: byType[DECISION_TYPES.CAPACITY_FULL] || 0,
+      cooldownActive: byType[DECISION_TYPES.COOLDOWN_ACTIVE] || 0,
+      idle: byType[DECISION_TYPES.IDLE] || 0
     },
     impactfulDecisions,
     transparencyScore,

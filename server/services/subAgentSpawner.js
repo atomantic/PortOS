@@ -204,18 +204,51 @@ async function selectModelForTask(task, provider, agent = {}) {
     return { model: provider.lightModel || provider.defaultModel, tier: 'light', reason: 'documentation-task' };
   }
 
-  // Check historical performance for this task type and potentially upgrade model
+  // Check historical performance for this task type and select optimal model tier
   const taskTypeKey = extractTaskTypeKey(task);
   const learningSuggestion = await suggestModelTier(taskTypeKey).catch(() => null);
 
-  if (learningSuggestion && learningSuggestion.suggested === 'heavy') {
-    console.log(`📊 Learning-based upgrade: ${taskTypeKey} → heavy (${learningSuggestion.reason})`);
-    return {
-      model: provider.heavyModel || provider.defaultModel,
-      tier: 'heavy',
-      reason: 'learning-suggested',
-      learningReason: learningSuggestion.reason
+  if (learningSuggestion) {
+    const { suggested, avoidTiers = [], reason: learningReason } = learningSuggestion;
+
+    // Map tier names to provider model keys
+    const tierToModel = {
+      heavy: provider.heavyModel,
+      medium: provider.mediumModel || provider.defaultModel,
+      default: provider.defaultModel,
+      light: provider.lightModel
     };
+
+    // If we have a specific tier suggestion, use it
+    if (suggested && tierToModel[suggested]) {
+      console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})`);
+      return {
+        model: tierToModel[suggested],
+        tier: suggested,
+        reason: 'learning-suggested',
+        learningReason,
+        avoidedTiers: avoidTiers.length > 0 ? avoidTiers : undefined
+      };
+    }
+
+    // If no specific suggestion but we have tiers to avoid, pick the best available tier
+    if (avoidTiers.length > 0) {
+      // Try tiers in order of preference: heavy → medium → default → light
+      // Skip any that are in avoidTiers
+      const tierPreference = ['heavy', 'medium', 'default', 'light'];
+      for (const tier of tierPreference) {
+        if (!avoidTiers.includes(tier) && tierToModel[tier]) {
+          console.log(`📊 Learning-based avoidance: ${taskTypeKey} → ${tier} (avoiding ${avoidTiers.join(', ')})`);
+          return {
+            model: tierToModel[tier],
+            tier,
+            reason: 'learning-avoid-bad-tier',
+            learningReason,
+            avoidedTiers: avoidTiers
+          };
+        }
+      }
+    }
   }
 
   // Standard tasks → use provider's default model
@@ -519,6 +552,27 @@ const ERROR_PATTERNS = [
         requiresFallback: true
       };
     }
+  },
+  {
+    pattern: /API Error: 400|invalid_request_error|bad.?request/i,
+    category: 'bad-request',
+    actionable: true,
+    extract: (match, output) => {
+      const msgMatch = output.match(/"message":\s*"([^"]{1,150})"/);
+      return {
+        message: `Bad request${msgMatch ? `: ${msgMatch[1]}` : ''}`,
+        suggestedFix: 'API rejected the request as invalid. Check prompt formatting, tool names, and parameter sizes.'
+      };
+    }
+  },
+  {
+    pattern: /API Error: 403|forbidden/i,
+    category: 'forbidden',
+    actionable: true,
+    extract: () => ({
+      message: 'API access forbidden',
+      suggestedFix: 'API key lacks permission for this operation. Check API key permissions and provider configuration.'
+    })
   },
   {
     pattern: /API Error: 5\d{2}|server error|internal error/i,
@@ -1338,14 +1392,37 @@ export async function spawnAgentForTask(task) {
     }
   }
 
-  // Ensure clean workspace for managed apps before agent starts.
-  // For managed apps, always use a worktree based on the latest default branch
-  // to prevent cross-agent contamination (dirty state, stale branches, other agents' commits).
+  // Determine worktree usage: explicit user flag takes priority, then auto-detection.
+  // The useWorktree metadata flag is set from the task creation UI checkbox.
+  // When true, always create a worktree (branch + PR). When not set, fall back to
+  // existing auto-detection (managed apps = worktree, non-managed = conflict-based).
   let worktreeInfo = null;
   const isManagedApp = !!task.metadata?.app;
+  const explicitWorktree = task.metadata?.useWorktree === 'true' || task.metadata?.useWorktree === true;
 
-  if (isManagedApp && !jiraBranchName) {
-    // Managed apps always get an isolated worktree based on the latest default branch
+  if (explicitWorktree && !jiraBranchName) {
+    // User explicitly requested worktree via task creation UI
+    const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+    emitLog('info', `🌳 Worktree requested for task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
+      taskId: task.id, app: task.metadata?.app, baseBranch: detectedBase
+    });
+
+    worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
+      baseBranch: detectedBase || undefined
+    }).catch(err => {
+      emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
+      return null;
+    });
+
+    if (worktreeInfo) {
+      workspacePath = worktreeInfo.worktreePath;
+      emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName} (base: ${worktreeInfo.baseBranch})`, {
+        agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
+      });
+    }
+  } else if (isManagedApp && !jiraBranchName) {
+    // Managed apps: auto-detect — always use a worktree based on the latest default branch
+    // to prevent cross-agent contamination (dirty state, stale branches, other agents' commits).
     const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
     emitLog('info', `🌳 Managed app task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
       taskId: task.id, app: task.metadata.app, baseBranch: detectedBase

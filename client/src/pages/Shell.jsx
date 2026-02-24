@@ -6,6 +6,15 @@ import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
 import { RefreshCw, Power, PowerOff } from 'lucide-react';
 
+// Read a CSS custom property as hex (e.g., '--port-bg' → '#0f0f0f')
+const getThemeHex = (varName) => {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  if (!raw) return '#000000';
+  const parts = raw.split(' ').map(Number);
+  if (parts.length !== 3) return '#000000';
+  return '#' + parts.map(n => n.toString(16).padStart(2, '0')).join('');
+};
+
 export default function Shell() {
   const terminalRef = useRef(null);
   const termInstanceRef = useRef(null);
@@ -18,25 +27,33 @@ export default function Shell() {
   useEffect(() => {
     if (!terminalRef.current || termInstanceRef.current) return;
 
+    const bg = getThemeHex('--port-bg');
+    const fg = getThemeHex('--port-text');
+    const accent = getThemeHex('--port-accent');
+    const card = getThemeHex('--port-card');
+    const error = getThemeHex('--port-error');
+    const success = getThemeHex('--port-success');
+    const warning = getThemeHex('--port-warning');
+
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
       fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
       theme: {
-        background: '#0f0f0f',
-        foreground: '#e5e5e5',
-        cursor: '#3b82f6',
-        cursorAccent: '#0f0f0f',
-        selectionBackground: '#3b82f640',
-        black: '#1a1a1a',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#f59e0b',
-        blue: '#3b82f6',
+        background: bg,
+        foreground: fg,
+        cursor: accent,
+        cursorAccent: bg,
+        selectionBackground: accent + '40',
+        black: card,
+        red: error,
+        green: success,
+        yellow: warning,
+        blue: accent,
         magenta: '#a855f7',
         cyan: '#06b6d4',
-        white: '#e5e5e5',
+        white: fg,
         brightBlack: '#404040',
         brightRed: '#f87171',
         brightGreen: '#4ade80',

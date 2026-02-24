@@ -127,13 +127,13 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, attachments, position = 'bottom', createJiraTicket, jiraTicketId, jiraTicketUrl } = req.body;
+  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, attachments, position = 'bottom', createJiraTicket, jiraTicketId, jiraTicketUrl, useWorktree } = req.body;
 
   if (!description) {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position, createJiraTicket, jiraTicketId, jiraTicketUrl };
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position, createJiraTicket, jiraTicketId, jiraTicketUrl, useWorktree };
   const result = await cos.addTask(taskData, type);
   res.json(result);
 }));
@@ -1055,11 +1055,14 @@ router.get('/recent-tasks', asyncHandler(async (req, res) => {
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
 // Combines today's activity, streak status, next job, and pending approvals into one efficient call
 router.get('/quick-summary', asyncHandler(async (req, res) => {
-  const [todayActivity, productivityData, tasksData, jobStats] = await Promise.all([
+  const [todayActivity, productivityData, tasksData, jobStats, velocityData, weekData, optimalTime] = await Promise.all([
     cos.getTodayActivity(),
     productivity.getProductivitySummary(),
     cos.getAllTasks(),
-    autonomousJobs.getJobStats()
+    autonomousJobs.getJobStats(),
+    productivity.getVelocityMetrics(),
+    productivity.getWeekComparison(),
+    productivity.getOptimalTimeInfo()
   ]);
 
   // Count pending approvals from system tasks
@@ -1068,6 +1071,18 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
   // Count pending user tasks
   const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
 
+  // Combine all pending tasks for queue estimate
+  const allPendingTasks = [
+    ...(tasksData.user?.grouped?.pending || []),
+    ...(tasksData.cos?.grouped?.pending || [])
+  ];
+
+  // Get queue completion estimate
+  const queueEstimate = await taskLearning.estimateQueueCompletion(
+    allPendingTasks,
+    todayActivity.stats.running
+  );
+
   res.json({
     today: {
       completed: todayActivity.stats.completed,
@@ -1075,7 +1090,8 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       failed: todayActivity.stats.failed,
       running: todayActivity.stats.running,
       successRate: todayActivity.stats.successRate,
-      timeWorked: todayActivity.time.combined
+      timeWorked: todayActivity.time.combined,
+      accomplishments: todayActivity.accomplishments || []
     },
     streak: {
       current: productivityData.currentStreak,
@@ -1083,17 +1099,26 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       weekly: productivityData.weeklyStreak,
       lastActive: productivityData.lastActive
     },
+    velocity: {
+      percentage: velocityData.velocity,
+      label: velocityData.velocityLabel,
+      avgPerDay: velocityData.avgPerDay,
+      historicalDays: velocityData.historicalDays
+    },
     nextJob: jobStats.nextDue,
     queue: {
       pendingApprovals,
       pendingUserTasks,
-      total: pendingApprovals + pendingUserTasks
+      total: pendingApprovals + pendingUserTasks,
+      estimate: queueEstimate
     },
     status: {
       running: todayActivity.isRunning,
       paused: todayActivity.isPaused,
       lastEvaluation: todayActivity.lastEvaluation
-    }
+    },
+    weekComparison: weekData,
+    optimalTime
   });
 }));
 

@@ -186,6 +186,7 @@ export const appSchema = z.object({
     enabled: z.boolean().optional(),
     interval: z.string().nullable().optional()
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
+  defaultUseWorktree: z.boolean().optional().default(false),
   jira: jiraConfigSchema.optional().nullable()
 });
 

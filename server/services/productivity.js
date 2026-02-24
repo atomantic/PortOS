@@ -421,6 +421,136 @@ export async function getProductivitySummary() {
 }
 
 /**
+ * Get week-over-week comparison metrics
+ * Compares this week's completed tasks to last week
+ * @returns {Object} Week comparison data
+ */
+export async function getWeekComparison() {
+  const data = await loadProductivity();
+  const dailyHistory = data.dailyHistory || {};
+
+  // Get date ranges for this week and last week
+  const today = new Date();
+  const dayOfWeek = today.getDay(); // 0 = Sunday
+
+  // This week: from last Sunday to today
+  const thisWeekStart = new Date(today);
+  thisWeekStart.setDate(today.getDate() - dayOfWeek);
+  thisWeekStart.setHours(0, 0, 0, 0);
+
+  // Last week: 7 days before this week's start, for 7 days
+  const lastWeekStart = new Date(thisWeekStart);
+  lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+
+  // Aggregate this week's tasks (up to today)
+  let thisWeekTasks = 0;
+  let thisWeekSuccesses = 0;
+  for (let d = new Date(thisWeekStart); d <= today; d.setDate(d.getDate() + 1)) {
+    const dateStr = getDateString(d);
+    const dayData = dailyHistory[dateStr];
+    if (dayData) {
+      thisWeekTasks += dayData.tasks || 0;
+      thisWeekSuccesses += dayData.successes || 0;
+    }
+  }
+
+  // Aggregate last week's tasks (same day range as this week for fair comparison)
+  let lastWeekTasks = 0;
+  let lastWeekSuccesses = 0;
+  const lastWeekEnd = new Date(lastWeekStart);
+  lastWeekEnd.setDate(lastWeekEnd.getDate() + dayOfWeek); // Same relative day as today
+  for (let d = new Date(lastWeekStart); d <= lastWeekEnd; d.setDate(d.getDate() + 1)) {
+    const dateStr = getDateString(d);
+    const dayData = dailyHistory[dateStr];
+    if (dayData) {
+      lastWeekTasks += dayData.tasks || 0;
+      lastWeekSuccesses += dayData.successes || 0;
+    }
+  }
+
+  // Calculate change
+  let changePercent = null;
+  let trend = 'neutral';
+  if (lastWeekTasks > 0) {
+    changePercent = Math.round(((thisWeekTasks - lastWeekTasks) / lastWeekTasks) * 100);
+    if (changePercent > 10) trend = 'up';
+    else if (changePercent < -10) trend = 'down';
+  } else if (thisWeekTasks > 0) {
+    // No tasks last week but have tasks this week
+    trend = 'up';
+    changePercent = 100;
+  }
+
+  return {
+    thisWeek: {
+      tasks: thisWeekTasks,
+      successes: thisWeekSuccesses,
+      successRate: thisWeekTasks > 0 ? Math.round((thisWeekSuccesses / thisWeekTasks) * 100) : 0
+    },
+    lastWeek: {
+      tasks: lastWeekTasks,
+      successes: lastWeekSuccesses,
+      successRate: lastWeekTasks > 0 ? Math.round((lastWeekSuccesses / lastWeekTasks) * 100) : 0
+    },
+    changePercent,
+    trend,
+    daysCompared: dayOfWeek + 1 // How many days we're comparing (e.g., if today is Tuesday, comparing 3 days)
+  };
+}
+
+/**
+ * Get velocity metrics - how today compares to historical average
+ * @returns {Object} Velocity data including today's count, average, and relative performance
+ */
+export async function getVelocityMetrics() {
+  const data = await loadProductivity();
+  const dailyHistory = data.dailyHistory || {};
+  const today = getDateString();
+
+  // Get today's stats
+  const todayStats = dailyHistory[today] || { tasks: 0, successes: 0, failures: 0 };
+
+  // Calculate historical daily average (excluding today)
+  const historicalDays = Object.entries(dailyHistory)
+    .filter(([date]) => date !== today)
+    .map(([, stats]) => stats);
+
+  // Only count days with at least 1 task for average (active days)
+  const activeDays = historicalDays.filter(d => d.tasks > 0);
+  const avgTasksPerDay = activeDays.length > 0
+    ? activeDays.reduce((sum, d) => sum + d.tasks, 0) / activeDays.length
+    : 0;
+
+  // Calculate velocity: how today compares to average
+  // null if no history, percentage otherwise
+  let velocity = null;
+  let velocityLabel = null;
+
+  if (avgTasksPerDay > 0 && todayStats.tasks > 0) {
+    velocity = Math.round((todayStats.tasks / avgTasksPerDay) * 100);
+    if (velocity >= 150) velocityLabel = 'exceptional';
+    else if (velocity >= 120) velocityLabel = 'above-average';
+    else if (velocity >= 80) velocityLabel = 'on-track';
+    else if (velocity >= 50) velocityLabel = 'slow';
+    else velocityLabel = 'light';
+  } else if (todayStats.tasks > 0 && avgTasksPerDay === 0) {
+    // First active day ever
+    velocity = 100;
+    velocityLabel = 'first-day';
+  }
+
+  return {
+    today: todayStats.tasks,
+    todaySuccesses: todayStats.successes,
+    todayFailures: todayStats.failures,
+    avgPerDay: Math.round(avgTasksPerDay * 10) / 10,
+    historicalDays: activeDays.length,
+    velocity,
+    velocityLabel
+  };
+}
+
+/**
  * Get daily task trends for visualization
  * Returns last N days of task completion data with trend analysis
  */
@@ -587,5 +717,82 @@ export async function getActivityCalendar(weeks = 12) {
         : 0
     },
     currentStreak: data.streaks?.currentDaily || 0
+  };
+}
+
+/**
+ * Get optimal time indicator for current hour
+ * Compares current hour's success rate to find peak windows
+ * @returns {Object} Optimal time data
+ */
+export async function getOptimalTimeInfo() {
+  const data = await loadProductivity();
+  const hourlyPatterns = data.hourlyPatterns || {};
+  const currentHour = new Date().getHours();
+
+  // Need minimum data to make meaningful recommendations
+  const minTasksForReliable = 3;
+
+  // Get hours with enough data, sorted by success rate
+  const rankedHours = Object.entries(hourlyPatterns)
+    .filter(([, p]) => p.tasks >= minTasksForReliable)
+    .map(([hour, p]) => ({
+      hour: parseInt(hour, 10),
+      tasks: p.tasks,
+      successRate: p.successRate
+    }))
+    .sort((a, b) => b.successRate - a.successRate);
+
+  // Not enough data
+  if (rankedHours.length < 3) {
+    return { hasData: false };
+  }
+
+  // Find current hour's data
+  const currentHourData = hourlyPatterns[currentHour];
+  const currentSuccessRate = currentHourData?.successRate ?? null;
+  const currentTasks = currentHourData?.tasks ?? 0;
+
+  // Calculate average success rate
+  const avgSuccessRate = rankedHours.reduce((sum, h) => sum + h.successRate, 0) / rankedHours.length;
+
+  // Determine if current hour is optimal (top 25%), good (above avg), or suboptimal
+  const topThreshold = Math.ceil(rankedHours.length * 0.25);
+  const topHours = rankedHours.slice(0, topThreshold).map(h => h.hour);
+  const isOptimal = topHours.includes(currentHour);
+  const isAboveAverage = currentSuccessRate !== null && currentSuccessRate >= avgSuccessRate;
+
+  // Find next optimal hour if current isn't optimal
+  let nextOptimalHour = null;
+  if (!isOptimal) {
+    // Find nearest future top hour
+    for (let offset = 1; offset < 24; offset++) {
+      const checkHour = (currentHour + offset) % 24;
+      if (topHours.includes(checkHour)) {
+        nextOptimalHour = checkHour;
+        break;
+      }
+    }
+  }
+
+  // Format hour for display
+  const formatHour = (h) => {
+    if (h === 0) return '12AM';
+    if (h === 12) return '12PM';
+    return h < 12 ? `${h}AM` : `${h - 12}PM`;
+  };
+
+  return {
+    hasData: true,
+    currentHour,
+    currentSuccessRate,
+    currentTasks,
+    isOptimal,
+    isAboveAverage,
+    topHours,
+    nextOptimalHour,
+    nextOptimalFormatted: nextOptimalHour !== null ? formatHour(nextOptimalHour) : null,
+    avgSuccessRate: Math.round(avgSuccessRate),
+    peakSuccessRate: rankedHours[0]?.successRate ?? 0
   };
 }

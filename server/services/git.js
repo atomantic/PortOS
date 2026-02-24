@@ -378,6 +378,75 @@ export async function getRepoBranches(dir) {
 }
 
 /**
+ * Get all local branches with tracking info
+ * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number}>>}
+ */
+export async function getBranches(dir) {
+  // Get branches with verbose info (includes tracking)
+  const result = await execGit(
+    ['branch', '-vv', '--format=%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)'],
+    dir,
+    { ignoreExitCode: true }
+  );
+
+  const branches = result.stdout.trim().split('\n').filter(Boolean).map(line => {
+    const [head, name, upstream, track] = line.split('|');
+    const aheadMatch = track?.match(/ahead (\d+)/);
+    const behindMatch = track?.match(/behind (\d+)/);
+
+    return {
+      name,
+      current: head === '*',
+      tracking: upstream || null,
+      ahead: aheadMatch ? parseInt(aheadMatch[1], 10) : 0,
+      behind: behindMatch ? parseInt(behindMatch[1], 10) : 0
+    };
+  });
+
+  return branches;
+}
+
+/**
+ * Pull changes from remote for current branch
+ */
+export async function pull(dir) {
+  const result = await execGit(['pull', '--rebase', '--autostash'], dir);
+  return { success: true, output: result.stdout + result.stderr };
+}
+
+/**
+ * Sync branch - pull then push
+ */
+export async function syncBranch(dir, branch = null) {
+  const currentBranch = branch || await getBranch(dir);
+
+  // First pull with rebase
+  const pullResult = await execGit(['pull', '--rebase', '--autostash', 'origin', currentBranch], dir, { ignoreExitCode: true });
+  const pullSuccess = !pullResult.stderr?.includes('fatal') && !pullResult.stderr?.includes('CONFLICT');
+
+  if (!pullSuccess) {
+    return {
+      success: false,
+      error: pullResult.stderr || 'Pull failed',
+      pulled: false,
+      pushed: false
+    };
+  }
+
+  // Then push
+  const pushResult = await execGit(['push', 'origin', currentBranch], dir, { ignoreExitCode: true });
+  const pushSuccess = !pushResult.stderr?.includes('rejected') && !pushResult.stderr?.includes('fatal');
+
+  return {
+    success: pushSuccess,
+    pulled: true,
+    pushed: pushSuccess,
+    output: pullResult.stdout + pushResult.stdout,
+    error: pushSuccess ? null : pushResult.stderr
+  };
+}
+
+/**
  * Check if a .changelog/ directory exists in the repo
  */
 export function hasChangelogDir(dir) {

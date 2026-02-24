@@ -3,11 +3,19 @@ import {
   CheckCircle,
   Clock,
   Flame,
-  Calendar,
   ListTodo,
   Zap,
-  AlertCircle,
-  Timer
+  Timer,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  ChevronDown,
+  ChevronRight,
+  Award,
+  Hourglass,
+  Calendar,
+  Sun,
+  Sunset
 } from 'lucide-react';
 import * as api from '../../services/api';
 
@@ -18,6 +26,7 @@ import * as api from '../../services/api';
 export default function QuickSummary() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showAccomplishments, setShowAccomplishments] = useState(false);
 
   useEffect(() => {
     const loadSummary = async () => {
@@ -36,13 +45,45 @@ export default function QuickSummary() {
     return null;
   }
 
-  const { today, streak, nextJob, queue } = summary;
+  const { today, streak, nextJob, queue, velocity, weekComparison, optimalTime } = summary;
 
   // Only show if there's meaningful data to display
   const hasActivity = today.completed > 0 || today.running > 0 || streak.current > 0 || queue.total > 0;
   if (!hasActivity && !nextJob) {
     return null;
   }
+
+  // Velocity indicator helper
+  const getVelocityDisplay = () => {
+    if (!velocity?.percentage || velocity.historicalDays < 3) return null;
+
+    const { percentage, label } = velocity;
+    let icon = Minus;
+    let color = 'text-gray-400';
+    let bgColor = 'bg-gray-500/10';
+
+    if (label === 'exceptional') {
+      icon = TrendingUp;
+      color = 'text-emerald-400';
+      bgColor = 'bg-emerald-500/20';
+    } else if (label === 'above-average') {
+      icon = TrendingUp;
+      color = 'text-port-success';
+      bgColor = 'bg-port-success/15';
+    } else if (label === 'on-track') {
+      icon = Minus;
+      color = 'text-port-accent';
+      bgColor = 'bg-port-accent/15';
+    } else if (label === 'slow' || label === 'light') {
+      icon = TrendingDown;
+      color = 'text-port-warning';
+      bgColor = 'bg-port-warning/15';
+    }
+
+    return { icon, color, bgColor, percentage };
+  };
+
+  const velocityDisplay = getVelocityDisplay();
 
   // Format time until next job
   const formatTimeUntil = (isoDate) => {
@@ -96,6 +137,89 @@ export default function QuickSummary() {
           </div>
         )}
 
+        {/* Velocity */}
+        {velocityDisplay && (
+          <div className="flex items-center gap-1.5">
+            <velocityDisplay.icon size={14} className={velocityDisplay.color} />
+            <span className="text-gray-400">Pace:</span>
+            <span className={`font-medium ${velocityDisplay.color} px-1.5 py-0.5 rounded ${velocityDisplay.bgColor}`}>
+              {velocityDisplay.percentage}%
+            </span>
+            <span className="text-gray-500 text-xs">vs avg</span>
+          </div>
+        )}
+
+        {/* Optimal Time Indicator */}
+        {optimalTime?.hasData && (
+          <div
+            className="flex items-center gap-1.5"
+            title={optimalTime.isOptimal
+              ? `This is a peak productivity hour (${optimalTime.currentSuccessRate}% success rate)`
+              : optimalTime.nextOptimalFormatted
+                ? `Next peak hour: ${optimalTime.nextOptimalFormatted}`
+                : 'Current hour performance data'
+            }
+          >
+            {optimalTime.isOptimal ? (
+              <>
+                <Sun size={14} className="text-yellow-400" />
+                <span className="text-gray-400">Time:</span>
+                <span className="font-medium text-yellow-400 px-1.5 py-0.5 rounded bg-yellow-500/15">
+                  Peak Hour
+                </span>
+              </>
+            ) : optimalTime.isAboveAverage ? (
+              <>
+                <Sun size={14} className="text-port-success/70" />
+                <span className="text-gray-400">Time:</span>
+                <span className="font-medium text-port-success px-1.5 py-0.5 rounded bg-port-success/10">
+                  Good
+                </span>
+              </>
+            ) : optimalTime.nextOptimalFormatted ? (
+              <>
+                <Sunset size={14} className="text-gray-500" />
+                <span className="text-gray-400">Peak:</span>
+                <span className="font-medium text-gray-300">
+                  {optimalTime.nextOptimalFormatted}
+                </span>
+              </>
+            ) : null}
+          </div>
+        )}
+
+        {/* Week over Week Comparison */}
+        {weekComparison && weekComparison.lastWeek?.tasks > 0 && (
+          <div className="flex items-center gap-1.5" title={`This week: ${weekComparison.thisWeek?.tasks || 0} tasks, Last week (same days): ${weekComparison.lastWeek?.tasks} tasks`}>
+            <Calendar size={14} className={
+              weekComparison.trend === 'up' ? 'text-port-success' :
+              weekComparison.trend === 'down' ? 'text-port-warning' :
+              'text-gray-400'
+            } />
+            <span className="text-gray-400">Week:</span>
+            <span className={`font-medium flex items-center gap-1 ${
+              weekComparison.trend === 'up' ? 'text-port-success' :
+              weekComparison.trend === 'down' ? 'text-port-warning' :
+              'text-white'
+            }`}>
+              {weekComparison.thisWeek?.tasks || 0}
+              {weekComparison.changePercent !== null && (
+                <span className={`text-xs flex items-center ${
+                  weekComparison.trend === 'up' ? 'text-port-success' :
+                  weekComparison.trend === 'down' ? 'text-port-warning' :
+                  'text-gray-500'
+                }`}>
+                  {weekComparison.trend === 'up' ? <TrendingUp size={10} /> :
+                   weekComparison.trend === 'down' ? <TrendingDown size={10} /> :
+                   <Minus size={10} />}
+                  {Math.abs(weekComparison.changePercent)}%
+                </span>
+              )}
+            </span>
+            <span className="text-gray-500 text-xs">vs last</span>
+          </div>
+        )}
+
         {/* Pending Work */}
         {queue.total > 0 && (
           <div className="flex items-center gap-1.5">
@@ -113,6 +237,22 @@ export default function QuickSummary() {
           </div>
         )}
 
+        {/* Queue Estimate */}
+        {queue.estimate?.taskCount > 0 && (
+          <div className="flex items-center gap-1.5" title={`Based on ${queue.estimate.confidence}% historical data`}>
+            <Hourglass size={14} className="text-purple-400" />
+            <span className="text-gray-400">ETA:</span>
+            <span className="font-medium text-purple-300">
+              {queue.estimate.formatted}
+            </span>
+            {queue.estimate.runningCount > 0 && (
+              <span className="text-gray-500 text-xs">
+                ({queue.estimate.runningCount} active)
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Next Job */}
         {nextJob && (
           <div className="flex items-center gap-1.5">
@@ -127,6 +267,34 @@ export default function QuickSummary() {
           </div>
         )}
       </div>
+
+      {/* Today's Accomplishments - expandable list */}
+      {today.accomplishments?.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-port-border/50">
+          <button
+            onClick={() => setShowAccomplishments(!showAccomplishments)}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors w-full"
+            aria-expanded={showAccomplishments}
+            aria-controls="accomplishments-list"
+          >
+            {showAccomplishments ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <Award size={12} className="text-port-success" />
+            <span>{today.accomplishments.length} task{today.accomplishments.length !== 1 ? 's' : ''} completed today</span>
+          </button>
+          {showAccomplishments && (
+            <ul id="accomplishments-list" className="mt-2 space-y-1 text-xs">
+              {today.accomplishments.map((item) => (
+                <li key={item.id} className="flex items-start gap-2 pl-5">
+                  <CheckCircle size={10} className="text-port-success mt-0.5 shrink-0" />
+                  <span className="text-gray-300 line-clamp-1" title={item.description}>
+                    {item.description}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }

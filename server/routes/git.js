@@ -140,4 +140,52 @@ router.post('/info', asyncHandler(async (req, res) => {
   res.json(info);
 }));
 
+// POST /api/git/branches - Get all local branches
+router.post('/branches', asyncHandler(async (req, res) => {
+  const { path } = req.body;
+
+  if (!path) {
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const branches = await git.getBranches(path);
+  res.json({ branches });
+}));
+
+// POST /api/git/checkout - Switch to a branch
+router.post('/checkout', asyncHandler(async (req, res) => {
+  const { path, branch } = req.body;
+
+  if (!path || !branch) {
+    throw new ServerError('path and branch are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await git.checkout(path, branch);
+  res.json(result);
+}));
+
+// POST /api/git/pull - Pull changes from remote
+router.post('/pull', asyncHandler(async (req, res) => {
+  const { path } = req.body;
+
+  if (!path) {
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await git.pull(path);
+  res.json(result);
+}));
+
+// POST /api/git/sync - Sync branch (pull then push)
+router.post('/sync', asyncHandler(async (req, res) => {
+  const { path, branch } = req.body;
+
+  if (!path) {
+    throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await git.syncBranch(path, branch);
+  res.json(result);
+}));
+
 export default router;
