@@ -381,9 +381,11 @@ export default function Instances() {
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
-    const data = await getInstances();
-    setSelf(data.self);
-    setPeers(data.peers);
+    const data = await getInstances().catch(() => null);
+    if (data) {
+      setSelf(data.self);
+      setPeers(data.peers);
+    }
     setLoading(false);
   }, []);
 
