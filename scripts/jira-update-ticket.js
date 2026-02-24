@@ -41,22 +41,21 @@ function parseArgs() {
   const args = process.argv.slice(2);
   const parsed = {};
 
-  const requireValue = (flag) => {
-    if (i + 1 >= args.length) {
-      console.error(`❌ Missing value for ${flag}`);
-      process.exit(1);
-    }
-    return args[++i];
-  };
-
   for (let i = 0; i < args.length; i++) {
+    const requireValue = (flag) => {
+      if (i + 1 >= args.length) {
+        console.error(`❌ Missing value for ${flag}`);
+        process.exit(1);
+      }
+      return args[++i];
+    };
     switch (args[i]) {
       case '--app': parsed.app = requireValue('--app'); break;
       case '--ticket': parsed.ticket = requireValue('--ticket'); break;
       case '--summary': parsed.summary = requireValue('--summary'); break;
       case '--description': parsed.description = requireValue('--description'); break;
       case '--comment': parsed.comment = requireValue('--comment'); break;
-      case '--points': parsed.points = parseInt(requireValue('--points')) || undefined; break;
+      case '--points': parsed.points = parseInt(requireValue('--points'), 10) || undefined; break;
       case '--assignee': parsed.assignee = requireValue('--assignee'); break;
       case '--labels': parsed.labels = requireValue('--labels').split(',').map(l => l.trim()); break;
       case '--transition': parsed.transition = requireValue('--transition'); break;
@@ -84,7 +83,8 @@ function parseArgs() {
 async function loadAppConfig(appName) {
   const appsFile = join(rootDir, 'data/apps.json');
   const content = await fs.readFile(appsFile, 'utf-8');
-  const data = JSON.parse(content);
+  const { safeJSONParse } = await import(join(rootDir, 'server/lib/fileUtils.js'));
+  const data = safeJSONParse(content, {});
   const apps = Object.values(data.apps || data);
 
   const app = apps.find(a => a.name?.toLowerCase() === appName.toLowerCase());
@@ -157,9 +157,7 @@ async function main() {
     const updatedFields = Object.keys(fields).join(', ');
     console.log(`✏️  Updating ${args.ticket} (${updatedFields})...`);
     const result = await jiraService.updateTicket(jira.instanceId, args.ticket, fields);
-    console.log(`✅ ${result.ticketId} updated`);
-    console.log(`🔗 ${result.url}`);
-    console.log(JSON.stringify(result));
+    console.log(`✅ ${result.ticketId} updated — ${result.url}`);
   }
 
   // Add comment
