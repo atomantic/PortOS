@@ -226,6 +226,24 @@ export async function recordTaskCompletion(agent, task) {
       data.errorPatterns[errorCategory].taskTypes[taskType] = 0;
     }
     data.errorPatterns[errorCategory].taskTypes[taskType]++;
+
+    // Store recent unknown error samples for diagnosability
+    // This helps identify missing patterns that should be added to ERROR_PATTERNS
+    if (errorCategory === 'unknown') {
+      const errorAnalysis = agent.result?.errorAnalysis || {};
+      if (!data.recentUnknownErrors) data.recentUnknownErrors = [];
+      data.recentUnknownErrors.push({
+        taskType,
+        message: (errorAnalysis.message || '').substring(0, 200),
+        details: (errorAnalysis.details || '').substring(0, 500),
+        agentId: agent.agentId || agent.id,
+        recordedAt: new Date().toISOString()
+      });
+      // Keep only last 20 samples to avoid unbounded growth
+      if (data.recentUnknownErrors.length > 20) {
+        data.recentUnknownErrors = data.recentUnknownErrors.slice(-20);
+      }
+    }
   }
 
   // Update totals
@@ -321,7 +339,8 @@ export async function getLearningInsights() {
         completed: t.completed
       })),
       commonErrors,
-      modelEffectiveness
+      modelEffectiveness,
+      recentUnknownErrors: data.recentUnknownErrors || []
     },
     recommendations: generateRecommendations(data, bestPerforming, worstPerforming, commonErrors)
   };

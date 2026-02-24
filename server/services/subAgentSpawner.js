@@ -521,6 +521,27 @@ const ERROR_PATTERNS = [
     }
   },
   {
+    pattern: /API Error: 400|invalid_request_error|bad.?request/i,
+    category: 'bad-request',
+    actionable: true,
+    extract: (match, output) => {
+      const msgMatch = output.match(/"message":\s*"([^"]{1,150})"/);
+      return {
+        message: `Bad request${msgMatch ? `: ${msgMatch[1]}` : ''}`,
+        suggestedFix: 'API rejected the request as invalid. Check prompt formatting, tool names, and parameter sizes.'
+      };
+    }
+  },
+  {
+    pattern: /API Error: 403|forbidden/i,
+    category: 'forbidden',
+    actionable: true,
+    extract: () => ({
+      message: 'API access forbidden',
+      suggestedFix: 'API key lacks permission for this operation. Check API key permissions and provider configuration.'
+    })
+  },
+  {
     pattern: /API Error: 5\d{2}|server error|internal error/i,
     category: 'server-error',
     actionable: false, // Transient
