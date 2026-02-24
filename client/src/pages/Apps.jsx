@@ -8,6 +8,78 @@ import IconPicker from '../components/IconPicker';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
+function KanbanBoard({ tickets }) {
+  // Group tickets by status category
+  const columns = {
+    'To Do': tickets.filter(t => t.statusCategory === 'To Do'),
+    'In Progress': tickets.filter(t => t.statusCategory === 'In Progress'),
+    'Done': tickets.filter(t => t.statusCategory === 'Done')
+  };
+
+  const columnConfig = {
+    'To Do': { bg: 'bg-gray-500/10', border: 'border-gray-500/30', dot: 'bg-gray-500' },
+    'In Progress': { bg: 'bg-port-accent/10', border: 'border-port-accent/30', dot: 'bg-port-accent' },
+    'Done': { bg: 'bg-port-success/10', border: 'border-port-success/30', dot: 'bg-port-success' }
+  };
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {Object.entries(columns).map(([category, categoryTickets]) => {
+        const config = columnConfig[category];
+        return (
+          <div
+            key={category}
+            className={`${config.bg} border ${config.border} rounded-lg p-3 min-h-[120px]`}
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <span className={`w-2 h-2 rounded-full ${config.dot}`} />
+              <span className="text-sm font-medium text-white">{category}</span>
+              <span className="text-xs text-gray-500">({categoryTickets.length})</span>
+            </div>
+            <div className="space-y-2">
+              {categoryTickets.map(ticket => (
+                <a
+                  key={ticket.key}
+                  href={ticket.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block p-2 bg-port-card border border-port-border rounded-lg hover:border-port-accent/50 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-1">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-mono text-port-accent">{ticket.key}</span>
+                        {ticket.priority && (
+                          <span className={`text-xs ${
+                            ticket.priority === 'Highest' || ticket.priority === 'High' ? 'text-port-error' :
+                            ticket.priority === 'Medium' ? 'text-port-warning' :
+                            'text-gray-500'
+                          }`}>
+                            {ticket.priority}
+                          </span>
+                        )}
+                        {ticket.storyPoints && (
+                          <span className="text-xs text-cyan-400">{ticket.storyPoints}pt</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-white line-clamp-2">{ticket.summary}</div>
+                      <div className="text-xs text-gray-500 mt-1">{ticket.issueType}</div>
+                    </div>
+                    <ExternalLink size={12} className="text-gray-500 flex-shrink-0" />
+                  </div>
+                </a>
+              ))}
+              {categoryTickets.length === 0 && (
+                <div className="text-xs text-gray-500 text-center py-4">No tickets</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Apps() {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -456,7 +528,7 @@ export default function Apps() {
                           )}
                         </div>
 
-                        {/* My Sprint Tickets */}
+                        {/* My Sprint Tickets - Kanban Board */}
                         {app.jira.instanceId && app.jira.projectKey && (
                           <div className="mt-3">
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
@@ -466,49 +538,7 @@ export default function Apps() {
                                 <span>Loading tickets...</span>
                               </div>
                             ) : jiraTickets[app.id]?.length > 0 ? (
-                              <div className="space-y-2">
-                                {jiraTickets[app.id].map(ticket => (
-                                  <a
-                                    key={ticket.key}
-                                    href={ticket.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block px-3 py-2 bg-port-card border border-port-border rounded-lg hover:border-port-accent/50 transition-colors"
-                                  >
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 mb-1">
-                                          <span className="text-sm font-mono text-port-accent">{ticket.key}</span>
-                                          <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                            ticket.statusCategory === 'Done' ? 'bg-port-success/20 text-port-success' :
-                                            ticket.statusCategory === 'In Progress' ? 'bg-port-accent/20 text-port-accent' :
-                                            'bg-gray-500/20 text-gray-400'
-                                          }`}>
-                                            {ticket.status}
-                                          </span>
-                                          {ticket.priority && (
-                                            <span className={`text-xs ${
-                                              ticket.priority === 'Highest' || ticket.priority === 'High' ? 'text-port-error' :
-                                              ticket.priority === 'Medium' ? 'text-port-warning' :
-                                              'text-gray-500'
-                                            }`}>
-                                              {ticket.priority}
-                                            </span>
-                                          )}
-                                          {ticket.storyPoints && (
-                                            <span className="text-xs text-cyan-400">{ticket.storyPoints} pts</span>
-                                          )}
-                                        </div>
-                                        <div className="text-sm text-white line-clamp-2">{ticket.summary}</div>
-                                        <div className="text-xs text-gray-500 mt-1">
-                                          {ticket.issueType} • Updated {new Date(ticket.updated).toLocaleDateString()}
-                                        </div>
-                                      </div>
-                                      <ExternalLink size={14} className="text-gray-500 flex-shrink-0 mt-1" />
-                                    </div>
-                                  </a>
-                                ))}
-                              </div>
+                              <KanbanBoard tickets={jiraTickets[app.id]} />
                             ) : (
                               <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
                                 No tickets assigned to you in the current sprint
