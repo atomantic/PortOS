@@ -9,14 +9,19 @@ import {
   ArrowRight,
   Clock,
   RefreshCw,
-  Zap
+  Zap,
+  Users,
+  Pause,
+  Moon
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 /**
  * DecisionLogWidget - Shows transparency into CoS decision-making
- * Displays why tasks were skipped, intervals adjusted, or alternatives chosen
+ * Displays why tasks were skipped, intervals adjusted, or alternatives chosen.
+ * Surfaces rich context for each decision type so the user can understand
+ * exactly why the CoS took (or didn't take) action.
  */
 const DecisionLogWidget = memo(function DecisionLogWidget() {
   const { data: summary, loading } = useAutoRefetch(
@@ -50,6 +55,12 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
         return { icon: RefreshCw, color: 'text-port-success', bg: 'bg-port-success/10' };
       case 'task_selected':
         return { icon: CheckCircle, color: 'text-port-success', bg: 'bg-port-success/10' };
+      case 'capacity_full':
+        return { icon: Users, color: 'text-orange-400', bg: 'bg-orange-400/10' };
+      case 'cooldown_active':
+        return { icon: Pause, color: 'text-cyan-400', bg: 'bg-cyan-400/10' };
+      case 'idle':
+        return { icon: Moon, color: 'text-gray-400', bg: 'bg-gray-400/10' };
       default:
         return { icon: Eye, color: 'text-gray-400', bg: 'bg-gray-400/10' };
     }
@@ -64,8 +75,10 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
       cooldown_active: 'Cooldown',
       not_due: 'Not Due',
       queue_full: 'Queue Full',
+      capacity_full: 'At Capacity',
       task_selected: 'Selected',
-      rehabilitation: 'Retried'
+      rehabilitation: 'Retried',
+      idle: 'Idle'
     };
     return labels[type] || type;
   };
@@ -82,6 +95,110 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     return 'yesterday';
+  };
+
+  // Render context-specific detail pills for a decision
+  const renderContextDetails = (decision) => {
+    const ctx = decision.context;
+    if (!ctx) return null;
+
+    const pills = [];
+
+    switch (decision.type) {
+      case 'capacity_full':
+        if (ctx.running !== undefined && ctx.max !== undefined) {
+          pills.push(
+            <span key="slots" className="text-xs px-1.5 py-0.5 rounded bg-orange-400/15 text-orange-300">
+              {ctx.running}/{ctx.max} agents
+            </span>
+          );
+        }
+        if (ctx.project && ctx.project !== '_self') {
+          pills.push(
+            <span key="project" className="text-xs px-1.5 py-0.5 rounded bg-gray-500/15 text-gray-300">
+              {ctx.project}
+            </span>
+          );
+        }
+        if (ctx.limit) {
+          pills.push(
+            <span key="limit" className="text-xs px-1.5 py-0.5 rounded bg-orange-400/15 text-orange-300">
+              limit: {ctx.limit}/project
+            </span>
+          );
+        }
+        break;
+
+      case 'cooldown_active':
+        if (ctx.appId) {
+          pills.push(
+            <span key="app" className="text-xs px-1.5 py-0.5 rounded bg-cyan-400/15 text-cyan-300">
+              {ctx.appId}
+            </span>
+          );
+        }
+        if (ctx.cooldownMs) {
+          pills.push(
+            <span key="cooldown" className="text-xs px-1.5 py-0.5 rounded bg-cyan-400/15 text-cyan-300">
+              {Math.round(ctx.cooldownMs / 60000)}min window
+            </span>
+          );
+        }
+        break;
+
+      case 'task_switched':
+        if (ctx.fromTask && ctx.toTask) {
+          pills.push(
+            <span key="switch" className="text-xs px-1.5 py-0.5 rounded bg-purple-400/15 text-purple-300 inline-flex items-center gap-1">
+              {ctx.fromTask} <ArrowRight size={10} /> {ctx.toTask}
+            </span>
+          );
+        }
+        break;
+
+      case 'task_skipped':
+        if (ctx.attempts) {
+          pills.push(
+            <span key="attempts" className="text-xs px-1.5 py-0.5 rounded bg-port-warning/15 text-yellow-300">
+              {ctx.attempts} attempts
+            </span>
+          );
+        }
+        break;
+
+      case 'idle':
+        if (ctx.runningAgents !== undefined) {
+          pills.push(
+            <span key="running" className="text-xs px-1.5 py-0.5 rounded bg-gray-500/15 text-gray-300">
+              {ctx.runningAgents} running
+            </span>
+          );
+        }
+        if (ctx.awaitingApproval > 0) {
+          pills.push(
+            <span key="approval" className="text-xs px-1.5 py-0.5 rounded bg-port-warning/15 text-yellow-300">
+              {ctx.awaitingApproval} awaiting approval
+            </span>
+          );
+        }
+        break;
+
+      default:
+        break;
+    }
+
+    // Always show taskType if present and not already shown by type-specific pills
+    if (ctx.taskType && decision.type !== 'task_switched') {
+      pills.unshift(
+        <span key="taskType" className="text-xs text-gray-400">
+          {ctx.taskType}
+        </span>
+      );
+    }
+
+    if (pills.length === 0) return null;
+
+    return <div className="flex flex-wrap items-center gap-1.5 mt-1">{pills}</div>;
   };
 
   return (
@@ -122,6 +239,18 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
           <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-purple-400/10 text-purple-400 text-xs">
             <ArrowRight size={12} />
             <span>{last24Hours.switched} switched</span>
+          </div>
+        )}
+        {last24Hours.capacityFull > 0 && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-orange-400/10 text-orange-400 text-xs">
+            <Users size={12} />
+            <span>{last24Hours.capacityFull} deferred</span>
+          </div>
+        )}
+        {last24Hours.cooldownActive > 0 && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-cyan-400/10 text-cyan-400 text-xs">
+            <Pause size={12} />
+            <span>{last24Hours.cooldownActive} cooldowns</span>
           </div>
         )}
         {last24Hours.selected > 0 && (
@@ -175,15 +304,11 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
                         <span className={`text-xs font-medium ${style.color}`}>
                           {formatDecisionType(decision.type)}
                         </span>
-                        {decision.context?.taskType && (
-                          <span className="text-xs text-gray-400">
-                            {decision.context.taskType}
-                          </span>
-                        )}
                       </div>
                       <p className="text-sm text-gray-300 truncate" title={decision.reason}>
                         {decision.reason}
                       </p>
+                      {renderContextDetails(decision)}
                       <div className="text-xs text-gray-500 mt-0.5">
                         {formatRelativeTime(decision.lastTimestamp || decision.timestamp)}
                         {(decision.count || 1) > 1 && (
@@ -192,8 +317,11 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
                           </span>
                         )}
                         {decision.context?.successRate !== undefined && (
-                          <span className="ml-2">
-                            Success rate: {decision.context.successRate}%
+                          <span className={`ml-2 ${
+                            decision.context.successRate < 30 ? 'text-port-error' :
+                            decision.context.successRate < 60 ? 'text-port-warning' : 'text-port-success'
+                          }`}>
+                            {decision.context.successRate}% success
                           </span>
                         )}
                       </div>
