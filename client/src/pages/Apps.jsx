@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, ChevronDown, ChevronUp, Ticket } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, ChevronDown, ChevronUp, Ticket, GitBranch } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import StatusBadge from '../components/StatusBadge';
@@ -582,6 +582,7 @@ function EditAppModal({ app, onClose, onSave }) {
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
     editorCommand: app.editorCommand || 'code .',
+    defaultUseWorktree: app.defaultUseWorktree || false,
     jiraEnabled: app.jira?.enabled || false,
     jiraInstanceId: app.jira?.instanceId || '',
     jiraProjectKey: app.jira?.projectKey || '',
@@ -646,6 +647,7 @@ function EditAppModal({ app, onClose, onSave }) {
         ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
         : undefined,
       editorCommand: formData.editorCommand || undefined,
+      defaultUseWorktree: formData.defaultUseWorktree,
       jira: formData.jiraEnabled ? {
         enabled: true,
         instanceId: formData.jiraInstanceId || undefined,
@@ -766,6 +768,18 @@ function EditAppModal({ app, onClose, onSave }) {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
             />
           </div>
+
+          {/* Git Worktree Default */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={formData.defaultUseWorktree}
+              onChange={e => setFormData({ ...formData, defaultUseWorktree: e.target.checked })}
+              className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+            />
+            <GitBranch size={14} className="text-emerald-400" />
+            <span className="text-sm text-white">Default to Branch + PR for new tasks</span>
+          </label>
 
           {/* JIRA Integration Section */}
           <div className="border border-port-border rounded-lg overflow-hidden">

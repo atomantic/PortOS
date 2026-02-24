@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket } from 'lucide-react';
+import { Plus, Play, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   DndContext,
@@ -35,6 +35,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
+  const [useWorktree, setUseWorktree] = useState(false);
   const fileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
 
@@ -147,9 +148,11 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   );
   const appHasJira = selectedApp?.jira?.enabled;
 
-  // Auto-toggle JIRA checkbox when app selection changes
+  // Auto-toggle JIRA and worktree checkboxes when app selection changes
   useEffect(() => {
-    setCreateJiraTicket(!!apps?.find(a => a.id === newTask.app)?.jira?.enabled);
+    const app = apps?.find(a => a.id === newTask.app);
+    setCreateJiraTicket(!!app?.jira?.enabled);
+    setUseWorktree(!!app?.defaultUseWorktree);
   }, [newTask.app, apps]);
 
   // Split user tasks by status (only pending tasks are sortable)
@@ -285,6 +288,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
       provider: newTask.provider || undefined,
       app: newTask.app || undefined,
       createJiraTicket: createJiraTicket || undefined,
+      useWorktree: useWorktree || undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -306,6 +310,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
     setAddToTop(false);
     setEnhancePrompt(false);
     setCreateJiraTicket(false);
+    setUseWorktree(false);
     onRefresh();
   };
 
@@ -446,6 +451,18 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                     ))}
                   </select>
                 </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={useWorktree}
+                    onChange={(e) => setUseWorktree(e.target.checked)}
+                    className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                  />
+                  <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                    <GitBranch size={14} className="text-emerald-400" />
+                    Branch + PR
+                  </span>
+                </label>
                 {appHasJira && (
                   <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
                     <input
