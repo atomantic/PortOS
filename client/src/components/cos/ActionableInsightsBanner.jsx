@@ -19,7 +19,8 @@ const ICON_MAP = {
   XCircle,
   Brain,
   Newspaper,
-  ListTodo
+  ListTodo,
+  Zap
 };
 
 const PRIORITY_STYLES = {

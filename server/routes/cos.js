@@ -935,11 +935,12 @@ router.get('/productivity/calendar', asyncHandler(async (req, res) => {
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
-  const [tasksData, learningSummary, healthCheck, notificationsModule] = await Promise.all([
+  const [tasksData, learningSummary, healthCheck, notificationsModule, optimalTimeInfo] = await Promise.all([
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
     cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
-    import('../services/notifications.js')
+    import('../services/notifications.js'),
+    productivity.getOptimalTimeInfo().catch(() => ({ hasData: false }))
   ]);
 
   const notificationsData = await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []);
@@ -1031,6 +1032,20 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       description: pendingUserTasks[0]?.description?.substring(0, 80),
       action: { label: 'View Tasks', route: '/cos/tasks' },
       count: pendingUserTasks.length
+    });
+  }
+
+  // 7. Peak productivity time (proactive suggestion)
+  // Show when it's a peak hour AND there are pending tasks to work on
+  const totalPendingTasks = pendingUserTasks.length + (tasksData.cos?.grouped?.pending?.length || 0);
+  if (optimalTimeInfo?.hasData && optimalTimeInfo.isOptimal && totalPendingTasks > 0 && insights.length < 5) {
+    insights.push({
+      type: 'peak-time',
+      priority: 'low',
+      icon: 'Zap',
+      title: 'Peak productivity hour',
+      description: `This hour has a ${optimalTimeInfo.currentSuccessRate || optimalTimeInfo.peakSuccessRate}% success rate — good time to tackle tasks`,
+      action: { label: 'Start Task', route: '/cos/tasks' }
     });
   }
 
