@@ -91,7 +91,8 @@ function SelfCard({ self, onUpdate }) {
 
   const saveName = async () => {
     if (!name.trim()) return;
-    await updateSelfInstance({ name: name.trim() });
+    const result = await updateSelfInstance({ name: name.trim() }).catch(() => null);
+    if (!result) return;
     onUpdate();
     setEditing(false);
     toast.success('Instance name updated');
@@ -150,11 +151,12 @@ function AddPeerForm({ onAdd }) {
     setAdding(true);
     const data = { address: address.trim(), port: parseInt(port, 10) || 5554 };
     if (name.trim()) data.name = name.trim();
-    await addPeer(data);
+    const result = await addPeer(data).catch(() => null);
+    setAdding(false);
+    if (!result) return;
     setAddress('');
     setPort('5554');
     setName('');
-    setAdding(false);
     onAdd();
     toast.success('Peer added');
   };
@@ -169,7 +171,7 @@ function AddPeerForm({ onAdd }) {
           value={address}
           onChange={e => setAddress(e.target.value)}
           placeholder="100.64.x.x"
-          pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"
+          pattern="^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$"
           required
           className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-port-accent flex-1 min-w-[140px]"
         />
@@ -280,25 +282,27 @@ function PeerCard({ peer, onRefresh }) {
 
   const handleProbe = async () => {
     setProbing(true);
-    await probePeer(peer.id);
+    await probePeer(peer.id).catch(() => null);
     onRefresh();
     setProbing(false);
   };
 
   const handleRemove = async () => {
-    await removePeer(peer.id);
+    const result = await removePeer(peer.id).catch(() => null);
+    if (!result) return;
     onRefresh();
     toast.success('Peer removed');
   };
 
   const handleToggle = async () => {
-    await updatePeer(peer.id, { enabled: !peer.enabled });
+    await updatePeer(peer.id, { enabled: !peer.enabled }).catch(() => null);
     onRefresh();
   };
 
   const saveName = async () => {
     if (!name.trim()) return;
-    await updatePeer(peer.id, { name: name.trim() });
+    const result = await updatePeer(peer.id, { name: name.trim() }).catch(() => null);
+    if (!result) return;
     onRefresh();
     setEditingName(false);
   };

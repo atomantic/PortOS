@@ -13,7 +13,7 @@ const router = Router();
 
 // Validation schemas
 const addPeerSchema = z.object({
-  address: z.string().regex(/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/, 'Must be a valid IP address'),
+  address: z.string().regex(/^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/, 'Must be a valid IP address'),
   port: z.number().int().min(1).max(65535).default(5554),
   name: z.string().optional()
 });

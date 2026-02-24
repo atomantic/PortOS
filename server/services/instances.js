@@ -136,6 +136,7 @@ export async function probePeer(peer) {
   let status, lastHealth, lastSeen;
   try {
     const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     status = 'online';
     lastHealth = json;
