@@ -104,8 +104,8 @@ export function useAgentFeedbackToast() {
           id: toastId,
           duration: 15000, // 15 seconds - enough time to react but not annoying
           style: {
-            background: '#1a1a1a',
-            border: '1px solid #2a2a2a',
+            background: 'rgb(var(--port-card))',
+            border: '1px solid rgb(var(--port-border))',
             padding: '12px 16px',
             borderRadius: '8px'
           }

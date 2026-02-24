@@ -7,13 +7,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        'port-bg': '#0f0f0f',
-        'port-card': '#1a1a1a',
-        'port-border': '#2a2a2a',
-        'port-accent': '#3b82f6',
-        'port-success': '#22c55e',
-        'port-warning': '#f59e0b',
-        'port-error': '#ef4444'
+        'port-bg': 'rgb(var(--port-bg) / <alpha-value>)',
+        'port-card': 'rgb(var(--port-card) / <alpha-value>)',
+        'port-border': 'rgb(var(--port-border) / <alpha-value>)',
+        'port-accent': 'rgb(var(--port-accent) / <alpha-value>)',
+        'port-success': 'rgb(var(--port-success) / <alpha-value>)',
+        'port-warning': 'rgb(var(--port-warning) / <alpha-value>)',
+        'port-error': 'rgb(var(--port-error) / <alpha-value>)',
       },
       keyframes: {
         scanline: {

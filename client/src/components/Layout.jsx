@@ -42,6 +42,7 @@ import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import NotificationDropdown from './NotificationDropdown';
+import ThemeSwitcher from './ThemeSwitcher';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -415,7 +416,8 @@ export default function Layout() {
             <span className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
               v{packageJson.version}
             </span>
-            <div className={collapsed ? '' : ''}>
+            <div className="flex items-center gap-1">
+              <ThemeSwitcher />
               <NotificationDropdown
                 notifications={notifications}
                 unreadCount={unreadCount}
@@ -445,15 +447,18 @@ export default function Layout() {
             <Logo size={18} className="text-port-accent" />
             <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
-          <NotificationDropdown
-            notifications={notifications}
-            unreadCount={unreadCount}
-            onMarkAsRead={markAsRead}
-            onMarkAllAsRead={markAllAsRead}
-            onRemove={removeNotification}
-            onClearAll={clearAll}
-            position="top"
-          />
+          <div className="flex items-center gap-1">
+            <ThemeSwitcher position="below" />
+            <NotificationDropdown
+              notifications={notifications}
+              unreadCount={unreadCount}
+              onMarkAsRead={markAsRead}
+              onMarkAllAsRead={markAllAsRead}
+              onRemove={removeNotification}
+              onClearAll={clearAll}
+              position="top"
+            />
+          </div>
         </header>
 
         {/* Main content */}
