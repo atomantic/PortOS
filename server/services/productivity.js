@@ -719,3 +719,80 @@ export async function getActivityCalendar(weeks = 12) {
     currentStreak: data.streaks?.currentDaily || 0
   };
 }
+
+/**
+ * Get optimal time indicator for current hour
+ * Compares current hour's success rate to find peak windows
+ * @returns {Object} Optimal time data
+ */
+export async function getOptimalTimeInfo() {
+  const data = await loadProductivity();
+  const hourlyPatterns = data.hourlyPatterns || {};
+  const currentHour = new Date().getHours();
+
+  // Need minimum data to make meaningful recommendations
+  const minTasksForReliable = 3;
+
+  // Get hours with enough data, sorted by success rate
+  const rankedHours = Object.entries(hourlyPatterns)
+    .filter(([, p]) => p.tasks >= minTasksForReliable)
+    .map(([hour, p]) => ({
+      hour: parseInt(hour, 10),
+      tasks: p.tasks,
+      successRate: p.successRate
+    }))
+    .sort((a, b) => b.successRate - a.successRate);
+
+  // Not enough data
+  if (rankedHours.length < 3) {
+    return { hasData: false };
+  }
+
+  // Find current hour's data
+  const currentHourData = hourlyPatterns[currentHour];
+  const currentSuccessRate = currentHourData?.successRate ?? null;
+  const currentTasks = currentHourData?.tasks ?? 0;
+
+  // Calculate average success rate
+  const avgSuccessRate = rankedHours.reduce((sum, h) => sum + h.successRate, 0) / rankedHours.length;
+
+  // Determine if current hour is optimal (top 25%), good (above avg), or suboptimal
+  const topThreshold = Math.ceil(rankedHours.length * 0.25);
+  const topHours = rankedHours.slice(0, topThreshold).map(h => h.hour);
+  const isOptimal = topHours.includes(currentHour);
+  const isAboveAverage = currentSuccessRate !== null && currentSuccessRate >= avgSuccessRate;
+
+  // Find next optimal hour if current isn't optimal
+  let nextOptimalHour = null;
+  if (!isOptimal) {
+    // Find nearest future top hour
+    for (let offset = 1; offset < 24; offset++) {
+      const checkHour = (currentHour + offset) % 24;
+      if (topHours.includes(checkHour)) {
+        nextOptimalHour = checkHour;
+        break;
+      }
+    }
+  }
+
+  // Format hour for display
+  const formatHour = (h) => {
+    if (h === 0) return '12AM';
+    if (h === 12) return '12PM';
+    return h < 12 ? `${h}AM` : `${h - 12}PM`;
+  };
+
+  return {
+    hasData: true,
+    currentHour,
+    currentSuccessRate,
+    currentTasks,
+    isOptimal,
+    isAboveAverage,
+    topHours,
+    nextOptimalHour,
+    nextOptimalFormatted: nextOptimalHour !== null ? formatHour(nextOptimalHour) : null,
+    avgSuccessRate: Math.round(avgSuccessRate),
+    peakSuccessRate: rankedHours[0]?.successRate ?? 0
+  };
+}

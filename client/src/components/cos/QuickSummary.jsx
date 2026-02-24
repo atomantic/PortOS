@@ -13,7 +13,9 @@ import {
   ChevronRight,
   Award,
   Hourglass,
-  Calendar
+  Calendar,
+  Sun,
+  Sunset
 } from 'lucide-react';
 import * as api from '../../services/api';
 
@@ -43,7 +45,7 @@ export default function QuickSummary() {
     return null;
   }
 
-  const { today, streak, nextJob, queue, velocity, weekComparison } = summary;
+  const { today, streak, nextJob, queue, velocity, weekComparison, optimalTime } = summary;
 
   // Only show if there's meaningful data to display
   const hasActivity = today.completed > 0 || today.running > 0 || streak.current > 0 || queue.total > 0;
@@ -144,6 +146,45 @@ export default function QuickSummary() {
               {velocityDisplay.percentage}%
             </span>
             <span className="text-gray-500 text-xs">vs avg</span>
+          </div>
+        )}
+
+        {/* Optimal Time Indicator */}
+        {optimalTime?.hasData && (
+          <div
+            className="flex items-center gap-1.5"
+            title={optimalTime.isOptimal
+              ? `This is a peak productivity hour (${optimalTime.currentSuccessRate}% success rate)`
+              : optimalTime.nextOptimalFormatted
+                ? `Next peak hour: ${optimalTime.nextOptimalFormatted}`
+                : 'Current hour performance data'
+            }
+          >
+            {optimalTime.isOptimal ? (
+              <>
+                <Sun size={14} className="text-yellow-400" />
+                <span className="text-gray-400">Time:</span>
+                <span className="font-medium text-yellow-400 px-1.5 py-0.5 rounded bg-yellow-500/15">
+                  Peak Hour
+                </span>
+              </>
+            ) : optimalTime.isAboveAverage ? (
+              <>
+                <Sun size={14} className="text-port-success/70" />
+                <span className="text-gray-400">Time:</span>
+                <span className="font-medium text-port-success px-1.5 py-0.5 rounded bg-port-success/10">
+                  Good
+                </span>
+              </>
+            ) : optimalTime.nextOptimalFormatted ? (
+              <>
+                <Sunset size={14} className="text-gray-500" />
+                <span className="text-gray-400">Peak:</span>
+                <span className="font-medium text-gray-300">
+                  {optimalTime.nextOptimalFormatted}
+                </span>
+              </>
+            ) : null}
           </div>
         )}
 
