@@ -168,7 +168,7 @@ const DEFAULT_CONFIG = {
     { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
   ],
   autoStart: false,                        // Legacy: use alwaysOn instead
-  selfImprovementEnabled: true,            // Allow CoS to improve itself (PortOS codebase)
+  selfImprovementEnabled: false,           // Allow CoS to improve itself (PortOS codebase)
   appImprovementEnabled: true,             // Allow CoS to improve managed apps
   avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil'
   // Always-on mode settings
@@ -180,7 +180,7 @@ const DEFAULT_CONFIG = {
   immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
   proactiveMode: true,                     // Be proactive about finding work
   autonomousJobsEnabled: true,             // Enable recurring autonomous jobs (git maintenance, brain processing, etc.)
-  autonomyLevel: 'manager',                // Default autonomy level preset (standby/assistant/manager/yolo)
+  autonomyLevel: 'standby',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   autoFixThresholds: {
     maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed

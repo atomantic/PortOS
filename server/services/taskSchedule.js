@@ -484,19 +484,19 @@ IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev bran
 
 // Default interval settings for self-improvement task types
 const DEFAULT_SELF_IMPROVEMENT_INTERVALS = {
-  'ui-bugs': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'mobile-responsive': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'security': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'code-quality': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'console-errors': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'performance': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'cos-enhancement': { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'test-coverage': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'documentation': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'feature-ideas': { type: INTERVAL_TYPES.DAILY, enabled: true, providerId: null, model: null, prompt: null },
-  'accessibility': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'release-check': { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null }
+  'ui-bugs': { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'mobile-responsive': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'security': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'code-quality': { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'console-errors': { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'performance': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'cos-enhancement': { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'test-coverage': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'documentation': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'feature-ideas': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null },
+  'accessibility': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'dependency-updates': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'release-check': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null }
 };
 
 // Default prompts for app improvement task types (templates with {appName} and {repoPath} variables)

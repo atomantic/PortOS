@@ -155,7 +155,7 @@ const PROMPT_THEMES = [
 
 const DEFAULT_CONFIG = {
   intervalHours: 24,
-  enabled: true,
+  enabled: false,
   lastPromptAt: null,
   lastPromptId: null
 };
