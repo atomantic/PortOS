@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2, RotateCcw, Download, Rocket } from 'lucide-react';
+import { GitBranch, Plus, Minus, FileText, Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, Maximize2, RotateCcw, Download, Rocket, Upload, ArrowUpDown, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -1762,6 +1762,10 @@ export function GitPage() {
   const [updating, setUpdating] = useState(false);
   const [releasing, setReleasing] = useState(false);
   const [showReleaseConfirm, setShowReleaseConfirm] = useState(false);
+  const [branches, setBranches] = useState([]);
+  const [checkingOut, setCheckingOut] = useState(null);
+  const [pushing, setPushing] = useState(null);
+  const [syncing, setSyncing] = useState(null);
 
   const selectedApp = apps.find(a => a.id === selectedAppId);
   const repoPath = selectedApp?.repoPath || '';
@@ -1784,12 +1788,16 @@ export function GitPage() {
   const loadGitInfo = async () => {
     if (!repoPath) return;
     setLoading(true);
-    const info = await api.getGitInfo(repoPath).catch(() => null);
+    const [info, branchesResult] = await Promise.all([
+      api.getGitInfo(repoPath).catch(() => null),
+      api.getBranches(repoPath).catch(() => ({ branches: [] }))
+    ]);
     let comparison = null;
     if (info?.baseBranch && info?.devBranch) {
       comparison = await api.getBranchComparison(repoPath, info.baseBranch, info.devBranch).catch(() => null);
     }
     setGitInfo(info);
+    setBranches(branchesResult.branches || []);
     setBranchComparison(comparison);
     setLoading(false);
   };
@@ -1861,6 +1869,41 @@ export function GitPage() {
     if (result) {
       toast.success(`Release task queued for ${appName} — check CoS Agents tab`);
       await api.forceCosEvaluate().catch(() => null);
+    }
+  };
+
+  const handleCheckout = async (branchName) => {
+    if (!repoPath || checkingOut) return;
+    setCheckingOut(branchName);
+    const result = await api.checkoutBranch(repoPath, branchName).catch(() => null);
+    setCheckingOut(null);
+    if (result?.success) {
+      toast.success(`Switched to ${branchName}`);
+      await loadGitInfo();
+    }
+  };
+
+  const handlePush = async (branchName) => {
+    if (!repoPath || pushing) return;
+    setPushing(branchName);
+    const result = await api.pushBranch(repoPath, branchName).catch(() => null);
+    setPushing(null);
+    if (result?.success) {
+      toast.success(`Pushed ${branchName}`);
+      await loadGitInfo();
+    }
+  };
+
+  const handleSync = async (branchName) => {
+    if (!repoPath || syncing) return;
+    setSyncing(branchName);
+    const result = await api.syncBranch(repoPath, branchName).catch(() => null);
+    setSyncing(null);
+    if (result?.success) {
+      toast.success(`Synced ${branchName}`);
+      await loadGitInfo();
+    } else if (result?.error) {
+      toast.error(`Sync failed: ${result.error}`);
     }
   };
 
@@ -2035,23 +2078,103 @@ export function GitPage() {
             </div>
 
             {/* Recent Commits */}
-            <div className="bg-port-card border border-port-border rounded-xl p-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Commits</h3>
-              <div className="space-y-2">
-                {gitInfo.recentCommits?.map((commit, i) => (
-                  <div key={i} className="py-2 border-b border-port-border last:border-0">
-                    <div className="flex items-center gap-2">
-                      <code className="text-xs text-port-accent">{commit.hash}</code>
-                      <span className="text-sm text-white truncate">{commit.message}</span>
+            <div className="space-y-4">
+              <div className="bg-port-card border border-port-border rounded-xl p-4">
+                <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Commits</h3>
+                <div className="space-y-2">
+                  {gitInfo.recentCommits?.map((commit, i) => (
+                    <div key={i} className="py-2 border-b border-port-border last:border-0">
+                      <div className="flex items-center gap-2">
+                        <code className="text-xs text-port-accent">{commit.hash}</code>
+                        <span className="text-sm text-white truncate">{commit.message}</span>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {commit.author} • {new Date(commit.date).toLocaleDateString()}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {commit.author} • {new Date(commit.date).toLocaleDateString()}
+                  ))}
+                  {(!gitInfo.recentCommits || gitInfo.recentCommits.length === 0) && (
+                    <div className="text-gray-500 text-sm">No commits</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Local Branches */}
+              <div className="bg-port-card border border-port-border rounded-xl p-4">
+                <h3 className="text-sm font-medium text-gray-400 mb-3">Local Branches</h3>
+                <div className="space-y-2 max-h-64 overflow-auto">
+                  {branches.map((branch) => (
+                    <div
+                      key={branch.name}
+                      className={`flex items-center justify-between py-2 px-2 rounded-lg ${branch.current ? 'bg-port-accent/10 border border-port-accent/30' : 'hover:bg-port-bg'}`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        {branch.current ? (
+                          <Check size={14} className="text-port-accent shrink-0" />
+                        ) : (
+                          <GitBranch size={14} className="text-gray-500 shrink-0" />
+                        )}
+                        <span className={`text-sm truncate ${branch.current ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
+                          {branch.name}
+                        </span>
+                        {branch.tracking && (
+                          <span className="text-xs text-gray-500 shrink-0">
+                            {branch.ahead > 0 && <span className="text-port-success">+{branch.ahead}</span>}
+                            {branch.ahead > 0 && branch.behind > 0 && ' / '}
+                            {branch.behind > 0 && <span className="text-port-warning">-{branch.behind}</span>}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!branch.current && (
+                          <button
+                            onClick={() => handleCheckout(branch.name)}
+                            disabled={checkingOut === branch.name}
+                            className="p-1.5 text-gray-400 hover:text-white hover:bg-port-bg rounded disabled:opacity-50"
+                            title="Checkout"
+                          >
+                            {checkingOut === branch.name ? (
+                              <RefreshCw size={14} className="animate-spin" />
+                            ) : (
+                              <Check size={14} />
+                            )}
+                          </button>
+                        )}
+                        {branch.tracking && branch.ahead > 0 && (
+                          <button
+                            onClick={() => handlePush(branch.name)}
+                            disabled={pushing === branch.name}
+                            className="p-1.5 text-gray-400 hover:text-port-success hover:bg-port-bg rounded disabled:opacity-50"
+                            title="Push"
+                          >
+                            {pushing === branch.name ? (
+                              <RefreshCw size={14} className="animate-spin" />
+                            ) : (
+                              <Upload size={14} />
+                            )}
+                          </button>
+                        )}
+                        {branch.tracking && (
+                          <button
+                            onClick={() => handleSync(branch.name)}
+                            disabled={syncing === branch.name}
+                            className="p-1.5 text-gray-400 hover:text-port-accent hover:bg-port-bg rounded disabled:opacity-50"
+                            title="Sync (pull & push)"
+                          >
+                            {syncing === branch.name ? (
+                              <RefreshCw size={14} className="animate-spin" />
+                            ) : (
+                              <ArrowUpDown size={14} />
+                            )}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {(!gitInfo.recentCommits || gitInfo.recentCommits.length === 0) && (
-                  <div className="text-gray-500 text-sm">No commits</div>
-                )}
+                  ))}
+                  {branches.length === 0 && (
+                    <div className="text-gray-500 text-sm">No branches found</div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

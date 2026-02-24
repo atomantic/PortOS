@@ -232,6 +232,22 @@ export const pushBranch = (path, branch) => request('/git/push', {
   method: 'POST',
   body: JSON.stringify({ path, branch })
 });
+export const getBranches = (path) => request('/git/branches', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});
+export const checkoutBranch = (path, branch) => request('/git/checkout', {
+  method: 'POST',
+  body: JSON.stringify({ path, branch })
+});
+export const pullBranch = (path) => request('/git/pull', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});
+export const syncBranch = (path, branch) => request('/git/sync', {
+  method: 'POST',
+  body: JSON.stringify({ path, branch })
+});
 
 // Usage
 export const getUsage = () => request('/usage');
