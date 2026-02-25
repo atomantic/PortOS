@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
   Wifi, WifiOff, CircleDot, ChevronDown, ChevronRight,
-  Cpu, HardDrive, Activity, Bot, MonitorSmartphone, Search
+  Cpu, HardDrive, Activity, Bot, MonitorSmartphone, Search,
+  ArrowUpRight, ArrowDownLeft, ArrowLeftRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import socket from '../services/socket';
@@ -272,6 +273,34 @@ function QueryPanel({ peerId }) {
   );
 }
 
+function DirectionBadge({ directions = [] }) {
+  const hasInbound = directions.includes('inbound');
+  const hasOutbound = directions.includes('outbound');
+
+  if (hasInbound && hasOutbound) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] text-port-success bg-port-success/10 rounded px-1.5 py-0.5" title="Bidirectional — we added them and they added us">
+        <ArrowLeftRight size={10} /> mutual
+      </span>
+    );
+  }
+  if (hasOutbound) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 rounded px-1.5 py-0.5" title="Outbound — we added this peer">
+        <ArrowUpRight size={10} /> outbound
+      </span>
+    );
+  }
+  if (hasInbound) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] text-port-warning bg-port-warning/10 rounded px-1.5 py-0.5" title="Inbound — this peer added us">
+        <ArrowDownLeft size={10} /> inbound
+      </span>
+    );
+  }
+  return null;
+}
+
 function PeerCard({ peer, onRefresh }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
@@ -366,7 +395,10 @@ function PeerCard({ peer, onRefresh }) {
         </div>
       </div>
 
-      <p className="text-xs text-gray-500 font-mono mb-3">{peer.address}:{peer.port}</p>
+      <div className="flex items-center gap-2 mb-3">
+        <p className="text-xs text-gray-500 font-mono">{peer.address}:{peer.port}</p>
+        <DirectionBadge directions={peer.directions} />
+      </div>
 
       <HealthSummary health={peer.lastHealth} />
 

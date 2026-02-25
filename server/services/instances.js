@@ -96,7 +96,8 @@ export async function addPeer({ address, port = 5554, name }) {
       lastSeen: null,
       lastHealth: null,
       status: 'unknown',
-      enabled: true
+      enabled: true,
+      directions: ['outbound']
     };
     data.peers.push(entry);
     console.log(`🌐 Peer added: ${entry.name} (${entry.address}:${entry.port})`);
@@ -209,7 +210,7 @@ export async function queryPeer(id, apiPath) {
 // --- Announce (Bidirectional Registration) ---
 
 export async function handleAnnounce({ address, port, instanceId, name }) {
-  return withData(async (data) => {
+  const result = await withData(async (data) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
     // Fallback: check by address + port
@@ -222,12 +223,15 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       existing.status = 'online';
       existing.instanceId = instanceId;
       if (name) existing.name = name;
+      // Mark that this peer has announced to us (inbound connection)
+      existing.directions = existing.directions || [];
+      if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
       console.log(`🌐 Peer announced (existing): ${existing.name} (${address}:${port})`);
       instanceEvents.emit('peers:updated', data.peers);
       return { created: false, peer: existing };
     }
 
-    // Create new peer entry
+    // Create new peer entry from remote announcement
     const peer = {
       id: crypto.randomUUID(),
       address,
@@ -238,13 +242,21 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       lastSeen: new Date().toISOString(),
       lastHealth: null,
       status: 'online',
-      enabled: true
+      enabled: true,
+      directions: ['inbound']
     };
     data.peers.push(peer);
     console.log(`🌐 Peer announced (new): ${peer.name} (${address}:${port})`);
     instanceEvents.emit('peers:updated', data.peers);
     return { created: true, peer };
   });
+
+  // Immediately probe newly announced peers to populate health data
+  if (result.created) {
+    probePeer(result.peer).catch(() => {});
+  }
+
+  return result;
 }
 
 async function announceSelf(address, port) {
@@ -269,6 +281,8 @@ async function announceSelf(address, port) {
     });
     if (res.ok) {
       console.log(`🌐 Announced self to ${address}:${port}`);
+      // Mark outbound direction on the local peer record
+      await markDirection(address, port, 'outbound');
     } else {
       console.log(`🌐 Announce to ${address}:${port} failed: HTTP ${res.status}`);
     }
@@ -277,6 +291,18 @@ async function announceSelf(address, port) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function markDirection(address, port, direction) {
+  await withData(async (data) => {
+    const peer = data.peers.find(p => p.address === address && p.port === port);
+    if (!peer) return;
+    peer.directions = peer.directions || [];
+    if (!peer.directions.includes(direction)) {
+      peer.directions.push(direction);
+      instanceEvents.emit('peers:updated', data.peers);
+    }
+  });
 }
 
 // --- Polling ---
