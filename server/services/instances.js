@@ -257,7 +257,7 @@ async function announceSelf(address, port) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -267,8 +267,13 @@ async function announceSelf(address, port) {
       }),
       signal: controller.signal
     });
-  } catch {
-    // Fire-and-forget — peer may be offline or not running PortOS
+    if (res.ok) {
+      console.log(`🌐 Announced self to ${address}:${port}`);
+    } else {
+      console.log(`🌐 Announce to ${address}:${port} failed: HTTP ${res.status}`);
+    }
+  } catch (err) {
+    console.log(`🌐 Announce to ${address}:${port} unreachable: ${err.message}`);
   } finally {
     clearTimeout(timeout);
   }
