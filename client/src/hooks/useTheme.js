@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 const STORAGE_KEY = 'portos-theme';
 
@@ -108,11 +108,32 @@ export default function useTheme() {
     return id;
   });
 
+  // On mount, fetch server-side theme and apply if different from localStorage
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(settings => {
+        const serverTheme = settings?.theme;
+        if (serverTheme && THEMES[serverTheme] && serverTheme !== themeId) {
+          localStorage.setItem(STORAGE_KEY, serverTheme);
+          applyTheme(serverTheme);
+          setThemeId(serverTheme);
+        }
+      })
+      .catch(() => {}); // Server unreachable — use localStorage fallback
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const setTheme = useCallback((id) => {
     if (!THEMES[id]) return;
     localStorage.setItem(STORAGE_KEY, id);
     applyTheme(id);
     setThemeId(id);
+    // Persist to server (fire-and-forget)
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: id }),
+    }).catch(() => {});
   }, []);
 
   return { themeId, theme: THEMES[themeId], themes: THEMES, setTheme };

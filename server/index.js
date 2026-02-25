@@ -41,6 +41,7 @@ import moltworldWsRoutes from './routes/moltworldWs.js';
 import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import instancesRoutes from './routes/instances.js';
+import settingsRoutes from './routes/settings.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
@@ -211,6 +212,7 @@ app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/jira', jiraRoutes);
 app.use('/api/instances', instancesRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Initialize script runner
 initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));
