@@ -7,6 +7,7 @@
 
 import { DEFAULT_MEMORY_CONFIG } from './memory.js';
 import { getProviderById } from './providers.js';
+import { getConfig as getCosConfig } from './cos.js';
 
 // Cache for embedding config (loaded from CoS config)
 let embeddingConfig = null;
@@ -87,22 +88,36 @@ async function ensureEmbeddingModelLoaded(config) {
 }
 
 /**
+ * Reset initialization so the next embedding call re-reads config.
+ */
+export function reinitialize() {
+  initialized = false;
+  modelEnsured = false;
+  embeddingConfig = null;
+}
+
+/**
  * Initialize embedding config from provider settings
  */
 async function initConfig() {
   if (initialized) return;
   initialized = true;
 
-  const provider = await getProviderById('lmstudio').catch(() => null);
+  const cosConfig = await getCosConfig().catch(() => ({}));
+  const providerId = cosConfig.embeddingProviderId || 'lmstudio';
+  const configModel = cosConfig.embeddingModel || '';
+
+  const provider = await getProviderById(providerId).catch(() => null);
   if (provider?.endpoint) {
     const endpoint = provider.endpoint.endsWith('/v1')
       ? `${provider.endpoint}/embeddings`
       : `${provider.endpoint}/v1/embeddings`;
     embeddingConfig = {
       ...DEFAULT_MEMORY_CONFIG,
-      embeddingEndpoint: endpoint
+      embeddingEndpoint: endpoint,
+      ...(configModel ? { embeddingModel: configModel } : {})
     };
-    console.log(`📚 Memory embeddings using provider endpoint: ${endpoint}`);
+    console.log(`📚 Memory embeddings using provider ${providerId}: ${endpoint}`);
   }
 }
 

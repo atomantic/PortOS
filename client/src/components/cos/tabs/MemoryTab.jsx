@@ -8,6 +8,8 @@ import { getAppName } from '../../../utils/formatters';
 import MemoryTimeline from './MemoryTimeline';
 import MemoryGraph from './MemoryGraph';
 import MemoryEditModal from './MemoryEditModal';
+import ProviderModelSelector from '../../ProviderModelSelector';
+import useProviderModels from '../../../hooks/useProviderModels';
 
 export default function MemoryTab({ apps = [] }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -29,6 +31,28 @@ export default function MemoryTab({ apps = [] }) {
   }, [setSearchParams]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [editingMemory, setEditingMemory] = useState(null);
+
+  // Embedding provider/model configuration
+  const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
+  const [embeddingProviderId, setEmbeddingProviderId] = useState('');
+  const [embeddingModel, setEmbeddingModel] = useState('');
+  const [embeddingConfigLoaded, setEmbeddingConfigLoaded] = useState(false);
+
+  // Load current embedding config from CoS config
+  useEffect(() => {
+    if (embeddingConfigLoaded) return;
+    api.getCosConfig().then(cfg => {
+      if (cfg?.embeddingProviderId) {
+        setEmbeddingProviderId(cfg.embeddingProviderId);
+        setProviderHook(cfg.embeddingProviderId);
+      }
+      if (cfg?.embeddingModel) {
+        setEmbeddingModel(cfg.embeddingModel);
+        setModelHook(cfg.embeddingModel);
+      }
+      setEmbeddingConfigLoaded(true);
+    }).catch(() => setEmbeddingConfigLoaded(true));
+  }, [embeddingConfigLoaded, setProviderHook, setModelHook]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -256,9 +280,29 @@ export default function MemoryTab({ apps = [] }) {
                       {embeddingStatus?.error && (
                         <p className="text-sm text-gray-500 mt-1">Error: {embeddingStatus.error}</p>
                       )}
-                      <p className="text-sm text-gray-400 mt-2">
-                        Ensure LM Studio or a compatible embedding service is running with an embedding model loaded.
-                      </p>
+                      <div className="mt-3">
+                        <ProviderModelSelector
+                          providers={providers}
+                          selectedProviderId={embeddingProviderId || hookProviderId}
+                          selectedModel={embeddingModel || hookModel}
+                          availableModels={availableModels}
+                          onProviderChange={(id) => { setEmbeddingProviderId(id); setProviderHook(id); setEmbeddingModel(''); }}
+                          onModelChange={(m) => { setEmbeddingModel(m); setModelHook(m); }}
+                          label="Embedding Provider"
+                        />
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const pid = embeddingProviderId || hookProviderId;
+                          const mid = embeddingModel || hookModel;
+                          await api.updateCosConfig({ embeddingProviderId: pid, embeddingModel: mid });
+                          toast.success('Embedding config saved');
+                          fetchData();
+                        }}
+                        className="mt-3 px-4 py-2 min-h-[40px] text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+                      >
+                        Save &amp; Retry
+                      </button>
                     </div>
                   )}
                   {embeddingStatus?.available && (

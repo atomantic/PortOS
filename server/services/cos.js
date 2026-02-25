@@ -295,6 +295,8 @@ const DEFAULT_CONFIG = {
   autonomyLevel: 'standby',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   completedAgentRetentionMs: 86400000,     // 24h - auto-archive completed agents from state.json after this
+  embeddingProviderId: 'lmstudio',           // Provider for memory embeddings
+  embeddingModel: '',                         // Empty = auto-detect from provider
   autoFixThresholds: {
     maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed
     allowedCategories: [                   // Categories that can auto-execute
