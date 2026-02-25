@@ -297,19 +297,20 @@ export default function Layout() {
               {item.label}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Badge for expanded state on collapsible sections */}
-            {item.showBadge && unreadCount > 0 && !collapsed && (
-              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
-            )}
-            {!collapsed && (
-              expandedSections[item.label]
+          {!collapsed && (
+            <div className="flex items-center gap-2">
+              {/* Badge for expanded state on collapsible sections */}
+              {item.showBadge && unreadCount > 0 && (
+                <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+              {expandedSections[item.label]
                 ? <ChevronDown size={16} />
                 : <ChevronRight size={16} />
-            )}
-          </div>
+              }
+            </div>
+          )}
         </button>
 
         {/* Children items */}
