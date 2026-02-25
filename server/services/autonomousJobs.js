@@ -14,12 +14,13 @@
  * - Custom user-defined jobs
  */
 
-import { writeFile, readFile } from 'fs/promises'
+import { writeFile, readFile, rename } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js'
+import { createMutex } from '../lib/asyncMutex.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
 
 /**
@@ -35,6 +36,7 @@ const __dirname = dirname(__filename)
 const DATA_DIR = PATHS.cos
 const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
 const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
+const withLock = createMutex()
 
 /**
  * Map job IDs to their skill template filenames
@@ -322,7 +324,9 @@ function mergeWithDefaults(loaded) {
 async function saveJobs(data) {
   await ensureDataDir()
   data.lastUpdated = new Date().toISOString()
-  await writeFile(JOBS_FILE, JSON.stringify(data, null, 2))
+  const tmp = JOBS_FILE + '.tmp'
+  await writeFile(tmp, JSON.stringify(data, null, 2))
+  await rename(tmp, JOBS_FILE)
 }
 
 /**
@@ -418,35 +422,37 @@ async function getDueJobs() {
  * @returns {Promise<Object>} Created job
  */
 async function createJob(jobData) {
-  const data = await loadJobs()
-  const now = new Date().toISOString()
+  return withLock(async () => {
+    const data = await loadJobs()
+    const now = new Date().toISOString()
 
-  const job = {
-    id: jobData.id || `job-${uuidv4().slice(0, 8)}`,
-    name: jobData.name,
-    description: jobData.description || '',
-    category: jobData.category || 'custom',
-    interval: jobData.interval || 'weekly',
-    intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
-    scheduledTime: jobData.scheduledTime || null,
-    weekdaysOnly: jobData.weekdaysOnly || false,
-    enabled: jobData.enabled !== undefined ? jobData.enabled : false,
-    priority: jobData.priority || 'MEDIUM',
-    autonomyLevel: jobData.autonomyLevel || 'manager',
-    promptTemplate: jobData.promptTemplate || '',
-    lastRun: null,
-    runCount: 0,
-    createdAt: now,
-    updatedAt: now
-  }
+    const job = {
+      id: jobData.id || `job-${uuidv4().slice(0, 8)}`,
+      name: jobData.name,
+      description: jobData.description || '',
+      category: jobData.category || 'custom',
+      interval: jobData.interval || 'weekly',
+      intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
+      scheduledTime: jobData.scheduledTime || null,
+      weekdaysOnly: jobData.weekdaysOnly || false,
+      enabled: jobData.enabled !== undefined ? jobData.enabled : false,
+      priority: jobData.priority || 'MEDIUM',
+      autonomyLevel: jobData.autonomyLevel || 'manager',
+      promptTemplate: jobData.promptTemplate || '',
+      lastRun: null,
+      runCount: 0,
+      createdAt: now,
+      updatedAt: now
+    }
 
-  data.jobs.push(job)
-  await saveJobs(data)
+    data.jobs.push(job)
+    await saveJobs(data)
 
-  console.log(`🤖 Autonomous job created: ${job.name}`)
-  cosEvents.emit('jobs:created', { id: job.id, name: job.name })
+    console.log(`🤖 Autonomous job created: ${job.name}`)
+    cosEvents.emit('jobs:created', { id: job.id, name: job.name })
 
-  return job
+    return job
+  })
 }
 
 /**
@@ -456,33 +462,35 @@ async function createJob(jobData) {
  * @returns {Promise<Object|null>} Updated job or null
  */
 async function updateJob(jobId, updates) {
-  const data = await loadJobs()
-  const job = data.jobs.find(j => j.id === jobId)
-  if (!job) return null
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job) return null
 
-  const updatableFields = [
-    'name', 'description', 'category', 'interval', 'intervalMs',
-    'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
-  ]
+    const updatableFields = [
+      'name', 'description', 'category', 'interval', 'intervalMs',
+      'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
+    ]
 
-  for (const field of updatableFields) {
-    if (updates[field] !== undefined) {
-      job[field] = updates[field]
+    for (const field of updatableFields) {
+      if (updates[field] !== undefined) {
+        job[field] = updates[field]
+      }
     }
-  }
 
-  // Recalculate intervalMs if interval changed
-  if (updates.interval) {
-    job.intervalMs = resolveIntervalMs(updates.interval, updates.intervalMs)
-  }
+    // Recalculate intervalMs if interval changed
+    if (updates.interval) {
+      job.intervalMs = resolveIntervalMs(updates.interval, updates.intervalMs)
+    }
 
-  job.updatedAt = new Date().toISOString()
-  await saveJobs(data)
+    job.updatedAt = new Date().toISOString()
+    await saveJobs(data)
 
-  console.log(`🤖 Autonomous job updated: ${job.name}`)
-  cosEvents.emit('jobs:updated', { id: job.id, updates })
+    console.log(`🤖 Autonomous job updated: ${job.name}`)
+    cosEvents.emit('jobs:updated', { id: job.id, updates })
 
-  return job
+    return job
+  })
 }
 
 /**
@@ -491,17 +499,19 @@ async function updateJob(jobId, updates) {
  * @returns {Promise<boolean>}
  */
 async function deleteJob(jobId) {
-  const data = await loadJobs()
-  const idx = data.jobs.findIndex(j => j.id === jobId)
-  if (idx === -1) return false
+  return withLock(async () => {
+    const data = await loadJobs()
+    const idx = data.jobs.findIndex(j => j.id === jobId)
+    if (idx === -1) return false
 
-  const deleted = data.jobs.splice(idx, 1)[0]
-  await saveJobs(data)
+    const deleted = data.jobs.splice(idx, 1)[0]
+    await saveJobs(data)
 
-  console.log(`🗑️ Autonomous job deleted: ${deleted.name}`)
-  cosEvents.emit('jobs:deleted', { id: jobId })
+    console.log(`🗑️ Autonomous job deleted: ${deleted.name}`)
+    cosEvents.emit('jobs:deleted', { id: jobId })
 
-  return true
+    return true
+  })
 }
 
 /**
@@ -510,20 +520,22 @@ async function deleteJob(jobId) {
  * @returns {Promise<Object|null>} Updated job
  */
 async function recordJobExecution(jobId) {
-  const data = await loadJobs()
-  const job = data.jobs.find(j => j.id === jobId)
-  if (!job) return null
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job) return null
 
-  job.lastRun = new Date().toISOString()
-  job.runCount = (job.runCount || 0) + 1
-  job.updatedAt = job.lastRun
+    job.lastRun = new Date().toISOString()
+    job.runCount = (job.runCount || 0) + 1
+    job.updatedAt = job.lastRun
 
-  await saveJobs(data)
+    await saveJobs(data)
 
-  console.log(`🤖 Job executed: ${job.name} (run #${job.runCount})`)
-  cosEvents.emit('jobs:executed', { id: jobId, runCount: job.runCount })
+    console.log(`🤖 Job executed: ${job.name} (run #${job.runCount})`)
+    cosEvents.emit('jobs:executed', { id: jobId, runCount: job.runCount })
 
-  return job
+    return job
+  })
 }
 
 /**
@@ -532,20 +544,22 @@ async function recordJobExecution(jobId) {
  * @returns {Promise<Object|null>}
  */
 async function toggleJob(jobId) {
-  const data = await loadJobs()
-  const job = data.jobs.find(j => j.id === jobId)
-  if (!job) return null
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job) return null
 
-  job.enabled = !job.enabled
-  job.updatedAt = new Date().toISOString()
+    job.enabled = !job.enabled
+    job.updatedAt = new Date().toISOString()
 
-  await saveJobs(data)
+    await saveJobs(data)
 
-  const stateLabel = job.enabled ? 'enabled' : 'disabled'
-  console.log(`🤖 Autonomous job ${stateLabel}: ${job.name}`)
-  cosEvents.emit('jobs:toggled', { id: jobId, enabled: job.enabled })
+    const stateLabel = job.enabled ? 'enabled' : 'disabled'
+    console.log(`🤖 Autonomous job ${stateLabel}: ${job.name}`)
+    cosEvents.emit('jobs:toggled', { id: jobId, enabled: job.enabled })
 
-  return job
+    return job
+  })
 }
 
 /**

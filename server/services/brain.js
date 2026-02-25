@@ -134,7 +134,11 @@ function parseJsonResponse(content) {
     jsonStr = objectMatch[0];
   }
 
-  return JSON.parse(jsonStr);
+  try {
+    return JSON.parse(jsonStr);
+  } catch (err) {
+    throw new Error(`Failed to parse AI JSON response: ${err.message}`);
+  }
 }
 
 /**

@@ -11,6 +11,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
+import { safeJSONParse } from '../lib/fileUtils.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin.js';
@@ -284,7 +285,18 @@ async function loadTasteProfile() {
   }
 
   const raw = await readFile(TASTE_PROFILE_FILE, 'utf-8');
-  profileCache = JSON.parse(raw);
+  const defaultProfile = {
+    version: '1.0.0',
+    createdAt: null,
+    updatedAt: null,
+    sections: {},
+    profileSummary: null,
+    lastSessionAt: null
+  };
+  for (const sectionId of Object.keys(TASTE_SECTIONS)) {
+    defaultProfile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
+  }
+  profileCache = safeJSONParse(raw, defaultProfile);
   return profileCache;
 }
 

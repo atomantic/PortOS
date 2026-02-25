@@ -6,12 +6,15 @@
  * to provide smarter task prioritization and model selection.
  */
 
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cosEvents, emitLog } from './cos.js';
 import { readJSONFile } from '../lib/fileUtils.js';
+import { createMutex } from '../lib/asyncMutex.js';
+
+const withLock = createMutex();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -75,7 +78,9 @@ async function saveLearningData(data) {
     }
   }
 
-  await writeFile(LEARNING_FILE, JSON.stringify(data, null, 2));
+  const tmp = `${LEARNING_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(data, null, 2));
+  await rename(tmp, LEARNING_FILE);
 }
 
 /**
@@ -142,6 +147,7 @@ function extractTaskType(task) {
  * Record a completed task for learning
  */
 export async function recordTaskCompletion(agent, task) {
+  return withLock(async () => {
   const data = await loadLearningData();
 
   const taskType = extractTaskType(task);
@@ -281,6 +287,7 @@ export async function recordTaskCompletion(agent, task) {
   }, '[TaskLearning]');
 
   return data;
+  });
 }
 
 /**
@@ -625,24 +632,26 @@ export async function getPerformanceSummary() {
  * Stores observations about what works and what doesn't
  */
 export async function recordLearningInsight(insight) {
-  const data = await loadLearningData();
+  return withLock(async () => {
+    const data = await loadLearningData();
 
-  if (!data.insights) {
-    data.insights = [];
-  }
+    if (!data.insights) {
+      data.insights = [];
+    }
 
-  data.insights.push({
-    ...insight,
-    recordedAt: new Date().toISOString()
+    data.insights.push({
+      ...insight,
+      recordedAt: new Date().toISOString()
+    });
+
+    // Keep only last 50 insights
+    if (data.insights.length > 50) {
+      data.insights = data.insights.slice(-50);
+    }
+
+    await saveLearningData(data);
+    return insight;
   });
-
-  // Keep only last 50 insights
-  if (data.insights.length > 50) {
-    data.insights = data.insights.slice(-50);
-  }
-
-  await saveLearningData(data);
-  return insight;
 }
 
 /**
@@ -892,6 +901,7 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
  * @returns {Object} Summary of what was reset
  */
 export async function resetTaskTypeLearning(taskType) {
+  return withLock(async () => {
   const data = await loadLearningData();
 
   const metrics = data.byTaskType[taskType];
@@ -975,6 +985,7 @@ export async function resetTaskTypeLearning(taskType) {
       successRate: metrics.successRate
     }
   };
+  });
 }
 
 /**
@@ -1083,6 +1094,7 @@ export async function getAllTaskDurations() {
  * @returns {Object} Summary of changes made
  */
 export async function recalculateModelTierMetrics() {
+  return withLock(async () => {
   const data = await loadLearningData();
   const routingData = data.routingAccuracy || {};
   const oldTiers = data.byModelTier || {};
@@ -1154,6 +1166,7 @@ export async function recalculateModelTierMetrics() {
   }
 
   return { recalculated: changes.length > 0, changes };
+  });
 }
 
 /**

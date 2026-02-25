@@ -3,9 +3,9 @@ import { readFile, writeFile, mkdir, access } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { promisify } from 'util';
-import { exec as execCb } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 
-const exec = promisify(execCb);
+const execFileAsync = promisify(execFileCb);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -98,7 +98,7 @@ async function saveSession(sessionId, prompt, output, metadata) {
 
 // Get PM2 process list
 async function getProcessList() {
-  const { stdout } = await exec('pm2 jlist');
+  const { stdout } = await execFileAsync('pm2', ['jlist']);
   const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, '');
   const jsonStart = stripped.indexOf('[{');
   const jsonEnd = stripped.lastIndexOf('}]');
@@ -113,8 +113,8 @@ async function getProcessList() {
 
 // Get error logs for a process
 async function getProcessLogs(processName) {
-  const { stdout: errLogs } = await exec(`pm2 logs ${processName} --lines 100 --nostream --err`).catch(() => ({ stdout: '' }));
-  const { stdout: outLogs } = await exec(`pm2 logs ${processName} --lines 50 --nostream --out`).catch(() => ({ stdout: '' }));
+  const { stdout: errLogs } = await execFileAsync('pm2', ['logs', processName, '--lines', '100', '--nostream', '--err']).catch(() => ({ stdout: '' }));
+  const { stdout: outLogs } = await execFileAsync('pm2', ['logs', processName, '--lines', '50', '--nostream', '--out']).catch(() => ({ stdout: '' }));
   return { errLogs, outLogs };
 }
 

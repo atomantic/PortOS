@@ -67,7 +67,8 @@ export default function App() {
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="instances" element={<Instances />} />
-          <Route path="jira" element={<Jira />} />
+          <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
+          <Route path="devtools/jira" element={<Jira />} />
           <Route path="city" element={<CyberCity />} />
           <Route path="city/settings" element={<CyberCity />} />
           <Route path="agents" element={<Agents />} />

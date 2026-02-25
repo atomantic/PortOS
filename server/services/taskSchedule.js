@@ -25,6 +25,8 @@ import { readJSONFile } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 
+const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.env.PORT_UI || 5555}`;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '../../data/cos');
@@ -120,7 +122,7 @@ const DEFAULT_SELF_IMPROVEMENT_PROMPTS = {
 
 Use Playwright MCP (browser_navigate, browser_snapshot, browser_console_messages) to analyze PortOS UI:
 
-1. Navigate to http://localhost:5555/
+1. Navigate to ${PORTOS_UI_URL}/
 2. Check each main route: /, /apps, /cos, /cos/tasks, /cos/agents, /devtools, /devtools/history, /providers, /usage
 3. For each route:
    - Take a browser_snapshot to see the page structure
@@ -133,7 +135,7 @@ Use Playwright MCP (browser_navigate, browser_snapshot, browser_console_messages
 
 Use Playwright MCP to test PortOS at different viewport sizes:
 
-1. browser_resize to mobile (375x812), then navigate to http://localhost:5555/
+1. browser_resize to mobile (375x812), then navigate to ${PORTOS_UI_URL}/
 2. Take browser_snapshot and analyze for:
    - Text overflow or truncation
    - Buttons too small to tap (< 44px)
@@ -192,7 +194,7 @@ Refactor issues found and commit improvements.`,
 
 Use Playwright MCP to find and fix console errors:
 
-1. Navigate to http://localhost:5555/
+1. Navigate to ${PORTOS_UI_URL}/
 2. Call browser_console_messages with level: "error"
 3. Visit each route and capture errors:
    - /, /apps, /cos, /cos/tasks, /cos/agents
@@ -346,7 +348,7 @@ Think critically about what we have before adding more.`,
 
 Use Playwright MCP to audit PortOS accessibility:
 
-1. Navigate to http://localhost:5555/
+1. Navigate to ${PORTOS_UI_URL}/
 2. Use browser_snapshot to get accessibility tree
 3. Check each main route for:
    - Missing ARIA labels

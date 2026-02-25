@@ -173,7 +173,6 @@ app.use('/api/ports', portsRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
-app.use('/api', scaffoldRoutes); // Also mount at /api for /api/templates
 
 // AI Toolkit routes with PortOS extensions
 app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));

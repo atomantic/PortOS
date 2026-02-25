@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as git from '../services/git.js';
+import * as appsService from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -8,9 +9,7 @@ const router = Router();
 router.get('/:appId', asyncHandler(async (req, res) => {
   const { appId } = req.params;
 
-  // Get app to find its path
-  const apps = req.app.get('apps');
-  const app = apps?.find(a => a.id === appId);
+  const app = await appsService.getAppById(appId);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });

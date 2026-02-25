@@ -28,6 +28,8 @@ import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
 
+const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.env.PORT_UI || 5555}`;
+
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
@@ -295,6 +297,8 @@ const DEFAULT_CONFIG = {
   autonomyLevel: 'standby',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
   completedAgentRetentionMs: 86400000,     // 24h - auto-archive completed agents from state.json after this
+  embeddingProviderId: 'lmstudio',           // Provider for memory embeddings
+  embeddingModel: '',                         // Empty = auto-detect from provider
   autoFixThresholds: {
     maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed
     allowedCategories: [                   // Categories that can auto-execute
@@ -1610,7 +1614,7 @@ function getSelfImprovementTaskDescriptions() {
 
 Use Playwright MCP (browser_navigate, browser_snapshot, browser_console_messages) to analyze PortOS UI:
 
-1. Navigate to http://localhost:5555/
+1. Navigate to ${PORTOS_UI_URL}/
 2. Check each main route: /, /apps, /cos, /cos/tasks, /cos/agents, /devtools, /devtools/history, /providers, /usage
 3. For each route:
    - Take a browser_snapshot to see the page structure
@@ -1625,7 +1629,7 @@ Use model: claude-opus-4-5-20251101 for thorough analysis`,
 
 Use Playwright MCP to test PortOS at different viewport sizes:
 
-1. browser_resize to mobile (375x812), then navigate to http://localhost:5555/
+1. browser_resize to mobile (375x812), then navigate to ${PORTOS_UI_URL}/
 2. Take browser_snapshot and analyze for:
    - Text overflow or truncation
    - Buttons too small to tap (< 44px)
@@ -1690,7 +1694,7 @@ Use model: claude-opus-4-5-20251101 for quality refactoring`,
 
 Use Playwright MCP to audit PortOS accessibility:
 
-1. Navigate to http://localhost:5555/
+1. Navigate to ${PORTOS_UI_URL}/
 2. Use browser_snapshot to get accessibility tree
 3. Check each main route for:
    - Missing ARIA labels
@@ -1709,7 +1713,7 @@ Use model: claude-opus-4-5-20251101 for comprehensive a11y fixes`,
 
 Use Playwright MCP to find and fix console errors:
 
-1. Navigate to http://localhost:5555/
+1. Navigate to ${PORTOS_UI_URL}/
 2. Call browser_console_messages with level: "error"
 3. Visit each route and capture errors:
    - /, /apps, /cos, /cos/tasks, /cos/agents
@@ -2770,10 +2774,10 @@ export async function getAgentProcessStats(agentId) {
  */
 async function isPidAlive(pid) {
   if (!pid) return false;
-  const { exec } = await import('child_process');
+  const { execFile } = await import('child_process');
   const { promisify } = await import('util');
-  const execAsync = promisify(exec);
-  const result = await execAsync(`ps -p ${pid} -o pid= 2>/dev/null`).catch(() => ({ stdout: '' }));
+  const execFileAsync = promisify(execFile);
+  const result = await execFileAsync('ps', ['-p', String(pid), '-o', 'pid=']).catch(() => ({ stdout: '' }));
   return result.stdout.trim() !== '';
 }
 

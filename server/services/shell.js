@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 // Store active shell sessions
 const shellSessions = new Map();
 
+const MAX_SESSIONS_PER_SOCKET = 3;
+
 // Allowlist of safe environment variable prefixes to pass to PTY sessions
 // Prevents leaking secrets (API keys, tokens) to the shell
 const SAFE_ENV_PREFIXES = [
@@ -40,6 +42,13 @@ function getDefaultShell() {
  * Create a new shell session
  */
 export function createShellSession(socket, options = {}) {
+  const existing = getSessionsForSocket(socket);
+  if (existing.length >= MAX_SESSIONS_PER_SOCKET) {
+    console.warn(`🐚 Socket ${socket.id} exceeded max sessions (${MAX_SESSIONS_PER_SOCKET})`);
+    socket.emit('shell:error', { error: `Max ${MAX_SESSIONS_PER_SOCKET} shell sessions per connection` });
+    return null;
+  }
+
   const sessionId = uuidv4();
   const shell = options.shell || getDefaultShell();
   const cwd = options.cwd || os.homedir();

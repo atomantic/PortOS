@@ -14,6 +14,8 @@
 
 import { cosEvents, getConfig } from './cos.js';
 
+const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.env.PORT_UI || 5555}`;
+
 // Known routes to analyze
 const ROUTES = [
   { path: '/', name: 'Dashboard', critical: true },
@@ -103,7 +105,7 @@ export async function runSelfImprovementCycle() {
  */
 async function generateSelfImprovementTask(analysisType) {
   const taskDescriptions = {
-    [ANALYSIS_TYPES.UI_BUGS]: `Analyze PortOS UI at http://localhost:5555 for bugs and issues
+    [ANALYSIS_TYPES.UI_BUGS]: `Analyze PortOS UI at ${PORTOS_UI_URL} for bugs and issues
 
 Use Playwright MCP to:
 1. Navigate to each main route (/, /apps, /cos, /devtools, /providers, /usage)
@@ -116,7 +118,7 @@ Model: claude-opus-4-5-20251101`,
     [ANALYSIS_TYPES.MOBILE_RESPONSIVE]: `Analyze PortOS UI for mobile responsiveness issues
 
 Use Playwright MCP to:
-1. Navigate to http://localhost:5555 and its sub-routes
+1. Navigate to ${PORTOS_UI_URL} and its sub-routes
 2. Test at mobile (375px), tablet (768px), and desktop (1440px) viewports
 3. Capture snapshots at each viewport size
 4. Identify layout issues, overflow, touch targets, font sizes
@@ -156,7 +158,7 @@ Model: claude-opus-4-5-20251101`,
     [ANALYSIS_TYPES.ACCESSIBILITY]: `Accessibility audit of PortOS UI
 
 Use Playwright MCP to:
-1. Navigate to http://localhost:5555 and sub-routes
+1. Navigate to ${PORTOS_UI_URL} and sub-routes
 2. Capture accessibility snapshots
 3. Check for missing ARIA labels, alt text, keyboard navigation
 4. Verify color contrast ratios
@@ -169,7 +171,7 @@ Model: claude-opus-4-5-20251101`,
     [ANALYSIS_TYPES.CONSOLE_ERRORS]: `Check PortOS for console errors and warnings
 
 Use Playwright MCP to:
-1. Navigate to http://localhost:5555
+1. Navigate to ${PORTOS_UI_URL}
 2. Open each main route and interact with key features
 3. Capture all console messages (errors, warnings)
 4. Identify the source of each error

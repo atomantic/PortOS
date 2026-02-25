@@ -13,7 +13,9 @@ const router = Router();
 
 // Validation schemas
 const addPeerSchema = z.object({
-  address: z.string().regex(/^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/, 'Must be a valid IP address'),
+  address: z.string()
+    .regex(/^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/, 'Must be a valid IP address')
+    .refine(ip => !ip.startsWith('127.') && !ip.startsWith('169.254.'), 'Loopback and link-local addresses are not allowed'),
   port: z.number().int().min(1).max(65535).default(5554),
   name: z.string().optional()
 });

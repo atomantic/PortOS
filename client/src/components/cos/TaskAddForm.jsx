@@ -211,7 +211,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   if (compact) {
     return (
       <div className="space-y-3">
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <label htmlFor="compact-task-desc" className="sr-only">Task description (required)</label>
           <input
             id="compact-task-desc"
@@ -220,29 +220,31 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleAddTask()}
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
-          <label htmlFor="compact-task-app" className="sr-only">Target application</label>
-          <select
-            id="compact-task-app"
-            value={newTask.app}
-            onChange={e => setNewTask(t => ({ ...t, app: e.target.value }))}
-            className="w-32 px-2 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-          >
-            <option value="">PortOS</option>
-            {apps?.map(app => (
-              <option key={app.id} value={app.id}>{app.name}</option>
-            ))}
-          </select>
-          <button
-            onClick={handleAddTask}
-            disabled={isEnhancing}
-            className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
-          >
-            {isEnhancing ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-            Add
-          </button>
+          <div className="flex gap-2">
+            <label htmlFor="compact-task-app" className="sr-only">Target application</label>
+            <select
+              id="compact-task-app"
+              value={newTask.app}
+              onChange={e => setNewTask(t => ({ ...t, app: e.target.value }))}
+              className="flex-1 sm:w-32 sm:flex-none px-2 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            >
+              <option value="">PortOS</option>
+              {apps?.map(app => (
+                <option key={app.id} value={app.id}>{app.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleAddTask}
+              disabled={isEnhancing}
+              className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[44px]"
+            >
+              {isEnhancing ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              Add
+            </button>
+          </div>
         </div>
         <button
           onClick={() => setExpanded(!expanded)}

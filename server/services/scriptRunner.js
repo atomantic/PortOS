@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Cron from 'croner';
 import { cosEvents } from './cosEvents.js';
 import { readJSONFile } from '../lib/fileUtils.js';
+import { ALLOWED_COMMANDS, DANGEROUS_SHELL_CHARS } from '../lib/commandSecurity.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,24 +26,6 @@ const scheduledJobs = new Map();
 
 // Execution lock to prevent duplicate runs (tracks last execution time)
 const executionLock = new Map();
-
-// Allowlist of safe commands for scripts (mirrors commands.js allowlist)
-const ALLOWED_SCRIPT_COMMANDS = new Set([
-  'npm', 'npx', 'pnpm', 'yarn', 'bun',
-  'node', 'deno',
-  'git', 'gh',
-  'pm2',
-  'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc',
-  'pwd', 'which', 'echo', 'env',
-  'curl', 'wget',
-  'docker', 'docker-compose',
-  'make', 'cargo', 'go', 'python', 'python3', 'pip', 'pip3',
-  'brew'
-]);
-
-// Shell metacharacters that could be used for command injection
-// Security: Reject any command containing these to prevent injection via pipes, chaining, etc.
-const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
 
 // Patterns matching sensitive environment variable values in command output (e.g., pm2 jlist)
 // Keys must be underscore-delimited segments to avoid false positives like "monkey" or "keymetrics"
@@ -88,10 +71,10 @@ function validateScriptCommand(command) {
   const parts = trimmed.split(/\s+/);
   const baseCommand = parts[0];
 
-  if (!ALLOWED_SCRIPT_COMMANDS.has(baseCommand)) {
+  if (!ALLOWED_COMMANDS.has(baseCommand)) {
     return {
       valid: false,
-      error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${Array.from(ALLOWED_SCRIPT_COMMANDS).sort().join(', ')}`
+      error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${Array.from(ALLOWED_COMMANDS).sort().join(', ')}`
     };
   }
 
@@ -495,5 +478,5 @@ export function getScheduledJobs() {
  * Get list of allowed commands for scripts
  */
 export function getAllowedScriptCommands() {
-  return Array.from(ALLOWED_SCRIPT_COMMANDS).sort();
+  return Array.from(ALLOWED_COMMANDS).sort();
 }

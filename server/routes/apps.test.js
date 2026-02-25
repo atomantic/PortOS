@@ -10,7 +10,9 @@ vi.mock('../services/apps.js', () => ({
   createApp: vi.fn(),
   updateApp: vi.fn(),
   deleteApp: vi.fn(),
-  notifyAppsChanged: vi.fn()
+  archiveApp: vi.fn(),
+  notifyAppsChanged: vi.fn(),
+  PORTOS_APP_ID: 'portos-default'
 }));
 
 vi.mock('../services/pm2.js', () => ({
@@ -187,6 +189,22 @@ describe('Apps Routes', () => {
       const response = await request(app).delete('/api/apps/app-999');
 
       expect(response.status).toBe(404);
+    });
+
+    it('should return 403 when deleting PortOS baseline app', async () => {
+      const response = await request(app).delete('/api/apps/portos-default');
+
+      expect(response.status).toBe(403);
+      expect(appsService.deleteApp).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/apps/:id/archive', () => {
+    it('should return 403 when archiving PortOS baseline app', async () => {
+      const response = await request(app).post('/api/apps/portos-default/archive');
+
+      expect(response.status).toBe(403);
+      expect(appsService.archiveApp).not.toHaveBeenCalled();
     });
   });
 

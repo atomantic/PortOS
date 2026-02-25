@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.digitalTwin;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
@@ -194,7 +194,7 @@ async function loadData() {
   await ensureDir(DATA_DIR);
   const raw = await readFile(EPIGENETIC_FILE, 'utf-8').catch(() => null);
   if (!raw) return { ...DEFAULT_DATA };
-  return JSON.parse(raw);
+  return safeJSONParse(raw, { ...DEFAULT_DATA });
 }
 
 async function saveData(data) {

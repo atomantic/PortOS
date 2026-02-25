@@ -62,7 +62,15 @@ async function loadIndex() {
     indexCache = createEmptyIndex()
     return indexCache
   }
-  indexCache = deserializeIndex(JSON.parse(data))
+  let parsed
+  try {
+    parsed = JSON.parse(data)
+  } catch {
+    console.log('⚠️ BM25 index file has invalid JSON, creating fresh index')
+    indexCache = createEmptyIndex()
+    return indexCache
+  }
+  indexCache = deserializeIndex(parsed)
   return indexCache
 }
 

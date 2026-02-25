@@ -67,6 +67,7 @@ class MediaService {
   }
 
   startVideoStream(deviceId = '0') {
+    if (!/^\d+$/.test(deviceId)) throw new Error('Invalid device ID');
     if (this.videoProcess) {
       this.stopVideoStream();
     }
@@ -106,6 +107,7 @@ class MediaService {
   }
 
   startAudioStream(deviceId = '0') {
+    if (!/^\d+$/.test(deviceId)) throw new Error('Invalid device ID');
     if (this.audioProcess) {
       this.stopAudioStream();
     }

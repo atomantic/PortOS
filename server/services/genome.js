@@ -1,7 +1,7 @@
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
 const GENOME_DIR = PATHS.digitalTwin;
@@ -31,7 +31,7 @@ async function loadMeta() {
   await ensureGenomeDir();
   const raw = await readFile(META_FILE, 'utf-8').catch(() => null);
   if (!raw) return { ...DEFAULT_META };
-  return JSON.parse(raw);
+  return safeJSONParse(raw, { ...DEFAULT_META });
 }
 
 async function saveMeta(meta) {

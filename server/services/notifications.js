@@ -8,11 +8,14 @@
  * - Health issues
  */
 
-import { writeFile } from 'fs/promises';
+import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { createMutex } from '../lib/asyncMutex.js';
+
+const withLock = createMutex();
 
 const DATA_DIR = PATHS.data;
 const NOTIFICATIONS_FILE = join(DATA_DIR, 'notifications.json');
@@ -66,7 +69,9 @@ async function loadNotifications() {
 async function saveNotifications(data) {
   await ensureDirectory();
   notificationsCache = data;
-  await writeFile(NOTIFICATIONS_FILE, JSON.stringify(data, null, 2));
+  const tmp = `${NOTIFICATIONS_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(data, null, 2));
+  await rename(tmp, NOTIFICATIONS_FILE);
 }
 
 /**
@@ -129,55 +134,59 @@ export async function getCountsByType() {
  * Add a new notification
  */
 export async function addNotification(notification) {
-  const data = await loadNotifications();
+  return withLock(async () => {
+    const data = await loadNotifications();
 
-  const newNotification = {
-    id: uuidv4(),
-    type: notification.type,
-    title: notification.title,
-    description: notification.description || '',
-    priority: notification.priority || PRIORITY_LEVELS.MEDIUM,
-    timestamp: new Date().toISOString(),
-    link: notification.link || null,
-    read: false,
-    metadata: notification.metadata || {}
-  };
+    const newNotification = {
+      id: uuidv4(),
+      type: notification.type,
+      title: notification.title,
+      description: notification.description || '',
+      priority: notification.priority || PRIORITY_LEVELS.MEDIUM,
+      timestamp: new Date().toISOString(),
+      link: notification.link || null,
+      read: false,
+      metadata: notification.metadata || {}
+    };
 
-  data.notifications.push(newNotification);
+    data.notifications.push(newNotification);
 
-  // Keep only the most recent 500 notifications
-  if (data.notifications.length > 500) {
-    data.notifications = data.notifications.slice(-500);
-  }
+    // Keep only the most recent 500 notifications
+    if (data.notifications.length > 500) {
+      data.notifications = data.notifications.slice(-500);
+    }
 
-  await saveNotifications(data);
+    await saveNotifications(data);
 
-  console.log(`🔔 Notification added: ${newNotification.type} - ${newNotification.title}`);
-  notificationEvents.emit('added', newNotification);
-  notificationEvents.emit('count-changed', await getUnreadCount());
+    console.log(`🔔 Notification added: ${newNotification.type} - ${newNotification.title}`);
+    notificationEvents.emit('added', newNotification);
+    notificationEvents.emit('count-changed', await getUnreadCount());
 
-  return newNotification;
+    return newNotification;
+  });
 }
 
 /**
  * Remove a notification by ID
  */
 export async function removeNotification(id) {
-  const data = await loadNotifications();
-  const index = data.notifications.findIndex(n => n.id === id);
+  return withLock(async () => {
+    const data = await loadNotifications();
+    const index = data.notifications.findIndex(n => n.id === id);
 
-  if (index === -1) {
-    return { success: false, error: 'Notification not found' };
-  }
+    if (index === -1) {
+      return { success: false, error: 'Notification not found' };
+    }
 
-  const removed = data.notifications.splice(index, 1)[0];
-  await saveNotifications(data);
+    const removed = data.notifications.splice(index, 1)[0];
+    await saveNotifications(data);
 
-  console.log(`🔔 Notification removed: ${id}`);
-  notificationEvents.emit('removed', { id });
-  notificationEvents.emit('count-changed', await getUnreadCount());
+    console.log(`🔔 Notification removed: ${id}`);
+    notificationEvents.emit('removed', { id });
+    notificationEvents.emit('count-changed', await getUnreadCount());
 
-  return { success: true, notification: removed };
+    return { success: true, notification: removed };
+  });
 }
 
 /**
@@ -185,79 +194,87 @@ export async function removeNotification(id) {
  * Useful for removing notifications when the underlying item is handled
  */
 export async function removeByMetadata(field, value) {
-  const data = await loadNotifications();
-  const before = data.notifications.length;
+  return withLock(async () => {
+    const data = await loadNotifications();
+    const before = data.notifications.length;
 
-  data.notifications = data.notifications.filter(n => n.metadata[field] !== value);
+    data.notifications = data.notifications.filter(n => n.metadata[field] !== value);
 
-  const removed = before - data.notifications.length;
-  if (removed > 0) {
-    await saveNotifications(data);
-    console.log(`🔔 Removed ${removed} notifications with ${field}=${value}`);
-    notificationEvents.emit('count-changed', await getUnreadCount());
-  }
+    const removed = before - data.notifications.length;
+    if (removed > 0) {
+      await saveNotifications(data);
+      console.log(`🔔 Removed ${removed} notifications with ${field}=${value}`);
+      notificationEvents.emit('count-changed', await getUnreadCount());
+    }
 
-  return { success: true, removed };
+    return { success: true, removed };
+  });
 }
 
 /**
  * Mark a notification as read
  */
 export async function markAsRead(id) {
-  const data = await loadNotifications();
-  const notification = data.notifications.find(n => n.id === id);
+  return withLock(async () => {
+    const data = await loadNotifications();
+    const notification = data.notifications.find(n => n.id === id);
 
-  if (!notification) {
-    return { success: false, error: 'Notification not found' };
-  }
+    if (!notification) {
+      return { success: false, error: 'Notification not found' };
+    }
 
-  if (!notification.read) {
-    notification.read = true;
-    await saveNotifications(data);
+    if (!notification.read) {
+      notification.read = true;
+      await saveNotifications(data);
 
-    notificationEvents.emit('updated', notification);
-    notificationEvents.emit('count-changed', await getUnreadCount());
-  }
+      notificationEvents.emit('updated', notification);
+      notificationEvents.emit('count-changed', await getUnreadCount());
+    }
 
-  return { success: true, notification };
+    return { success: true, notification };
+  });
 }
 
 /**
  * Mark all notifications as read
  */
 export async function markAllAsRead() {
-  const data = await loadNotifications();
-  let updated = 0;
+  return withLock(async () => {
+    const data = await loadNotifications();
+    let updated = 0;
 
-  for (const notification of data.notifications) {
-    if (!notification.read) {
-      notification.read = true;
-      updated++;
+    for (const notification of data.notifications) {
+      if (!notification.read) {
+        notification.read = true;
+        updated++;
+      }
     }
-  }
 
-  if (updated > 0) {
-    await saveNotifications(data);
-    notificationEvents.emit('count-changed', 0);
-  }
+    if (updated > 0) {
+      await saveNotifications(data);
+      notificationEvents.emit('count-changed', 0);
+    }
 
-  return { success: true, updated };
+    return { success: true, updated };
+  });
 }
 
 /**
  * Clear all notifications
  */
 export async function clearAll() {
-  const data = await loadNotifications();
-  const count = data.notifications.length;
+  return withLock(async () => {
+    const data = await loadNotifications();
+    const count = data.notifications.length;
 
-  data.notifications = [];
-  await saveNotifications(data);
+    data.notifications = [];
+    await saveNotifications(data);
 
-  notificationEvents.emit('cleared');
-  notificationEvents.emit('count-changed', 0);
+    notificationEvents.emit('cleared');
+    notificationEvents.emit('count-changed', 0);
 
-  return { success: true, cleared: count };
+    return { success: true, cleared: count };
+  });
 }
 
 /**

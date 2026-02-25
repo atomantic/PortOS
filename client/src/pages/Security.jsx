@@ -27,9 +27,13 @@ export default function Security() {
   useEffect(() => {
     const saved = localStorage.getItem(MEDIA_CONSTRAINTS_KEY);
     if (saved) {
-      const { videoDeviceId, audioDeviceId } = JSON.parse(saved);
-      if (videoDeviceId) setSelectedVideo(videoDeviceId);
-      if (audioDeviceId) setSelectedAudio(audioDeviceId);
+      try {
+        const { videoDeviceId, audioDeviceId } = JSON.parse(saved);
+        if (videoDeviceId) setSelectedVideo(videoDeviceId);
+        if (audioDeviceId) setSelectedAudio(audioDeviceId);
+      } catch {
+        localStorage.removeItem(MEDIA_CONSTRAINTS_KEY);
+      }
     }
   }, []);
 

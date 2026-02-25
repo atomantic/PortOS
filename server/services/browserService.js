@@ -8,6 +8,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,7 +37,8 @@ let cachedConfig = null;
 export async function loadConfig() {
   if (cachedConfig) return cachedConfig;
   const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
-  cachedConfig = raw ? { ...DEFAULT_CONFIG, ...JSON.parse(raw) } : { ...DEFAULT_CONFIG };
+  const parsed = safeJSONParse(raw, null);
+  cachedConfig = parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG };
   return cachedConfig;
 }
 
@@ -134,7 +136,7 @@ export async function getProcessStatus() {
   const execFileAsync = promisify(execFile);
 
   const { stdout } = await execFileAsync('pm2', ['jlist']);
-  const processes = JSON.parse(stdout);
+  const processes = safeJSONParse(stdout, [], { allowArray: true });
   const browserProc = processes.find(p => p.name === 'portos-browser');
 
   if (!browserProc) {

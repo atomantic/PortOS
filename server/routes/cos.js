@@ -15,6 +15,7 @@ import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
+import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -74,6 +75,9 @@ router.get('/config', asyncHandler(async (req, res) => {
 // PUT /api/cos/config - Update configuration
 router.put('/config', asyncHandler(async (req, res) => {
   const config = await cos.updateConfig(req.body);
+  if (req.body.embeddingProviderId !== undefined || req.body.embeddingModel !== undefined) {
+    reinitializeEmbeddings();
+  }
   res.json(config);
 }));
 

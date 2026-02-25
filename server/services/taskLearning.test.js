@@ -4,7 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
   writeFile: vi.fn(),
-  mkdir: vi.fn()
+  mkdir: vi.fn(),
+  rename: vi.fn()
 }));
 
 vi.mock('fs', () => ({

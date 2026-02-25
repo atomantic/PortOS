@@ -399,20 +399,22 @@ export default function Apps() {
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
-                        {/* Archive/Unarchive button */}
-                        <button
-                          onClick={() => app.archived ? handleUnarchive(app) : handleArchive(app)}
-                          disabled={archiving[app.id]}
-                          className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors disabled:opacity-50 border ${
-                            app.archived
-                              ? 'bg-port-success/20 text-port-success border-port-success/30 hover:bg-port-success/30'
-                              : 'bg-port-border text-gray-400 border-port-border hover:text-white hover:bg-port-border/80'
-                          }`}
-                          aria-label={app.archived ? `Unarchive ${app.name}` : `Archive ${app.name}`}
-                        >
-                          {app.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-                          {archiving[app.id] ? '...' : app.archived ? 'Unarchive' : 'Archive'}
-                        </button>
+                        {/* Archive/Unarchive button (hidden for PortOS baseline) */}
+                        {app.id !== api.PORTOS_APP_ID && (
+                          <button
+                            onClick={() => app.archived ? handleUnarchive(app) : handleArchive(app)}
+                            disabled={archiving[app.id]}
+                            className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors disabled:opacity-50 border ${
+                              app.archived
+                                ? 'bg-port-success/20 text-port-success border-port-success/30 hover:bg-port-success/30'
+                                : 'bg-port-border text-gray-400 border-port-border hover:text-white hover:bg-port-border/80'
+                            }`}
+                            aria-label={app.archived ? `Unarchive ${app.name}` : `Archive ${app.name}`}
+                          >
+                            {app.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                            {archiving[app.id] ? '...' : app.archived ? 'Unarchive' : 'Archive'}
+                          </button>
+                        )}
                         <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
                           <button
                             onClick={() => setEditingApp(app)}
@@ -421,13 +423,15 @@ export default function Apps() {
                           >
                             Edit
                           </button>
-                          <button
-                            onClick={() => setConfirmingDelete(app.id)}
-                            className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-none focus:ring-2 focus:ring-port-error"
-                            aria-label={`Delete ${app.name}`}
-                          >
-                            Delete
-                          </button>
+                          {app.id !== api.PORTOS_APP_ID && (
+                            <button
+                              onClick={() => setConfirmingDelete(app.id)}
+                              className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-none focus:ring-2 focus:ring-port-error"
+                              aria-label={`Delete ${app.name}`}
+                            >
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}

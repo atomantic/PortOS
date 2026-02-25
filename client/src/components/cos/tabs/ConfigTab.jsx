@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
 import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS } from '../constants';
+import ProviderModelSelector from '../../ProviderModelSelector';
+import useProviderModels from '../../../hooks/useProviderModels';
 
 // Color classes for autonomy level buttons
 const LEVEL_COLORS = {
@@ -132,6 +134,22 @@ function AutonomyControl({ config, onLevelChange }) {
 }
 
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle, evalCountdown }) {
+  const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
+  const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
+  const [embeddingModel, setEmbeddingModel] = useState(config?.embeddingModel || '');
+
+  // Sync local state when config prop updates
+  useEffect(() => {
+    if (config?.embeddingProviderId) {
+      setEmbeddingProviderId(config.embeddingProviderId);
+      setProviderHook(config.embeddingProviderId);
+    }
+    if (config?.embeddingModel) {
+      setEmbeddingModel(config.embeddingModel);
+      setModelHook(config.embeddingModel);
+    }
+  }, [config?.embeddingProviderId, config?.embeddingModel, setProviderHook, setModelHook]);
+
   const [editing, setEditing] = useState(false);
   const [formData, setFormData] = useState({
     evaluationIntervalMs: config?.evaluationIntervalMs || 60000,
@@ -367,6 +385,41 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
               />
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Memory Embeddings */}
+      <div>
+        <h4 className="text-sm font-medium text-gray-400 mb-2">Memory Embeddings</h4>
+        <div className="bg-port-card border border-port-border rounded-lg p-4">
+          <ProviderModelSelector
+            providers={providers}
+            selectedProviderId={
+              providers?.some((p) => p.id === embeddingProviderId)
+                ? embeddingProviderId
+                : providers?.some((p) => p.id === hookProviderId)
+                  ? hookProviderId
+                  : ''
+            }
+            selectedModel={embeddingModel || hookModel}
+            availableModels={availableModels}
+            onProviderChange={async (id) => {
+              setEmbeddingProviderId(id);
+              setProviderHook(id);
+              setEmbeddingModel('');
+              await api.updateCosConfig({ embeddingProviderId: id, embeddingModel: '' });
+              toast.success('Embedding provider updated');
+              onUpdate();
+            }}
+            onModelChange={async (m) => {
+              setEmbeddingModel(m);
+              setModelHook(m);
+              await api.updateCosConfig({ embeddingModel: m });
+              toast.success('Embedding model updated');
+              onUpdate();
+            }}
+            label="Embedding Provider"
+          />
         </div>
       </div>
 

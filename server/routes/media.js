@@ -1,6 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import mediaService from '../services/mediaService.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 
 const router = express.Router();
 
@@ -13,10 +14,10 @@ const startMediaSchema = z.object({
 });
 
 // List available media devices
-router.get('/devices', async (req, res) => {
+router.get('/devices', asyncHandler(async (req, res) => {
   const devices = await mediaService.listDevices();
   res.json(devices);
-});
+}));
 
 // Get current streaming status
 router.get('/status', (req, res) => {
@@ -27,7 +28,7 @@ router.get('/status', (req, res) => {
 });
 
 // Start media streaming
-router.post('/start', async (req, res) => {
+router.post('/start', asyncHandler(async (req, res) => {
   const { videoDeviceId = '0', audioDeviceId = '0', video = true, audio = true } = startMediaSchema.parse(req.body);
 
   if (video) {
@@ -43,7 +44,7 @@ router.post('/start', async (req, res) => {
     video: mediaService.isVideoStreaming(),
     audio: mediaService.isAudioStreaming()
   });
-});
+}));
 
 // Stop media streaming
 router.post('/stop', (req, res) => {

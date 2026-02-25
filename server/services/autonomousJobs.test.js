@@ -13,7 +13,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(),
-  readFile: vi.fn().mockResolvedValue('{}')
+  readFile: vi.fn().mockResolvedValue('{}'),
+  rename: vi.fn().mockResolvedValue()
 }))
 
 vi.mock('./autobiography.js', () => ({
