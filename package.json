@@ -6,11 +6,6 @@
   "author": "Adam Eivy (@antic|@atomantic)",
   "license": "MIT",
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "server",
-    "client"
-  ],
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",

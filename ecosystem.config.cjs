@@ -1,6 +1,7 @@
 // =============================================================================
 // PM2 Ecosystem Configuration - shared constants and app definitions
 // =============================================================================
+const path = require('path');
 const LOG_DATE_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSS[Z]';
 
 // Shared env inherited by all apps (merged into each app's env)
@@ -63,8 +64,8 @@ module.exports = {
     },
     {
       name: 'portos-ui',
-      script: `${__dirname}/node_modules/.bin/vite`,
-      cwd: `${__dirname}/client`,
+      script: path.join(__dirname, 'node_modules', '.bin', 'vite'),
+      cwd: path.join(__dirname, 'client'),
       log_date_format: LOG_DATE_FORMAT,
       args: `--host 0.0.0.0 --port ${PORTS.UI}`,
       env: {
