@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -45,6 +46,7 @@ export default function PromptManager() {
   const [jobSkillMeta, setJobSkillMeta] = useState({});
   const [jobSkillPreview, setJobSkillPreview] = useState('');
 
+  const [providers, setProviders] = useState([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -53,14 +55,16 @@ export default function PromptManager() {
 
   const loadData = async () => {
     setLoading(true);
-    const [stagesRes, varsRes, jobSkillsRes] = await Promise.all([
+    const [stagesRes, varsRes, jobSkillsRes, providersRes] = await Promise.all([
       fetch('/api/prompts').then(r => r.json()),
       fetch('/api/prompts/variables').then(r => r.json()),
-      fetch('/api/prompts/skills/jobs').then(r => r.json()).catch(() => ({ skills: [] }))
+      fetch('/api/prompts/skills/jobs').then(r => r.json()).catch(() => ({ skills: [] })),
+      fetch('/api/providers').then(r => r.json()).catch(() => ({ providers: [] }))
     ]);
     setStages(stagesRes.stages || {});
     setVariables(varsRes.variables || {});
     setJobSkills(jobSkillsRes.skills || []);
+    setProviders((providersRes.providers || []).filter(p => p.enabled));
     setLoading(false);
   };
 
@@ -68,16 +72,19 @@ export default function PromptManager() {
     setSelectedStage(name);
     const res = await fetch(`/api/prompts/${name}`).then(r => r.json());
     setStageTemplate(res.template || '');
-    setStageConfig({ name: res.name, description: res.description, model: res.model, variables: res.variables || [] });
+    setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] });
     setPreview('');
   };
 
   const saveStage = async () => {
     setSaving(true);
+    const payload = { template: stageTemplate, ...stageConfig };
+    // Explicitly null provider when in tier mode so server clears any previous value
+    if (!payload.provider) payload.provider = null;
     await fetch(`/api/prompts/${selectedStage}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ template: stageTemplate, ...stageConfig })
+      body: JSON.stringify(payload)
     });
     setSaving(false);
     await loadData();
@@ -132,10 +139,13 @@ export default function PromptManager() {
 
   const createStage = async () => {
     setSaving(true);
+    const payload = { ...newStageForm };
+    // Strip provider field when in tier mode
+    if (!payload.provider) delete payload.provider;
     const res = await fetch('/api/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newStageForm)
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
@@ -231,6 +241,11 @@ export default function PromptManager() {
   const previewJobSkill = async () => {
     const res = await fetch(`/api/prompts/skills/jobs/${selectedJobSkill}/preview`).then(r => r.json());
     setJobSkillPreview(res.preview || '');
+  };
+
+  const getModelsForProvider = (providerId) => {
+    const p = providers.find(pr => pr.id === providerId);
+    return p ? (p.models || [p.defaultModel]).filter(Boolean) : [];
   };
 
   if (loading) {
@@ -369,18 +384,54 @@ export default function PromptManager() {
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-4">
                     <div>
-                      <label className="block text-sm text-gray-400 mb-1">Model</label>
-                      <select
-                        value={stageConfig.model || 'default'}
-                        onChange={(e) => setStageConfig({ ...stageConfig, model: e.target.value })}
-                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
-                      >
-                        <option value="default">Default</option>
-                        <option value="quick">Quick</option>
-                        <option value="coding">Coding</option>
-                      </select>
+                      <div className="flex items-center gap-2 mb-2">
+                        <label className="text-sm text-gray-400">Model</label>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setStageConfig({ ...stageConfig, provider: null, model: 'default' })}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${!stageConfig.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'}`}
+                          >
+                            Tier
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (stageConfig.provider) return;
+                              const first = providers[0];
+                              setStageConfig({ ...stageConfig, provider: first?.id || '', model: first?.defaultModel || '' });
+                            }}
+                            disabled={providers.length === 0}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${stageConfig.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'} disabled:opacity-50`}
+                          >
+                            Specific
+                          </button>
+                        </div>
+                      </div>
+                      {!stageConfig.provider ? (
+                        <select
+                          value={stageConfig.model || 'default'}
+                          onChange={(e) => setStageConfig({ ...stageConfig, model: e.target.value })}
+                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                        >
+                          <option value="default">Default</option>
+                          <option value="quick">Quick</option>
+                          <option value="coding">Coding</option>
+                          <option value="heavy">Heavy</option>
+                        </select>
+                      ) : (
+                        <ProviderModelSelector
+                          providers={providers}
+                          selectedProviderId={stageConfig.provider}
+                          selectedModel={stageConfig.model}
+                          availableModels={getModelsForProvider(stageConfig.provider)}
+                          onProviderChange={(id) => {
+                            const p = providers.find(pr => pr.id === id);
+                            setStageConfig({ ...stageConfig, provider: id, model: p?.defaultModel || '' });
+                          }}
+                          onModelChange={(model) => setStageConfig({ ...stageConfig, model })}
+                        />
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Variables Used</label>
@@ -685,22 +736,59 @@ export default function PromptManager() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-4">
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Model</label>
-                  <select
-                    value={newStageForm.model}
-                    onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
-                  >
-                    <option value="default">Default</option>
-                    <option value="quick">Quick</option>
-                    <option value="coding">Coding</option>
-                    <option value="heavy">Heavy</option>
-                  </select>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-sm text-gray-400">Model</label>
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setNewStageForm({ ...newStageForm, provider: undefined, model: 'default' })}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${!newStageForm.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'}`}
+                      >
+                        Tier
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (newStageForm.provider) return;
+                          const first = providers[0];
+                          setNewStageForm({ ...newStageForm, provider: first?.id || '', model: first?.defaultModel || '' });
+                        }}
+                        disabled={providers.length === 0}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${newStageForm.provider ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'} disabled:opacity-50`}
+                      >
+                        Specific
+                      </button>
+                    </div>
+                  </div>
+                  {!newStageForm.provider ? (
+                    <select
+                      value={newStageForm.model}
+                      onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                    >
+                      <option value="default">Default</option>
+                      <option value="quick">Quick</option>
+                      <option value="coding">Coding</option>
+                      <option value="heavy">Heavy</option>
+                    </select>
+                  ) : (
+                    <ProviderModelSelector
+                      providers={providers}
+                      selectedProviderId={newStageForm.provider}
+                      selectedModel={newStageForm.model}
+                      availableModels={getModelsForProvider(newStageForm.provider)}
+                      onProviderChange={(id) => {
+                        const p = providers.find(pr => pr.id === id);
+                        setNewStageForm({ ...newStageForm, provider: id, model: p?.defaultModel || '' });
+                      }}
+                      onModelChange={(model) => setNewStageForm({ ...newStageForm, model })}
+                    />
+                  )}
                 </div>
                 <div>
-                  <label className="flex items-center gap-2 text-sm text-gray-400 mt-7">
+                  <label className="flex items-center gap-2 text-sm text-gray-400">
                     <input
                       type="checkbox"
                       checked={newStageForm.returnsJson}
