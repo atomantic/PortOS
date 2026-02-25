@@ -2009,7 +2009,7 @@ export async function runHealthCheck() {
     emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
 
     const restartResults = await Promise.all(names.map(async (name) => {
-      const result = await execFileAsync('pm2', ['restart', name]).catch(e => ({ stdout: '', stderr: e.message }));
+      const result = await execFileAsync('pm2', ['restart', name], { shell: process.platform === 'win32' }).catch(e => ({ stdout: '', stderr: e.message }));
       const failed = result.stderr && !result.stdout;
       if (failed) {
         emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);

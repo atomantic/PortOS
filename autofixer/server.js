@@ -5,7 +5,8 @@ import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { execFile as execFileCb } from 'child_process';
 
-const execFileAsync = promisify(execFileCb);
+const IS_WIN = process.platform === 'win32';
+const execFileAsync = (cmd, args, opts = {}) => promisify(execFileCb)(cmd, args, { shell: IS_WIN, ...opts });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
