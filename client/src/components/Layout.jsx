@@ -89,6 +89,7 @@ const navItems = [
       { to: '/devtools/runner', label: 'Code', icon: Code2 },
       { to: '/devtools/git', label: 'Git Status', icon: GitBranch },
       { to: '/devtools/history', label: 'History', icon: History },
+      { to: '/devtools/jira', label: 'JIRA', icon: Ticket },
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
@@ -102,7 +103,6 @@ const navItems = [
     ]
   },
   { to: '/instances', label: 'Instances', icon: Network, single: true },
-  { to: '/jira', label: 'JIRA', icon: Ticket, single: true },
   { to: '/security', label: 'Security', icon: Camera, single: true },
   { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true },
   { to: '/agents', label: 'Social Agents', icon: Users, single: true },
