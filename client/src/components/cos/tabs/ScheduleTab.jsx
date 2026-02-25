@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
+import AppIcon from '../../AppIcon';
 
 const INTERVAL_LABELS = {
   rotation: 'Rotation',
@@ -445,11 +446,7 @@ function AppOverrideRow({ app, taskType, globalIntervalType, override, onUpdate 
   return (
     <div className="flex items-center gap-3 py-2 px-3 rounded hover:bg-port-card/30">
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        {app.icon ? (
-          <span className="text-base flex-shrink-0">{app.icon}</span>
-        ) : (
-          <Package size={14} className="text-gray-500 flex-shrink-0" />
-        )}
+        <AppIcon icon={app.icon || 'package'} size={16} className="text-gray-400 flex-shrink-0" />
         <span className="text-sm text-white truncate">{app.name}</span>
       </div>
 
