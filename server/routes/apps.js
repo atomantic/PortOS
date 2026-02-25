@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import * as appsService from '../services/apps.js';
-import { notifyAppsChanged } from '../services/apps.js';
+import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { logAction } from '../services/history.js';
 import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
@@ -118,8 +118,12 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
   res.json(app);
 }));
 
-// DELETE /api/apps/:id - Delete app
+// DELETE /api/apps/:id - Delete app (PortOS baseline cannot be deleted)
 router.delete('/:id', asyncHandler(async (req, res, next) => {
+  if (req.params.id === PORTOS_APP_ID) {
+    throw new ServerError('PortOS baseline app cannot be deleted', { status: 403, code: 'PROTECTED' });
+  }
+
   const deleted = await appsService.deleteApp(req.params.id);
 
   if (!deleted) {
@@ -131,6 +135,10 @@ router.delete('/:id', asyncHandler(async (req, res, next) => {
 
 // POST /api/apps/:id/archive - Archive app (exclude from COS tasks)
 router.post('/:id/archive', asyncHandler(async (req, res) => {
+  if (req.params.id === PORTOS_APP_ID) {
+    throw new ServerError('PortOS baseline app cannot be archived', { status: 403, code: 'PROTECTED' });
+  }
+
   const app = await appsService.archiveApp(req.params.id);
 
   if (!app) {

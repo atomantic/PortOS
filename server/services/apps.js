@@ -7,6 +7,46 @@ import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
 
+// Stable ID for the PortOS app — always present, never deletable
+export const PORTOS_APP_ID = 'portos-default';
+
+/**
+ * Build the baseline PortOS app entry with repoPath resolved to the actual project root.
+ */
+function buildPortosApp() {
+  return {
+    name: 'PortOS',
+    description: 'Local App OS portal for dev machines',
+    repoPath: PATHS.root,
+    type: 'express',
+    uiPort: 5555,
+    apiPort: 5554,
+    startCommands: ['npm run dev'],
+    pm2ProcessNames: [
+      'portos-server',
+      'portos-cos',
+      'portos-ui',
+      'portos-autofixer',
+      'portos-autofixer-ui',
+      'portos-browser'
+    ],
+    processes: [
+      { name: 'portos-server', port: 5554, ports: { api: 5554 } },
+      { name: 'portos-cos', port: 5558, ports: { api: 5558 } },
+      { name: 'portos-ui', port: 5555, ports: { ui: 5555 } },
+      { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
+      { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
+      { name: 'portos-browser', port: 5556, ports: { cdp: 5556, health: 5557 } }
+    ],
+    envFile: '.env',
+    icon: 'portos',
+    editorCommand: 'code .',
+    archived: false,
+    createdAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z'
+  };
+}
+
 // Event emitter for apps changes
 export const appsEvents = new EventEmitter();
 
@@ -23,7 +63,8 @@ async function ensureDataDir() {
 }
 
 /**
- * Load apps registry from disk (with caching)
+ * Load apps registry from disk (with caching).
+ * Ensures the PortOS baseline app always exists.
  */
 async function loadApps() {
   const now = Date.now();
@@ -35,7 +76,16 @@ async function loadApps() {
 
   await ensureDataDir();
 
-  appsCache = await readJSONFile(APPS_FILE, { apps: {} });
+  const data = await readJSONFile(APPS_FILE, { apps: {} });
+
+  // Ensure PortOS baseline app is always present
+  if (!data.apps[PORTOS_APP_ID]) {
+    data.apps[PORTOS_APP_ID] = buildPortosApp();
+    await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
+    console.log('📦 Seeded baseline PortOS app into apps registry');
+  }
+
+  appsCache = data;
   cacheTimestamp = now;
   return appsCache;
 }
@@ -161,9 +211,11 @@ export async function updateApp(id, updates) {
 }
 
 /**
- * Delete an app
+ * Delete an app (PortOS baseline app cannot be deleted)
  */
 export async function deleteApp(id) {
+  if (id === PORTOS_APP_ID) return false;
+
   const data = await loadApps();
 
   if (!data.apps[id]) {
@@ -177,9 +229,11 @@ export async function deleteApp(id) {
 }
 
 /**
- * Archive an app (soft-delete that excludes from COS tasks)
+ * Archive an app (soft-delete that excludes from COS tasks).
+ * PortOS baseline app cannot be archived.
  */
 export async function archiveApp(id) {
+  if (id === PORTOS_APP_ID) return null;
   return updateApp(id, { archived: true });
 }
 
