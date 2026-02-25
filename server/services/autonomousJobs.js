@@ -20,6 +20,15 @@ import { fileURLToPath } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js'
+import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
+
+/**
+ * Registry of script handlers for jobs that execute functions directly
+ * instead of spawning AI agents. Key is the scriptHandler name, value is the function.
+ */
+const SCRIPT_HANDLERS = {
+  'autobiography-prompt': autobiographyCheckAndPrompt
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -243,14 +252,8 @@ Focus on moving tickets forward. Don't just report - take action by improving ti
     intervalMs: DAY,
     enabled: true,
     priority: 'LOW',
-    autonomyLevel: 'assistant',
-    promptTemplate: `[Autonomous Job] Autobiography Story Prompt
-
-This job triggers a notification asking the user to write a short autobiographical story.
-
-Call POST /api/digital-twin/autobiography/trigger to check if a prompt is due and send a notification.
-
-This is a lightweight job — it simply checks timing and sends a notification if due. No AI processing needed.`,
+    type: 'script',
+    scriptHandler: 'autobiography-prompt',
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -796,6 +799,39 @@ const INTERVAL_OPTIONS = [
   { value: 'monthly', label: 'Monthly', ms: 30 * DAY }
 ]
 
+/**
+ * Check if a job is a script job (executes directly, no AI agent needed)
+ * @param {Object} job - The job object
+ * @returns {boolean}
+ */
+function isScriptJob(job) {
+  return !!(job.type === 'script' && job.scriptHandler && SCRIPT_HANDLERS[job.scriptHandler])
+}
+
+/**
+ * Execute a script job directly without spawning an AI agent
+ * @param {Object} job - The script job to execute
+ * @returns {Promise<Object>} Result of the script execution
+ */
+async function executeScriptJob(job) {
+  if (!isScriptJob(job)) {
+    throw new Error(`Job ${job.id} is not a script job`)
+  }
+
+  const handler = SCRIPT_HANDLERS[job.scriptHandler]
+  console.log(`📜 Executing script job: ${job.name}`)
+
+  const result = await handler()
+
+  // Record the job execution
+  await recordJobExecution(job.id)
+
+  console.log(`✅ Script job completed: ${job.name}`)
+  cosEvents.emit('jobs:script-executed', { id: job.id, result })
+
+  return result
+}
+
 export {
   getAllJobs,
   getJob,
@@ -816,5 +852,7 @@ export {
   saveJobSkillTemplate,
   listJobSkillTemplates,
   getJobEffectivePrompt,
-  JOB_SKILL_MAP
+  JOB_SKILL_MAP,
+  isScriptJob,
+  executeScriptJob
 }

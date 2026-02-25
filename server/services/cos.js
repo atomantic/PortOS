@@ -20,7 +20,7 @@ import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSumma
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
-import { getDueJobs, generateTaskFromJob, recordJobExecution } from './autonomousJobs.js';
+import { getDueJobs, generateTaskFromJob, recordJobExecution, isScriptJob, executeScriptJob } from './autonomousJobs.js';
 import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
@@ -844,6 +844,15 @@ export async function evaluateTasks() {
     });
 
     for (const job of dueJobs) {
+      // Script jobs execute directly without spawning an AI agent
+      if (isScriptJob(job)) {
+        await executeScriptJob(job).catch(err => {
+          emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+        });
+        emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
+        continue;
+      }
+
       if (tasksToSpawn.length >= availableSlots) break;
       const task = await generateTaskFromJob(job);
       if (!canSpawnTask(task)) continue;
