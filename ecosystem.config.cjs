@@ -1,7 +1,13 @@
 // =============================================================================
 // PM2 Ecosystem Configuration - shared constants and app definitions
 // =============================================================================
-const LOG_DATE_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSSZ';
+const LOG_DATE_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSS[Z]';
+
+// Shared env inherited by all apps (merged into each app's env)
+const BASE_ENV = {
+  NODE_ENV: 'development',
+  TZ: 'UTC'  // All log timestamps and Date operations in UTC
+};
 
 const PORTS = {
   API: 5554,           // Express API server
@@ -24,7 +30,7 @@ module.exports = {
       interpreter: 'node',
       log_date_format: LOG_DATE_FORMAT,
       env: {
-        NODE_ENV: 'development',
+        ...BASE_ENV,
         PORT: PORTS.API,
         HOST: '0.0.0.0'
       },
@@ -41,7 +47,7 @@ module.exports = {
       // Does NOT restart when portos-server restarts, preventing orphaned agents
       // Security: Binds to localhost only - not exposed externally
       env: {
-        NODE_ENV: 'development',
+        ...BASE_ENV,
         PORT: PORTS.COS,
         HOST: '127.0.0.1'
       },
@@ -62,7 +68,7 @@ module.exports = {
       log_date_format: LOG_DATE_FORMAT,
       args: `--host 0.0.0.0 --port ${PORTS.UI}`,
       env: {
-        NODE_ENV: 'development',
+        ...BASE_ENV,
         VITE_PORT: PORTS.UI
       },
       watch: false
@@ -74,7 +80,7 @@ module.exports = {
       interpreter: 'node',
       log_date_format: LOG_DATE_FORMAT,
       env: {
-        NODE_ENV: 'development',
+        ...BASE_ENV,
         PORT: PORTS.AUTOFIXER,
         PATH: process.env.PATH // Inherit PATH for nvm/node access in child processes
       },
@@ -91,7 +97,7 @@ module.exports = {
       interpreter: 'node',
       log_date_format: LOG_DATE_FORMAT,
       env: {
-        NODE_ENV: 'development',
+        ...BASE_ENV,
         PORT: PORTS.AUTOFIXER_UI
       },
       watch: false,
@@ -109,7 +115,7 @@ module.exports = {
       // Security: CDP binds to 127.0.0.1 by default (set CDP_HOST=0.0.0.0 to expose)
       // Remote access should go through portos-server proxy with authentication
       env: {
-        NODE_ENV: 'development',
+        ...BASE_ENV,
         CDP_PORT: PORTS.CDP,
         CDP_HOST: '127.0.0.1',
         PORT: PORTS.CDP_HEALTH
