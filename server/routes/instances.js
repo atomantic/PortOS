@@ -23,6 +23,12 @@ const updatePeerSchema = z.object({
   enabled: z.boolean().optional()
 });
 
+const announceSchema = z.object({
+  port: z.number().int().min(1).max(65535),
+  instanceId: z.string().uuid(),
+  name: z.string().optional()
+});
+
 const querySchema = z.object({
   path: z.string().startsWith('/api/', 'Path must start with /api/')
 });
@@ -49,6 +55,27 @@ router.put('/self', asyncHandler(async (req, res) => {
   const updated = await instances.updateSelf(name.trim());
   if (!updated) throw new ServerError('Self identity not initialized', { status: 500 });
   res.json(updated);
+}));
+
+// POST /api/instances/peers/announce — receive announcement from remote peer
+router.post('/peers/announce', asyncHandler(async (req, res) => {
+  const data = announceSchema.parse(req.body);
+  // Derive caller IP from req.ip, stripping ::ffff: prefix for IPv4-mapped addresses
+  const address = req.ip?.replace(/^::ffff:/, '') ?? req.socket.remoteAddress?.replace(/^::ffff:/, '');
+  if (!address) throw new ServerError('Could not determine caller IP', { status: 400 });
+
+  const result = await instances.handleAnnounce({
+    address,
+    port: data.port,
+    instanceId: data.instanceId,
+    name: data.name
+  });
+
+  const self = await instances.getSelf();
+  res.status(result.created ? 201 : 200).json({
+    self: { instanceId: self?.instanceId, name: self?.name },
+    peer: result.peer
+  });
 }));
 
 // POST /api/instances/peers — add a peer

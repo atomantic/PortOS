@@ -85,23 +85,27 @@ export async function getPeers() {
 }
 
 export async function addPeer({ address, port = 5554, name }) {
-  return withData(async (data) => {
-    const peer = {
+  const peer = await withData(async (data) => {
+    const entry = {
       id: crypto.randomUUID(),
       address,
       port,
       name: name || address,
+      instanceId: null,
       addedAt: new Date().toISOString(),
       lastSeen: null,
       lastHealth: null,
       status: 'unknown',
       enabled: true
     };
-    data.peers.push(peer);
-    console.log(`🌐 Peer added: ${peer.name} (${peer.address}:${peer.port})`);
+    data.peers.push(entry);
+    console.log(`🌐 Peer added: ${entry.name} (${entry.address}:${entry.port})`);
     instanceEvents.emit('peers:updated', data.peers);
-    return peer;
+    return entry;
   });
+  // Announce ourselves to the remote peer (fire-and-forget)
+  announceSelf(peer.address, peer.port);
+  return peer;
 }
 
 export async function removePeer(id) {
@@ -133,7 +137,7 @@ export async function probePeer(peer) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
-  let status, lastHealth, lastSeen;
+  let status, lastHealth, lastSeen, remoteInstanceId;
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -141,6 +145,7 @@ export async function probePeer(peer) {
     status = 'online';
     lastHealth = json;
     lastSeen = new Date().toISOString();
+    remoteInstanceId = json.instanceId ?? null;
   } catch {
     status = 'offline';
     lastHealth = peer.lastHealth; // preserve last known
@@ -149,14 +154,22 @@ export async function probePeer(peer) {
     clearTimeout(timeout);
   }
 
-  return withData(async (data) => {
-    const stored = data.peers.find(p => p.id === peer.id);
-    if (!stored) return null;
-    stored.status = status;
-    stored.lastSeen = lastSeen;
-    stored.lastHealth = lastHealth;
-    return stored;
+  const stored = await withData(async (data) => {
+    const entry = data.peers.find(p => p.id === peer.id);
+    if (!entry) return null;
+    entry.status = status;
+    entry.lastSeen = lastSeen;
+    entry.lastHealth = lastHealth;
+    if (remoteInstanceId) entry.instanceId = remoteInstanceId;
+    return entry;
   });
+
+  // Announce ourselves on successful probe (fire-and-forget)
+  if (status === 'online') {
+    announceSelf(peer.address, peer.port);
+  }
+
+  return stored;
 }
 
 export async function probeAllPeers() {
@@ -188,6 +201,74 @@ export async function queryPeer(id, apiPath) {
     return { success: true, data: json };
   } catch (err) {
     return { error: `Failed to query peer: ${err.message}` };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// --- Announce (Bidirectional Registration) ---
+
+export async function handleAnnounce({ address, port, instanceId, name }) {
+  return withData(async (data) => {
+    // Check for existing peer by instanceId
+    let existing = data.peers.find(p => p.instanceId === instanceId);
+    // Fallback: check by address + port
+    if (!existing) {
+      existing = data.peers.find(p => p.address === address && p.port === port);
+    }
+
+    if (existing) {
+      existing.lastSeen = new Date().toISOString();
+      existing.status = 'online';
+      existing.instanceId = instanceId;
+      if (name) existing.name = name;
+      console.log(`🌐 Peer announced (existing): ${existing.name} (${address}:${port})`);
+      instanceEvents.emit('peers:updated', data.peers);
+      return { created: false, peer: existing };
+    }
+
+    // Create new peer entry
+    const peer = {
+      id: crypto.randomUUID(),
+      address,
+      port,
+      name: name || address,
+      instanceId,
+      addedAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      lastHealth: null,
+      status: 'online',
+      enabled: true
+    };
+    data.peers.push(peer);
+    console.log(`🌐 Peer announced (new): ${peer.name} (${address}:${port})`);
+    instanceEvents.emit('peers:updated', data.peers);
+    return { created: true, peer };
+  });
+}
+
+async function announceSelf(address, port) {
+  const data = await loadData();
+  if (!data.self) return;
+
+  const selfPort = parseInt(process.env.PORT, 10) || 5554;
+  const url = `http://${address}:${port}/api/instances/peers/announce`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        port: selfPort,
+        instanceId: data.self.instanceId,
+        name: data.self.name
+      }),
+      signal: controller.signal
+    });
+  } catch {
+    // Fire-and-forget — peer may be offline or not running PortOS
   } finally {
     clearTimeout(timeout);
   }
