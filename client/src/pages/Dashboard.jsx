@@ -138,7 +138,7 @@ export default function Dashboard() {
               <StatCard label="Total Apps" value={appStats.total} icon="📦" />
               <StatCard label="Online" value={appStats.online} icon="🟢" />
               <StatCard label="Stopped" value={appStats.stopped} icon="🟡" />
-              <StatCard label="Not Started" value={appStats.notStarted} icon="⚪" />
+              <StatCard label="Offline" value={appStats.notStarted} icon="⚪" />
             </div>
           </div>
         )}
