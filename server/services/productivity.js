@@ -446,7 +446,7 @@ export async function onTaskCompleted(agent) {
   if (data.streaks.lastActiveDate !== today) {
     if (isConsecutiveDay(data.streaks.lastActiveDate, today)) {
       data.streaks.currentDaily++;
-    } else if (data.streaks.lastActiveDate !== today) {
+    } else {
       data.streaks.currentDaily = 1;
     }
     data.streaks.longestDaily = Math.max(data.streaks.longestDaily, data.streaks.currentDaily);

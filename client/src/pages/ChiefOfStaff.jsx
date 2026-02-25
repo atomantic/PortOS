@@ -205,6 +205,13 @@ export default function ChiefOfStaff() {
       setTimeout(() => setSpeaking(false), 2000);
       // Clear active agent metadata so avatar reverts to default
       setActiveAgentMeta(null);
+      // Clean up live output buffer for completed agent to prevent memory growth
+      if (data?.agentId) {
+        setLiveOutputs(prev => {
+          const { [data.agentId]: _, ...rest } = prev;
+          return rest;
+        });
+      }
       fetchData();
     });
 

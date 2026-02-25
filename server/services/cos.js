@@ -94,12 +94,16 @@ async function loadAgentIndex() {
   return agentIndex;
 }
 
-// Persist agent index to disk
+// Persist agent index to disk (atomic write via temp file + rename)
 async function saveAgentIndex() {
   if (!agentIndex) return;
   const obj = Object.fromEntries(agentIndex);
-  await writeFile(INDEX_FILE, JSON.stringify(obj)).catch(err => {
+  const tmpFile = `${INDEX_FILE}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(obj)).catch(err => {
     console.error(`❌ Failed to save agent index: ${err.message}`);
+  });
+  await rename(tmpFile, INDEX_FILE).catch(err => {
+    console.error(`❌ Failed to rename agent index: ${err.message}`);
   });
 }
 
