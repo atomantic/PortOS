@@ -35,7 +35,8 @@ import {
   Newspaper,
   Building2,
   Ticket,
-  Network
+  Network,
+  Flame
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -71,10 +72,12 @@ const navItems = [
       { to: '/cos/config', label: 'Config', icon: Settings },
       { to: '/cos/digest', label: 'Digest', icon: Calendar },
       { to: '/cos/health', label: 'Health', icon: Activity },
+      { to: '/cos/jobs', label: 'Jobs', icon: Bot },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
       { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
+      { to: '/cos/productivity', label: 'Streaks', icon: Flame },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText }
     ]
   },
