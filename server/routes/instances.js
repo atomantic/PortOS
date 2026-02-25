@@ -102,6 +102,13 @@ router.delete('/peers/:id', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+// POST /api/instances/peers/:id/connect — announce ourselves to this peer (make it mutual)
+router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
+  const result = await instances.connectPeer(req.params.id);
+  if (!result) throw new ServerError('Peer not found', { status: 404 });
+  res.json(result);
+}));
+
 // POST /api/instances/peers/:id/probe — force immediate probe
 router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   const peers = await instances.getPeers();

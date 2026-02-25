@@ -293,6 +293,15 @@ async function announceSelf(address, port) {
   }
 }
 
+export async function connectPeer(id) {
+  const data = await loadData();
+  const peer = data.peers.find(p => p.id === id);
+  if (!peer) return null;
+  await announceSelf(peer.address, peer.port);
+  const probed = await probePeer(peer);
+  return probed;
+}
+
 async function markDirection(address, port, direction) {
   await withData(async (data) => {
     const peer = data.peers.find(p => p.address === address && p.port === port);

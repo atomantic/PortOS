@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
-  removePeer, probePeer, queryPeer
+  removePeer, connectPeer, probePeer, queryPeer
 } from '../services/api';
 
 const STATUS_COLORS = {
@@ -305,9 +305,20 @@ function PeerCard({ peer, onRefresh }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
+  const isInboundOnly = peer.directions?.includes('inbound') && !peer.directions?.includes('outbound');
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    const result = await connectPeer(peer.id).catch(() => null);
+    setConnecting(false);
+    if (!result) return;
+    onRefresh();
+    toast.success(`Connected to ${peer.name}`);
+  };
 
   const handleProbe = async () => {
     setProbing(true);
@@ -398,6 +409,17 @@ function PeerCard({ peer, onRefresh }) {
       <div className="flex items-center gap-2 mb-3">
         <p className="text-xs text-gray-500 font-mono">{peer.address}:{peer.port}</p>
         <DirectionBadge directions={peer.directions} />
+        {isInboundOnly && (
+          <button
+            onClick={handleConnect}
+            disabled={connecting}
+            className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+            title="Connect back to make this mutual"
+          >
+            <ArrowLeftRight size={10} />
+            {connecting ? 'Connecting...' : 'Connect'}
+          </button>
+        )}
       </div>
 
       <HealthSummary health={peer.lastHealth} />
