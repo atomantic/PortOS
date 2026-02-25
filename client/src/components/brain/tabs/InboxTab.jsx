@@ -39,6 +39,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const [editText, setEditText] = useState('');
   const [showDone, setShowDone] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [retryingId, setRetryingId] = useState(null);
   const inputRef = useRef(null);
 
   const fetchInbox = useCallback(async () => {
@@ -103,10 +104,13 @@ export default function InboxTab({ onRefresh, settings }) {
   };
 
   const handleRetry = async (entryId) => {
+    if (retryingId) return;
+    setRetryingId(entryId);
     const result = await api.retryBrainClassification(entryId).catch(err => {
       toast.error(err.message || 'Failed to retry');
       return null;
     });
+    setRetryingId(null);
 
     if (result) {
       toast.success(result.message || 'Reclassified');
@@ -392,11 +396,12 @@ export default function InboxTab({ onRefresh, settings }) {
                       </button>
                       <button
                         onClick={() => handleRetry(entry.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                        disabled={retryingId === entry.id}
+                        className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
                         title="Retry AI classification"
                       >
-                        <RefreshCw size={12} />
-                        Retry AI
+                        <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
+                        {retryingId === entry.id ? 'Classifying...' : 'Retry AI'}
                       </button>
                     </div>
                   )}
@@ -491,11 +496,12 @@ export default function InboxTab({ onRefresh, settings }) {
                 ) : editingId !== entry.id && (
                   <button
                     onClick={() => handleRetry(entry.id)}
-                    className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                    disabled={retryingId === entry.id}
+                    className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
                     title="Retry AI classification"
                   >
-                    <RefreshCw size={12} />
-                    Retry
+                    <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
+                    {retryingId === entry.id ? 'Classifying...' : 'Retry'}
                   </button>
                 )}
               </div>

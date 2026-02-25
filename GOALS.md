@@ -4,7 +4,7 @@
 
 ## Purpose
 
-PortOS transforms a local development machine into an intelligent personal operating system. It exists to solve the fragmentation of developer workflows — managing apps, orchestrating AI agents, capturing knowledge, and modeling personal identity are all scattered across dozens of tools with no unified interface. PortOS brings these together in a single dashboard that runs on your own hardware, keeps your data local, and is accessible from any device on your private Tailscale network.
+PortOS transforms a local development machine into an intelligent personal operating system. This app is intended to help the user manage their life, their goals, their projects, and their machines. It exists to solve the fragmentation of developer workflows — managing apps, orchestrating AI agents, capturing knowledge, and modeling personal identity are all scattered across dozens of tools with no unified interface. PortOS brings these together in a single dashboard that runs on your own hardware, keeps your data local, and is accessible from any device on your private Tailscale network.
 
 ## Core Goals
 

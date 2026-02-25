@@ -184,7 +184,8 @@ export async function captureThought(text, providerOverride, modelOverride) {
   console.log(`🧠 Thought captured, classifying in background: ${inboxEntry.id}`);
 
   // Run AI classification in background (don't await)
-  classifyInBackground(inboxEntry.id, text, meta, providerOverride, modelOverride)
+  // Pass resolved provider/model so callAI uses brain's configured provider, not the system active one
+  classifyInBackground(inboxEntry.id, text, meta, provider, model)
     .catch(err => console.error(`❌ Background classification failed for ${inboxEntry.id}: ${err.message}`));
 
   return {

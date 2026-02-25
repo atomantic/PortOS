@@ -141,6 +141,7 @@ export async function probePeer(peer) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
+  const previousStatus = peer.status;
   let status, lastHealth, lastSeen, remoteInstanceId, remoteApps;
   try {
     const res = await fetch(url, { signal: controller.signal });
@@ -188,8 +189,8 @@ export async function probePeer(peer) {
     disconnectFromPeer(peer.id);
   }
 
-  // Announce ourselves on successful probe (fire-and-forget)
-  if (status === 'online') {
+  // Announce ourselves only when peer transitions to online (not every poll cycle)
+  if (status === 'online' && previousStatus !== 'online') {
     announceSelf(peer.address, peer.port);
   }
 
