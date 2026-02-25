@@ -21,7 +21,6 @@ export default function PromptManager() {
   const [stageTemplate, setStageTemplate] = useState('');
   const [stageConfig, setStageConfig] = useState({});
   const [preview, setPreview] = useState('');
-  const [testData, setTestData] = useState('{}');
 
   // Variable editing
   const [selectedVar, setSelectedVar] = useState(null);
@@ -91,11 +90,10 @@ export default function PromptManager() {
   };
 
   const previewStage = async () => {
-    const data = JSON.parse(testData || '{}');
     const res = await fetch(`/api/prompts/${selectedStage}/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testData: data })
+      body: JSON.stringify({ testData: {} })
     }).then(r => r.json());
     setPreview(res.preview);
   };
@@ -372,19 +370,7 @@ export default function PromptManager() {
                     </div>
                   </div>
 
-                  <div className="mb-4">
-                    <label className="block text-sm text-gray-400 mb-1">Template</label>
-                    <textarea
-                      value={stageTemplate}
-                      onChange={(e) => setStageTemplate(e.target.value)}
-                      className="w-full h-64 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-none"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Use {'{{variable}}'} for substitution, {'{{#array}}...{{/array}}'} for iteration
-                    </p>
-                  </div>
-
-                  <div className="space-y-4">
+                  <div className="space-y-4 mb-4">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
                         <label className="text-sm text-gray-400">Model</label>
@@ -440,6 +426,18 @@ export default function PromptManager() {
                       </div>
                     </div>
                   </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Template</label>
+                    <textarea
+                      value={stageTemplate}
+                      onChange={(e) => setStageTemplate(e.target.value)}
+                      className="w-full h-96 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Use {'{{variable}}'} for substitution, {'{{#array}}...{{/array}}'} for iteration
+                    </p>
+                  </div>
                 </div>
 
                 {/* Preview Panel */}
@@ -452,16 +450,6 @@ export default function PromptManager() {
                   </div>
                 )}
 
-                {/* Test Data */}
-                <div className="bg-port-card border border-port-border rounded-xl p-4">
-                  <h4 className="text-sm font-medium text-gray-400 mb-2">Test Data (JSON)</h4>
-                  <textarea
-                    value={testData}
-                    onChange={(e) => setTestData(e.target.value)}
-                    className="w-full h-24 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-none"
-                    placeholder='{"dirName": "my-app", "fileList": "package.json, src/"}'
-                  />
-                </div>
               </>
             ) : (
               <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
