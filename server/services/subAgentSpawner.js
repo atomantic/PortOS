@@ -310,10 +310,15 @@ function checkForTaskCommit(taskId, workspacePath = ROOT_DIR) {
   const gitDir = join(workspacePath, '.git');
   if (!existsSync(gitDir)) return false;
 
-  const searchPattern = `[task-${taskId}]`;
-  const gitLogCmd = `git log --all --oneline --grep="${searchPattern}" -1 2>/dev/null || true`;
-  const result = execSync(gitLogCmd, { cwd: workspacePath, encoding: 'utf-8' }).trim();
-  return result.length > 0;
+  try {
+    const searchPattern = `[task-${taskId}]`;
+    const result = execSync(`git log --all --oneline --grep="${searchPattern}" -1`, {
+      cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe']
+    }).trim();
+    return result.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -2877,12 +2882,15 @@ export async function getAgentProcessStats(agentId) {
     return null;
   }
 
-  // Get process stats using ps command
+  // Get process stats
   const { exec } = await import('child_process');
   const { promisify } = await import('util');
   const execAsync = promisify(exec);
 
-  const result = await execAsync(`ps -p ${agent.pid} -o pid=,pcpu=,rss=,state= 2>/dev/null`).catch(() => ({ stdout: '' }));
+  const psCmd = process.platform === 'win32'
+    ? `tasklist /FI "PID eq ${agent.pid}" /FO CSV /NH`
+    : `ps -p ${agent.pid} -o pid=,pcpu=,rss=,state=`;
+  const result = await execAsync(psCmd).catch(() => ({ stdout: '' }));
   const line = result.stdout.trim();
 
   if (!line) {
@@ -2932,11 +2940,12 @@ const MAX_TASK_RETRIES = 3;
  */
 async function isPidAlive(pid) {
   if (!pid) return false;
-  const { exec } = await import('child_process');
-  const { promisify } = await import('util');
-  const execAsync = promisify(exec);
-  const result = await execAsync(`ps -p ${pid} -o pid= 2>/dev/null`).catch(() => ({ stdout: '' }));
-  return result.stdout.trim() !== '';
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

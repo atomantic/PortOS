@@ -238,7 +238,7 @@ async function scaffoldApp(req, res) {
     const { stderr } = await new Promise((resolve) => {
       const child = spawn('npm', ['create', 'vite@latest', dirName, '--', '--template', 'react'], {
         cwd: parentDir,
-        shell: false
+        shell: process.platform === 'win32'
       });
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });

@@ -885,7 +885,7 @@ app.get('/logs', async (req, res) => {
     }
 
     // Stream new logs
-    pm2Process = spawn('pm2', ['logs', processName, '--lines', '0', '--raw']);
+    pm2Process = spawn('pm2', ['logs', processName, '--lines', '0', '--raw'], { shell: process.platform === 'win32' });
 
     pm2Process.stdout.on('data', (data) => {
       if (res.writableEnded) {

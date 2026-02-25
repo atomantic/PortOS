@@ -14,7 +14,7 @@ export async function getListeningPorts() {
 
   if (platform === 'darwin') {
     // macOS: use lsof
-    const { stdout } = await execAsync('lsof -iTCP -sTCP:LISTEN -n -P 2>/dev/null || true');
+    const { stdout } = await execAsync('lsof -iTCP -sTCP:LISTEN -n -P').catch(() => ({ stdout: '' }));
     const lines = stdout.split('\n').slice(1); // Skip header
     for (const line of lines) {
       const match = line.match(/:(\d+)\s+\(LISTEN\)/);
@@ -24,7 +24,7 @@ export async function getListeningPorts() {
     }
   } else if (platform === 'linux') {
     // Linux: use ss
-    const { stdout } = await execAsync('ss -lntp 2>/dev/null || true');
+    const { stdout } = await execAsync('ss -lntp').catch(() => ({ stdout: '' }));
     const lines = stdout.split('\n').slice(1); // Skip header
     for (const line of lines) {
       const match = line.match(/:(\d+)\s/);
@@ -33,11 +33,11 @@ export async function getListeningPorts() {
       }
     }
   } else {
-    // Windows/other: try netstat
-    const { stdout } = await execAsync('netstat -an 2>/dev/null || true');
+    // Windows: use netstat
+    const { stdout } = await execAsync('netstat -an').catch(() => ({ stdout: '' }));
     const lines = stdout.split('\n');
     for (const line of lines) {
-      if (line.includes('LISTEN')) {
+      if (line.includes('LISTENING')) {
         const match = line.match(/:(\d+)\s/);
         if (match) {
           ports.add(parseInt(match[1], 10));

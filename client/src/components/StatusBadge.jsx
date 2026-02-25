@@ -11,7 +11,7 @@ const statusConfig = {
   },
   not_started: {
     color: 'bg-gray-500',
-    text: 'Not Started',
+    text: 'Offline',
     pulse: false
   },
   not_found: {

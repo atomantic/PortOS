@@ -259,7 +259,7 @@ export default function QuickSummary() {
             <Timer size={14} className={nextJob.isDue ? 'text-port-accent animate-pulse' : 'text-gray-400'} />
             <span className="text-gray-400">Next:</span>
             <span className={`font-medium truncate max-w-[120px] ${nextJob.isDue ? 'text-port-accent' : 'text-white'}`} title={nextJob.jobName}>
-              {nextJob.jobName?.replace(/^(self-improvement|app-improvement)-/, '').replace(/-/g, ' ')}
+              {nextJob.jobName?.replace(/^(self-improvement|app-improvement|task)-/, '').replace(/-/g, ' ')}
             </span>
             <span className="text-gray-500 text-xs">
               {nextJob.isDue ? 'due' : formatTimeUntil(nextJob.nextDueAt)}

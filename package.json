@@ -1,16 +1,11 @@
 {
   "name": "portos",
-  "version": "1.2.0",
+  "version": "1.4.3",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
   "license": "MIT",
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "server",
-    "client"
-  ],
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",

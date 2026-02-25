@@ -69,6 +69,7 @@ export function emitLog(level, message, data = {}, prefix = '') {
 
 // In-memory daemon state
 let daemonRunning = false;
+let initialStartup = false;
 
 // Lightweight index mapping agentId → YYYY-MM-DD date bucket (~50KB vs 16MB full cache)
 // Lazy-loaded from data/cos/agents/index.json on first access
@@ -270,7 +271,7 @@ const withStateLock = createMutex();
 const DEFAULT_CONFIG = {
   userTasksFile: 'data/TASKS.md',          // User-defined tasks
   cosTasksFile: 'data/COS-TASKS.md',       // CoS internal/system tasks
-  goalsFile: 'data/COS-GOALS.md',          // Mission and goals file
+  goalsFile: 'GOALS.md',                    // Mission and goals file
   evaluationIntervalMs: 60000,             // 1 minute - stay active, check frequently
   healthCheckIntervalMs: 900000,           // 15 minutes
   maxConcurrentAgents: 3,
@@ -282,15 +283,16 @@ const DEFAULT_CONFIG = {
     { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
   ],
   autoStart: false,                        // Legacy: use alwaysOn instead
-  selfImprovementEnabled: false,           // Allow CoS to improve itself (PortOS codebase)
-  appImprovementEnabled: true,             // Allow CoS to improve managed apps
+  selfImprovementEnabled: true,            // Deprecated: use improvementEnabled
+  appImprovementEnabled: true,             // Deprecated: use improvementEnabled
+  improvementEnabled: true,                // Allow CoS to run improvement tasks on all apps (including PortOS)
   avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil'
   // Always-on mode settings
   alwaysOn: true,                          // CoS starts automatically and stays active
   appReviewCooldownMs: 1800000,            // 30 min between working on same app (was 1 hour)
   idleReviewEnabled: true,                 // Review apps for improvements when no user tasks
   idleReviewPriority: 'MEDIUM',            // Priority for auto-generated tasks (was LOW)
-  comprehensiveAppImprovement: true,       // Use comprehensive analysis for managed apps (same as PortOS self-improvement)
+  comprehensiveAppImprovement: true,       // Deprecated: always comprehensive now
   immediateExecution: true,                // Execute new tasks immediately, don't wait for interval
   proactiveMode: true,                     // Be proactive about finding work
   autonomousJobsEnabled: true,             // Enable recurring autonomous jobs (git maintenance, brain processing, etc.)
@@ -603,9 +605,12 @@ export async function start() {
   // Schedule improvement task checks based on next due time
   await scheduleNextImprovementCheck();
 
-  // Run initial evaluation to fill available slots, then health check
+  // Run initial evaluation to pick up existing pending tasks, then health check
+  // Skip improvement task generation on startup to avoid spawning agents on fresh installs
   emitLog('info', 'Running initial task evaluation...');
+  initialStartup = true;
   await evaluateTasks();
+  initialStartup = false;
   await runHealthCheck();
 
   cosEvents.emit('status', { running: true });
@@ -896,57 +901,46 @@ export async function evaluateTasks() {
     for (const request of onDemandRequests) {
       if (tasksToSpawn.length >= availableSlots) break;
 
-      let task = null;
-      if (request.category === 'selfImprovement' && state.config.selfImprovementEnabled) {
-        // Generate self-improvement task for the requested type
-        await taskSchedule.clearOnDemandRequest(request.id);
-        emitLog('info', `Processing on-demand self-improvement: ${request.taskType}`, { requestId: request.id });
+      // Unified on-demand handling (no category split)
+      const improvementEnabled = state.config.improvementEnabled ??
+        (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
 
-        await taskSchedule.recordExecution(`self-improve:${request.taskType}`);
+      if (!improvementEnabled) {
+        await taskSchedule.clearOnDemandRequest(request.id);
+        continue;
+      }
+
+      let task = null;
+      // Determine target app (if any)
+      const apps = await getActiveApps().catch(() => []);
+      let targetApp = null;
+
+      if (request.appId) {
+        targetApp = apps.find(a => a.id === request.appId);
+        if (!targetApp) {
+          emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
+          await taskSchedule.clearOnDemandRequest(request.id);
+          continue;
+        }
+      }
+
+      await taskSchedule.clearOnDemandRequest(request.id);
+
+      if (targetApp) {
+        emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+        await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
+        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
+      } else {
+        emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
+        await taskSchedule.recordExecution(`task:${request.taskType}`);
         await withStateLock(async () => {
           const s = await loadState();
           s.stats.lastSelfImprovement = new Date().toISOString();
           s.stats.lastSelfImprovementType = request.taskType;
           await saveState(s);
         });
-
         task = await generateSelfImprovementTaskForType(request.taskType, state);
-      } else if (request.category === 'appImprovement' && state.config.appImprovementEnabled) {
-        // Generate app improvement task for the specific app requested (or next eligible if no appId)
-        // Only consider active (non-archived) apps for COS tasks
-        const apps = await getActiveApps().catch(() => []);
-        let targetApp = null;
-
-        if (request.appId) {
-          // Specific app requested
-          targetApp = apps.find(a => a.id === request.appId);
-          if (!targetApp) {
-            emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
-            await taskSchedule.clearOnDemandRequest(request.id);
-            continue;
-          }
-        } else {
-          // No specific app - use next eligible app (bypass cooldown for on-demand)
-          targetApp = await getNextAppForReview(apps, 0); // 0 cooldown = no cooldown check
-          if (!targetApp && apps.length > 0) {
-            // All apps might be on cooldown - pick the first app anyway for on-demand
-            targetApp = apps[0];
-          }
-          if (!targetApp) {
-            emitLog('warn', 'On-demand app improvement requested but no apps available', { requestId: request.id });
-            await taskSchedule.clearOnDemandRequest(request.id);
-            continue;
-          }
-        }
-
-        await taskSchedule.clearOnDemandRequest(request.id);
-        emitLog('info', `Processing on-demand app improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
-
-        // Mark app review started and record execution
-        await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
-        await taskSchedule.recordExecution(`app-improve:${request.taskType}`, targetApp.id);
-
-        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
       }
 
       if (task && canSpawnTask(task)) {
@@ -1018,7 +1012,8 @@ export async function evaluateTasks() {
 
   // Background: Queue eligible self-improvement tasks as system tasks
   // Only queue if there are NO pending user tasks (user tasks always take priority)
-  if (state.config.idleReviewEnabled && !hasPendingUserTasks) {
+  // Skip on initial startup to avoid auto-spawning agents on fresh installs
+  if (state.config.idleReviewEnabled && !hasPendingUserTasks && !initialStartup) {
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
 
@@ -1160,30 +1155,19 @@ export async function evaluateTasks() {
  * @returns {Object|null} Generated task or null if nothing to do
  */
 async function generateIdleReviewTask(state) {
-  // Check if we should run self-improvement (alternates with app reviews)
-  const lastSelfImprovementTime = state.stats.lastSelfImprovement
-    ? new Date(state.stats.lastSelfImprovement).getTime()
-    : 0;
-  const lastIdleReviewTime = state.stats.lastIdleReview
-    ? new Date(state.stats.lastIdleReview).getTime()
-    : 0;
+  // Check if improvement tasks are enabled (unified flag, with backward compat)
+  const improvementEnabled = state.config.improvementEnabled ??
+    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
 
-  // Prioritize self-improvement if it hasn't run recently (or ever)
-  const shouldRunSelfImprovement = lastSelfImprovementTime <= lastIdleReviewTime;
-
-  if (shouldRunSelfImprovement && state.config.selfImprovementEnabled) {
-    const selfImprovementTask = await generateSelfImprovementTask(state);
-    if (selfImprovementTask) {
-      return selfImprovementTask;
-    }
+  if (!improvementEnabled) {
+    emitLog('debug', 'Improvement tasks are disabled');
+    return null;
   }
 
-  // Try app reviews (if enabled)
-  if (state.config.appImprovementEnabled) {
-    // Get all active (non-archived) managed apps
-    const apps = await getActiveApps().catch(() => []);
+  // Get all active (non-archived) managed apps (including PortOS)
+  const apps = await getActiveApps().catch(() => []);
 
-    if (apps.length > 0) {
+  if (apps.length > 0) {
     // Find next app eligible for review (not on cooldown, oldest review first)
     const nextApp = await getNextAppForReview(apps, state.config.appReviewCooldownMs);
 
@@ -1199,40 +1183,9 @@ async function generateIdleReviewTask(state) {
         await saveState(s);
       });
 
-      // Use comprehensive improvement if enabled, otherwise use simple idle review
-      if (state.config.comprehensiveAppImprovement) {
-        emitLog('info', `Generating comprehensive improvement task for ${nextApp.name}`, { appId: nextApp.id });
-        return await generateManagedAppImprovementTask(nextApp, state);
-      } else {
-        emitLog('info', `Generating idle review task for ${nextApp.name}`, { appId: nextApp.id });
-
-        // Create a simple idle review task (legacy behavior)
-        return {
-          id: `idle-review-${nextApp.id}-${Date.now().toString(36)}`,
-          status: 'pending',
-          priority: state.config.idleReviewPriority || 'MEDIUM',
-          priorityValue: PRIORITY_VALUES[state.config.idleReviewPriority] || 2,
-          description: `[Idle Review] Review ${nextApp.name} codebase for improvements: formatting issues, dead code, DRY violations, typos, and other small fixes that can be auto-approved. Commit each fix with a clear description.`,
-          metadata: {
-            app: nextApp.id,
-            appName: nextApp.name,
-            repoPath: nextApp.repoPath,
-            reviewType: 'idle',
-            autoGenerated: true
-          },
-          taskType: 'internal',
-          autoApproved: true
-        };
-      }
+      emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
+      return await generateManagedAppImprovementTask(nextApp, state);
     }
-  }
-  }
-
-  // All apps on cooldown or no apps - fall back to self-improvement
-  // This ensures CoS is ALWAYS working on something
-  if (state.config.selfImprovementEnabled) {
-    emitLog('debug', 'No apps available for review - running self-improvement instead');
-    return await generateSelfImprovementTask(state);
   }
 
   emitLog('debug', 'No idle tasks available');
@@ -1245,7 +1198,12 @@ async function generateIdleReviewTask(state) {
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
 async function queueEligibleImprovementTasks(state, cosTaskData) {
-  const { getDueSelfImprovementTasks, shouldRunSelfImprovementTask, getNextAppImprovementTaskType } = await import('./taskSchedule.js');
+  const { getDueTasks, shouldRunTask, getNextTaskType } = await import('./taskSchedule.js');
+
+  // Check unified improvement flag (with backward compat)
+  const improvementEnabled = state.config.improvementEnabled ??
+    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
+  if (!improvementEnabled) return;
 
   // Get existing pending/in_progress system tasks to avoid duplicates
   const existingTasks = cosTaskData.tasks || [];
@@ -1253,74 +1211,33 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
   for (const task of existingTasks) {
     if (task.status === 'pending' || task.status === 'in_progress') {
-      // Check for self-improvement type in metadata or description
-      const selfImpType = task.metadata?.selfImprovementType ||
-        task.description?.match(/\[self-improvement\]\s*(\w[\w-]*)/i)?.[1];
-      if (selfImpType) {
-        existingTaskTypes.add(selfImpType);
-      }
-      // Check for app improvement type
-      const appImpType = task.metadata?.analysisType;
+      const analysisType = task.metadata?.analysisType ||
+        task.metadata?.selfImprovementType ||
+        task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1];
       const appId = task.metadata?.app;
-      if (appImpType && appId) {
-        existingTaskTypes.add(`app:${appId}:${appImpType}`);
+      if (analysisType) {
+        existingTaskTypes.add(appId ? `app:${appId}:${analysisType}` : analysisType);
       }
     }
   }
 
   let queued = 0;
 
-  // Queue eligible self-improvement tasks for PortOS
-  if (state.config.selfImprovementEnabled) {
-    const dueTasks = await getDueSelfImprovementTasks().catch(() => []);
-
-    for (const taskType of dueTasks) {
-      // Skip if already queued
-      if (existingTaskTypes.has(taskType)) {
-        emitLog('debug', `Self-improvement task ${taskType} already queued`);
-        continue;
-      }
-
-      // Double-check eligibility
-      const eligible = await shouldRunSelfImprovementTask(taskType).catch(() => false);
-      if (!eligible) continue;
-
-      // Generate task description
-      const taskDesc = getSelfImprovementTaskDescription(taskType);
-      if (!taskDesc) continue;
-
-      // Add to COS-TASKS.md
-      const newTask = await addTask({
-        id: `sys-${taskType}-${Date.now().toString(36)}`,
-        description: `[self-improvement] ${taskType}: ${taskDesc}`,
-        priority: 'LOW',
-        app: null,
-        context: `Auto-generated self-improvement task. Type: ${taskType}`,
-        approvalRequired: false
-      }, 'internal');
-
-      emitLog('info', `Queued self-improvement task: ${taskType}`, { taskId: newTask.id });
-      existingTaskTypes.add(taskType);
-      queued++;
-    }
-  }
-
-  // Queue eligible app improvement tasks for managed apps (if enabled)
-  if (state.config.appImprovementEnabled) {
-    // Only queue tasks for active (non-archived) apps
-    const apps = await getActiveApps().catch(() => []);
-    for (const app of apps) {
+  // Queue eligible improvement tasks for all managed apps (including PortOS)
+  const apps = await getActiveApps().catch(() => []);
+  for (const app of apps) {
     // Check if app is on cooldown
     const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
     if (onCooldown) continue;
 
     // Get next eligible improvement type for this app
-    const nextType = await getNextAppImprovementTaskType(app.id).catch(() => null);
-    if (!nextType) continue;
+    const nextTypeResult = await getNextTaskType(app.id).catch(() => null);
+    if (!nextTypeResult) continue;
+    const nextType = nextTypeResult.taskType;
 
     const taskKey = `app:${app.id}:${nextType}`;
     if (existingTaskTypes.has(taskKey)) {
-      emitLog('debug', `App improvement task ${nextType} for ${app.name} already queued`);
+      emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
       continue;
     }
 
@@ -1330,21 +1247,19 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
     // Add to COS-TASKS.md
     const newTask = await addTask({
-      id: `sys-app-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`,
+      id: `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`,
       description: taskDesc,
       priority: 'LOW',
       app: app.id,
-      context: `Auto-generated app improvement task for ${app.name}. Type: ${nextType}`,
+      context: `Auto-generated improvement task for ${app.name}. Type: ${nextType}`,
       approvalRequired: false
     }, 'internal');
 
-    emitLog('info', `Queued app improvement task: ${nextType} for ${app.name}`, { taskId: newTask.id, appId: app.id });
+    emitLog('info', `Queued improvement task: ${nextType} for ${app.name}`, { taskId: newTask.id, appId: app.id });
     existingTaskTypes.add(taskKey);
     queued++;
 
     // Only queue one task per app per evaluation to avoid flooding
-    break;
-  }
   }
 
   if (queued > 0) {
@@ -1357,18 +1272,20 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
  */
 function getSelfImprovementTaskDescription(taskType) {
   const descriptions = {
-    'ui-bugs': 'Review PortOS UI for visual bugs, layout issues, and UX improvements',
+    'ui-bugs': 'Review UI for visual bugs, layout issues, and UX improvements',
     'mobile-responsive': 'Check mobile responsiveness and fix layout issues on smaller screens',
-    'security': 'Audit PortOS for security vulnerabilities (XSS, injection, auth issues)',
+    'security': 'Audit codebase for security vulnerabilities (XSS, injection, auth issues)',
     'code-quality': 'Review code for DRY violations, dead code, and refactoring opportunities',
     'console-errors': 'Check browser console and fix JavaScript errors and warnings',
     'performance': 'Profile and optimize slow components, queries, and renders',
-    'cos-enhancement': 'Improve CoS capabilities, prompts, and task handling logic',
     'test-coverage': 'Add missing tests for uncovered code paths',
     'documentation': 'Update documentation, comments, and README files',
-    'feature-ideas': 'Brainstorm and document potential new features for PortOS',
+    'feature-ideas': 'Brainstorm and document potential new features based on GOALS.md',
     'accessibility': 'Audit and fix accessibility issues (ARIA, keyboard nav, contrast)',
-    'dependency-updates': 'Check for and safely update outdated dependencies'
+    'dependency-updates': 'Check for and safely update outdated dependencies',
+    'error-handling': 'Improve error handling patterns and recovery logic',
+    'typing': 'Add or fix TypeScript/JSDoc type annotations',
+    'release-check': 'Verify release readiness (changelog, version, tests)'
   };
   return descriptions[taskType] || null;
 }
@@ -1378,7 +1295,7 @@ function getSelfImprovementTaskDescription(taskType) {
  */
 function getAppImprovementTaskDescription(taskType, app) {
   const descriptions = {
-    'security-audit': `Security audit for ${app.name}: check for vulnerabilities`,
+    'security': `Security audit for ${app.name}: check for vulnerabilities`,
     'code-quality': `Code quality review for ${app.name}: DRY violations, dead code`,
     'test-coverage': `Add missing tests for ${app.name}`,
     'performance': `Performance optimization for ${app.name}`,
@@ -1387,14 +1304,18 @@ function getAppImprovementTaskDescription(taskType, app) {
     'dependency-updates': `Update dependencies for ${app.name}`,
     'documentation': `Update documentation for ${app.name}`,
     'error-handling': `Improve error handling in ${app.name}`,
-    'typing': `Add/fix TypeScript types in ${app.name}`
+    'typing': `Add/fix TypeScript types in ${app.name}`,
+    'ui-bugs': `Review UI for visual bugs in ${app.name}`,
+    'mobile-responsive': `Check mobile responsiveness of ${app.name}`,
+    'feature-ideas': `Brainstorm features for ${app.name} based on GOALS.md`,
+    'release-check': `Verify release readiness for ${app.name}`
   };
   return descriptions[taskType] || null;
 }
 
-// Self-improvement task types (rotates through these)
-// Organized by goal priority from COS-GOALS.md
-const SELF_IMPROVEMENT_TYPES = [
+// Unified improvement task types (rotates through these)
+// Organized by goal priority from GOALS.md
+const IMPROVEMENT_TYPES = [
   // Goal 1: Codebase Quality
   'ui-bugs',
   'mobile-responsive',
@@ -1402,17 +1323,21 @@ const SELF_IMPROVEMENT_TYPES = [
   'code-quality',
   'console-errors',
   'performance',
-  // Goal 2: Self-Improvement (CoS enhancing itself)
-  'cos-enhancement',
+  // Goal 2: Self-Improvement
   'test-coverage',
+  'error-handling',
+  'typing',
   // Goal 3: Documentation
   'documentation',
   // Goal 4: User Engagement
   'feature-ideas',
   // Goal 5: System Health
   'accessibility',
-  'dependency-updates'
+  'dependency-updates',
+  'release-check'
 ];
+// Backward compat alias
+const SELF_IMPROVEMENT_TYPES = IMPROVEMENT_TYPES;
 
 /**
  * Generate a self-improvement task for PortOS itself
@@ -1429,17 +1354,17 @@ async function generateSelfImprovementTask(state) {
   // Import task schedule service dynamically to avoid circular dependency
   const taskSchedule = await import('./taskSchedule.js');
 
-  // First, check for any on-demand task requests
+  // First, check for any on-demand task requests (no category filter — unified)
   const onDemandRequests = await taskSchedule.getOnDemandRequests();
-  const selfImprovementRequests = onDemandRequests.filter(r => r.category === 'selfImprovement');
+  const selfRequests = onDemandRequests.filter(r => !r.appId);
 
-  if (selfImprovementRequests.length > 0) {
-    const request = selfImprovementRequests[0];
+  if (selfRequests.length > 0) {
+    const request = selfRequests[0];
     await taskSchedule.clearOnDemandRequest(request.id);
     emitLog('info', `Processing on-demand task request: ${request.taskType}`, { requestId: request.id });
 
     // Record execution and generate the requested task
-    await taskSchedule.recordExecution(`self-improve:${request.taskType}`);
+    await taskSchedule.recordExecution(`task:${request.taskType}`);
 
     // Update state
     await withStateLock(async () => {
@@ -1454,14 +1379,14 @@ async function generateSelfImprovementTask(state) {
 
   // Use the schedule service to determine the next task type
   const lastType = state.stats.lastSelfImprovementType || '';
-  const nextTypeResult = await taskSchedule.getNextSelfImprovementTaskType(lastType);
+  const nextTypeResult = await taskSchedule.getNextTaskType(null, lastType);
 
   if (!nextTypeResult) {
-    emitLog('debug', 'No self-improvement tasks are eligible to run based on schedule');
+    emitLog('debug', 'No improvement tasks are eligible to run based on schedule');
     await recordDecision(
       DECISION_TYPES.NOT_DUE,
-      'No self-improvement tasks are eligible based on schedule',
-      { category: 'selfImprovement' }
+      'No improvement tasks are eligible based on schedule',
+      {}
     );
     return null;
   }
@@ -1470,7 +1395,7 @@ async function generateSelfImprovementTask(state) {
   const selectionReason = nextTypeResult.reason;
 
   // Additional check: skip if learning data suggests poor performance
-  const taskTypeKey = `self-improve:${nextType}`;
+  const taskTypeKey = `task:${nextType}`;
   const cooldownInfo = await getAdaptiveCooldownMultiplier(taskTypeKey).catch(() => ({ skip: false }));
 
   if (cooldownInfo.skip) {
@@ -1489,7 +1414,7 @@ async function generateSelfImprovementTask(state) {
     );
 
     // Try to find another eligible task type
-    const dueTasks = await taskSchedule.getDueSelfImprovementTasks();
+    const dueTasks = await taskSchedule.getDueTasks();
     const alternativeTask = dueTasks.find(t => t.taskType !== nextType);
 
     if (alternativeTask) {
@@ -1508,7 +1433,7 @@ async function generateSelfImprovementTask(state) {
       const skippedTypes = await getSkippedTaskTypes().catch(() => []);
       if (skippedTypes.length > 0) {
         skippedTypes.sort((a, b) => new Date(a.lastCompleted || 0) - new Date(b.lastCompleted || 0));
-        const oldestType = skippedTypes[0].taskType.replace('self-improve:', '');
+        const oldestType = skippedTypes[0].taskType.replace(/^(self-improve|app-improve|task):/, '');
         nextType = oldestType;
         emitLog('info', `Retrying ${oldestType} as it hasn't been attempted recently`);
 
@@ -1519,7 +1444,7 @@ async function generateSelfImprovementTask(state) {
           { taskType: oldestType, reason: 'oldest-skipped-type' }
         );
       } else {
-        nextType = SELF_IMPROVEMENT_TYPES[0];
+        nextType = IMPROVEMENT_TYPES[0];
       }
     }
   }
@@ -1533,7 +1458,7 @@ async function generateSelfImprovementTask(state) {
   }
 
   // Record execution in the schedule service
-  await taskSchedule.recordExecution(`self-improve:${nextType}`);
+  await taskSchedule.recordExecution(`task:${nextType}`);
 
   // Update state with new timestamp and type
   await withStateLock(async () => {
@@ -1543,12 +1468,12 @@ async function generateSelfImprovementTask(state) {
     await saveState(s);
   });
 
-  emitLog('info', `Generating self-improvement task: ${nextType} (${selectionReason})`);
+  emitLog('info', `Generating improvement task: ${nextType} (${selectionReason})`);
 
   // Record task selection decision
   await recordDecision(
     DECISION_TYPES.TASK_SELECTED,
-    `Selected ${nextType} for self-improvement`,
+    `Selected ${nextType} for improvement`,
     {
       taskType: nextType,
       reason: selectionReason,
@@ -1569,10 +1494,10 @@ async function generateSelfImprovementTask(state) {
  */
 async function generateSelfImprovementTaskForType(taskType, state, taskDescriptions = null) {
   const taskSchedule = await import('./taskSchedule.js');
-  const interval = await taskSchedule.getSelfImprovementInterval(taskType);
+  const interval = await taskSchedule.getTaskInterval(taskType);
 
   // Get the effective prompt (custom or default)
-  const description = await taskSchedule.getSelfImprovementPrompt(taskType);
+  const description = await taskSchedule.getTaskPrompt(taskType);
 
   const metadata = {
     analysisType: taskType,
@@ -1755,34 +1680,6 @@ Optimize and commit improvements.
 
 Use model: claude-opus-4-5-20251101 for performance optimization`,
 
-    'cos-enhancement': `[Self-Improvement] Enhance CoS Capabilities
-
-Review the CoS system and add new capabilities:
-
-1. Read data/COS-GOALS.md to understand the mission and goals
-2. Review server/services/cos.js for improvement opportunities:
-   - Better task prioritization logic
-   - Smarter model selection
-   - More informative status messages
-   - Better error recovery
-
-3. Review the self-improvement task prompts:
-   - Are they comprehensive enough?
-   - Do they lead to quality fixes?
-   - What new analysis types could be added?
-
-4. Consider adding:
-   - New MCP server integrations
-   - Better metrics tracking
-   - Learning from completed tasks
-   - Smarter cooldown logic
-
-5. Implement ONE meaningful enhancement and commit it
-
-Focus on making CoS more autonomous and effective.
-
-Use model: claude-opus-4-5-20251101 for thoughtful enhancement`,
-
     'test-coverage': `[Self-Improvement] Improve Test Coverage
 
 Analyze and improve test coverage for PortOS:
@@ -1846,7 +1743,7 @@ Use model: claude-opus-4-5-20251101 for clear documentation`,
 
 Think about ways to make PortOS more useful:
 
-1. Read data/COS-GOALS.md for context on user goals
+1. Read GOALS.md for context on user goals
 2. Review recent completed tasks to understand patterns
 3. Consider these areas:
    - User task management improvements
@@ -1919,9 +1816,7 @@ async function generateManagedAppImprovementTask(app, state) {
 
   // First, check for any on-demand task requests for this app
   const onDemandRequests = await taskSchedule.getOnDemandRequests();
-  const appRequests = onDemandRequests.filter(r =>
-    r.category === 'appImprovement' && r.appId === app.id
-  );
+  const appRequests = onDemandRequests.filter(r => r.appId === app.id);
 
   let nextType;
   let selectionReason;
@@ -1938,7 +1833,7 @@ async function generateManagedAppImprovementTask(app, state) {
     const lastType = appActivity?.lastImprovementType || '';
 
     // Use the schedule service to determine the next task type
-    const nextTypeResult = await taskSchedule.getNextAppImprovementTaskType(app.id, lastType);
+    const nextTypeResult = await taskSchedule.getNextTaskType(app.id, lastType);
 
     if (!nextTypeResult) {
       emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
@@ -1950,283 +1845,25 @@ async function generateManagedAppImprovementTask(app, state) {
   }
 
   // Record execution in the schedule service
-  await taskSchedule.recordExecution(`app-improve:${nextType}`, app.id);
+  await taskSchedule.recordExecution(`task:${nextType}`, app.id);
 
   // Update app activity with new type
   await updateAppActivity(app.id, {
     lastImprovementType: nextType
   });
 
-  emitLog('info', `Generating comprehensive improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
+  emitLog('info', `Generating improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
 
   // Get the effective prompt (custom or default template)
-  const promptTemplate = await taskSchedule.getAppImprovementPrompt(nextType);
+  const promptTemplate = await taskSchedule.getTaskPrompt(nextType);
 
   // Replace template variables in the prompt
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath);
 
-  // Legacy task descriptions - keeping for fallback but they won't be used
-  const taskDescriptions = {
-    'security-audit': `[App Improvement: ${app.name}] Security Audit
-
-Analyze the ${app.name} codebase for security vulnerabilities:
-
-Repository: ${app.repoPath}
-
-1. Review routes/controllers for:
-   - Command injection in exec/spawn calls
-   - Path traversal in file operations
-   - Missing input validation
-   - XSS vulnerabilities
-   - SQL/NoSQL injection
-
-2. Review services for:
-   - Unsafe eval() or Function()
-   - Hardcoded credentials
-   - Insecure dependencies
-
-3. Review client code for:
-   - XSS vulnerabilities
-   - Sensitive data in localStorage
-   - CSRF protection
-
-4. Check authentication and authorization:
-   - Secure password handling
-   - Token management
-   - Access control
-
-Fix any vulnerabilities found and commit with security advisory notes.
-
-Use model: claude-opus-4-5-20251101 for thorough security analysis`,
-
-    'code-quality': `[App Improvement: ${app.name}] Code Quality Review
-
-Analyze ${app.name} for maintainability improvements:
-
-Repository: ${app.repoPath}
-
-1. Find DRY violations - similar code in multiple places
-2. Identify functions >50 lines that should be split
-3. Look for missing error handling
-4. Find dead code and unused imports
-5. Check for console.log that should be removed
-6. Look for TODO/FIXME that need addressing
-7. Identify magic numbers that should be constants
-
-Focus on the main source directories. Refactor issues found and commit improvements.
-
-Use model: claude-opus-4-5-20251101 for quality refactoring`,
-
-    'test-coverage': `[App Improvement: ${app.name}] Improve Test Coverage
-
-Analyze and improve test coverage for ${app.name}:
-
-Repository: ${app.repoPath}
-
-1. Check existing tests and identify untested critical paths
-2. Look for:
-   - API routes without tests
-   - Services with complex logic
-   - Error handling paths
-   - Edge cases
-
-3. Add tests following existing patterns in the project
-4. Ensure tests:
-   - Use appropriate mocks
-   - Test edge cases
-   - Follow naming conventions
-
-5. Run tests to verify all pass
-6. Commit test additions with clear message describing coverage
-
-Use model: claude-opus-4-5-20251101 for comprehensive test design`,
-
-    'performance': `[App Improvement: ${app.name}] Performance Analysis
-
-Analyze ${app.name} for performance issues:
-
-Repository: ${app.repoPath}
-
-1. Review components/views for:
-   - Unnecessary re-renders
-   - Missing memoization
-   - Large files that should be split
-
-2. Review backend for:
-   - N+1 query patterns
-   - Missing caching opportunities
-   - Inefficient file operations
-   - Slow API endpoints
-
-3. Review build/bundle for:
-   - Missing code splitting
-   - Large dependencies that could be optimized
-
-4. Check for:
-   - Memory leaks
-   - Unnecessary broadcasts/events
-
-Optimize and commit improvements.
-
-Use model: claude-opus-4-5-20251101 for performance optimization`,
-
-    'accessibility': `[App Improvement: ${app.name}] Accessibility Audit
-
-Audit ${app.name} for accessibility issues:
-
-Repository: ${app.repoPath}
-
-If the app has a web UI:
-1. Navigate to the app's UI
-2. Check for:
-   - Missing ARIA labels
-   - Missing alt text on images
-   - Insufficient color contrast
-   - Keyboard navigation issues
-   - Focus indicators
-   - Semantic HTML usage
-
-3. Fix accessibility issues in components
-4. Add appropriate aria-* attributes
-5. Test and commit changes
-
-Use model: claude-opus-4-5-20251101 for comprehensive a11y fixes`,
-
-    'console-errors': `[App Improvement: ${app.name}] Console Error Investigation
-
-Find and fix console errors in ${app.name}:
-
-Repository: ${app.repoPath}
-
-1. If the app has a UI, check browser console for errors
-2. Check server logs for errors
-3. For each error:
-   - Identify the source file and line
-   - Understand the root cause
-   - Implement a fix
-
-4. Test fixes and commit changes
-
-Use model: claude-opus-4-5-20251101 for thorough debugging`,
-
-    'dependency-updates': `[App Improvement: ${app.name}] Dependency Updates
-
-Check ${app.name} dependencies for updates and security vulnerabilities:
-
-Repository: ${app.repoPath}
-
-1. Run npm audit (or equivalent package manager)
-2. Check for outdated packages
-3. Review CRITICAL and HIGH severity vulnerabilities
-4. For each vulnerability:
-   - Assess actual risk
-   - Check if update available
-   - Test updates don't break functionality
-
-5. Update dependencies carefully:
-   - Patch versions first (safest)
-   - Then minor versions
-   - Major versions need careful review
-
-6. After updating:
-   - Run tests
-   - Verify the app starts correctly
-
-7. Commit with clear changelog
-
-IMPORTANT: Only update one major version bump at a time.
-
-Use model: claude-opus-4-5-20251101 for thorough security analysis`,
-
-    'documentation': `[App Improvement: ${app.name}] Update Documentation
-
-Review and improve ${app.name} documentation:
-
-Repository: ${app.repoPath}
-
-1. Check README.md:
-   - Installation instructions current?
-   - Quick start guide clear?
-   - Feature overview complete?
-
-2. Review inline documentation:
-   - Add JSDoc to exported functions
-   - Document complex algorithms
-   - Explain non-obvious code
-
-3. Check for docs/ folder:
-   - Are all features documented?
-   - Is information current?
-   - Add missing guides if needed
-
-4. Update PLAN.md or similar if present:
-   - Mark completed milestones
-   - Document architectural decisions
-
-Commit documentation improvements.
-
-Use model: claude-opus-4-5-20251101 for clear documentation`,
-
-    'error-handling': `[App Improvement: ${app.name}] Improve Error Handling
-
-Enhance error handling in ${app.name}:
-
-Repository: ${app.repoPath}
-
-1. Review code for:
-   - Missing try-catch blocks where needed
-   - Silent failures (empty catch blocks)
-   - Errors that should be logged
-   - User-facing error messages
-
-2. Add error handling for:
-   - Network requests
-   - File operations
-   - Database queries
-   - External API calls
-
-3. Ensure errors are:
-   - Logged appropriately
-   - Have clear messages
-   - Include relevant context
-   - Don't expose sensitive data
-
-4. Test error paths and commit improvements
-
-Use model: claude-opus-4-5-20251101 for comprehensive error handling`,
-
-    'typing': `[App Improvement: ${app.name}] TypeScript Type Improvements
-
-Improve TypeScript types in ${app.name}:
-
-Repository: ${app.repoPath}
-
-1. Review TypeScript files for:
-   - 'any' types that should be specific
-   - Missing type annotations
-   - Type assertions that could be avoided
-   - Missing interfaces/types for objects
-
-2. Add types for:
-   - Function parameters and returns
-   - Component props
-   - API responses
-   - Configuration objects
-
-3. Ensure:
-   - Types are properly exported
-   - No implicit any
-   - Types are reusable
-
-4. Run type checking and commit improvements
-
-Use model: claude-opus-4-5-20251101 for thorough typing`
-  };
-
   // Get interval settings to determine provider/model
-  const interval = await taskSchedule.getAppImprovementInterval(nextType);
+  const interval = await taskSchedule.getTaskInterval(nextType);
 
   const metadata = {
     app: app.id,
@@ -2279,10 +1916,10 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
     lastImprovementType: taskType
   });
 
-  emitLog('info', `Generating app improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
+  emitLog('info', `Generating improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
 
   // Get the effective prompt (custom or default template)
-  const promptTemplate = await taskSchedule.getAppImprovementPrompt(taskType);
+  const promptTemplate = await taskSchedule.getTaskPrompt(taskType);
 
   // Replace template variables in the prompt
   const description = promptTemplate
@@ -2290,7 +1927,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
     .replace(/\{repoPath\}/g, app.repoPath);
 
   // Get interval settings to determine provider/model
-  const interval = await taskSchedule.getAppImprovementInterval(taskType);
+  const interval = await taskSchedule.getTaskInterval(taskType);
 
   const metadata = {
     app: app.id,
@@ -2341,7 +1978,7 @@ export async function runHealthCheck() {
   };
 
   // Check PM2 processes
-  const pm2Result = await execAsync('pm2 jlist 2>/dev/null || echo "[]"').catch(() => ({ stdout: '[]' }));
+  const pm2Result = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
   // pm2 jlist may output ANSI codes and warnings before JSON, extract the JSON array
   // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
   const pm2Output = pm2Result.stdout || '[]';
@@ -2377,7 +2014,7 @@ export async function runHealthCheck() {
     emitLog('warn', `🔄 ${names.length} errored PM2 process(es) detected: ${names.join(', ')} — attempting restart`);
 
     const restartResults = await Promise.all(names.map(async (name) => {
-      const result = await execFileAsync('pm2', ['restart', name]).catch(e => ({ stdout: '', stderr: e.message }));
+      const result = await execFileAsync('pm2', ['restart', name], { shell: process.platform === 'win32' }).catch(e => ({ stdout: '', stderr: e.message }));
       const failed = result.stderr && !result.stdout;
       if (failed) {
         emitLog('error', `❌ Failed to restart ${name}: ${result.stderr}`);
@@ -2421,7 +2058,9 @@ export async function runHealthCheck() {
   }
 
   // Get system memory
-  const memResult = await execAsync('vm_stat 2>/dev/null || free -m 2>/dev/null').catch(() => ({ stdout: '' }));
+  const memCmd = process.platform === 'win32' ? 'wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /VALUE' :
+    process.platform === 'darwin' ? 'vm_stat' : 'free -m';
+  const memResult = await execAsync(memCmd).catch(() => ({ stdout: '' }));
   metrics.memory = { raw: memResult.stdout.slice(0, 500) }; // Truncate for storage
 
   // Store health check result with lock to prevent race conditions
@@ -2774,11 +2413,12 @@ export async function getAgentProcessStats(agentId) {
  */
 async function isPidAlive(pid) {
   if (!pid) return false;
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const execFileAsync = promisify(execFile);
-  const result = await execFileAsync('ps', ['-p', String(pid), '-o', 'pid=']).catch(() => ({ stdout: '' }));
-  return result.stdout.trim() !== '';
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3561,11 +3201,37 @@ async function dequeueNextTask() {
   for (const request of onDemandRequests) {
     if (spawned >= availableSlots) break;
 
-    let task = null;
-    if (request.category === 'selfImprovement' && state.config.selfImprovementEnabled) {
+    // Unified on-demand handling (no category split)
+    const improvEnabled = state.config.improvementEnabled ??
+      (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
+    if (!improvEnabled) {
       await taskScheduleMod.clearOnDemandRequest(request.id);
-      emitLog('info', `Processing on-demand self-improvement: ${request.taskType}`, { requestId: request.id });
-      await taskScheduleMod.recordExecution(`self-improve:${request.taskType}`);
+      continue;
+    }
+
+    let task = null;
+    const apps = await getActiveApps().catch(() => []);
+    let targetApp = null;
+
+    if (request.appId) {
+      targetApp = apps.find(a => a.id === request.appId);
+      if (!targetApp) {
+        emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
+        await taskScheduleMod.clearOnDemandRequest(request.id);
+        continue;
+      }
+    }
+
+    await taskScheduleMod.clearOnDemandRequest(request.id);
+
+    if (targetApp) {
+      emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+      await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
+      await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
+      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
+    } else {
+      emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
+      await taskScheduleMod.recordExecution(`task:${request.taskType}`);
       await withStateLock(async () => {
         const s = await loadState();
         s.stats.lastSelfImprovement = new Date().toISOString();
@@ -3573,32 +3239,6 @@ async function dequeueNextTask() {
         await saveState(s);
       });
       task = await generateSelfImprovementTaskForType(request.taskType, state);
-    } else if (request.category === 'appImprovement' && state.config.appImprovementEnabled) {
-      const apps = await getActiveApps().catch(() => []);
-      let targetApp = null;
-
-      if (request.appId) {
-        targetApp = apps.find(a => a.id === request.appId);
-        if (!targetApp) {
-          emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
-          await taskScheduleMod.clearOnDemandRequest(request.id);
-          continue;
-        }
-      } else {
-        targetApp = await getNextAppForReview(apps, 0);
-        if (!targetApp && apps.length > 0) targetApp = apps[0];
-        if (!targetApp) {
-          emitLog('warn', 'On-demand app improvement requested but no apps available', { requestId: request.id });
-          await taskScheduleMod.clearOnDemandRequest(request.id);
-          continue;
-        }
-      }
-
-      await taskScheduleMod.clearOnDemandRequest(request.id);
-      emitLog('info', `Processing on-demand app improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
-      await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
-      await taskScheduleMod.recordExecution(`app-improve:${request.taskType}`, targetApp.id);
-      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
     }
 
     if (task && canSpawn(task)) {

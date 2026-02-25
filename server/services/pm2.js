@@ -3,6 +3,8 @@ import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { extractJSONArray, safeJSONParse } from '../lib/fileUtils.js';
 
+const IS_WIN = process.platform === 'win32';
+
 /**
  * Build environment object with optional custom PM2_HOME
  * @param {string} pm2Home Optional custom PM2_HOME path
@@ -29,7 +31,7 @@ function buildEnv(pm2Home) {
 function spawnPm2Cli(action, name, pm2Home) {
   return new Promise((resolve, reject) => {
     const child = spawn('pm2', [action, name], {
-      shell: false,
+      shell: IS_WIN,
       env: buildEnv(pm2Home)
     });
     let stderr = '';
@@ -162,7 +164,7 @@ export async function deleteApp(name, pm2Home = null) {
 export async function getAppStatus(name, pm2Home = null) {
   return new Promise((resolve) => {
     const child = spawn('pm2', ['jlist'], {
-      shell: false,
+      shell: IS_WIN,
       env: buildEnv(pm2Home)
     });
     let stdout = '';
@@ -209,7 +211,7 @@ export async function getAppStatus(name, pm2Home = null) {
 export async function listProcesses(pm2Home = null) {
   return new Promise((resolve) => {
     const child = spawn('pm2', ['jlist'], {
-      shell: false,
+      shell: IS_WIN,
       env: buildEnv(pm2Home)
     });
     let stdout = '';
@@ -249,7 +251,7 @@ export async function getLogs(name, lines = 100, pm2Home = null) {
   return new Promise((resolve, reject) => {
     const args = ['logs', name, '--lines', String(lines), '--nostream', '--raw'];
     const child = spawn('pm2', args, {
-      shell: false,
+      shell: IS_WIN,
       env: buildEnv(pm2Home)
     });
 
@@ -325,7 +327,7 @@ export async function startFromEcosystem(cwd, processNames = [], pm2Home = null)
 
     const child = spawn('pm2', args, {
       cwd,
-      shell: false,
+      shell: IS_WIN,
       env: buildEnv(pm2Home)
     });
     let stdout = '';

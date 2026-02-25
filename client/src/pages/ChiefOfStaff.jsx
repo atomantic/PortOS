@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import * as api from '../services/api';
-import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain } from 'lucide-react';
+import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 
@@ -58,6 +58,9 @@ export default function ChiefOfStaff() {
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
+  const [desktopPanelCollapsed, setDesktopPanelCollapsed] = useState(() =>
+    localStorage.getItem('cos-panel-collapsed') === 'true'
+  );
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -76,6 +79,14 @@ export default function ChiefOfStaff() {
     await api.updateCosConfig({ avatarStyle: style });
     fetchData();
   };
+
+  const toggleDesktopPanel = useCallback(() => {
+    setDesktopPanelCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('cos-panel-collapsed', String(next));
+      return next;
+    });
+  }, []);
 
   // Countdown to next evaluation
   const evalCountdown = useNextEvalCountdown(
@@ -367,22 +378,128 @@ export default function ChiefOfStaff() {
   }
 
   return (
-    <div className="flex flex-col lg:grid lg:grid-cols-[320px_1fr] h-full overflow-hidden">
+    <div className={`flex flex-col lg:grid ${desktopPanelCollapsed ? 'lg:grid-cols-[48px_1fr]' : 'lg:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
       {/* Agent Panel */}
       {avatarStyle === 'ascii' ? (
-        <TerminalCoSPanel
-          state={agentState}
-          speaking={speaking}
-          statusMessage={statusMessage}
-          eventLogs={eventLogs}
-          running={status?.running}
-          onStart={handleStart}
-          onStop={handleStop}
-          stats={status?.stats}
-          evalCountdown={evalCountdown}
-        />
+        <>
+          {/* Desktop: collapsed strip or full panel */}
+          {desktopPanelCollapsed ? (
+            <div className="hidden lg:flex flex-col items-center py-4 border-r border-indigo-500/20 bg-slate-900/60">
+              <button
+                onClick={toggleDesktopPanel}
+                className="p-2 text-gray-400 hover:text-white transition-colors"
+                aria-label="Expand CoS panel"
+                title="Expand CoS panel"
+              >
+                <PanelLeftOpen size={18} />
+              </button>
+              <StatusIndicator running={status?.running} />
+            </div>
+          ) : (
+            <div className="hidden lg:block relative">
+              <button
+                onClick={toggleDesktopPanel}
+                className="absolute top-2 right-2 z-10 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+                aria-label="Collapse CoS panel"
+                title="Collapse CoS panel"
+              >
+                <PanelLeftClose size={16} />
+              </button>
+              <TerminalCoSPanel
+                state={agentState}
+                speaking={speaking}
+                statusMessage={statusMessage}
+                eventLogs={eventLogs}
+                running={status?.running}
+                onStart={handleStart}
+                onStop={handleStop}
+                stats={status?.stats}
+                evalCountdown={evalCountdown}
+              />
+            </div>
+          )}
+          {/* Mobile: always show the terminal panel (it has its own compact layout) */}
+          <div className="lg:hidden">
+            <TerminalCoSPanel
+              state={agentState}
+              speaking={speaking}
+              statusMessage={statusMessage}
+              eventLogs={eventLogs}
+              running={status?.running}
+              onStart={handleStart}
+              onStop={handleStop}
+              stats={status?.stats}
+              evalCountdown={evalCountdown}
+            />
+          </div>
+        </>
+      ) : desktopPanelCollapsed ? (
+        /* Collapsed SVG strip - desktop only, mobile shows nothing */
+        <>
+          <div className="hidden lg:flex flex-col items-center gap-3 py-4 border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
+            <button
+              onClick={toggleDesktopPanel}
+              className="p-2 text-gray-400 hover:text-white transition-colors"
+              aria-label="Expand CoS panel"
+              title="Expand CoS panel"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+            <StatusIndicator running={status?.running} />
+            <StateLabel state={agentState} compact />
+          </div>
+          {/* Mobile: still show the compact header */}
+          <div className="lg:hidden border-b border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
+            <button
+              onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
+              className="flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-indigo-500/20 min-h-[40px]"
+              aria-expanded={!agentPanelCollapsed}
+              aria-controls="cos-agent-panel"
+            >
+              <div className="flex items-center gap-2">
+                <h1
+                  className="text-base font-bold"
+                  style={{
+                    background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text'
+                  }}
+                >
+                  CoS
+                </h1>
+                <StatusIndicator running={status?.running} />
+              </div>
+              <div className="flex items-center gap-1.5 text-gray-400">
+                <StateLabel state={agentState} compact />
+                {agentPanelCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+              </div>
+            </button>
+            {!agentPanelCollapsed && (
+              <div className="flex flex-1 min-w-0 p-2">
+                {/* Mobile Stats Grid */}
+                <div className="flex-1 grid grid-cols-2 gap-1.5 relative z-10 content-center">
+                  <StatCard label="Active" value={activeAgentCount} icon={<Cpu className="w-4 h-4 text-port-accent" />} active={activeAgentCount > 0} compact />
+                  <StatCard label="Pending" value={pendingTaskCount} icon={<Clock className="w-4 h-4 text-yellow-500" />} compact />
+                  <StatCard label="Done" value={status?.stats?.tasksCompleted || 0} icon={<CheckCircle className="w-4 h-4 text-port-success" />} compact />
+                  <StatCard label="Issues" value={health?.issues?.length || 0} icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />} compact />
+                </div>
+              </div>
+            )}
+          </div>
+        </>
       ) : (
         <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+          {/* Desktop Collapse Button */}
+          <button
+            onClick={toggleDesktopPanel}
+            className="hidden lg:flex absolute top-2 right-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+            aria-label="Collapse CoS panel"
+            title="Collapse CoS panel"
+          >
+            <PanelLeftClose size={16} />
+          </button>
+
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}

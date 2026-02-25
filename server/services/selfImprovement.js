@@ -51,11 +51,13 @@ const ANALYSIS_TYPES = {
   SECURITY: 'security',
   PERFORMANCE: 'performance',
   CODE_QUALITY: 'code-quality',
-  COS_ENHANCEMENT: 'cos-enhancement',
   TEST_COVERAGE: 'test-coverage',
   DOCUMENTATION: 'documentation',
   FEATURE_IDEAS: 'feature-ideas',
-  DEPENDENCY_UPDATES: 'dependency-updates'
+  DEPENDENCY_UPDATES: 'dependency-updates',
+  ERROR_HANDLING: 'error-handling',
+  TYPING: 'typing',
+  RELEASE_CHECK: 'release-check'
 };
 
 /**

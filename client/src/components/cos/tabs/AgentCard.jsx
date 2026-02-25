@@ -36,7 +36,7 @@ function extractTaskType(description) {
   if (d.includes('database') || d.includes('migration')) return 'database';
   if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
   if (d.includes('investigate') || d.includes('debug')) return 'investigation';
-  if (d.includes('self-improvement') || d.includes('feature idea')) return 'self-improvement';
+  if (d.includes('self-improvement') || d.includes('improvement') || d.includes('feature idea')) return 'self-improvement';
   return 'feature';
 }
 

@@ -613,57 +613,66 @@ router.get('/upcoming', asyncHandler(async (req, res) => {
   res.json(upcoming);
 }));
 
-// GET /api/cos/schedule/self-improvement/:taskType - Get interval for self-improvement task
-router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
+// GET /api/cos/schedule/task/:taskType - Get interval for a task type (unified)
+router.get('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const interval = await taskSchedule.getSelfImprovementInterval(taskType);
-  const shouldRun = await taskSchedule.shouldRunSelfImprovementTask(taskType);
+  const interval = await taskSchedule.getTaskInterval(taskType);
+  const shouldRun = await taskSchedule.shouldRunTask(taskType);
   res.json({ taskType, interval, shouldRun });
 }));
 
-// PUT /api/cos/schedule/self-improvement/:taskType - Update interval for self-improvement task
-router.put('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
+// PUT /api/cos/schedule/task/:taskType - Update interval for a task type (unified)
+router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const result = await taskSchedule.updateSelfImprovementInterval(taskType, pickScheduleSettings(req.body));
+  const result = await taskSchedule.updateTaskInterval(taskType, pickScheduleSettings(req.body));
   res.json({ success: true, taskType, interval: result });
 }));
 
-// GET /api/cos/schedule/app-improvement/:taskType - Get interval for app improvement task
+// Deprecated aliases — delegate to unified endpoints
+router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const interval = await taskSchedule.getTaskInterval(taskType);
+  const shouldRun = await taskSchedule.shouldRunTask(taskType);
+  res.json({ taskType, interval, shouldRun });
+}));
+router.put('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
+  const { taskType } = req.params;
+  const result = await taskSchedule.updateTaskInterval(taskType, pickScheduleSettings(req.body));
+  res.json({ success: true, taskType, interval: result });
+}));
 router.get('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const interval = await taskSchedule.getAppImprovementInterval(taskType);
+  const interval = await taskSchedule.getTaskInterval(taskType);
   res.json({ taskType, interval });
 }));
-
-// PUT /api/cos/schedule/app-improvement/:taskType - Update interval for app improvement task
 router.put('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const result = await taskSchedule.updateAppImprovementInterval(taskType, pickScheduleSettings(req.body));
+  const result = await taskSchedule.updateTaskInterval(taskType, pickScheduleSettings(req.body));
   res.json({ success: true, taskType, interval: result });
 }));
 
 // GET /api/cos/schedule/due - Get all tasks that are due to run
 router.get('/schedule/due', asyncHandler(async (req, res) => {
-  const selfImprovement = await taskSchedule.getDueSelfImprovementTasks();
-  res.json({ selfImprovement, appImprovement: 'requires appId - use /schedule/due/:appId' });
+  const tasks = await taskSchedule.getDueTasks();
+  res.json({ tasks });
 }));
 
-// GET /api/cos/schedule/due/:appId - Get app improvement tasks due for specific app
+// GET /api/cos/schedule/due/:appId - Get tasks due for specific app
 router.get('/schedule/due/:appId', asyncHandler(async (req, res) => {
   const { appId } = req.params;
-  const appImprovement = await taskSchedule.getDueAppImprovementTasks(appId);
-  res.json({ appId, appImprovement });
+  const tasks = await taskSchedule.getDueTasks(appId);
+  res.json({ appId, tasks });
 }));
 
 // POST /api/cos/schedule/trigger - Trigger an on-demand task
 router.post('/schedule/trigger', asyncHandler(async (req, res) => {
-  const { taskType, category, appId } = req.body;
+  const { taskType, appId } = req.body;
 
   if (!taskType) {
     throw new ServerError('taskType is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const request = await taskSchedule.triggerOnDemandTask(taskType, category || 'selfImprovement', appId);
+  const request = await taskSchedule.triggerOnDemandTask(taskType, appId);
   res.json({ success: true, request });
 }));
 
@@ -685,13 +694,13 @@ router.delete('/schedule/on-demand/:requestId', asyncHandler(async (req, res) =>
 
 // POST /api/cos/schedule/reset - Reset execution history for a task type
 router.post('/schedule/reset', asyncHandler(async (req, res) => {
-  const { taskType, category, appId } = req.body;
+  const { taskType, appId } = req.body;
 
   if (!taskType) {
     throw new ServerError('taskType is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await taskSchedule.resetExecutionHistory(taskType, category || 'selfImprovement', appId);
+  const result = await taskSchedule.resetExecutionHistory(taskType, appId);
   if (result.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
@@ -1157,7 +1166,7 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/cos/goal-progress - Get progress toward user goals
-// Maps completed tasks to goal categories from COS-GOALS.md
+// Maps completed tasks to goal categories from GOALS.md
 router.get('/goal-progress', asyncHandler(async (req, res) => {
   const progress = await goalProgress.getGoalProgress();
   res.json(progress);

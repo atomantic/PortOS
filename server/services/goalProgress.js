@@ -1,10 +1,10 @@
 /**
  * Goal Progress Service
  *
- * Tracks progress toward user goals defined in COS-GOALS.md by analyzing
+ * Tracks progress toward user goals defined in GOALS.md by analyzing
  * completed CoS tasks and mapping them to goal categories.
  *
- * Goals are extracted from COS-GOALS.md's Active Goals section.
+ * Goals are extracted from GOALS.md's Operational Goals section.
  * Task completions are categorized by keywords and mapped to goal progress.
  */
 
@@ -12,7 +12,7 @@ import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { readJSONFile, PATHS } from '../lib/fileUtils.js'
 
-const GOALS_FILE = join(PATHS.data, 'COS-GOALS.md')
+const GOALS_FILE = join(PATHS.root, 'GOALS.md')
 const LEARNING_FILE = join(PATHS.cos, 'learning.json')
 
 /**
@@ -24,19 +24,19 @@ const GOAL_MAPPINGS = {
     icon: '🔧',
     color: 'emerald',
     keywords: ['security', 'audit', 'mobile', 'responsive', 'dry', 'dead-code', 'test', 'coverage', 'console', 'lint', 'refactor'],
-    taskTypes: ['self-improve:security-audit', 'self-improve:mobile-responsive', 'self-improve:feature', 'app-improve:security', 'app-improve:mobile']
+    taskTypes: ['task:security', 'task:mobile-responsive', 'task:code-quality', 'task:test-coverage', 'task:console-errors', 'self-improve:security-audit', 'self-improve:mobile-responsive', 'app-improve:security']
   },
   'Self-Improvement': {
     icon: '🧠',
     color: 'purple',
     keywords: ['capability', 'improvement', 'learn', 'analysis', 'error', 'retry', 'prioritization', 'a11y', 'i18n', 'seo'],
-    taskTypes: ['self-improve:general', 'self-improve:brainstorm', 'idle-review']
+    taskTypes: ['task:feature-ideas', 'task:error-handling', 'idle-review']
   },
   'Documentation': {
     icon: '📚',
     color: 'blue',
     keywords: ['document', 'docs', 'readme', 'plan', 'report', 'summary', 'changelog'],
-    taskTypes: ['self-improve:documentation', 'app-improve:documentation']
+    taskTypes: ['task:documentation', 'self-improve:documentation', 'app-improve:documentation']
   },
   'User Engagement': {
     icon: '💬',
@@ -48,12 +48,12 @@ const GOAL_MAPPINGS = {
     icon: '💚',
     color: 'green',
     keywords: ['health', 'pm2', 'memory', 'performance', 'monitor', 'alert', 'process', 'service'],
-    taskTypes: ['auto-fix', 'internal-task']
+    taskTypes: ['task:performance', 'task:dependency-updates', 'auto-fix', 'internal-task']
   }
 }
 
 /**
- * Parse COS-GOALS.md to extract active goals
+ * Parse GOALS.md to extract active goals
  * @returns {Promise<Array>} Parsed goals with titles and items
  */
 async function parseGoalsFile() {
@@ -62,23 +62,29 @@ async function parseGoalsFile() {
 
   const goals = []
   const lines = content.split('\n')
-  let inActiveGoals = false
+  let inGoalsSection = false
   let currentGoal = null
 
   for (const line of lines) {
-    // Detect Active Goals section
-    if (line.startsWith('## Active Goals')) {
-      inActiveGoals = true
+    // Detect Active Goals or Operational Goals section
+    if (line.startsWith('## Active Goals') || line.startsWith('## Operational Goals')) {
+      inGoalsSection = true
       continue
     }
 
-    // Stop at next major section
-    if (inActiveGoals && line.startsWith('## ') && !line.includes('Active Goals')) {
-      inActiveGoals = false
+    // Stop at next major section (but not sub-sections like ### Task Generation)
+    if (inGoalsSection && line.startsWith('## ') && !line.includes('Active Goals') && !line.includes('Operational Goals')) {
+      inGoalsSection = false
       continue
     }
 
-    if (!inActiveGoals) continue
+    // Stop at non-goal sub-sections within Operational Goals
+    if (inGoalsSection && line.startsWith('### ') && !line.match(/^### Goal \d+:/)) {
+      // Skip non-goal subsections like "### Task Generation Priorities"
+      continue
+    }
+
+    if (!inGoalsSection) continue
 
     // Parse goal headers (### Goal N: Name)
     const goalMatch = line.match(/^### Goal \d+:\s*(.+)/)
@@ -115,7 +121,7 @@ async function getTaskStats() {
 
 /**
  * Calculate progress for each goal based on completed tasks
- * @param {Array} goals - Parsed goals from COS-GOALS.md
+ * @param {Array} goals - Parsed goals from GOALS.md
  * @param {Object} taskStats - Task completion statistics
  * @returns {Array} Goals with progress metrics
  */

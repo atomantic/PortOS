@@ -31,19 +31,22 @@ function extractTaskType(description) {
   if (!description) return 'general';
   const d = description.toLowerCase();
 
-  // Check for self-improvement task patterns first
-  if (d.includes('[self-improvement]')) {
-    if (d.includes('ui bug')) return 'self-improve:ui-bugs';
-    if (d.includes('mobile')) return 'self-improve:mobile-responsive';
-    if (d.includes('security')) return 'self-improve:security';
-    if (d.includes('code quality')) return 'self-improve:code-quality';
-    if (d.includes('console error')) return 'self-improve:console-errors';
-    if (d.includes('performance')) return 'self-improve:performance';
-    if (d.includes('enhance cos') || d.includes('cos capabilities')) return 'self-improve:cos-enhancement';
-    if (d.includes('test coverage')) return 'self-improve:test-coverage';
-    if (d.includes('documentation')) return 'self-improve:documentation';
-    if (d.includes('feature idea') || d.includes('brainstorm')) return 'self-improve:feature-ideas';
-    if (d.includes('accessibility')) return 'self-improve:accessibility';
+  // Check for improvement task patterns first
+  if (d.includes('[self-improvement]') || d.includes('[improvement]')) {
+    if (d.includes('ui bug')) return 'task:ui-bugs';
+    if (d.includes('mobile')) return 'task:mobile-responsive';
+    if (d.includes('security')) return 'task:security';
+    if (d.includes('code quality')) return 'task:code-quality';
+    if (d.includes('console error')) return 'task:console-errors';
+    if (d.includes('performance')) return 'task:performance';
+    if (d.includes('test coverage')) return 'task:test-coverage';
+    if (d.includes('documentation')) return 'task:documentation';
+    if (d.includes('feature idea') || d.includes('brainstorm')) return 'task:feature-ideas';
+    if (d.includes('accessibility')) return 'task:accessibility';
+    if (d.includes('error handling')) return 'task:error-handling';
+    if (d.includes('typing') || d.includes('typescript')) return 'task:typing';
+    if (d.includes('release')) return 'task:release-check';
+    if (d.includes('dependency')) return 'task:dependency-updates';
   }
 
   // General task type classification

@@ -197,7 +197,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
             {apps.stopped > 0 ? (
               <span>{apps.stopped} stopped</span>
             ) : apps.notStarted > 0 ? (
-              <span>{apps.notStarted} not started</span>
+              <span>{apps.notStarted} offline</span>
             ) : apps.online === apps.total ? (
               <span className="text-port-success">All online</span>
             ) : (

@@ -104,7 +104,7 @@ async function pm2Action(action, args) {
   const execFileAsync = promisify(execFile);
 
   console.log(`🌐 Browser PM2 ${action}: portos-browser`);
-  await execFileAsync('pm2', [action, ...args]);
+  await execFileAsync('pm2', [action, ...args], { shell: process.platform === 'win32' });
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle
@@ -135,7 +135,7 @@ export async function getProcessStatus() {
   const { promisify } = await import('util');
   const execFileAsync = promisify(execFile);
 
-  const { stdout } = await execFileAsync('pm2', ['jlist']);
+  const { stdout } = await execFileAsync('pm2', ['jlist'], { shell: process.platform === 'win32' });
   const processes = safeJSONParse(stdout, [], { allowArray: true });
   const browserProc = processes.find(p => p.name === 'portos-browser');
 
@@ -164,7 +164,8 @@ export async function getRecentLogs(lines = 50) {
   const execFileAsync = promisify(execFile);
 
   const { stdout, stderr } = await execFileAsync('pm2', ['logs', 'portos-browser', '--nostream', '--lines', String(lines)], {
-    timeout: 5000
+    timeout: 5000,
+    shell: process.platform === 'win32'
   }).catch(() => ({ stdout: '', stderr: '' }));
 
   return { stdout: stdout || '', stderr: stderr || '' };

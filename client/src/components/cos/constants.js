@@ -71,29 +71,25 @@ export const AUTONOMY_LEVELS = [
       evaluationIntervalMs: 300000,      // 5 min
       maxConcurrentAgents: 1,
       maxConcurrentAgentsPerProject: 1,
-      selfImprovementEnabled: false,
-      appImprovementEnabled: false,
+      improvementEnabled: false,
       proactiveMode: false,
       idleReviewEnabled: false,
-      immediateExecution: false,
-      comprehensiveAppImprovement: false
+      immediateExecution: false
     }
   },
   {
     id: 'assistant',
     label: 'Assistant',
     color: 'blue',
-    description: 'Processes user tasks plus self-improvement on schedule',
+    description: 'Processes user tasks plus improvement tasks on schedule',
     params: {
       evaluationIntervalMs: 120000,      // 2 min
       maxConcurrentAgents: 2,
       maxConcurrentAgentsPerProject: 1,
-      selfImprovementEnabled: true,
-      appImprovementEnabled: false,
+      improvementEnabled: true,
       proactiveMode: false,
       idleReviewEnabled: false,
-      immediateExecution: true,
-      comprehensiveAppImprovement: false
+      immediateExecution: true
     }
   },
   {
@@ -105,12 +101,10 @@ export const AUTONOMY_LEVELS = [
       evaluationIntervalMs: 60000,       // 1 min
       maxConcurrentAgents: 3,
       maxConcurrentAgentsPerProject: 2,
-      selfImprovementEnabled: true,
-      appImprovementEnabled: true,
+      improvementEnabled: true,
       proactiveMode: false,
       idleReviewEnabled: true,
-      immediateExecution: true,
-      comprehensiveAppImprovement: true
+      immediateExecution: true
     }
   },
   {
@@ -122,12 +116,10 @@ export const AUTONOMY_LEVELS = [
       evaluationIntervalMs: 30000,       // 30 sec
       maxConcurrentAgents: 5,
       maxConcurrentAgentsPerProject: 3,
-      selfImprovementEnabled: true,
-      appImprovementEnabled: true,
+      improvementEnabled: true,
       proactiveMode: true,
       idleReviewEnabled: true,
-      immediateExecution: true,
-      comprehensiveAppImprovement: true
+      immediateExecution: true
     }
   }
 ];
@@ -169,7 +161,7 @@ export const AVATAR_STYLE_LABELS = {
 };
 
 // Dynamic avatar rules - maps task context to avatar styles
-// Priority order: provider > selfImprovementType > taskType > priority > fallback
+// Priority order: provider > analysisType > taskType > priority > fallback
 const DYNAMIC_AVATAR_RULES = {
   // Provider-based: different providers get distinct visual identities
   provider: {
@@ -177,8 +169,8 @@ const DYNAMIC_AVATAR_RULES = {
     'lm-studio': 'sigil',    // Local LM Studio → arcane/occult aesthetic
     'gemini-cli': 'sigil',   // Gemini → arcane aesthetic
   },
-  // Self-improvement task types → cyberpunk (system working on itself)
-  selfImprovementType: {
+  // Improvement task analysis types → cyberpunk (system working on itself)
+  analysisType: {
     security: 'cyber',
     'code-quality': 'cyber',
     'test-coverage': 'cyber',
@@ -187,7 +179,6 @@ const DYNAMIC_AVATAR_RULES = {
   },
   // Task analysis types
   taskType: {
-    'self-improve': 'cyber',  // System self-improvement → cyberpunk
     internal: 'sigil',        // Internal CoS tasks → arcane
   },
   // Priority-based: critical tasks get a distinctive look
@@ -209,10 +200,10 @@ export const resolveDynamicAvatar = (agentMetadata) => {
     return DYNAMIC_AVATAR_RULES.provider[providerId];
   }
 
-  // Check self-improvement type
-  if (agentMetadata.selfImprovementType &&
-      DYNAMIC_AVATAR_RULES.selfImprovementType[agentMetadata.selfImprovementType]) {
-    return DYNAMIC_AVATAR_RULES.selfImprovementType[agentMetadata.selfImprovementType];
+  // Check analysis type (improvement tasks)
+  const analysisType = agentMetadata.analysisType || agentMetadata.selfImprovementType;
+  if (analysisType && DYNAMIC_AVATAR_RULES.analysisType[analysisType]) {
+    return DYNAMIC_AVATAR_RULES.analysisType[analysisType];
   }
 
   // Check task type

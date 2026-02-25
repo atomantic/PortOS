@@ -303,7 +303,10 @@ async function getProcessStats(pid) {
 
   // Get process stats using ps command
   // %cpu = CPU percentage, rss = resident set size in KB
-  const result = await execAsync(`ps -p ${safePid} -o pid=,pcpu=,rss=,state= 2>/dev/null`).catch(() => ({ stdout: '' }));
+  const psCmd = process.platform === 'win32'
+    ? `tasklist /FI "PID eq ${safePid}" /FO CSV /NH`
+    : `ps -p ${safePid} -o pid=,pcpu=,rss=,state=`;
+  const result = await execAsync(psCmd).catch(() => ({ stdout: '' }));
   const line = result.stdout.trim();
 
   if (!line) {

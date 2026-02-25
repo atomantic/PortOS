@@ -670,22 +670,23 @@ export const getCosSchedule = () => request('/cos/schedule');
 export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval-types');
 export const getCosScheduleDueTasks = () => request('/cos/schedule/due');
 export const getCosScheduleDueAppTasks = (appId) => request(`/cos/schedule/due/${appId}`);
-export const updateCosSelfImprovementInterval = (taskType, settings) => request(`/cos/schedule/self-improvement/${taskType}`, {
+// Unified task interval update
+export const updateCosTaskInterval = (taskType, settings) => request(`/cos/schedule/task/${taskType}`, {
   method: 'PUT',
   body: JSON.stringify(settings)
 });
-export const updateCosAppImprovementInterval = (taskType, settings) => request(`/cos/schedule/app-improvement/${taskType}`, {
-  method: 'PUT',
-  body: JSON.stringify(settings)
-});
-export const triggerCosOnDemandTask = (taskType, category = 'selfImprovement', appId = null) => request('/cos/schedule/trigger', {
+// Deprecated aliases — delegate to unified endpoint
+export const updateCosSelfImprovementInterval = (taskType, settings) => updateCosTaskInterval(taskType, settings);
+export const updateCosAppImprovementInterval = (taskType, settings) => updateCosTaskInterval(taskType, settings);
+
+export const triggerCosOnDemandTask = (taskType, appId = null) => request('/cos/schedule/trigger', {
   method: 'POST',
-  body: JSON.stringify({ taskType, category, appId })
+  body: JSON.stringify({ taskType, appId })
 });
 export const getCosOnDemandRequests = () => request('/cos/schedule/on-demand');
-export const resetCosTaskHistory = (taskType, category = 'selfImprovement', appId = null) => request('/cos/schedule/reset', {
+export const resetCosTaskHistory = (taskType, appId = null) => request('/cos/schedule/reset', {
   method: 'POST',
-  body: JSON.stringify({ taskType, category, appId })
+  body: JSON.stringify({ taskType, appId })
 });
 export const getCosScheduleTemplates = () => request('/cos/schedule/templates');
 export const addCosScheduleTemplate = (template) => request('/cos/schedule/templates', {

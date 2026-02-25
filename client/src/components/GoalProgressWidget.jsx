@@ -11,7 +11,7 @@ import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 /**
  * GoalProgressWidget - Shows progress toward user goals on the dashboard
- * Maps completed CoS tasks to goal categories from COS-GOALS.md
+ * Maps completed CoS tasks to goal categories from GOALS.md
  */
 const GoalProgressWidget = memo(function GoalProgressWidget() {
   const { data: progress, loading } = useAutoRefetch(

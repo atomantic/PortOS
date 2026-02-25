@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
+import AppIcon from '../../AppIcon';
 
 const INTERVAL_LABELS = {
   rotation: 'Rotation',
@@ -284,7 +284,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
                 Cancel
               </button>
             </div>
-            {category === 'appImprovement' && (
+            {activeApps.length > 0 && (
               <p className="text-xs text-gray-500">
                 Use <code className="bg-port-border px-1 rounded">{'{appName}'}</code> and <code className="bg-port-border px-1 rounded">{'{repoPath}'}</code> as placeholders.
               </p>
@@ -302,7 +302,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
       </div>
 
       <div className="flex gap-2">
-        {category === 'appImprovement' && activeApps.length > 0 ? (
+        {activeApps.length > 0 ? (
           <div className="relative" ref={appSelectorRef}>
             <button
               onClick={() => setShowAppSelector(!showAppSelector)}
@@ -446,11 +446,7 @@ function AppOverrideRow({ app, taskType, globalIntervalType, override, onUpdate 
   return (
     <div className="flex items-center gap-3 py-2 px-3 rounded hover:bg-port-card/30">
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        {app.icon ? (
-          <span className="text-base flex-shrink-0">{app.icon}</span>
-        ) : (
-          <Package size={14} className="text-gray-500 flex-shrink-0" />
-        )}
+        <AppIcon icon={app.icon || 'package'} size={16} className="text-gray-400 flex-shrink-0" />
         <span className="text-sm text-white truncate">{app.name}</span>
       </div>
 
@@ -632,13 +628,13 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <h3 className="text-lg font-semibold text-white">App Improvement Tasks</h3>
+        <h3 className="text-lg font-semibold text-white">Improvement Tasks</h3>
         <span className="text-xs text-gray-500">
           {enabledCount} enabled
         </span>
       </div>
       <p className="text-sm text-gray-400">
-        Tasks that analyze and improve managed applications. Expand a task to configure per-app overrides.
+        Tasks that analyze and improve PortOS and managed apps. Expand a task to configure per-app overrides.
       </p>
       <div className="space-y-2">
         {taskEntries.map(([taskType, config]) => (
@@ -660,20 +656,12 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
 }
 
 export default function ScheduleTab({ apps }) {
-  const [searchParams, setSearchParams] = useSearchParams();
+  // searchParams no longer used — unified task list
   const [schedule, setSchedule] = useState(null);
   const [providers, setProviders] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const activeView = searchParams.get('view') || 'self';
-
-  const setView = useCallback((view) => {
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev);
-      next.set('view', view);
-      return next;
-    }, { replace: true });
-  }, [setSearchParams]);
+  // View state removed — unified task list replaces segmented self/app views
 
   const fetchSchedule = useCallback(async () => {
     const data = await api.getCosSchedule().catch(() => null);
@@ -691,8 +679,8 @@ export default function ScheduleTab({ apps }) {
     fetchProviders();
   }, [fetchSchedule, fetchProviders]);
 
-  const handleUpdateSelfImprovement = async (taskType, settings) => {
-    const result = await api.updateCosSelfImprovementInterval(taskType, settings).catch(err => {
+  const handleUpdateTask = async (taskType, settings) => {
+    const result = await api.updateCosTaskInterval(taskType, settings).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -702,41 +690,19 @@ export default function ScheduleTab({ apps }) {
     }
   };
 
-  const handleUpdateAppImprovement = async (taskType, settings) => {
-    const result = await api.updateCosAppImprovementInterval(taskType, settings).catch(err => {
+  const handleTriggerTask = async (taskType, appId = null) => {
+    const result = await api.triggerCosOnDemandTask(taskType, appId).catch(err => {
       toast.error(err.message);
       return null;
     });
     if (result?.success) {
-      toast.success(`Updated ${taskType} interval`);
+      toast.success(`Triggered ${taskType} task${appId ? ' for app' : ''} - will run on next evaluation`);
       fetchSchedule();
     }
   };
 
-  const handleTriggerSelfImprovement = async (taskType) => {
-    const result = await api.triggerCosOnDemandTask(taskType, 'selfImprovement').catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (result?.success) {
-      toast.success(`Triggered ${taskType} task - will run on next evaluation`);
-      fetchSchedule();
-    }
-  };
-
-  const handleTriggerAppImprovement = async (taskType, appId) => {
-    const result = await api.triggerCosOnDemandTask(taskType, 'appImprovement', appId).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (result?.success) {
-      toast.success(`Triggered ${taskType} task for app`);
-      fetchSchedule();
-    }
-  };
-
-  const handleResetSelfImprovement = async (taskType) => {
-    const result = await api.resetCosTaskHistory(taskType, 'selfImprovement').catch(err => {
+  const handleResetTask = async (taskType) => {
+    const result = await api.resetCosTaskHistory(taskType).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -746,16 +712,13 @@ export default function ScheduleTab({ apps }) {
     }
   };
 
-  const handleResetAppImprovement = async (taskType) => {
-    const result = await api.resetCosTaskHistory(taskType, 'appImprovement').catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (result?.success) {
-      toast.success(`Reset execution history for ${taskType}`);
-      fetchSchedule();
-    }
-  };
+  // Backward-compat aliases used in child components
+  const handleUpdateSelfImprovement = handleUpdateTask;
+  const handleUpdateAppImprovement = handleUpdateTask;
+  const handleTriggerSelfImprovement = (taskType) => handleTriggerTask(taskType);
+  const handleTriggerAppImprovement = (taskType, appId) => handleTriggerTask(taskType, appId);
+  const handleResetSelfImprovement = handleResetTask;
+  const handleResetAppImprovement = handleResetTask;
 
   const handleUpdateAppOverride = async (appId, taskType, { enabled, interval }) => {
     const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled, interval }).catch(err => {
@@ -805,67 +768,28 @@ export default function ScheduleTab({ apps }) {
         </button>
       </div>
 
-      {/* Segmented Control */}
-      <div className="flex bg-port-card rounded-lg p-1 border border-port-border">
-        <button
-          onClick={() => setView('self')}
-          className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeView === 'self'
-              ? 'bg-port-accent text-white'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          Self-Improvement
-        </button>
-        <button
-          onClick={() => setView('app')}
-          className={`flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeView === 'app'
-              ? 'bg-port-accent text-white'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          App Improvement
-        </button>
-      </div>
-
       {schedule.onDemandRequests?.length > 0 && (
         <div className="bg-port-accent/10 border border-port-accent/30 rounded-lg p-4">
           <h4 className="text-sm font-medium text-port-accent mb-2">Pending On-Demand Tasks</h4>
           <div className="space-y-1">
             {schedule.onDemandRequests.map(req => (
               <div key={req.id} className="text-sm text-gray-300">
-                {req.taskType} ({req.category}) - requested {new Date(req.requestedAt).toLocaleTimeString()}
+                {req.taskType}{req.appId ? ` (${req.appId})` : ''} - requested {new Date(req.requestedAt).toLocaleTimeString()}
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {activeView === 'self' && (
-        <TaskTypeSection
-          title="Self-Improvement Tasks"
-          description="Tasks that analyze and improve PortOS itself"
-          tasks={schedule.selfImprovement}
-          onUpdate={handleUpdateSelfImprovement}
-          onTrigger={handleTriggerSelfImprovement}
-          onReset={handleResetSelfImprovement}
-          category="selfImprovement"
-          providers={providers}
-        />
-      )}
-
-      {activeView === 'app' && (
-        <AppTaskTypeSection
-          tasks={schedule.appImprovement}
-          onUpdate={handleUpdateAppImprovement}
-          onTrigger={handleTriggerAppImprovement}
-          onReset={handleResetAppImprovement}
-          providers={providers}
-          apps={apps}
-          onUpdateOverride={handleUpdateAppOverride}
-        />
-      )}
+      <AppTaskTypeSection
+        tasks={schedule.tasks || schedule.appImprovement || schedule.selfImprovement}
+        onUpdate={handleUpdateTask}
+        onTrigger={handleTriggerAppImprovement}
+        onReset={handleResetTask}
+        providers={providers}
+        apps={apps}
+        onUpdateOverride={handleUpdateAppOverride}
+      />
 
       {schedule.lastUpdated && (
         <div className="text-xs text-gray-500 text-right">

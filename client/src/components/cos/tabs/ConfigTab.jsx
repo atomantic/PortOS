@@ -32,12 +32,10 @@ const PARAM_LABELS = {
   evaluationIntervalMs: 'Eval',
   maxConcurrentAgents: 'Agents',
   maxConcurrentAgentsPerProject: 'Per Project',
-  selfImprovementEnabled: 'Self',
-  appImprovementEnabled: 'App',
+  improvementEnabled: 'Improve',
   proactiveMode: 'Proactive',
   idleReviewEnabled: 'Idle',
-  immediateExecution: 'Immediate',
-  comprehensiveAppImprovement: 'Comprehensive'
+  immediateExecution: 'Immediate'
 };
 
 // Format param value for display
@@ -158,12 +156,10 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     maxConcurrentAgentsPerProject: config?.maxConcurrentAgentsPerProject || 2,
     maxProcessMemoryMb: config?.maxProcessMemoryMb || 2048,
     autoStart: config?.autoStart || false,
-    selfImprovementEnabled: config?.selfImprovementEnabled ?? true,
-    appImprovementEnabled: config?.appImprovementEnabled ?? true,
+    improvementEnabled: config?.improvementEnabled ?? config?.selfImprovementEnabled ?? true,
     proactiveMode: config?.proactiveMode ?? true,
     idleReviewEnabled: config?.idleReviewEnabled ?? true,
-    immediateExecution: config?.immediateExecution ?? true,
-    comprehensiveAppImprovement: config?.comprehensiveAppImprovement ?? true
+    immediateExecution: config?.immediateExecution ?? true
   });
 
   const handleLevelChange = async (params) => {
@@ -281,22 +277,13 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           tooltip="Automatically start the CoS daemon when the server starts"
         />
         <ConfigRow
-          label="Self-Improvement"
-          value={formData.selfImprovementEnabled ? 'Enabled' : 'Disabled'}
+          label="Improvement Tasks"
+          value={formData.improvementEnabled ? 'Enabled' : 'Disabled'}
           editing={editing}
           type="checkbox"
-          inputValue={formData.selfImprovementEnabled}
-          onChange={v => setFormData(f => ({ ...f, selfImprovementEnabled: v }))}
-          tooltip="Allow CoS to improve the PortOS codebase (security audits, code quality, etc.)"
-        />
-        <ConfigRow
-          label="App Improvement"
-          value={formData.appImprovementEnabled ? 'Enabled' : 'Disabled'}
-          editing={editing}
-          type="checkbox"
-          inputValue={formData.appImprovementEnabled}
-          onChange={v => setFormData(f => ({ ...f, appImprovementEnabled: v }))}
-          tooltip="Allow CoS to improve managed apps (code review, testing, documentation, etc.)"
+          inputValue={formData.improvementEnabled}
+          onChange={v => setFormData(f => ({ ...f, improvementEnabled: v }))}
+          tooltip="Allow CoS to run improvement tasks for PortOS and managed apps (security audits, code quality, etc.)"
         />
         <ConfigRow
           label="Proactive Mode"
@@ -324,15 +311,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
           inputValue={formData.immediateExecution}
           onChange={v => setFormData(f => ({ ...f, immediateExecution: v }))}
           tooltip="Execute new tasks immediately instead of waiting for evaluation interval"
-        />
-        <ConfigRow
-          label="Comprehensive App Analysis"
-          value={formData.comprehensiveAppImprovement ? 'Enabled' : 'Disabled'}
-          editing={editing}
-          type="checkbox"
-          inputValue={formData.comprehensiveAppImprovement}
-          onChange={v => setFormData(f => ({ ...f, comprehensiveAppImprovement: v }))}
-          tooltip="Use comprehensive analysis for managed apps (same as PortOS self-improvement)"
         />
       </div>
 
