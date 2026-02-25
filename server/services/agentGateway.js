@@ -10,9 +10,10 @@ import { cosEvents } from './cosEvents.js'
 // Request deduplication cache
 const pendingRequests = new Map()
 
-// Response cache with TTL
+// Response cache with TTL and size cap
 const responseCache = new Map()
 const CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+const MAX_CACHE_SIZE = 1000
 
 // Request history for analytics
 const requestHistory = []
@@ -97,8 +98,13 @@ async function routeRequest(type, params, handler, options = {}) {
     try {
       result = await handler(params)
 
-      // Cache successful response
+      // Cache successful response (evict oldest if at capacity)
       if (cacheable && result) {
+        if (responseCache.size >= MAX_CACHE_SIZE) {
+          // Evict oldest entry (first key in insertion order)
+          const oldest = responseCache.keys().next().value
+          responseCache.delete(oldest)
+        }
         responseCache.set(cacheKey, {
           response: result,
           expiresAt: now + ttlMs,

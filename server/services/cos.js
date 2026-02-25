@@ -68,86 +68,195 @@ export function emitLog(level, message, data = {}, prefix = '') {
 // In-memory daemon state
 let daemonRunning = false;
 
-// In-memory cache of completed agents loaded from disk metadata files
-// Keyed by agentId, lazy-loaded on first getAgents() call
-let completedAgentCache = null;
+// Lightweight index mapping agentId → YYYY-MM-DD date bucket (~50KB vs 16MB full cache)
+// Lazy-loaded from data/cos/agents/index.json on first access
+let agentIndex = null;
+const INDEX_FILE = join(AGENTS_DIR, 'index.json');
 
-// Load completed agent metadata from disk into the cache.
-// Reads all data/cos/agents/{id}/metadata.json files.
-// Handles legacy formats (agentId instead of id, missing status) and
-// reconstructs minimal metadata for directories with no metadata.json.
-// Only called once (lazy init), then kept in sync via completeAgent/deleteAgent.
-async function loadCompletedAgentCache() {
-  if (completedAgentCache) return completedAgentCache;
+// Load agent index from disk (lazy init)
+async function loadAgentIndex() {
+  if (agentIndex) return agentIndex;
 
   if (!existsSync(AGENTS_DIR)) {
-    completedAgentCache = new Map();
-    return completedAgentCache;
+    await mkdir(AGENTS_DIR, { recursive: true });
   }
 
-  // Build into a local Map — only assign to module-level cache on success
-  // so a failed load can be retried on the next call
-  const cache = new Map();
+  if (existsSync(INDEX_FILE)) {
+    const content = await readFile(INDEX_FILE, 'utf-8').catch(() => '{}');
+    const parsed = safeJSONParse(content, {});
+    agentIndex = new Map(Object.entries(parsed));
+    console.log(`📂 Loaded agent index: ${agentIndex.size} entries`);
+  } else {
+    // No index yet — run migration from flat dirs to date buckets
+    agentIndex = await migrateAgentsToDateBuckets();
+  }
+
+  return agentIndex;
+}
+
+// Persist agent index to disk (atomic write via temp file + rename)
+async function saveAgentIndex() {
+  if (!agentIndex) return;
+  const obj = Object.fromEntries(agentIndex);
+  const tmpFile = `${INDEX_FILE}.tmp`;
+  await writeFile(tmpFile, JSON.stringify(obj)).catch(err => {
+    console.error(`❌ Failed to save agent index: ${err.message}`);
+  });
+  await rename(tmpFile, INDEX_FILE).catch(err => {
+    console.error(`❌ Failed to rename agent index: ${err.message}`);
+  });
+}
+
+// Resolve the correct directory for an agent (running = flat, completed = date bucket)
+function getAgentDir(agentId, dateString) {
+  if (dateString) return join(AGENTS_DIR, dateString, agentId);
+  // Check index for date bucket
+  const date = agentIndex?.get(agentId);
+  if (date) return join(AGENTS_DIR, date, agentId);
+  // Fallback to flat dir (running agents or pre-migration)
+  return join(AGENTS_DIR, agentId);
+}
+
+// Migrate flat agent-* directories into YYYY-MM-DD date buckets
+// Runs once when index.json doesn't exist. Idempotent — no-op if already migrated.
+async function migrateAgentsToDateBuckets() {
+  const index = new Map();
+
+  if (!existsSync(AGENTS_DIR)) {
+    await mkdir(AGENTS_DIR, { recursive: true });
+    await writeFile(INDEX_FILE, '{}');
+    console.log('📂 Created empty agent index (no agents to migrate)');
+    return index;
+  }
+
   const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
-  let recovered = 0;
-  let skipped = 0;
-  const metadataReads = entries
-    .filter(e => e.isDirectory() && e.name.startsWith('agent-'))
-    .map(async (entry) => {
-      const agentId = entry.name;
-      const agentDir = join(AGENTS_DIR, agentId);
-      const metaPath = join(agentDir, 'metadata.json');
 
-      if (existsSync(metaPath)) {
-        const content = await readFile(metaPath, 'utf-8').catch(() => null);
-        if (!content) { skipped++; return; }
-        let raw;
-        try { raw = JSON.parse(content); } catch { skipped++; return; }
-
-        // Normalize legacy format: agentId → id, missing status → completed
-        const id = raw.id || raw.agentId || agentId;
-        const status = raw.status || 'completed';
-        if (status !== 'running') {
-          const { output, ...rest } = raw;
-          cache.set(id, { ...rest, id, status });
-        }
-        return;
+  // Also scan existing date-bucket dirs to include them in the index
+  const dateDirPattern = /^\d{4}-\d{2}-\d{2}$/;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !dateDirPattern.test(entry.name)) continue;
+    const dateStr = entry.name;
+    const dateDir = join(AGENTS_DIR, dateStr);
+    const agentDirs = await readdir(dateDir, { withFileTypes: true }).catch(() => []);
+    for (const agentEntry of agentDirs) {
+      if (agentEntry.isDirectory() && agentEntry.name.startsWith('agent-')) {
+        index.set(agentEntry.name, dateStr);
       }
+    }
+  }
 
-      // No metadata.json — reconstruct from directory contents
-      const promptPath = join(agentDir, 'prompt.txt');
-      const outputPath = join(agentDir, 'output.txt');
-      const hasPrompt = existsSync(promptPath);
-      const hasOutput = existsSync(outputPath);
+  // Find flat agent-* dirs that need migration
+  const flatAgentDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('agent-'));
 
-      // Use file modification time as best-guess completedAt
+  if (flatAgentDirs.length === 0) {
+    await writeFile(INDEX_FILE, JSON.stringify(Object.fromEntries(index)));
+    console.log(`📂 Agent index built: ${index.size} entries (no flat dirs to migrate)`);
+    return index;
+  }
+
+  console.log(`📦 Migrating ${flatAgentDirs.length} agents into date buckets...`);
+  let migrated = 0;
+  let skipped = 0;
+
+  for (const entry of flatAgentDirs) {
+    const agentId = entry.name;
+    const agentDir = join(AGENTS_DIR, agentId);
+    const metaPath = join(agentDir, 'metadata.json');
+
+    let dateStr = null;
+
+    // Try to get date from metadata
+    if (existsSync(metaPath)) {
+      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      if (content) {
+        const raw = safeJSONParse(content, null);
+        if (raw?.completedAt) {
+          dateStr = raw.completedAt.slice(0, 10); // YYYY-MM-DD
+        }
+      }
+    }
+
+    // Fallback: directory mtime
+    if (!dateStr) {
       const dirStat = await stat(agentDir).catch(() => null);
-      const completedAt = dirStat?.mtime?.toISOString() ?? new Date().toISOString();
+      if (dirStat?.mtime) {
+        dateStr = dirStat.mtime.toISOString().slice(0, 10);
+      }
+    }
 
-      const reconstructed = {
-        id: agentId,
-        status: 'completed',
-        completedAt,
-        result: { success: hasOutput, recovered: true },
-        metadata: { description: hasPrompt ? 'Recovered from disk (no metadata)' : 'Recovered (prompt-only)' }
-      };
+    if (!dateStr) {
+      console.log(`⚠️ Cannot determine date for ${agentId}, skipping`);
+      skipped++;
+      continue;
+    }
 
-      // Persist the reconstructed metadata so future loads are fast
-      await writeFile(metaPath, JSON.stringify(reconstructed, null, 2)).catch(() => {});
-      cache.set(agentId, reconstructed);
-      recovered++;
+    // Move into date bucket
+    const bucketDir = join(AGENTS_DIR, dateStr);
+    await mkdir(bucketDir, { recursive: true });
+    const targetDir = join(bucketDir, agentId);
+
+    // If target already exists (partial previous migration), skip
+    if (existsSync(targetDir)) {
+      index.set(agentId, dateStr);
+      migrated++;
+      continue;
+    }
+
+    await rename(agentDir, targetDir).catch(async (err) => {
+      // rename can fail across filesystems — fall back to copy+delete
+      console.log(`⚠️ Rename failed for ${agentId}, using copy: ${err.message}`);
+      await mkdir(targetDir, { recursive: true });
+      const files = await readdir(agentDir);
+      for (const file of files) {
+        const content = await readFile(join(agentDir, file));
+        await writeFile(join(targetDir, file), content);
+      }
+      await rm(agentDir, { recursive: true });
     });
 
-  // Use allSettled so individual file errors don't abort the entire load
-  await Promise.allSettled(metadataReads);
+    index.set(agentId, dateStr);
+    migrated++;
+  }
 
-  // Only assign to module-level cache after successful build
-  completedAgentCache = cache;
-  const parts = [`📂 Loaded ${cache.size} completed agents from disk`];
-  if (recovered > 0) parts.push(`recovered ${recovered} missing metadata`);
-  if (skipped > 0) parts.push(`skipped ${skipped} unreadable`);
-  console.log(parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(', ')})` : parts[0]);
-  return completedAgentCache;
+  // Persist index
+  await writeFile(INDEX_FILE, JSON.stringify(Object.fromEntries(index)));
+  const uniqueDates = new Set(index.values()).size;
+  const parts = [`📦 Migrated ${migrated} agents into date buckets (${uniqueDates} unique dates)`];
+  if (skipped > 0) parts.push(`skipped ${skipped} undatable`);
+  console.log(parts.join(', '));
+
+  return index;
+}
+
+// Prune agent archive date buckets older than retentionDays (default 90).
+// Removes directories + their index entries. Runs after migration on startup.
+async function pruneOldAgentArchives(retentionDays = 90) {
+  const idx = await loadAgentIndex();
+  if (!idx || idx.size === 0) return;
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - retentionDays);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const dateDirPattern = /^\d{4}-\d{2}-\d{2}$/;
+  const entries = await readdir(AGENTS_DIR, { withFileTypes: true }).catch(() => []);
+  const oldDates = entries
+    .filter(e => e.isDirectory() && dateDirPattern.test(e.name) && e.name < cutoffStr)
+    .map(e => e.name);
+
+  if (oldDates.length === 0) return;
+
+  let pruned = 0;
+  for (const dateStr of oldDates) {
+    await rm(join(AGENTS_DIR, dateStr), { recursive: true }).catch(() => {});
+    // Remove index entries for this date
+    for (const [agentId, date] of idx.entries()) {
+      if (date === dateStr) { idx.delete(agentId); pruned++; }
+    }
+  }
+
+  await saveAgentIndex();
+  console.log(`🗑️ Pruned ${pruned} archived agents older than ${retentionDays} days (${oldDates.length} date buckets)`);
 }
 
 // Mutex lock for state operations to prevent race conditions
@@ -185,6 +294,7 @@ const DEFAULT_CONFIG = {
   autonomousJobsEnabled: true,             // Enable recurring autonomous jobs (git maintenance, brain processing, etc.)
   autonomyLevel: 'standby',                // Default autonomy level preset (standby/assistant/manager/yolo)
   rehabilitationGracePeriodDays: 7,        // Days before auto-retrying skipped task types (learning-based)
+  completedAgentRetentionMs: 86400000,     // 24h - auto-archive completed agents from state.json after this
   autoFixThresholds: {
     maxLinesChanged: 50,                   // Auto-approve if <= this many lines changed
     allowedCategories: [                   // Categories that can auto-execute
@@ -242,44 +352,69 @@ function isValidJSON(str) {
   return true;
 }
 
+// In-memory state cache — avoids re-reading state.json from disk on every call.
+// All mutations go through withStateLock, so the cache stays consistent.
+let stateCache = null;
+
 /**
- * Load CoS state
+ * Load CoS state — returns cached copy if available, reads disk only on first call
  */
 async function loadState() {
+  if (stateCache) return stateCache;
+
   await ensureDirectories();
 
   if (!existsSync(STATE_FILE)) {
-    return { ...DEFAULT_STATE };
+    stateCache = { ...DEFAULT_STATE };
+    return stateCache;
   }
 
   const content = await readFile(STATE_FILE, 'utf-8');
 
   if (!isValidJSON(content)) {
     console.log(`⚠️ Corrupted or empty state file at ${STATE_FILE}, returning default state`);
-    // Backup the corrupted file for debugging
     const backupPath = `${STATE_FILE}.corrupted.${Date.now()}`;
     await writeFile(backupPath, content).catch(() => {});
     console.log(`📝 Backed up corrupted state to ${backupPath}`);
-    return { ...DEFAULT_STATE };
+    // Cleanup old corrupted backups (keep only 3 most recent)
+    const cosDir = dirname(STATE_FILE);
+    const files = await readdir(cosDir).catch(() => []);
+    const corrupted = files
+      .filter(f => f.startsWith('state.json.corrupted.'))
+      .sort()
+      .reverse();
+    for (const old of corrupted.slice(3)) {
+      await rm(join(cosDir, old)).catch(() => {});
+    }
+    if (corrupted.length > 3) {
+      console.log(`🗑️ Cleaned up ${corrupted.length - 3} old corrupted state backups`);
+    }
+    stateCache = { ...DEFAULT_STATE };
+    return stateCache;
   }
 
   const state = safeJSONParse(content, null, { logError: true, context: 'CoS state' });
-  if (!state) return { ...DEFAULT_STATE };
+  if (!state) {
+    stateCache = { ...DEFAULT_STATE };
+    return stateCache;
+  }
 
   // Merge with defaults to ensure all fields exist
-  return {
+  stateCache = {
     ...DEFAULT_STATE,
     ...state,
     config: { ...DEFAULT_CONFIG, ...state.config },
     stats: { ...DEFAULT_STATE.stats, ...state.stats }
   };
+  return stateCache;
 }
 
 /**
- * Save CoS state
+ * Save CoS state — writes to disk and updates in-memory cache
  */
 async function saveState(state) {
   await ensureDirectories();
+  stateCache = state;
   const tmpFile = `${STATE_FILE}.tmp`;
   await writeFile(tmpFile, JSON.stringify(state, null, 2));
   await rename(tmpFile, STATE_FILE);
@@ -291,18 +426,16 @@ async function saveState(state) {
 export async function getStatus() {
   const state = await loadState();
   const provider = await getActiveProvider();
-  const cache = await loadCompletedAgentCache();
+  const idx = await loadAgentIndex();
 
   // Count active agents from state
   const activeAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
 
-  // Derive tasksCompleted from actual completed agents on disk + state,
+  // Derive tasksCompleted from union of index (disk) + state completed agents,
   // since state.stats.tasksCompleted can drift after state resets
-  const completedIds = new Set(cache.keys());
-  for (const [id, agent] of Object.entries(state.agents)) {
-    if (agent.status === 'completed') completedIds.add(id);
-  }
-  const tasksCompleted = Math.max(state.stats.tasksCompleted, completedIds.size);
+  const stateCompletedIds = Object.keys(state.agents).filter(id => state.agents[id].status === 'completed');
+  const stateOnlyCompleted = stateCompletedIds.filter(id => !idx.has(id)).length;
+  const tasksCompleted = Math.max(state.stats.tasksCompleted, idx.size + stateOnlyCompleted);
 
   return {
     running: daemonRunning,
@@ -368,6 +501,15 @@ export async function start() {
   // Then reset any orphaned in_progress tasks (no running agent)
   await resetOrphanedTasks();
 
+  // Archive stale completed agents from state.json on startup
+  const { archived } = await archiveStaleAgents().catch(() => ({ archived: 0 }));
+  if (archived > 0) {
+    emitLog('info', `📦 Startup: archived ${archived} stale agent(s) from state`);
+  }
+
+  // Prune agent archives older than 90 days
+  await pruneOldAgentArchives(90).catch(() => {});
+
   // Health check + orphan cleanup (15 min)
   scheduleEvent({
     id: 'cos-health-check',
@@ -379,8 +521,12 @@ export async function start() {
       if (cleaned > 0) {
         emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
       }
+      const { archived } = await archiveStaleAgents().catch(() => ({ archived: 0 }));
+      if (archived > 0) {
+        emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
+      }
     },
-    metadata: { description: 'CoS health check + orphan cleanup' }
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival' }
   });
 
   // Performance summary (10 min)
@@ -2428,21 +2574,38 @@ export async function completeAgent(agentId, result = {}) {
     cosEvents.emit('agent:completed', state.agents[agentId]);
     cosEvents.emit('agent:updated', state.agents[agentId]);
 
-    // Save agent data to file for history
-    const agentDir = join(AGENTS_DIR, agentId);
-    if (!existsSync(agentDir)) {
-      await mkdir(agentDir, { recursive: true });
-    }
-    await writeFile(
-      join(agentDir, 'metadata.json'),
-      JSON.stringify(state.agents[agentId], null, 2)
-    );
+    // Determine date bucket from completedAt
+    const dateStr = state.agents[agentId].completedAt.slice(0, 10);
+    const bucketDir = join(AGENTS_DIR, dateStr);
+    await mkdir(bucketDir, { recursive: true });
 
-    // Update in-memory cache so completed agents survive state resets
-    if (completedAgentCache) {
-      const { output, ...agentWithoutOutput } = state.agents[agentId];
-      completedAgentCache.set(agentId, agentWithoutOutput);
+    // Write metadata to flat dir first (may already have output.txt/prompt.txt there)
+    const flatDir = join(AGENTS_DIR, agentId);
+    if (!existsSync(flatDir)) {
+      await mkdir(flatDir, { recursive: true });
     }
+    const { output: _output, ...agentWithoutOutput } = state.agents[agentId];
+    await writeFile(join(flatDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2));
+
+    // Move entire agent dir into date bucket (atomic on same filesystem)
+    const targetDir = join(bucketDir, agentId);
+    if (!existsSync(targetDir)) {
+      await rename(flatDir, targetDir).catch(async () => {
+        // Fallback for cross-filesystem: copy files then remove
+        await mkdir(targetDir, { recursive: true });
+        const files = await readdir(flatDir);
+        for (const file of files) {
+          const content = await readFile(join(flatDir, file));
+          await writeFile(join(targetDir, file), content);
+        }
+        await rm(flatDir, { recursive: true });
+      });
+    }
+
+    // Update index
+    const idx = await loadAgentIndex();
+    idx.set(agentId, dateStr);
+    await saveAgentIndex();
 
     return state.agents[agentId];
   });
@@ -2481,22 +2644,56 @@ export async function appendAgentOutput(agentId, line) {
 }
 
 /**
- * Get all agents — merges in-memory state (running agents) with
- * persisted completed agents from disk metadata files.
+ * Get running agents from state (completed agents loaded on-demand via getAgentsByDate)
  */
 export async function getAgents() {
   const state = await loadState();
-  const cache = await loadCompletedAgentCache();
+  return Object.values(state.agents);
+}
 
-  // Start with all agents from state (running + any completed still in state)
-  const merged = { ...Object.fromEntries([...cache.entries()]) };
+/**
+ * Get available agent date buckets with counts, sorted descending
+ */
+export async function getAgentDates() {
+  const idx = await loadAgentIndex();
+  const dateCounts = {};
+  for (const date of idx.values()) {
+    dateCounts[date] = (dateCounts[date] || 0) + 1;
+  }
+  return Object.entries(dateCounts)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
 
-  // State agents override cache (they have fresher data for running agents)
-  for (const [id, agent] of Object.entries(state.agents)) {
-    merged[id] = agent;
+/**
+ * Get completed agents for a specific date bucket
+ */
+export async function getAgentsByDate(date) {
+  const dateDir = join(AGENTS_DIR, date);
+  if (!existsSync(dateDir)) return [];
+
+  const entries = await readdir(dateDir, { withFileTypes: true });
+  const agentDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('agent-'));
+  const agents = [];
+
+  // Batch reads in chunks of 50 to avoid fd exhaustion on large date buckets
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < agentDirs.length; i += BATCH_SIZE) {
+    const batch = agentDirs.slice(i, i + BATCH_SIZE);
+    const reads = batch.map(async (entry) => {
+      const metaPath = join(dateDir, entry.name, 'metadata.json');
+      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      if (!content) return;
+      const raw = safeJSONParse(content, null);
+      if (!raw) return;
+      const id = raw.id || raw.agentId || entry.name;
+      const { output, ...rest } = raw;
+      agents.push({ ...rest, id, status: raw.status || 'completed' });
+    });
+    await Promise.allSettled(reads);
   }
 
-  return Object.values(merged);
+  return agents.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
 }
 
 /**
@@ -2506,19 +2703,31 @@ export async function getAgent(agentId) {
   const state = await loadState();
   let agent = state.agents[agentId];
 
-  // Fall back to disk metadata if not in state
+  // Fall back to disk metadata via index if not in state
   if (!agent) {
-    const cache = await loadCompletedAgentCache();
-    agent = cache.get(agentId) ?? null;
+    const idx = await loadAgentIndex();
+    const dateStr = idx.get(agentId);
+    if (dateStr) {
+      const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
+      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      if (content) {
+        const raw = safeJSONParse(content, null);
+        if (raw) {
+          const { output, ...rest } = raw;
+          agent = { ...rest, id: raw.id || raw.agentId || agentId, status: raw.status || 'completed' };
+        }
+      }
+    }
   }
   if (!agent) return null;
 
   // For completed agents, read full output from file
   if (agent.status === 'completed') {
-    const outputFile = join(AGENTS_DIR, agentId, 'output.txt');
+    const dateStr = agent.completedAt?.slice(0, 10);
+    const agentDir = dateStr ? getAgentDir(agentId, dateStr) : getAgentDir(agentId);
+    const outputFile = join(agentDir, 'output.txt');
     if (existsSync(outputFile)) {
       const fullOutput = await readFile(outputFile, 'utf-8');
-      // Convert string to output array format
       const lines = fullOutput.split('\n').filter(line => line.trim());
       return {
         ...agent,
@@ -2624,16 +2833,39 @@ export async function cleanupZombieAgents() {
     if (cleaned.length > 0) {
       await saveState(state);
 
-      // Persist zombie-cleaned agents to disk and update cache so they survive state resets
+      // Persist zombie-cleaned agents to date-bucketed dirs and update index
+      const idx = await loadAgentIndex();
       for (const agentId of cleaned) {
-        const agentDir = join(AGENTS_DIR, agentId);
-        await mkdir(agentDir, { recursive: true });
-        const { output, ...agentWithoutOutput } = state.agents[agentId];
-        await writeFile(join(agentDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
-        if (completedAgentCache) {
-          completedAgentCache.set(agentId, agentWithoutOutput);
+        const agent = state.agents[agentId];
+        const dateStr = agent.completedAt?.slice(0, 10);
+        if (!dateStr) continue;
+        const bucketDir = join(AGENTS_DIR, dateStr);
+        await mkdir(bucketDir, { recursive: true });
+
+        const flatDir = join(AGENTS_DIR, agentId);
+        const { output, ...agentWithoutOutput } = agent;
+
+        // Ensure metadata is written before move
+        if (!existsSync(flatDir)) await mkdir(flatDir, { recursive: true });
+        await writeFile(join(flatDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+
+        // Move to date bucket
+        const targetDir = join(bucketDir, agentId);
+        if (!existsSync(targetDir)) {
+          await rename(flatDir, targetDir).catch(async () => {
+            await mkdir(targetDir, { recursive: true });
+            const files = await readdir(flatDir);
+            for (const file of files) {
+              const content = await readFile(join(flatDir, file));
+              await writeFile(join(targetDir, file), content);
+            }
+            await rm(flatDir, { recursive: true });
+          });
         }
+
+        idx.set(agentId, dateStr);
       }
+      await saveAgentIndex();
 
       console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);
       cosEvents.emit('agents:changed', { action: 'zombie-cleanup', cleaned });
@@ -2649,26 +2881,26 @@ export async function cleanupZombieAgents() {
 export async function deleteAgent(agentId) {
   return withStateLock(async () => {
     const state = await loadState();
+    const idx = await loadAgentIndex();
 
-    // Check state, cache, and disk (ensure cache is initialized)
     const inState = !!state.agents[agentId];
-    const cache = await loadCompletedAgentCache();
-    const inCache = cache.has(agentId);
-    if (!inState && !inCache) {
+    const inIndex = idx.has(agentId);
+    if (!inState && !inIndex) {
       return { error: 'Agent not found' };
     }
 
     delete state.agents[agentId];
     await saveState(state);
 
-    // Remove from cache
-    completedAgentCache?.delete(agentId);
-
-    // Remove metadata files from disk
-    const agentDir = join(AGENTS_DIR, agentId);
+    // Remove from disk (date-bucketed or flat)
+    const agentDir = getAgentDir(agentId);
     if (existsSync(agentDir)) {
       await rm(agentDir, { recursive: true }).catch(() => {});
     }
+
+    // Remove from index
+    idx.delete(agentId);
+    await saveAgentIndex();
 
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });
     return { success: true, agentId };
@@ -2683,29 +2915,58 @@ export async function deleteAgent(agentId) {
 export async function submitAgentFeedback(agentId, feedback) {
   return withStateLock(async () => {
     const state = await loadState();
-
-    if (!state.agents[agentId]) {
-      return { error: 'Agent not found' };
-    }
-
-    const agent = state.agents[agentId];
-    if (agent.status !== 'completed') {
-      return { error: 'Can only submit feedback for completed agents' };
-    }
-
-    // Store feedback on the agent
-    state.agents[agentId].feedback = {
+    const feedbackData = {
       rating: feedback.rating,
       comment: feedback.comment || null,
       submittedAt: new Date().toISOString()
     };
 
-    await saveState(state);
+    // Try state first (recently completed agents still in state)
+    if (state.agents[agentId]) {
+      const agent = state.agents[agentId];
+      if (agent.status !== 'completed') {
+        return { error: 'Can only submit feedback for completed agents' };
+      }
+      state.agents[agentId].feedback = feedbackData;
+      await saveState(state);
+
+      // Also update on-disk metadata
+      const agentDir = getAgentDir(agentId);
+      const metaPath = join(agentDir, 'metadata.json');
+      if (existsSync(metaPath)) {
+        const content = await readFile(metaPath, 'utf-8').catch(() => null);
+        if (content) {
+          const raw = safeJSONParse(content, null);
+          if (raw) {
+            raw.feedback = feedbackData;
+            await writeFile(metaPath, JSON.stringify(raw, null, 2)).catch(() => {});
+          }
+        }
+      }
+
+      emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
+      cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
+      return { success: true, agent: state.agents[agentId] };
+    }
+
+    // Agent not in state — look up from disk via index
+    const idx = await loadAgentIndex();
+    const dateStr = idx.get(agentId);
+    if (!dateStr) return { error: 'Agent not found' };
+
+    const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
+    const content = await readFile(metaPath, 'utf-8').catch(() => null);
+    if (!content) return { error: 'Agent not found' };
+
+    const raw = safeJSONParse(content, null);
+    if (!raw) return { error: 'Agent not found' };
+
+    raw.feedback = feedbackData;
+    await writeFile(metaPath, JSON.stringify(raw, null, 2));
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
-    cosEvents.emit('agent:feedback', { agentId, feedback: state.agents[agentId].feedback });
-
-    return { success: true, agent: state.agents[agentId] };
+    cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
+    return { success: true, agent: { ...raw, id: agentId } };
   });
 }
 
@@ -3032,39 +3293,109 @@ function formatRelativeTime(timestamp) {
 }
 
 /**
+ * Archive stale completed agents from state.json.
+ * Completed agents are already persisted to per-agent metadata files on disk
+ * (metadata.json) by completeAgent(), so removing them from state.json only
+ * reduces the size of the in-memory state and the state.json file.
+ * Archived agents remain accessible via the date index (getAgentsByDate()/getAgent()),
+ * which loads them from disk as needed; getAgents() returns only state.agents.
+ */
+export async function archiveStaleAgents() {
+  return withStateLock(async () => {
+    const state = await loadState();
+    const retentionMs = state.config.completedAgentRetentionMs ?? 86400000;
+    const cutoff = Date.now() - retentionMs;
+
+    const staleIds = Object.keys(state.agents).filter(id => {
+      const agent = state.agents[id];
+      if (agent.status !== 'completed') return false;
+      const completedAt = agent.completedAt ? new Date(agent.completedAt).getTime() : 0;
+      return completedAt > 0 && completedAt < cutoff;
+    });
+
+    if (staleIds.length === 0) return { archived: 0 };
+
+    const idx = await loadAgentIndex();
+
+    for (const id of staleIds) {
+      // Ensure agent is persisted to date-bucketed disk before removing from state
+      if (!idx.has(id)) {
+        const agent = state.agents[id];
+        const dateStr = agent.completedAt?.slice(0, 10);
+        if (!dateStr) continue;
+        const bucketDir = join(AGENTS_DIR, dateStr);
+        await mkdir(bucketDir, { recursive: true });
+
+        const { output, ...agentWithoutOutput } = agent;
+        const flatDir = join(AGENTS_DIR, id);
+        const targetDir = join(bucketDir, id);
+
+        if (existsSync(flatDir) && !existsSync(targetDir)) {
+          // Write metadata then move (with cross-filesystem fallback)
+          await writeFile(join(flatDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+          await rename(flatDir, targetDir).catch(async () => {
+            await mkdir(targetDir, { recursive: true });
+            const files = await readdir(flatDir).catch(() => []);
+            for (const file of files) {
+              const content = await readFile(join(flatDir, file)).catch(() => null);
+              if (content !== null) await writeFile(join(targetDir, file), content);
+            }
+            await rm(flatDir, { recursive: true }).catch(() => {});
+          });
+          if (!existsSync(targetDir)) continue; // Skip index update if move failed
+        } else if (!existsSync(targetDir)) {
+          await mkdir(targetDir, { recursive: true });
+          await writeFile(join(targetDir, 'metadata.json'), JSON.stringify(agentWithoutOutput, null, 2)).catch(() => {});
+        }
+
+        idx.set(id, dateStr);
+      }
+
+      delete state.agents[id];
+    }
+
+    await saveState(state);
+    await saveAgentIndex();
+    console.log(`📦 Archived ${staleIds.length} stale agents from state.json (retained on disk)`);
+    cosEvents.emit('agents:changed', { action: 'auto-archive', archived: staleIds.length });
+    return { archived: staleIds.length };
+  });
+}
+
+/**
  * Clear completed agents from state, cache, and disk
  */
 export async function clearCompletedAgents() {
   return withStateLock(async () => {
     const state = await loadState();
-    const cache = await loadCompletedAgentCache();
+    const idx = await loadAgentIndex();
 
-    // Collect IDs from both state and cache
+    // Remove completed agents from state
     const stateCompleted = Object.keys(state.agents).filter(
       id => state.agents[id].status === 'completed'
     );
-    const cacheCompleted = [...cache.keys()];
-    const allCompleted = [...new Set([...stateCompleted, ...cacheCompleted])];
-
-    // Remove from state
     for (const id of stateCompleted) {
       delete state.agents[id];
     }
     await saveState(state);
 
-    // Clear cache
-    cache.clear();
+    // Collect all unique dates from index, then remove date bucket dirs
+    const dates = new Set(idx.values());
+    const totalCleared = idx.size + stateCompleted.filter(id => !idx.has(id)).length;
 
-    // Remove metadata files from disk
-    const removals = allCompleted.map(id => {
-      const agentDir = join(AGENTS_DIR, id);
-      return existsSync(agentDir)
-        ? rm(agentDir, { recursive: true }).catch(() => {})
+    const removals = [...dates].map(date => {
+      const dateDir = join(AGENTS_DIR, date);
+      return existsSync(dateDir)
+        ? rm(dateDir, { recursive: true }).catch(() => {})
         : Promise.resolve();
     });
     await Promise.all(removals);
 
-    return { cleared: allCompleted.length };
+    // Clear index
+    idx.clear();
+    await saveAgentIndex();
+
+    return { cleared: totalCleared };
   });
 }
 

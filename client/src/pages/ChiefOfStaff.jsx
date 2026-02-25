@@ -189,13 +189,11 @@ export default function ChiefOfStaff() {
 
     socket.on('cos:agent:output', (data) => {
       if (data?.agentId && data?.line) {
-        setLiveOutputs(prev => ({
-          ...prev,
-          [data.agentId]: [
-            ...(prev[data.agentId] || []),
-            { line: data.line, timestamp: Date.now() }
-          ]
-        }));
+        setLiveOutputs(prev => {
+          const existing = prev[data.agentId] || [];
+          const updated = [...existing, { line: data.line, timestamp: Date.now() }];
+          return { ...prev, [data.agentId]: updated.length > 500 ? updated.slice(-500) : updated };
+        });
       }
     });
 
@@ -207,6 +205,13 @@ export default function ChiefOfStaff() {
       setTimeout(() => setSpeaking(false), 2000);
       // Clear active agent metadata so avatar reverts to default
       setActiveAgentMeta(null);
+      // Clean up live output buffer for completed agent to prevent memory growth
+      if (data?.agentId) {
+        setLiveOutputs(prev => {
+          const { [data.agentId]: _, ...rest } = prev;
+          return rest;
+        });
+      }
       fetchData();
     });
 

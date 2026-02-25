@@ -208,11 +208,26 @@ router.post('/health/check', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/cos/agents - Get all agents (auto-cleans zombies)
+// GET /api/cos/agents - Get state-resident agents (running + recently completed, auto-cleans zombies)
 router.get('/agents', asyncHandler(async (req, res) => {
-  // Cleanup zombie agents before returning list
   await cos.cleanupZombieAgents();
   const agents = await cos.getAgents();
+  res.json(agents);
+}));
+
+// GET /api/cos/agents/history - Get available date buckets with counts
+router.get('/agents/history', asyncHandler(async (req, res) => {
+  const dates = await cos.getAgentDates();
+  res.json({ dates });
+}));
+
+// GET /api/cos/agents/history/:date - Get completed agents for a date
+router.get('/agents/history/:date', asyncHandler(async (req, res) => {
+  const { date } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new ServerError('Invalid date format (expected YYYY-MM-DD)', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const agents = await cos.getAgentsByDate(date);
   res.json(agents);
 }));
 

@@ -25,6 +25,8 @@ vi.mock('../services/cos.js', () => ({
   runHealthCheck: vi.fn(),
   cleanupZombieAgents: vi.fn(),
   getAgents: vi.fn(),
+  getAgentDates: vi.fn(),
+  getAgentsByDate: vi.fn(),
   getAgent: vi.fn(),
   terminateAgent: vi.fn(),
   killAgent: vi.fn(),
@@ -326,7 +328,7 @@ describe('CoS Routes', () => {
   });
 
   describe('GET /api/cos/agents', () => {
-    it('should return all agents after cleaning zombies', async () => {
+    it('should return state-resident agents after cleaning zombies', async () => {
       cos.cleanupZombieAgents.mockResolvedValue({ cleaned: [], count: 0 });
       cos.getAgents.mockResolvedValue([
         { id: 'agent-001', status: 'running' },
@@ -338,6 +340,47 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(2);
       expect(cos.cleanupZombieAgents).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/cos/agents/history', () => {
+    it('should return available date buckets', async () => {
+      cos.getAgentDates.mockResolvedValue([
+        { date: '2026-02-25', count: 5 },
+        { date: '2026-02-24', count: 3 }
+      ]);
+
+      const response = await request(app).get('/api/cos/agents/history');
+
+      expect(response.status).toBe(200);
+      expect(response.body.dates).toHaveLength(2);
+      expect(response.body.dates[0]).toEqual({ date: '2026-02-25', count: 5 });
+    });
+  });
+
+  describe('GET /api/cos/agents/history/:date', () => {
+    it('should return agents for a valid date', async () => {
+      cos.getAgentsByDate.mockResolvedValue([
+        { id: 'agent-001', status: 'completed' }
+      ]);
+
+      const response = await request(app).get('/api/cos/agents/history/2026-02-25');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(cos.getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
+    });
+
+    it('should return 400 for invalid date format', async () => {
+      const response = await request(app).get('/api/cos/agents/history/not-a-date');
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 400 for partial date format', async () => {
+      const response = await request(app).get('/api/cos/agents/history/2026-02');
+
+      expect(response.status).toBe(400);
     });
   });
 

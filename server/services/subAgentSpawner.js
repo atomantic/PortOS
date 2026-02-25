@@ -9,7 +9,7 @@
 import { spawn, execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { writeFile, mkdir, readFile } from 'fs/promises';
+import { writeFile, mkdir, readFile, readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
@@ -1056,6 +1056,23 @@ export async function initSpawner() {
     console.error(`⚠️ Failed to initialize provider status: ${err.message}`);
   });
 
+  // Prune old run data (keep 30 days)
+  if (existsSync(RUNS_DIR)) {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const entries = await readdir(RUNS_DIR, { withFileTypes: true }).catch(() => []);
+    let pruned = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const runDir = join(RUNS_DIR, entry.name);
+      const dirStat = await stat(runDir).catch(() => null);
+      if (dirStat && dirStat.mtime.getTime() < cutoff) {
+        await rm(runDir, { recursive: true }).catch(() => {});
+        pruned++;
+      }
+    }
+    if (pruned > 0) console.log(`🗑️ Pruned ${pruned} old run directories (>30 days)`);
+  }
+
   // Check if CoS Runner is available
   useRunner = await isRunnerAvailable();
 
@@ -1760,6 +1777,15 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     const agentState = await getAgentState(agentId).catch(() => null);
     const workspace = agentState?.metadata?.workspacePath || ROOT_DIR;
 
+    // Resolve JIRA ticket URL for linking in PR description
+    let jiraTicketUrl = agent.task?.metadata?.jiraTicketUrl || null;
+    if (!jiraTicketUrl && jiraInstanceId) {
+      const jiraConfig = await jiraService.getInstances().catch(() => null);
+      const baseUrl = jiraConfig?.instances?.[jiraInstanceId]?.baseUrl;
+      if (baseUrl) jiraTicketUrl = `${baseUrl}/browse/${jiraTicketId}`;
+    }
+    const jiraTicketRef = jiraTicketUrl ? `[${jiraTicketId}](${jiraTicketUrl})` : jiraTicketId;
+
     // Push the feature branch
     await git.push(workspace, jiraBranch).catch(err => {
       emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
@@ -1773,7 +1799,7 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 
       const prResult = await git.createPR(workspace, {
         title: `${jiraTicketId}: ${(task.description || 'CoS automated task').substring(0, 100)}`,
-        body: `Resolves ${jiraTicketId}\n\nAutomated PR created by PortOS Chief of Staff.\n\n**Task:** ${task.description || ''}`,
+        body: `Resolves ${jiraTicketRef}\n\nAutomated PR created by PortOS Chief of Staff.\n\n**Task:** ${task.description || ''}`,
         base: targetBranch,
         head: jiraBranch
       }).catch(err => {

@@ -395,12 +395,82 @@ export async function getProductivityInsights() {
 }
 
 /**
- * Update productivity data on task completion
+ * Update productivity data incrementally on task completion.
+ * Only processes the single newly completed agent instead of rescanning all agents.
  */
 export async function onTaskCompleted(agent) {
-  // Debounce recalculation - just trigger it
-  // A full recalculation ensures accurate streak counting
-  await recalculateProductivity();
+  if (!agent?.completedAt) return;
+
+  const data = await loadProductivity();
+  const completedAt = new Date(agent.completedAt);
+  const dateStr = getDateString(completedAt);
+  const weekId = getWeekId(completedAt);
+  const hour = completedAt.getHours();
+  const dayOfWeek = completedAt.getDay();
+  const success = agent.result?.success === true;
+  const duration = agent.result?.duration || 0;
+
+  // Update hourly patterns
+  if (!data.hourlyPatterns[hour]) {
+    data.hourlyPatterns[hour] = { tasks: 0, successes: 0, failures: 0, totalDuration: 0 };
+  }
+  data.hourlyPatterns[hour].tasks++;
+  if (success) data.hourlyPatterns[hour].successes++;
+  else data.hourlyPatterns[hour].failures++;
+  data.hourlyPatterns[hour].totalDuration += duration;
+  data.hourlyPatterns[hour].avgDuration = Math.round(data.hourlyPatterns[hour].totalDuration / data.hourlyPatterns[hour].tasks);
+  data.hourlyPatterns[hour].successRate = Math.round((data.hourlyPatterns[hour].successes / data.hourlyPatterns[hour].tasks) * 100);
+
+  // Update daily patterns (by day of week)
+  if (!data.dailyPatterns[dayOfWeek]) {
+    data.dailyPatterns[dayOfWeek] = { tasks: 0, successes: 0, failures: 0, totalDuration: 0 };
+  }
+  data.dailyPatterns[dayOfWeek].tasks++;
+  if (success) data.dailyPatterns[dayOfWeek].successes++;
+  else data.dailyPatterns[dayOfWeek].failures++;
+  data.dailyPatterns[dayOfWeek].totalDuration += duration;
+  data.dailyPatterns[dayOfWeek].avgDuration = Math.round(data.dailyPatterns[dayOfWeek].totalDuration / data.dailyPatterns[dayOfWeek].tasks);
+  data.dailyPatterns[dayOfWeek].successRate = Math.round((data.dailyPatterns[dayOfWeek].successes / data.dailyPatterns[dayOfWeek].tasks) * 100);
+
+  // Update daily history
+  if (!data.dailyHistory[dateStr]) {
+    data.dailyHistory[dateStr] = { tasks: 0, successes: 0, failures: 0 };
+  }
+  data.dailyHistory[dateStr].tasks++;
+  if (success) data.dailyHistory[dateStr].successes++;
+  else data.dailyHistory[dateStr].failures++;
+  data.dailyHistory[dateStr].successRate = Math.round((data.dailyHistory[dateStr].successes / data.dailyHistory[dateStr].tasks) * 100);
+
+  // Update streaks using agent's completion date (not "now")
+  if (data.streaks.lastActiveDate !== dateStr) {
+    if (isConsecutiveDay(data.streaks.lastActiveDate, dateStr)) {
+      data.streaks.currentDaily++;
+    } else {
+      data.streaks.currentDaily = 1;
+    }
+    data.streaks.longestDaily = Math.max(data.streaks.longestDaily, data.streaks.currentDaily);
+    data.streaks.lastActiveDate = dateStr;
+  }
+
+  if (data.streaks.lastActiveWeek !== weekId) {
+    if (isConsecutiveWeek(data.streaks.lastActiveWeek, weekId)) {
+      data.streaks.currentWeekly++;
+    } else {
+      data.streaks.currentWeekly = 1;
+    }
+    data.streaks.longestWeekly = Math.max(data.streaks.longestWeekly, data.streaks.currentWeekly);
+    data.streaks.lastActiveWeek = weekId;
+  }
+
+  // Prune dailyHistory older than 90 days
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 90);
+  const cutoffStr = getDateString(cutoff);
+  for (const date of Object.keys(data.dailyHistory)) {
+    if (date < cutoffStr) delete data.dailyHistory[date];
+  }
+
+  await saveProductivity(data);
   cosEvents.emit('productivity:updated');
 }
 

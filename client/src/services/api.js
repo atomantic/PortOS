@@ -553,6 +553,8 @@ export const forceCosEvaluate = () => request('/cos/evaluate', { method: 'POST' 
 export const getCosHealth = () => request('/cos/health');
 export const forceHealthCheck = () => request('/cos/health/check', { method: 'POST' });
 export const getCosAgents = () => request('/cos/agents');
+export const getCosAgentDates = () => request('/cos/agents/history');
+export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
 export const getCosAgent = (id) => request(`/cos/agents/${id}`);
 export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
 export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 'POST' });

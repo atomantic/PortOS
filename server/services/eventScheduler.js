@@ -296,8 +296,8 @@ async function runEvent(event) {
     console.error(`⚠️ Event ${event.id} failed: ${err.message}`)
   }
 
-  // Record in history
-  eventHistory.unshift({
+  // Record in history (push + truncate is faster than unshift + pop for large arrays)
+  eventHistory.push({
     eventId: event.id,
     type: event.type,
     runAt: startTime,
@@ -306,8 +306,8 @@ async function runEvent(event) {
     error
   })
 
-  while (eventHistory.length > MAX_HISTORY) {
-    eventHistory.pop()
+  if (eventHistory.length > MAX_HISTORY) {
+    eventHistory.splice(0, eventHistory.length - MAX_HISTORY)
   }
 
   // Emit completion
@@ -454,7 +454,8 @@ function getEvent(id) {
  * @returns {Array} - Event history
  */
 function getHistory(options = {}) {
-  let history = [...eventHistory]
+  // History is stored oldest-first; reverse for newest-first output
+  let history = [...eventHistory].reverse()
 
   if (options.eventId) {
     history = history.filter(h => h.eventId === options.eventId)
@@ -474,7 +475,7 @@ function getHistory(options = {}) {
  */
 function getStats() {
   const events = Array.from(scheduledEvents.values())
-  const recent = eventHistory.slice(0, 100)
+  const recent = eventHistory.slice(-100).reverse()
 
   return {
     totalEvents: events.length,

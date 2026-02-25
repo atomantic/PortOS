@@ -144,6 +144,12 @@ export async function addNotification(notification) {
   };
 
   data.notifications.push(newNotification);
+
+  // Keep only the most recent 500 notifications
+  if (data.notifications.length > 500) {
+    data.notifications = data.notifications.slice(-500);
+  }
+
   await saveNotifications(data);
 
   console.log(`🔔 Notification added: ${newNotification.type} - ${newNotification.title}`);

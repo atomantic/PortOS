@@ -10,7 +10,7 @@ import { writeFile, mkdir, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { cosEvents, emitLog, getAgents } from './cos.js';
+import { cosEvents, emitLog, getAgents, getAgentDates, getAgentsByDate } from './cos.js';
 import { readJSONFile, formatDuration } from '../lib/fileUtils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -100,11 +100,19 @@ export async function generateWeeklyDigest(weekId = null) {
 
   emitLog('info', `Generating weekly digest for ${targetWeekId}`, { weekId: targetWeekId }, '📊 WeeklyDigest');
 
-  // Get all agents
-  const agents = await getAgents();
+  // Load only agents from dates in this week (not all agents)
+  const dates = await getAgentDates();
+  const weekDates = dates
+    .map(d => d.date)
+    .filter(d => getWeekId(new Date(d + 'T12:00:00')) === targetWeekId);
+  const flatDateAgents = (await Promise.all(weekDates.map(d => getAgentsByDate(d)))).flat();
+  const dateAgentIds = new Set(flatDateAgents.map(a => a.id));
+  // Also include state agents not yet in the date index (avoid double-counting)
+  const stateAgents = await getAgents();
+  const dedupedStateAgents = stateAgents.filter(a => !dateAgentIds.has(a.id));
+  const allAgents = [...flatDateAgents, ...dedupedStateAgents];
 
-  // Filter agents completed this week
-  const weekAgents = agents.filter(a => {
+  const weekAgents = allAgents.filter(a => {
     if (!a.completedAt) return false;
     const completedWeek = getWeekId(new Date(a.completedAt));
     return completedWeek === targetWeekId;

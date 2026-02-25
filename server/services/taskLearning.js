@@ -64,6 +64,17 @@ async function loadLearningData() {
  */
 async function saveLearningData(data) {
   data.lastUpdated = new Date().toISOString();
+
+  // Prune task types with fewer than 2 completions and last seen > 30 days ago
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  if (data.byTaskType) {
+    for (const [type, stats] of Object.entries(data.byTaskType)) {
+      if ((stats.completed || 0) < 2 && stats.lastCompleted && new Date(stats.lastCompleted).getTime() < cutoff) {
+        delete data.byTaskType[type];
+      }
+    }
+  }
+
   await writeFile(LEARNING_FILE, JSON.stringify(data, null, 2));
 }
 
