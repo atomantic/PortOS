@@ -1347,6 +1347,12 @@ export const navigateBrowser = (url) => request('/browser/navigate', {
   body: JSON.stringify({ url })
 });
 
+// Backup
+export const getBackupStatus = (options) => request('/backup/status', options);
+export const triggerBackup = () => request('/backup/run', { method: 'POST' });
+export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
+export const restoreBackup = (data) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data) });
+
 // Instances (Federation)
 export const getInstances = () => request('/instances');
 export const getSelfInstance = () => request('/instances/self');

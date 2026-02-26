@@ -40,6 +40,7 @@ import moltworldToolsRoutes from './routes/moltworldTools.js';
 import moltworldWsRoutes from './routes/moltworldWs.js';
 import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
+import backupRoutes from './routes/backup.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
 import meatspaceRoutes from './routes/meatspace.js';
@@ -55,6 +56,7 @@ import { errorEvents } from './lib/errorHandler.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
+import { startBackupScheduler } from './services/backupScheduler.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
 import { createPortOSProviderRoutes } from './routes/providers.js';
@@ -187,6 +189,7 @@ app.use('/api/git', gitRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
+app.use('/api/backup', backupRoutes);
 app.use('/api/uploads', uploadsRoutes);
 // Agent Personalities feature routes (must be before /api/agents to avoid route conflicts)
 app.use('/api/agents/personalities', agentPersonalitiesRoutes);
@@ -226,6 +229,8 @@ agentActionExecutor.init();
 
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
+// Initialize backup scheduler for daily data backups
+startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
 
 // 404 handler
 app.use((req, res) => {
