@@ -81,6 +81,43 @@ pm2 logs
 
 ## Planned Feature Details
 
+### Tier 1: Identity Integration (aligns with M42 direction)
+
+- **Chronotype-Aware Scheduling** — Derive peak-focus windows from genome sleep markers; schedule deep-work tasks during peak hours, routine tasks during low-energy. Display energy curve on Schedule tab. *Touches: taskSchedule.js, genome.js, CoS Schedule tab*
+- **Identity Context Injection** — Build identity brief from EXISTENTIAL.md, taste, personality, autobiography; inject as system preamble for AI calls via toolkit. Per-task-type toggle. *Touches: portos-ai-toolkit, runner.js, CoS Config*
+- **Mortality-Aware Goal Widget** — Life urgency score per goal from birth date + genome longevity markers. Visual timeline of projected remaining years. *(Overlaps M42 P3)* *Touches: Dashboard widgets, goalProgress.js, genome.js*
+- **Behavioral Feedback Loop** — "Sounds like me / Doesn't sound like me" toggle on agent-generated content. Adaptive style model with weighted scoring. *(Overlaps M34 P3)* *Touches: Agent Tools UI, Digital Twin service*
+
+### Tier 2: Deeper Autonomy
+
+- **Agent Confidence & Autonomy Levels** — Graduated autonomy tiers based on historical success rates and blast radius. System earns more autonomy over time. *Touches: cos.js, taskLearning.js, CoS Tasks UI*
+- **Content Calendar** — Unified calendar view of planned content across platforms. CoS auto-schedules based on engagement patterns. Draft → review → published pipeline. *Touches: New ContentCalendar page/route*
+- **Proactive Insight Alerts** — Real-time notifications when: brain captures connect to old memories, agent success rate drops, goals stall, costs spike. *Touches: notifications.js, brain.js, taskLearning.js*
+- **Goal Decomposition Engine** — Auto-decompose new goals into task sequences with dependencies by analyzing codebase and capabilities. Goal → task → outcome lineage tracking. *Touches: cos.js, goalProgress.js, missions.js*
+
+### Tier 3: Knowledge & Legacy
+
+- **Knowledge Graph Visualization** — Interactive force-directed graph mapping connections between brain captures, memories, goals, agent outputs. Color-coded nodes, semantic link edges. *Touches: New visualization component, brain.js, memory.js*
+- **Time Capsule Snapshots** — Periodic versioned archives of full digital twin state. "Then vs. Now" comparison view tracking identity evolution. *Touches: New timeCapsule service, digital-twin snapshots*
+- **Autobiography Prompt Chains** — Themed prompt chains (childhood → education → career → turning points → hopes) that build on prior answers. LLM-generated follow-ups. *(Extends M34 P5)* *Touches: autobiography.js, Digital Twin UI*
+- **Legacy Export Format** — Compile autobiography, personality, genome, taste, decisions, brain highlights into portable human-readable document (Markdown/PDF). *Touches: New export service*
+
+### Tier 4: Developer Experience
+
+- **Unified Search (Cmd+K)** — Global search across brain, memory, history, agents, tasks, apps. Hybrid vector + BM25 extended to all data sources. *Touches: New GlobalSearch component, Layout.jsx*
+- **Dashboard Customization** — Drag-and-drop widget reordering, show/hide toggles, named layouts ("morning briefing", "deep work"). *Touches: Dashboard.jsx, settings.js, dnd-kit*
+- **Workspace Contexts** — Active project context that syncs shell, git, tasks, and browser to current project. Persists across navigation. *Touches: Settings state, Layout context, Shell/Git/Browser*
+- **Inline Code Review Annotations** — Surface self-improvement findings as inline annotations in a code viewer. One-click "fix this" spawns CoS task. *Touches: New code viewer, selfImprovement.js*
+
+### Tier 5: Multi-Modal & Future
+
+- **Voice Capture for Brain** — Microphone button using Web Speech API for transcription. Feeds into brain classification pipeline. *Touches: Brain capture UI, Web Speech API*
+- **RSS/Feed Ingestion** — Passive ingestion from subscribed feeds, LLM-classified by user interests. Brain becomes personalized research aggregator. *Touches: New feedIngestion service, Brain inbox*
+- **Ambient Dashboard Mode** — Live status board for wall-mounted displays: tasks, agent activity, health, schedule, energy curve. Real-time WebSocket updates. *Touches: New AmbientDashboard page*
+- **Dynamic Skill Marketplace** — Skills as JSON/YAML documents in data/skills/. CoS discovers and routes dynamically. Self-generates new skill templates from task patterns. *Touches: taskClassifier.js, Prompt Manager*
+
+---
+
 ## Documentation
 
 ### Architecture & Guides

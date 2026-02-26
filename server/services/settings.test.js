@@ -33,12 +33,12 @@ describe('settings.js', () => {
       expect(result).toEqual({});
     });
 
-    it('should throw on invalid JSON in file', async () => {
-      // The code doesn't handle empty/invalid JSON - it will throw
-      // This tests that behavior
+    it('should return empty object for empty file content', async () => {
+      // safeJSONParse returns the default {} for empty/invalid input
       readFile.mockResolvedValue('');
 
-      await expect(getSettings()).rejects.toThrow();
+      const result = await getSettings();
+      expect(result).toEqual({});
     });
 
     it('should handle complex nested settings', async () => {
