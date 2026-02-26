@@ -494,7 +494,7 @@ async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Ho
   // JSON.stringify is safe here because require() already executed the CJS module,
   // resolving all dynamic expressions (__dirname, path.join, process.env) to plain
   // string/number/boolean values. The resulting apps array has no functions or symbols.
-  const tempFile = `_portos_pm2_${Date.now()}.config.cjs`;
+  const tempFile = `_portos_pm2_${process.pid}_${Date.now()}.config.cjs`;
   const tempPath = join(cwd, tempFile);
 
   try {
