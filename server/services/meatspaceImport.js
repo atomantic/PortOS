@@ -37,7 +37,7 @@ const COL = {
   FAT_PCT: 19,
   BONE_MASS: 20,
   TEMPERATURE: 21,
-  // Protein/Mercury columns (96-112)
+  // Protein columns (96-112)
   PROTEIN_START: 96,
   PROTEIN_END: 112,
   // Individual beverages (119-178) — names in row 0, ABV in row 1, serving oz in row 2
@@ -115,20 +115,6 @@ function parseBeverages(row, beverageNames, beverageABVs, beverageSizes) {
   }
 
   return { drinks, standardDrinks: Math.round(totalStandardDrinks * 100) / 100 };
-}
-
-// === Mercury from Protein Sources ===
-
-function parseMercury(row, mercuryHeaders) {
-  let totalMercuryMg = 0;
-  for (let i = COL.PROTEIN_START; i <= COL.PROTEIN_END; i++) {
-    const servings = parseNum(row[i]);
-    if (!servings || servings <= 0) continue;
-    const idx = i - COL.PROTEIN_START;
-    const hgMg = parseNum(mercuryHeaders[idx]) || 0;
-    totalMercuryMg += servings * hgMg;
-  }
-  return Math.round(totalMercuryMg * 1000) / 1000 || null;
 }
 
 // === Blood Test Parsing ===
@@ -224,14 +210,6 @@ export async function importTSV(content) {
     beverageSizes[idx] = headerRow3[i] || '12';
   }
 
-  // Extract mercury values from protein names in row 1 (e.g. "chicken Hg: .002")
-  const mercuryHeaders = [];
-  for (let i = COL.PROTEIN_START; i <= COL.PROTEIN_END; i++) {
-    const name = String(headerRow2[i] || '');
-    const hgMatch = name.match(/[Hh]g:\s*([\d.]+)/);
-    mercuryHeaders[i - COL.PROTEIN_START] = hgMatch ? hgMatch[1] : '0';
-  }
-
   // Extract blood test names from row 2
   const bloodHeaders = [];
   for (let i = COL.BLOOD_START; i <= COL.BLOOD_END; i++) {
@@ -309,15 +287,11 @@ export async function importTSV(content) {
     // Alcohol
     const alcohol = parseBeverages(cells, beverageNames, beverageABVs, beverageSizes);
 
-    // Mercury
-    const mercuryMg = parseMercury(cells, mercuryHeaders);
-
     // Build daily entry (only include populated sections)
     const entry = { date };
     if (Object.keys(nutrition).length > 0) entry.nutrition = nutrition;
     if (alcohol.drinks.length > 0) entry.alcohol = alcohol;
     if (Object.keys(body).length > 0) entry.body = body;
-    if (mercuryMg) entry.mercuryMg = mercuryMg;
 
     // Only add if entry has data beyond just the date
     if (Object.keys(entry).length > 1) {

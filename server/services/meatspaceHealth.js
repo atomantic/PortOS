@@ -135,21 +135,10 @@ export async function getNutritionSummary() {
     .filter(e => e.date >= weekAgoStr && e.date <= today)
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  // Mercury exposure
-  const mercuryEntries = (log.entries || []).filter(e => e.mercuryMg);
-  const totalMercury = mercuryEntries.reduce((sum, e) => sum + e.mercuryMg, 0);
-  const avgMercury = mercuryEntries.length > 0
-    ? Math.round((totalMercury / mercuryEntries.length) * 1000) / 1000
-    : null;
-
   return {
     totalEntries: entries.length,
     averages,
-    recentEntries,
-    mercury: {
-      avgDailyMg: avgMercury,
-      daysTracked: mercuryEntries.length
-    }
+    recentEntries
   };
 }
 
@@ -160,6 +149,6 @@ export async function getDailyNutrition(from, to) {
   if (from) entries = entries.filter(e => e.date >= from);
   if (to) entries = entries.filter(e => e.date <= to);
 
-  return entries.map(e => ({ date: e.date, ...e.nutrition, mercuryMg: e.mercuryMg }))
+  return entries.map(e => ({ date: e.date, ...e.nutrition }))
     .sort((a, b) => b.date.localeCompare(a.date));
 }

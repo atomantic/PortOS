@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Apple, AlertTriangle } from 'lucide-react';
+import { Apple } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 
@@ -21,7 +21,7 @@ export default function NutritionTab() {
 
   const fetchData = useCallback(async () => {
     const data = await api.getNutritionSummary().catch(() => ({
-      totalEntries: 0, averages: null, recentEntries: [], mercury: null
+      totalEntries: 0, averages: null, recentEntries: []
     }));
     setSummary(data);
     setLoading(false);
@@ -51,7 +51,7 @@ export default function NutritionTab() {
     );
   }
 
-  const { averages, recentEntries, mercury, totalEntries } = summary;
+  const { averages, recentEntries, totalEntries } = summary;
 
   return (
     <div className="space-y-6">
@@ -80,35 +80,6 @@ export default function NutritionTab() {
               );
             })}
           </div>
-        </div>
-      )}
-
-      {/* Mercury Exposure */}
-      {mercury?.avgDailyMg != null && (
-        <div className="bg-port-card border border-port-border rounded-xl p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <AlertTriangle size={18} className="text-port-warning" />
-            <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Mercury Exposure</h3>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-port-bg/50 rounded-lg px-3 py-2">
-              <p className="text-xs text-gray-500">Avg Daily Intake</p>
-              <p className={`text-lg font-mono font-bold ${
-                mercury.avgDailyMg > 0.05 ? 'text-port-error' :
-                mercury.avgDailyMg > 0.02 ? 'text-port-warning' : 'text-port-success'
-              }`}>
-                {mercury.avgDailyMg.toFixed(3)}
-                <span className="text-xs text-gray-600 ml-1">mg</span>
-              </p>
-            </div>
-            <div className="bg-port-bg/50 rounded-lg px-3 py-2">
-              <p className="text-xs text-gray-500">Days Tracked</p>
-              <p className="text-lg font-mono font-bold text-gray-300">{mercury.daysTracked}</p>
-            </div>
-          </div>
-          <p className="text-xs text-gray-600 mt-3">
-            EPA reference dose: 0.045 mg/day (for 70kg adult). FDA recommends limiting high-mercury fish to 2-3 servings/week.
-          </p>
         </div>
       )}
 

@@ -23,17 +23,6 @@ function computeNutritionAverages(entries) {
   return averages;
 }
 
-function computeMercuryStats(entries) {
-  const mercuryEntries = entries.filter(e => e.mercuryMg);
-  if (mercuryEntries.length === 0) return { avgDailyMg: null, daysTracked: 0 };
-
-  const total = mercuryEntries.reduce((sum, e) => sum + e.mercuryMg, 0);
-  return {
-    avgDailyMg: Math.round((total / mercuryEntries.length) * 1000) / 1000,
-    daysTracked: mercuryEntries.length
-  };
-}
-
 function extractBodyHistory(entries) {
   return entries
     .filter(e => e.body && Object.keys(e.body).length > 0)
@@ -104,40 +93,6 @@ describe('computeNutritionAverages', () => {
     ];
     const result = computeNutritionAverages(entries);
     expect(result.calories).toBe(1001);
-  });
-});
-
-// =============================================================================
-// MERCURY STATS TESTS
-// =============================================================================
-
-describe('computeMercuryStats', () => {
-  it('returns null avg for no mercury entries', () => {
-    const result = computeMercuryStats([{ date: '2024-01-01' }]);
-    expect(result.avgDailyMg).toBeNull();
-    expect(result.daysTracked).toBe(0);
-  });
-
-  it('computes average mercury exposure', () => {
-    const entries = [
-      { date: '2024-01-01', mercuryMg: 0.010 },
-      { date: '2024-01-02', mercuryMg: 0.030 },
-      { date: '2024-01-03', mercuryMg: 0.020 }
-    ];
-    const result = computeMercuryStats(entries);
-    expect(result.avgDailyMg).toBe(0.02);
-    expect(result.daysTracked).toBe(3);
-  });
-
-  it('skips entries without mercury data', () => {
-    const entries = [
-      { date: '2024-01-01', mercuryMg: 0.040 },
-      { date: '2024-01-02' },
-      { date: '2024-01-03', mercuryMg: 0.020 }
-    ];
-    const result = computeMercuryStats(entries);
-    expect(result.avgDailyMg).toBe(0.03);
-    expect(result.daysTracked).toBe(2);
   });
 });
 
