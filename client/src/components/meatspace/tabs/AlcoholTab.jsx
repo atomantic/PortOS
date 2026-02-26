@@ -6,8 +6,9 @@ import AlcoholChart from '../AlcoholChart';
 import StandardDrinkCalculator from '../StandardDrinkCalculator';
 
 const COMMON_DRINKS = [
-  { name: 'Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
+  { name: 'Nitro Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
   { name: 'Old Fashioned (2oz)', oz: 2, abv: 40 },
+  { name: 'Guinness 0 (14.9oz)', oz: 14.9, abv: 0.4 },
   { name: 'N/A Beer (12oz)', oz: 12, abv: 0.4 }
 ];
 
