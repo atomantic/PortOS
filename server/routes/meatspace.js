@@ -5,6 +5,7 @@ import {
   configUpdateSchema,
   lifestyleUpdateSchema,
   drinkLogSchema,
+  drinkUpdateSchema,
   bloodTestSchema,
   bodyEntrySchema,
   epigeneticTestSchema,
@@ -116,6 +117,20 @@ router.post('/alcohol/log', asyncHandler(async (req, res) => {
   const data = validateRequest(drinkLogSchema, req.body);
   const result = await alcoholService.logDrink(data);
   res.status(201).json(result);
+}));
+
+/**
+ * PUT /api/meatspace/alcohol/log/:date/:index
+ * Update a specific drink entry
+ */
+router.put('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
+  const { date, index } = req.params;
+  const data = validateRequest(drinkUpdateSchema, req.body);
+  const result = await alcoholService.updateDrink(date, parseInt(index, 10), data);
+  if (!result) {
+    throw new ServerError('Drink entry not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
 }));
 
 /**

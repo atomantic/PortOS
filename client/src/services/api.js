@@ -1283,6 +1283,10 @@ export const logAlcoholDrink = (data) => request('/meatspace/alcohol/log', {
   method: 'POST',
   body: JSON.stringify(data)
 });
+export const updateAlcoholDrink = (date, index, data) => request(`/meatspace/alcohol/log/${date}/${index}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
 export const removeAlcoholDrink = (date, index) => request(`/meatspace/alcohol/log/${date}/${index}`, {
   method: 'DELETE'
 });

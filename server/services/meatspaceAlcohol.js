@@ -189,6 +189,28 @@ export async function logDrink({ name, oz, abv, count = 1, date }) {
   return { drink, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
 }
 
+export async function updateDrink(date, index, updates) {
+  const log = await loadDailyLog();
+  const entry = log.entries.find(e => e.date === date);
+  if (!entry?.alcohol?.drinks?.[index]) return null;
+
+  const drink = entry.alcohol.drinks[index];
+  if (updates.name !== undefined) drink.name = updates.name;
+  if (updates.oz !== undefined) drink.oz = updates.oz;
+  if (updates.abv !== undefined) drink.abv = updates.abv;
+  if (updates.count !== undefined) drink.count = updates.count;
+
+  // Recalculate total
+  entry.alcohol.standardDrinks = entry.alcohol.drinks.reduce((sum, d) => {
+    return sum + computeStandardDrinks((d.oz || 0) * (d.count || 1), d.abv || 0);
+  }, 0);
+  entry.alcohol.standardDrinks = Math.round(entry.alcohol.standardDrinks * 100) / 100;
+
+  await saveDailyLog(log);
+  console.log(`📝 Updated drink on ${date}[${index}]: ${drink.name || 'unnamed'} ${drink.oz}oz @ ${drink.abv}%`);
+  return { drink, dayTotal: entry.alcohol.standardDrinks };
+}
+
 export async function removeDrink(date, index) {
   const log = await loadDailyLog();
   const entry = log.entries.find(e => e.date === date);

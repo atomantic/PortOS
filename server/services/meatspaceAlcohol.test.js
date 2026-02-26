@@ -105,6 +105,70 @@ describe('computeStandardDrinks', () => {
 });
 
 // =============================================================================
+// UPDATE DRINK TESTS (inline logic mirroring updateDrink service)
+// =============================================================================
+
+describe('updateDrink logic', () => {
+  it('updates oz and recalculates standard drinks for the day', () => {
+    // Simulate a day entry with two drinks
+    const entry = {
+      date: '2024-06-15',
+      alcohol: {
+        drinks: [
+          { name: 'Beer', oz: 12, abv: 5, count: 1 },
+          { name: 'Wine', oz: 5, abv: 12, count: 1 }
+        ],
+        standardDrinks: 2 // 1 + 1
+      }
+    };
+
+    // Update first drink oz from 12 to 24 (doubling it)
+    const drink = entry.alcohol.drinks[0];
+    drink.oz = 24;
+
+    // Recalculate total (same logic as updateDrink)
+    entry.alcohol.standardDrinks = entry.alcohol.drinks.reduce((sum, d) => {
+      return sum + computeStandardDrinks((d.oz || 0) * (d.count || 1), d.abv || 0);
+    }, 0);
+    entry.alcohol.standardDrinks = Math.round(entry.alcohol.standardDrinks * 100) / 100;
+
+    // 24oz @ 5% = 2 std drinks, 5oz @ 12% = 1 std drink => total 3
+    expect(entry.alcohol.standardDrinks).toBe(3);
+    expect(drink.oz).toBe(24);
+  });
+
+  it('updates abv and recalculates correctly', () => {
+    const entry = {
+      date: '2024-06-15',
+      alcohol: {
+        drinks: [
+          { name: 'Mystery', oz: 12, abv: 5, count: 1 }
+        ],
+        standardDrinks: 1
+      }
+    };
+
+    // Change ABV from 5% to 10%
+    entry.alcohol.drinks[0].abv = 10;
+
+    entry.alcohol.standardDrinks = entry.alcohol.drinks.reduce((sum, d) => {
+      return sum + computeStandardDrinks((d.oz || 0) * (d.count || 1), d.abv || 0);
+    }, 0);
+    entry.alcohol.standardDrinks = Math.round(entry.alcohol.standardDrinks * 100) / 100;
+
+    // 12oz @ 10% = 1.2 pure oz / 0.6 = 2
+    expect(entry.alcohol.standardDrinks).toBe(2);
+  });
+
+  it('updates name without affecting calculations', () => {
+    const drink = { name: 'Old Name', oz: 12, abv: 5, count: 1 };
+    drink.name = 'New IPA';
+    expect(drink.name).toBe('New IPA');
+    expect(computeStandardDrinks(drink.oz * drink.count, drink.abv)).toBe(1);
+  });
+});
+
+// =============================================================================
 // ROLLING AVERAGES TESTS
 // =============================================================================
 
