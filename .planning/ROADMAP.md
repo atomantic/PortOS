@@ -74,11 +74,11 @@ Plans:
   2. LLM-generated taste-to-identity theme analysis connects user preferences to identity patterns
   3. Insights dashboard groups results by domain with confidence levels and source attribution
   4. LLM narrative summaries of cross-domain patterns can be refreshed on demand
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md -- Backend insights engine: insightsService.js with genome-health correlations, LLM taste-identity themes, cross-domain narrative; REST routes, Zod validation, client API functions (INS-01, INS-02, INS-04)
+- [ ] 04-02-PLAN.md -- Insights dashboard UI: /insights/:tab page with Overview, Genome-Health, Taste-Identity, Cross-Domain tabs; shared components, App.jsx routes, Layout.jsx nav entry (INS-03, INS-01, INS-02, INS-04)
 
 ### Phase 5: Unified Search (Cmd+K)
 **Goal**: Any piece of information in PortOS is one keystroke away via a global search overlay
@@ -105,5 +105,5 @@ Note: Phases 1 and 2 have no dependency on each other and can execute in paralle
 | 1. Genome Migration Cleanup | 1/1 | Complete    | 2026-02-26 |
 | 2. Data Backup & Recovery | 2/2 | Complete    | 2026-02-26 |
 | 3. Apple Health Integration | 2/3 | In Progress|  |
-| 4. Cross-Domain Insights Engine | 0/2 | Not started | - |
+| 4. Cross-Domain Insights Engine | 0/2 | Planned | - |
 | 5. Unified Search (Cmd+K) | 0/1 | Not started | - |
