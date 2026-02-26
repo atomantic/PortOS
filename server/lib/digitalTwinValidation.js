@@ -425,3 +425,23 @@ export const tasteSummaryInputSchema = z.object({
   providerId: z.string().min(1),
   model: z.string().min(1)
 });
+
+// --- Behavioral Feedback Loop Schemas (M34 P3) ---
+
+export const feedbackContentTypeEnum = z.enum([
+  'test_response', 'taste_summary', 'enrichment', 'export'
+]);
+
+export const feedbackValidationEnum = z.enum([
+  'sounds_like_me', 'not_quite', 'doesnt_sound_like_me'
+]);
+
+export const feedbackInputSchema = z.object({
+  contentType: feedbackContentTypeEnum,
+  validation: feedbackValidationEnum,
+  contentSnippet: z.string().min(1).max(2000),
+  context: z.string().max(500).optional(),
+  providerId: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  documentsUsed: z.array(z.string()).optional()
+});

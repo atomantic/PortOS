@@ -1081,6 +1081,22 @@ export const saveDigitalTwinImport = (source, suggestedDoc) => request('/digital
   body: JSON.stringify({ source, suggestedDoc })
 });
 
+// Digital Twin - Behavioral Feedback Loop
+export const submitBehavioralFeedback = (data) => request('/digital-twin/feedback', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const getBehavioralFeedbackStats = () => request('/digital-twin/feedback/stats');
+export const recalculateFeedbackWeights = () => request('/digital-twin/feedback/recalculate', {
+  method: 'POST'
+});
+export const getRecentFeedback = (contentType, limit) => {
+  const params = new URLSearchParams();
+  if (contentType) params.set('contentType', contentType);
+  if (limit) params.set('limit', limit);
+  return request(`/digital-twin/feedback/recent?${params}`);
+};
+
 // Digital Twin - Taste Questionnaire
 export const getTasteProfile = () => request('/digital-twin/taste');
 export const getTasteSections = () => request('/digital-twin/taste/sections');

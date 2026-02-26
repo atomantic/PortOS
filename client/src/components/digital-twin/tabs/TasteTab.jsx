@@ -18,7 +18,10 @@ import {
   Eye,
   ChevronDown,
   ChevronUp,
-  Telescope
+  Telescope,
+  ThumbsUp,
+  ThumbsDown,
+  Minus
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from 'react-hot-toast';
@@ -67,6 +70,9 @@ export default function TasteTab({ onRefresh }) {
   // Personalized question state
   const [personalizedQuestion, setPersonalizedQuestion] = useState(null);
   const [loadingPersonalized, setLoadingPersonalized] = useState(false);
+
+  // Behavioral feedback
+  const [summaryFeedback, setSummaryFeedback] = useState({}); // key: sectionId → validation
 
   // Expanded summaries
   const [expandedSummary, setExpandedSummary] = useState(null);
@@ -211,6 +217,21 @@ export default function TasteTab({ onRefresh }) {
     setGeneratingSummary(false);
   };
 
+  const submitSummaryFeedback = async (sectionId, summary, validation) => {
+    setSummaryFeedback(prev => ({ ...prev, [sectionId]: validation }));
+    await api.submitBehavioralFeedback({
+      contentType: 'taste_summary',
+      validation,
+      contentSnippet: summary,
+      context: `Taste section: ${sectionId}`,
+      providerId: selectedProvider?.providerId,
+      model: selectedProvider?.model
+    }).catch(() => {
+      toast.error('Failed to save feedback');
+      setSummaryFeedback(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
+    });
+  };
+
   const handleGenerateOverallSummary = async () => {
     if (!selectedProvider) {
       toast.error('Select a provider first');
@@ -293,7 +314,33 @@ export default function TasteTab({ onRefresh }) {
                   <Sparkles size={14} />
                   AI Summary
                 </h3>
-                <div className="text-gray-300 text-sm whitespace-pre-wrap">{section.summary}</div>
+                <div className="text-gray-300 text-sm whitespace-pre-wrap mb-3">{section.summary}</div>
+
+                {/* Behavioral Feedback */}
+                <div className="pt-3 border-t border-port-border">
+                  <p className="text-xs text-gray-500 mb-2">Does this summary capture your taste accurately?</p>
+                  <div className="flex items-center gap-2">
+                    {[
+                      { key: 'sounds_like_me', label: 'Sounds like me', icon: ThumbsUp, color: 'green' },
+                      { key: 'not_quite', label: 'Not quite', icon: Minus, color: 'yellow' },
+                      { key: 'doesnt_sound_like_me', label: 'Not me', icon: ThumbsDown, color: 'red' }
+                    ].map(({ key, label, icon: FbIcon, color }) => (
+                      <button
+                        key={key}
+                        onClick={() => submitSummaryFeedback(reviewSection, section.summary, key)}
+                        disabled={!!summaryFeedback[reviewSection]}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                          summaryFeedback[reviewSection] === key
+                            ? `bg-${color}-500/20 text-${color}-400 border border-${color}-500/30`
+                            : `text-gray-400 border border-port-border hover:text-${color}-400 hover:border-${color}-500/30 disabled:opacity-30`
+                        }`}
+                      >
+                        <FbIcon size={14} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 

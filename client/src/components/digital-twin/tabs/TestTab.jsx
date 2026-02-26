@@ -10,7 +10,11 @@ import {
   RefreshCw,
   History,
   Wand2,
-  Plus
+  Plus,
+  ThumbsUp,
+  ThumbsDown,
+  Minus,
+  TrendingUp
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from 'react-hot-toast';
@@ -37,27 +41,54 @@ export default function TestTab({ onRefresh }) {
   const [generating, setGenerating] = useState(false);
   const [showGenerated, setShowGenerated] = useState(false);
 
+  // Behavioral feedback
+  const [feedbackGiven, setFeedbackGiven] = useState({}); // key: `${providerId}:${model}:${testId}` → validation
+  const [feedbackStats, setFeedbackStats] = useState(null);
+
   useEffect(() => {
     loadData();
   }, []);
 
   const loadData = async () => {
     setLoading(true);
-    const [testsData, providersData, historyData] = await Promise.all([
+    const [testsData, providersData, historyData, fbStats] = await Promise.all([
       api.getSoulTests().catch(() => []),
       api.getProviders().catch(() => ({ providers: [] })),
-      api.getSoulTestHistory(5).catch(() => [])
+      api.getSoulTestHistory(5).catch(() => []),
+      api.getBehavioralFeedbackStats().catch(() => null)
     ]);
 
     setTests(testsData);
     const providersList = providersData.providers || [];
     setProviders(providersList.filter(p => p.enabled));
     setHistory(historyData);
+    if (fbStats) setFeedbackStats(fbStats);
 
     // Default: select all tests
     setSelectedTests(testsData.map(t => t.testId));
 
     setLoading(false);
+  };
+
+  const submitFeedback = async (providerId, model, testId, testName, response, validation) => {
+    const key = `${providerId}:${model}:${testId}`;
+    setFeedbackGiven(prev => ({ ...prev, [key]: validation }));
+
+    await api.submitBehavioralFeedback({
+      contentType: 'test_response',
+      validation,
+      contentSnippet: response,
+      context: `Test: ${testName} | Model: ${model}`,
+      providerId,
+      model
+    }).catch(() => {
+      toast.error('Failed to save feedback');
+      setFeedbackGiven(prev => { const next = { ...prev }; delete next[key]; return next; });
+    });
+
+    // Refresh stats
+    const fbStats = await api.getBehavioralFeedbackStats().catch(() => null);
+    if (fbStats) setFeedbackStats(fbStats);
   };
 
   const toggleProvider = (providerId, model) => {
@@ -445,6 +476,9 @@ export default function TestTab({ onRefresh }) {
                       const testResult = r.results?.find(tr => tr.testId === expandedTest);
                       if (!testResult) return null;
 
+                      const fbKey = `${r.providerId}:${r.model}:${expandedTest}`;
+                      const currentFeedback = feedbackGiven[fbKey];
+
                       return (
                         <div key={`${r.providerId}-${r.model}-response`}>
                           <h4 className="text-sm font-medium text-gray-400 mb-1">
@@ -457,6 +491,49 @@ export default function TestTab({ onRefresh }) {
                                 Reasoning: {testResult.reasoning}
                               </p>
                             )}
+
+                            {/* Behavioral Feedback */}
+                            <div className="mt-3 pt-3 border-t border-port-border">
+                              <p className="text-xs text-gray-500 mb-2">Does this response sound like you?</p>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'sounds_like_me')}
+                                  disabled={!!currentFeedback}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                                    currentFeedback === 'sounds_like_me'
+                                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                      : 'text-gray-400 border border-port-border hover:text-green-400 hover:border-green-500/30 disabled:opacity-30'
+                                  }`}
+                                >
+                                  <ThumbsUp size={14} />
+                                  Sounds like me
+                                </button>
+                                <button
+                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'not_quite')}
+                                  disabled={!!currentFeedback}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                                    currentFeedback === 'not_quite'
+                                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                                      : 'text-gray-400 border border-port-border hover:text-yellow-400 hover:border-yellow-500/30 disabled:opacity-30'
+                                  }`}
+                                >
+                                  <Minus size={14} />
+                                  Not quite
+                                </button>
+                                <button
+                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'doesnt_sound_like_me')}
+                                  disabled={!!currentFeedback}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                                    currentFeedback === 'doesnt_sound_like_me'
+                                      ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                      : 'text-gray-400 border border-port-border hover:text-red-400 hover:border-red-500/30 disabled:opacity-30'
+                                  }`}
+                                >
+                                  <ThumbsDown size={14} />
+                                  Not me
+                                </button>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       );
@@ -499,6 +576,58 @@ export default function TestTab({ onRefresh }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Behavioral Feedback Stats */}
+      {feedbackStats && feedbackStats.totalFeedback > 0 && (
+        <div className="bg-port-card rounded-lg border border-port-border p-4">
+          <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+            <TrendingUp size={18} className="text-purple-400" />
+            Identity Validation
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div className="p-3 bg-port-bg rounded-lg text-center">
+              <div className="text-2xl font-bold text-white">{feedbackStats.totalFeedback}</div>
+              <div className="text-xs text-gray-500">Total Ratings</div>
+            </div>
+            <div className="p-3 bg-port-bg rounded-lg text-center">
+              <div className={`text-2xl font-bold ${
+                feedbackStats.validationRate >= 0.7 ? 'text-green-400' :
+                feedbackStats.validationRate >= 0.4 ? 'text-yellow-400' : 'text-red-400'
+              }`}>
+                {feedbackStats.validationRate != null ? `${Math.round(feedbackStats.validationRate * 100)}%` : '—'}
+              </div>
+              <div className="text-xs text-gray-500">Validation Rate</div>
+            </div>
+            <div className="p-3 bg-port-bg rounded-lg text-center">
+              <div className="text-2xl font-bold text-green-400">
+                {feedbackStats.byValidation?.sounds_like_me || 0}
+              </div>
+              <div className="text-xs text-gray-500">Sounds Like Me</div>
+            </div>
+            <div className="p-3 bg-port-bg rounded-lg text-center">
+              <div className="text-2xl font-bold text-red-400">
+                {feedbackStats.byValidation?.doesnt_sound_like_me || 0}
+              </div>
+              <div className="text-xs text-gray-500">Not Me</div>
+            </div>
+          </div>
+
+          {feedbackStats.recentTrend && feedbackStats.recentTrend.direction !== 'insufficient_data' && (
+            <div className={`p-3 rounded-lg text-sm ${
+              feedbackStats.recentTrend.direction === 'improving' ? 'bg-green-500/10 text-green-400' :
+              feedbackStats.recentTrend.direction === 'declining' ? 'bg-red-500/10 text-red-400' :
+              'bg-port-bg text-gray-400'
+            }`}>
+              {feedbackStats.recentTrend.direction === 'improving'
+                ? `Twin accuracy is improving: ${feedbackStats.recentTrend.previousRate}% → ${feedbackStats.recentTrend.recentRate}% (+${feedbackStats.recentTrend.delta}%)`
+                : feedbackStats.recentTrend.direction === 'declining'
+                ? `Twin accuracy needs attention: ${feedbackStats.recentTrend.previousRate}% → ${feedbackStats.recentTrend.recentRate}% (${feedbackStats.recentTrend.delta}%)`
+                : `Twin accuracy is stable at ${feedbackStats.recentTrend.recentRate}%`
+              }
+            </div>
+          )}
         </div>
       )}
     </div>
