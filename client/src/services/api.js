@@ -40,6 +40,31 @@ async function request(endpoint, options = {}) {
   return response.json();
 }
 
+// Apple Health
+export const ingestAppleHealth = (data) => request('/health/ingest', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const getAppleHealthMetrics = (metricName, from, to) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  return request(`/health/metrics/${metricName}/daily?${params}`);
+};
+export const getAppleHealthSummary = (metricName, from, to) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  return request(`/health/metrics/${metricName}?${params}`);
+};
+export const getAppleHealthRange = () => request('/health/range');
+export const getAppleHealthCorrelation = (from, to) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  return request(`/health/correlation?${params}`);
+};
+
 // Health
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);

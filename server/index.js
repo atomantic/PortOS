@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
+import appleHealthRoutes from './routes/appleHealth.js';
 import systemHealthRoutes from './routes/systemHealth.js';
 import appsRoutes from './routes/apps.js';
 import portsRoutes from './routes/ports.js';
@@ -216,6 +217,7 @@ app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/jira', jiraRoutes);
+app.use('/api/health', appleHealthRoutes);
 app.use('/api/instances', instancesRoutes);
 app.use('/api/meatspace', meatspaceRoutes);
 app.use('/api/settings', settingsRoutes);
