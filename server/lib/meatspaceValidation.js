@@ -15,7 +15,7 @@ export const lifestyleSchema = z.object({
   sleepHoursPerNight: z.number().min(0).max(24).optional().default(7.5),
   dietQuality: dietQualitySchema.optional().default('good'),
   stressLevel: stressLevelSchema.optional().default('moderate'),
-  bmi: z.number().min(10).max(80).optional(),
+  bmi: z.number().min(10).max(80).nullable().optional(),
   chronicConditions: z.array(z.string().max(100)).optional().default([])
 });
 

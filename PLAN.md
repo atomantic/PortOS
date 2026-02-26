@@ -79,10 +79,37 @@ pm2 logs
 - [ ] **M42 P5**: Unified Digital Twin Identity System - Cross-Insights Engine. See [Identity System](./docs/features/identity-system.md)
 - [x] **M44 P1-P5**: MeatSpace - Health tracker with death clock, LEV 2045 tracker, alcohol logging, blood/body/epigenetic tracking, lifestyle questionnaire, TSV import, dashboard widget, compact grid overview
 - [ ] **M44 P6**: MeatSpace - Genome/Epigenetic Migration from Digital Twin to MeatSpace
+- [ ] **M44 P7**: MeatSpace - Apple Health Integration (live sync via Health Auto Export app + bulk XML import)
 
 ---
 
 ## Planned Feature Details
+
+### M44 P7: Apple Health Integration
+
+Bring Apple Health data into MeatSpace via two complementary paths: live sync from the [Health Auto Export](https://apps.apple.com/us/app/health-auto-export-json-csv/id1115567069) iOS app (~$4) and bulk historical import from Apple Health XML exports.
+
+**Live Sync (Health Auto Export)**
+- `POST /api/health/ingest` — accepts Health Auto Export JSON payload (metrics, workouts, sleep, ECG, medications)
+- Validate payload with Zod, deduplicate by metric name + timestamp
+- Persist to `data/health/YYYY-MM-DD.json` (one file per day, append/merge)
+- Configure app to POST to `http://<tailscale-ip>:5554/api/health/ingest` on 15-60 min interval
+- Support custom auth header for basic request validation
+- 150+ metric types: steps, heart rate, HRV, VO2 max, sleep stages, blood pressure, workouts with GPS routes, etc.
+- Reference: [health-auto-export-server](https://github.com/HealthyApps/health-auto-export-server), [payload schema](https://github.com/Lybron/health-auto-export)
+
+**Bulk Historical Import (XML Export)**
+- `POST /api/health/import-xml` — accepts Apple Health export ZIP upload
+- Stream-parse `export.xml` using `xml-stream` (files can be 500MB+), extract records into same `data/health/YYYY-MM-DD.json` format
+- Progress reporting via WebSocket during import
+- Reference: [apple-health-parser](https://github.com/cvyl/apple-health-parser)
+
+**MeatSpace Dashboard Integration**
+- New dashboard cards for key Apple Health metrics (steps, heart rate, sleep, HRV trends)
+- Correlate with existing MeatSpace data (alcohol intake vs. HRV/sleep, blood work trends vs. activity)
+- Time-series charts with configurable date ranges
+
+*Touches: server/routes/health.js, server/services/healthIngest.js, MeatSpace UI, data/health/*
 
 ### Tier 1: Identity Integration (aligns with M42 direction)
 

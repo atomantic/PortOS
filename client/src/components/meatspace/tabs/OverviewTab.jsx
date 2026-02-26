@@ -29,7 +29,7 @@ function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
   );
 }
 
-function CompactCountdown({ deathDate, lifeExpectancy, percentComplete }) {
+function CompactCountdown({ deathDate, lifeExpectancy, percentComplete, lev }) {
   const countdown = useDeathClock(deathDate);
 
   if (!countdown) {
@@ -52,7 +52,15 @@ function CompactCountdown({ deathDate, lifeExpectancy, percentComplete }) {
 
   return (
     <div>
-      <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Time Remaining</h3>
+      <div className="flex items-baseline gap-2 mb-2">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Time Remaining</h3>
+        {deathDate && (
+          <span className="text-xs text-gray-500">
+            ({new Date(deathDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })})
+            {lev?.onTrack && <span className="text-port-success font-medium"> +LEV</span>}
+          </span>
+        )}
+      </div>
       <div className="flex items-baseline gap-1 flex-wrap mb-3">
         {units.map((u, i) => (
           <span key={i} className="whitespace-nowrap">
@@ -212,6 +220,7 @@ export default function OverviewTab() {
               deathDate={deathClock?.deathDate}
               lifeExpectancy={deathClock?.lifeExpectancy}
               percentComplete={deathClock?.percentComplete}
+              lev={lev}
             />
           )}
         </div>
