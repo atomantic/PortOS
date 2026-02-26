@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { spawn } from 'child_process';
 import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
+import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -58,10 +58,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
 
   // Spawn pm2 logs with --raw flag for clean output
   // Security: safeProcessName is validated above to only contain safe characters
-  const logProcess = spawn('pm2', ['logs', safeProcessName, '--raw', '--lines', String(lines)], {
-    shell: process.platform === 'win32',
-    windowsHide: true
-  });
+  const logProcess = spawnPm2(['logs', safeProcessName, '--raw', '--lines', String(lines)]);
 
   let buffer = '';
 

@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, execFile } from 'child_process';
+import { execPm2 } from './pm2.js';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
@@ -1981,7 +1982,7 @@ export async function runHealthCheck() {
   };
 
   // Check PM2 processes
-  const pm2Result = await execAsync('pm2 jlist', { windowsHide: true }).catch(() => ({ stdout: '[]' }));
+  const pm2Result = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
   // pm2 jlist may output ANSI codes and warnings before JSON, extract the JSON array
   // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
   const pm2Output = pm2Result.stdout || '[]';

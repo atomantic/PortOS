@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawnPm2 } from './pm2.js';
 import { streamDetection } from './streamingDetect.js';
 import { cosEvents } from './cosEvents.js';
 import { appsEvents } from './apps.js';
@@ -139,10 +139,7 @@ export function initSocket(io) {
       console.log(`📜 Log stream started: ${processName} (${lines} lines)`);
 
       // Spawn pm2 logs with --raw flag
-      const logProcess = spawn('pm2', ['logs', processName, '--raw', '--lines', String(lines)], {
-        shell: process.platform === 'win32',
-        windowsHide: true
-      });
+      const logProcess = spawnPm2(['logs', processName, '--raw', '--lines', String(lines)]);
 
       activeStreams.set(socket.id, { process: logProcess, processName });
 

@@ -2,11 +2,19 @@ import pm2 from 'pm2';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { readFile, writeFile, unlink } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 import { extractJSONArray, safeJSONParse } from '../lib/fileUtils.js';
 
 const IS_WIN = process.platform === 'win32';
+
+// Resolve PM2 CLI binary path from our local dependency.
+// On Windows, we run `node pm2/bin/pm2` directly to avoid pm2.cmd batch file
+// which creates visible CMD windows even with windowsHide:true
+// (cmd.exe → pm2.cmd → node is a chain where the middle .cmd flashes a window).
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PM2_BIN = join(__dirname, '..', 'node_modules', 'pm2', 'bin', 'pm2');
 
 /**
  * Check if a script path is a JS file that PM2 can fork directly.
@@ -15,6 +23,46 @@ const IS_WIN = process.platform === 'win32';
  */
 function isJsScript(script) {
   return /\.(?:js|mjs|cjs|ts)$/.test(script);
+}
+
+/**
+ * Spawn PM2 CLI directly via node, bypassing pm2.cmd on Windows.
+ * On Windows, `spawn('pm2', args, {shell:true})` runs cmd.exe → pm2.cmd → node,
+ * and the intermediate pm2.cmd batch file creates a visible CMD window even with
+ * windowsHide:true. Running `node pm2/bin/pm2` directly avoids the .cmd wrapper entirely.
+ * @param {string[]} pm2Args PM2 CLI arguments (e.g. ['jlist'], ['start', 'ecosystem.config.cjs'])
+ * @param {object} opts Spawn options (cwd, env, etc.)
+ * @returns {ChildProcess}
+ */
+export function spawnPm2(pm2Args, opts = {}) {
+  if (IS_WIN) {
+    // Run node with PM2's JS binary directly — no cmd.exe, no .cmd wrapper
+    return spawn(process.execPath, [PM2_BIN, ...pm2Args], {
+      windowsHide: true,
+      ...opts
+    });
+  }
+  // On non-Windows, pm2 is a JS file with shebang, runs fine directly
+  return spawn('pm2', pm2Args, { windowsHide: true, ...opts });
+}
+
+/**
+ * Execute a PM2 CLI command and return stdout/stderr as a promise.
+ * Drop-in replacement for execAsync('pm2 ...') that bypasses pm2.cmd on Windows.
+ * @param {string[]} pm2Args PM2 CLI arguments (e.g. ['jlist'])
+ * @param {object} opts Spawn options (env, cwd, etc.)
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
+export function execPm2(pm2Args, opts = {}) {
+  return new Promise((resolve) => {
+    const child = spawnPm2(pm2Args, opts);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (data) => { stdout += data.toString(); });
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    child.on('close', () => resolve({ stdout, stderr }));
+    child.on('error', () => resolve({ stdout, stderr }));
+  });
 }
 
 /**
@@ -42,10 +90,8 @@ function buildEnv(pm2Home) {
  */
 function spawnPm2Cli(action, name, pm2Home) {
   return new Promise((resolve, reject) => {
-    const child = spawn('pm2', [action, name], {
-      shell: IS_WIN,
-      env: buildEnv(pm2Home),
-      windowsHide: true
+    const child = spawnPm2([action, name], {
+      env: buildEnv(pm2Home)
     });
     let stderr = '';
     child.stderr.on('data', (data) => { stderr += data.toString(); });
@@ -186,10 +232,8 @@ export async function deleteApp(name, pm2Home = null) {
  */
 export async function getAppStatus(name, pm2Home = null) {
   return new Promise((resolve) => {
-    const child = spawn('pm2', ['jlist'], {
-      shell: IS_WIN,
-      env: buildEnv(pm2Home),
-      windowsHide: true
+    const child = spawnPm2(['jlist'], {
+      env: buildEnv(pm2Home)
     });
     let stdout = '';
 
@@ -234,10 +278,8 @@ export async function getAppStatus(name, pm2Home = null) {
  */
 export async function listProcesses(pm2Home = null) {
   return new Promise((resolve) => {
-    const child = spawn('pm2', ['jlist'], {
-      shell: IS_WIN,
-      env: buildEnv(pm2Home),
-      windowsHide: true
+    const child = spawnPm2(['jlist'], {
+      env: buildEnv(pm2Home)
     });
     let stdout = '';
 
@@ -275,10 +317,8 @@ export async function listProcesses(pm2Home = null) {
 export async function getLogs(name, lines = 100, pm2Home = null) {
   return new Promise((resolve, reject) => {
     const args = ['logs', name, '--lines', String(lines), '--nostream', '--raw'];
-    const child = spawn('pm2', args, {
-      shell: IS_WIN,
-      env: buildEnv(pm2Home),
-      windowsHide: true
+    const child = spawnPm2(args, {
+      env: buildEnv(pm2Home)
     });
 
     let stdout = '';
@@ -355,11 +395,9 @@ function spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home) {
       args.push('--only', processNames.join(','));
     }
 
-    const child = spawn('pm2', args, {
+    const child = spawnPm2(args, {
       cwd,
-      shell: IS_WIN,
-      env: buildEnv(pm2Home),
-      windowsHide: true
+      env: buildEnv(pm2Home)
     });
     let stdout = '';
     let stderr = '';
