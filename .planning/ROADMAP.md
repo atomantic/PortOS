@@ -28,10 +28,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. All genome API route comments reference `/api/meatspace/genome/` (no digital-twin references remain)
   2. IdentityTab no longer shows a Genome card (or it links to `/meatspace/genome` instead of a dead route)
   3. genome.js reads data from `data/meatspace/` paths and returns valid genome data
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 01-01: TBD
+- [ ] 01-01-PLAN.md -- Complete genome migration: update service paths, route comments, client navigation, docs, and move data files
 
 ### Phase 2: Data Backup & Recovery
 **Goal**: All PortOS data is automatically backed up to an external drive with integrity verification and restore capability
