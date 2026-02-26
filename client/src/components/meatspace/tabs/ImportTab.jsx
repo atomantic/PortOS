@@ -53,7 +53,7 @@ export default function ImportTab({ onRefresh }) {
 
         <p className="text-sm text-gray-400 mb-4">
           Import your health tracking spreadsheet. Expects a TSV file with 3 header rows,
-          2 summary rows, then daily data. Covers nutrition, alcohol, body composition,
+          2 summary rows, then daily data. Covers alcohol, body composition,
           blood tests, epigenetic results, and eye prescriptions.
         </p>
         <p className="text-xs text-gray-500 mb-4">

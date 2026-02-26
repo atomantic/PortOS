@@ -255,28 +255,6 @@ router.delete('/eyes/:index', asyncHandler(async (req, res) => {
 }));
 
 // =============================================================================
-// NUTRITION
-// =============================================================================
-
-/**
- * GET /api/meatspace/nutrition
- * Nutrition summary + averages
- */
-router.get('/nutrition', asyncHandler(async (req, res) => {
-  const summary = await healthService.getNutritionSummary();
-  res.json(summary);
-}));
-
-/**
- * GET /api/meatspace/nutrition/daily
- * Daily nutrition entries
- */
-router.get('/nutrition/daily', asyncHandler(async (req, res) => {
-  const entries = await healthService.getDailyNutrition(req.query.from, req.query.to);
-  res.json(entries);
-}));
-
-// =============================================================================
 // IMPORT
 // =============================================================================
 

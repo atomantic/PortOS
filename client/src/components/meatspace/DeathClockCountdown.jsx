@@ -1,8 +1,8 @@
 import { useDeathClock } from '../../hooks/useDeathClock';
 
-const TimeUnit = ({ value, label }) => (
+const TimeUnit = ({ value, label, color }) => (
   <div className="flex flex-col items-center">
-    <span className="text-3xl md:text-5xl font-mono font-bold text-port-error tabular-nums">
+    <span className={`text-3xl md:text-5xl font-mono font-bold tabular-nums ${color}`}>
       {String(value).padStart(2, '0')}
     </span>
     <span className="text-xs text-gray-500 uppercase mt-1">{label}</span>
@@ -38,19 +38,19 @@ export default function DeathClockCountdown({ deathDate, lifeExpectancy, percent
 
       {/* Countdown timer */}
       <div className="flex items-start gap-2 md:gap-3 justify-center flex-wrap">
-        <TimeUnit value={countdown.years} label="years" />
+        <TimeUnit value={countdown.years} label="years" color="text-port-accent" />
         <Separator />
-        <TimeUnit value={countdown.months} label="months" />
+        <TimeUnit value={countdown.months} label="months" color="text-purple-400" />
         <Separator />
-        <TimeUnit value={countdown.weeks} label="weeks" />
+        <TimeUnit value={countdown.weeks} label="weeks" color="text-teal-400" />
         <Separator />
-        <TimeUnit value={countdown.days} label="days" />
+        <TimeUnit value={countdown.days} label="days" color="text-port-success" />
         <Separator />
-        <TimeUnit value={countdown.hours} label="hours" />
+        <TimeUnit value={countdown.hours} label="hours" color="text-port-warning" />
         <Separator />
-        <TimeUnit value={countdown.minutes} label="min" />
+        <TimeUnit value={countdown.minutes} label="min" color="text-orange-400" />
         <Separator />
-        <TimeUnit value={countdown.seconds} label="sec" />
+        <TimeUnit value={countdown.seconds} label="sec" color="text-port-error" />
       </div>
 
       {/* Life expectancy details */}

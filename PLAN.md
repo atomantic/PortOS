@@ -77,7 +77,7 @@ pm2 logs
 - [ ] **M34 P5-P7**: Digital Twin - Multi-modal capture, advanced testing, personas
 - [x] **M42 P4**: Unified Digital Twin Identity System - Identity Tab UI dashboard with completeness header, 5 summary cards, derive actions
 - [ ] **M42 P5**: Unified Digital Twin Identity System - Cross-Insights Engine. See [Identity System](./docs/features/identity-system.md)
-- [x] **M44 P1-P5**: MeatSpace - Health tracker with death clock, LEV 2045 tracker, alcohol logging, blood/body/epigenetic tracking, nutrition, lifestyle questionnaire, TSV import, dashboard widget
+- [x] **M44 P1-P5**: MeatSpace - Health tracker with death clock, LEV 2045 tracker, alcohol logging, blood/body/epigenetic tracking, lifestyle questionnaire, TSV import, dashboard widget, compact grid overview
 - [ ] **M44 P6**: MeatSpace - Genome/Epigenetic Migration from Digital Twin to MeatSpace
 
 ---

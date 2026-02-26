@@ -1321,14 +1321,6 @@ export const updateEyeExam = (index, data) => request(`/meatspace/eyes/${index}`
 export const removeEyeExam = (index) => request(`/meatspace/eyes/${index}`, {
   method: 'DELETE'
 });
-export const getNutritionSummary = () => request('/meatspace/nutrition');
-export const getDailyNutrition = (from, to) => {
-  const params = new URLSearchParams();
-  if (from) params.set('from', from);
-  if (to) params.set('to', to);
-  return request(`/meatspace/nutrition/daily?${params}`);
-};
-
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);

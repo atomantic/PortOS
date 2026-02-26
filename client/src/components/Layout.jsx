@@ -133,7 +133,6 @@ const navItems = [
       { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
       { to: '/meatspace/blood', label: 'Blood & Body', icon: HeartPulse },
       { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
-      { to: '/meatspace/nutrition', label: 'Nutrition', icon: Flame },
       { to: '/meatspace/overview', label: 'Overview', icon: Activity }
     ]
   },

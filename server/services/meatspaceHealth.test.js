@@ -2,27 +2,6 @@ import { describe, it, expect } from 'vitest';
 
 // Inline pure functions to avoid mocking file I/O
 
-function computeNutritionAverages(entries) {
-  if (entries.length === 0) return null;
-
-  const sums = {};
-  const counts = {};
-  for (const entry of entries) {
-    for (const [key, val] of Object.entries(entry.nutrition)) {
-      if (val != null) {
-        sums[key] = (sums[key] || 0) + val;
-        counts[key] = (counts[key] || 0) + 1;
-      }
-    }
-  }
-
-  const averages = {};
-  for (const key of Object.keys(sums)) {
-    averages[key] = Math.round((sums[key] / counts[key]) * 10) / 10;
-  }
-  return averages;
-}
-
 function extractBodyHistory(entries) {
   return entries
     .filter(e => e.body && Object.keys(e.body).length > 0)
@@ -37,64 +16,6 @@ function mergeBodyEntry(existingBody, newBody) {
 function sortByDate(items) {
   return [...items].sort((a, b) => a.date.localeCompare(b.date));
 }
-
-// =============================================================================
-// NUTRITION AVERAGES TESTS
-// =============================================================================
-
-describe('computeNutritionAverages', () => {
-  it('returns null for empty entries', () => {
-    expect(computeNutritionAverages([])).toBeNull();
-  });
-
-  it('computes averages for single entry', () => {
-    const entries = [{ nutrition: { calories: 2000, fatG: 80, carbG: 250 } }];
-    const result = computeNutritionAverages(entries);
-    expect(result.calories).toBe(2000);
-    expect(result.fatG).toBe(80);
-    expect(result.carbG).toBe(250);
-  });
-
-  it('computes averages across multiple entries', () => {
-    const entries = [
-      { nutrition: { calories: 1500, fatG: 60 } },
-      { nutrition: { calories: 2500, fatG: 100 } }
-    ];
-    const result = computeNutritionAverages(entries);
-    expect(result.calories).toBe(2000);
-    expect(result.fatG).toBe(80);
-  });
-
-  it('handles sparse data (some fields missing)', () => {
-    const entries = [
-      { nutrition: { calories: 1800, fiberG: 30 } },
-      { nutrition: { calories: 2200 } }
-    ];
-    const result = computeNutritionAverages(entries);
-    expect(result.calories).toBe(2000);
-    expect(result.fiberG).toBe(30); // only 1 entry had fiber
-  });
-
-  it('skips null values in averages', () => {
-    const entries = [
-      { nutrition: { calories: 2000, fatG: null } },
-      { nutrition: { calories: 1800, fatG: 70 } }
-    ];
-    const result = computeNutritionAverages(entries);
-    expect(result.calories).toBe(1900);
-    expect(result.fatG).toBe(70); // only counted non-null
-  });
-
-  it('rounds to one decimal place', () => {
-    const entries = [
-      { nutrition: { calories: 1000 } },
-      { nutrition: { calories: 1001 } },
-      { nutrition: { calories: 1002 } }
-    ];
-    const result = computeNutritionAverages(entries);
-    expect(result.calories).toBe(1001);
-  });
-});
 
 // =============================================================================
 // BODY HISTORY TESTS
