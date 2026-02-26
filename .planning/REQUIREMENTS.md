@@ -15,9 +15,9 @@ Requirements for this milestone batch. Each maps to roadmap phases.
 
 ### Backup
 
-- [ ] **BAK-01**: Incremental rsync backup copies changed files from `./data/` to configurable external drive path
-- [ ] **BAK-02**: SHA-256 manifest tracks file integrity across backups
-- [ ] **BAK-03**: Daily backup runs via existing scheduler with configurable interval
+- [x] **BAK-01**: Incremental rsync backup copies changed files from `./data/` to configurable external drive path
+- [x] **BAK-02**: SHA-256 manifest tracks file integrity across backups
+- [x] **BAK-03**: Daily backup runs via existing scheduler with configurable interval
 - [ ] **BAK-04**: Dashboard widget shows last backup time, next scheduled, health status (green/yellow/red)
 - [ ] **BAK-05**: One-click manual backup trigger from dashboard
 - [ ] **BAK-06**: Restore from named snapshot with dry-run mode showing what would change
@@ -92,9 +92,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GEN-01 | Phase 1 | Complete |
 | GEN-02 | Phase 1 | Complete |
 | GEN-03 | Phase 1 | Complete |
-| BAK-01 | Phase 2 | Pending |
-| BAK-02 | Phase 2 | Pending |
-| BAK-03 | Phase 2 | Pending |
+| BAK-01 | Phase 2 | Complete |
+| BAK-02 | Phase 2 | Complete |
+| BAK-03 | Phase 2 | Complete |
 | BAK-04 | Phase 2 | Pending |
 | BAK-05 | Phase 2 | Pending |
 | BAK-06 | Phase 2 | Pending |
