@@ -4,7 +4,6 @@ import {
   HeartPulse,
   ClipboardList,
   Apple,
-  Upload,
   Activity
 } from 'lucide-react';
 
@@ -13,8 +12,7 @@ export const TABS = [
   { id: 'alcohol', label: 'Alcohol', icon: Beer },
   { id: 'blood', label: 'Blood & Body', icon: HeartPulse },
   { id: 'lifestyle', label: 'Lifestyle', icon: ClipboardList },
-  { id: 'nutrition', label: 'Nutrition', icon: Apple },
-  { id: 'import', label: 'Import', icon: Upload }
+  { id: 'nutrition', label: 'Nutrition', icon: Apple }
 ];
 
 // Lifestyle adjustment table for death clock

@@ -44,9 +44,9 @@ function buildMinimalTSV(dataRows) {
     if (row.carbs != null) cells[9] = String(row.carbs);
     if (row.fiber != null) cells[10] = String(row.fiber);
     if (row.sugar != null) cells[11] = String(row.sugar);
-    // Body
-    if (row.weightLbs != null) cells[15] = String(row.weightLbs);
-    if (row.weightKg != null) cells[16] = String(row.weightKg);
+    // Body (cols 16-21)
+    if (row.weightLbs != null) cells[16] = String(row.weightLbs);
+    if (row.weightKg != null) cells[17] = String(row.weightKg);
     return cells.join('\t');
   });
 

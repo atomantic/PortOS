@@ -8,7 +8,6 @@ import AlcoholTab from '../components/meatspace/tabs/AlcoholTab';
 import BloodTab from '../components/meatspace/tabs/BloodTab';
 import LifestyleTab from '../components/meatspace/tabs/LifestyleTab';
 import NutritionTab from '../components/meatspace/tabs/NutritionTab';
-import ImportTab from '../components/meatspace/tabs/ImportTab';
 
 export default function MeatSpace() {
   const { tab } = useParams();
@@ -31,8 +30,6 @@ export default function MeatSpace() {
         return <LifestyleTab />;
       case 'nutrition':
         return <NutritionTab />;
-      case 'import':
-        return <ImportTab />;
       default:
         return <OverviewTab />;
     }

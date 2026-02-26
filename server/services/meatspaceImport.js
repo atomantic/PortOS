@@ -15,7 +15,7 @@ const BLOOD_TESTS_FILE = join(MEATSPACE_DIR, 'blood-tests.json');
 const EPIGENETIC_TESTS_FILE = join(MEATSPACE_DIR, 'epigenetic-tests.json');
 const EYES_FILE = join(MEATSPACE_DIR, 'eyes.json');
 
-// Column indices (0-based)
+// Column indices (0-based), verified against actual TSV headers
 const COL = {
   DATE: 2,
   // Nutrition (3-11)
@@ -30,28 +30,28 @@ const COL = {
   SUGAR: 11,
   // Alcohol summary
   ALCOHOL_GRAMS: 12,
-  // Body composition (15-20)
-  WEIGHT_LBS: 15,
-  WEIGHT_KG: 16,
-  MUSCLE_PCT: 17,
-  FAT_PCT: 18,
-  BONE_MASS: 19,
-  TEMPERATURE: 20,
-  // Protein/Mercury columns (84-112)
-  PROTEIN_START: 84,
+  // Body composition (16-21)
+  WEIGHT_LBS: 16,
+  WEIGHT_KG: 17,
+  MUSCLE_PCT: 18,
+  FAT_PCT: 19,
+  BONE_MASS: 20,
+  TEMPERATURE: 21,
+  // Protein/Mercury columns (96-112)
+  PROTEIN_START: 96,
   PROTEIN_END: 112,
-  // Individual beverages (113-172)
-  BEVERAGE_START: 113,
-  BEVERAGE_END: 172,
-  // Elysium Index (173-184)
-  EPIGENETIC_START: 173,
-  EPIGENETIC_END: 184,
-  // Blood tests (185-239)
-  BLOOD_START: 185,
-  BLOOD_END: 239,
-  // Eye prescription (240-245)
-  EYE_START: 240,
-  EYE_END: 245
+  // Individual beverages (119-178) — names in row 0, ABV in row 1, serving oz in row 2
+  BEVERAGE_START: 119,
+  BEVERAGE_END: 178,
+  // Elysium Index (179-190)
+  EPIGENETIC_START: 179,
+  EPIGENETIC_END: 190,
+  // Blood tests (193-245)
+  BLOOD_START: 193,
+  BLOOD_END: 245,
+  // Eye prescription (246-251)
+  EYE_START: 246,
+  EYE_END: 251
 };
 
 // Epigenetic field names (indices relative to EPIGENETIC_START)
@@ -62,9 +62,10 @@ const EPIGENETIC_FIELDS = [
 ];
 
 // Eye field names (indices relative to EYE_START)
+// TSV order: Left OD Sphere, Left Cylinder, Left Axis, Right OS Sphere, Right Cylinder, Right Axis
 const EYE_FIELDS = [
-  'rightSphere', 'rightCylinder', 'rightAxis',
-  'leftSphere', 'leftCylinder', 'leftAxis'
+  'leftSphere', 'leftCylinder', 'leftAxis',
+  'rightSphere', 'rightCylinder', 'rightAxis'
 ];
 
 // === Parsing Helpers ===
@@ -100,8 +101,9 @@ function parseBeverages(row, beverageNames, beverageABVs, beverageSizes) {
     if (!count || count <= 0) continue;
 
     const idx = i - COL.BEVERAGE_START;
-    const name = beverageNames[idx] || `Beverage ${idx + 1}`;
-    const abv = parseNum(beverageABVs[idx]) || 5;
+    const rawAbv = parseNum(beverageABVs[idx]) || 5;
+    const name = beverageNames[idx] || `${rawAbv}% ABV`;
+    const abv = rawAbv;
     const servingOz = parseNum(beverageSizes[idx]) || 12;
 
     const oz = servingOz * count;
@@ -151,16 +153,16 @@ function parseBloodTests(row, bloodHeaders) {
 
 function parseEpigenetic(row) {
   const result = {};
-  let hasAny = false;
 
   for (let i = 0; i < EPIGENETIC_FIELDS.length; i++) {
     const val = parseNum(row[COL.EPIGENETIC_START + i]);
     if (val === null) continue;
     result[EPIGENETIC_FIELDS[i]] = val;
-    hasAny = true;
   }
 
-  if (!hasAny) return null;
+  // Only count as a real epigenetic test if biologicalAge or paceOfAging is present
+  // (chronologicalAge alone is just the user's age, populated on every row)
+  if (result.biologicalAge == null && result.paceOfAging == null) return null;
 
   // Separate organ scores from top-level fields
   const organScores = {};
@@ -209,22 +211,25 @@ export async function importTSV(content) {
   const headerRow3 = lines[2].split('\t'); // Serving sizes, reference ranges, units
 
   // Extract beverage metadata from headers
+  // Row 0 has beverage names, Row 1 has ABV values (e.g. "5.4%"), Row 2 has serving sizes in oz
   const beverageNames = [];
   const beverageABVs = [];
   const beverageSizes = [];
   for (let i = COL.BEVERAGE_START; i <= COL.BEVERAGE_END; i++) {
     const idx = i - COL.BEVERAGE_START;
-    beverageNames[idx] = headerRow2[i] || '';
-    // ABV typically in row 2 header, serving size in row 3
+    beverageNames[idx] = headerRow1[i] || '';
+    // ABV is in row 1 as "X.X%" format
     const abvMatch = String(headerRow2[i] || '').match(/(\d+\.?\d*)%/);
-    beverageABVs[idx] = abvMatch ? abvMatch[1] : headerRow3[i];
+    beverageABVs[idx] = abvMatch ? abvMatch[1] : '5';
     beverageSizes[idx] = headerRow3[i] || '12';
   }
 
-  // Extract mercury values from protein source headers (row 3 has Hg mg values)
+  // Extract mercury values from protein names in row 1 (e.g. "chicken Hg: .002")
   const mercuryHeaders = [];
   for (let i = COL.PROTEIN_START; i <= COL.PROTEIN_END; i++) {
-    mercuryHeaders[i - COL.PROTEIN_START] = headerRow3[i] || '0';
+    const name = String(headerRow2[i] || '');
+    const hgMatch = name.match(/[Hh]g:\s*([\d.]+)/);
+    mercuryHeaders[i - COL.PROTEIN_START] = hgMatch ? hgMatch[1] : '0';
   }
 
   // Extract blood test names from row 2
