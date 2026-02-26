@@ -16,13 +16,13 @@ import {
 
 const router = Router();
 
-// GET /api/digital-twin/genome — Summary
+// GET /api/meatspace/genome — Summary
 router.get('/', asyncHandler(async (req, res) => {
   const summary = await genomeService.getGenomeSummary();
   res.json(summary);
 }));
 
-// POST /api/digital-twin/genome/upload — Upload genome file
+// POST /api/meatspace/genome/upload — Upload genome file
 router.post('/upload', asyncHandler(async (req, res) => {
   const data = validateRequest(genomeUploadSchema, req.body);
   const result = await genomeService.uploadGenome(data.content, data.filename);
@@ -36,7 +36,7 @@ router.post('/upload', asyncHandler(async (req, res) => {
   res.status(201).json(result);
 }));
 
-// POST /api/digital-twin/genome/scan — Scan curated markers
+// POST /api/meatspace/genome/scan — Scan curated markers
 router.post('/scan', asyncHandler(async (req, res) => {
   const result = await genomeService.scanCuratedMarkers();
   if (result.error) {
@@ -49,21 +49,21 @@ router.post('/scan', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/digital-twin/genome/search — Search SNP by rsid
+// POST /api/meatspace/genome/search — Search SNP by rsid
 router.post('/search', asyncHandler(async (req, res) => {
   const data = validateRequest(genomeSearchSchema, req.body);
   const result = await genomeService.searchSNP(data.rsid);
   res.json(result);
 }));
 
-// POST /api/digital-twin/genome/markers — Save a marker
+// POST /api/meatspace/genome/markers — Save a marker
 router.post('/markers', asyncHandler(async (req, res) => {
   const data = validateRequest(genomeSaveMarkerSchema, req.body);
   const marker = await genomeService.saveMarker(data);
   res.status(201).json(marker);
 }));
 
-// PUT /api/digital-twin/genome/markers/:id/notes — Update marker notes
+// PUT /api/meatspace/genome/markers/:id/notes — Update marker notes
 router.put('/markers/:id/notes', asyncHandler(async (req, res) => {
   const data = validateRequest(genomeUpdateNotesSchema, req.body);
   const result = await genomeService.updateMarkerNotes(req.params.id, data.notes);
@@ -77,7 +77,7 @@ router.put('/markers/:id/notes', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// DELETE /api/digital-twin/genome/markers/:id — Delete a marker
+// DELETE /api/meatspace/genome/markers/:id — Delete a marker
 router.delete('/markers/:id', asyncHandler(async (req, res) => {
   const result = await genomeService.deleteMarker(req.params.id);
   if (result.error) {
@@ -92,13 +92,13 @@ router.delete('/markers/:id', asyncHandler(async (req, res) => {
 
 // === ClinVar Routes ===
 
-// GET /api/digital-twin/genome/clinvar/status — ClinVar sync status
+// GET /api/meatspace/genome/clinvar/status — ClinVar sync status
 router.get('/clinvar/status', asyncHandler(async (req, res) => {
   const status = await clinvarService.getClinvarStatus();
   res.json(status);
 }));
 
-// POST /api/digital-twin/genome/clinvar/sync — Download and index ClinVar database
+// POST /api/meatspace/genome/clinvar/sync — Download and index ClinVar database
 router.post('/clinvar/sync', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const onProgress = (message) => {
@@ -117,7 +117,7 @@ router.post('/clinvar/sync', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/digital-twin/genome/clinvar/scan — Scan genome against ClinVar
+// POST /api/meatspace/genome/clinvar/scan — Scan genome against ClinVar
 router.post('/clinvar/scan', asyncHandler(async (req, res) => {
   const snpIndex = await genomeService.getSnpIndex();
   if (!snpIndex) {
@@ -138,7 +138,7 @@ router.post('/clinvar/scan', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// DELETE /api/digital-twin/genome/clinvar — Delete ClinVar data
+// DELETE /api/meatspace/genome/clinvar — Delete ClinVar data
 router.delete('/clinvar', asyncHandler(async (req, res) => {
   await clinvarService.deleteClinvar();
   res.status(204).end();
@@ -146,34 +146,34 @@ router.delete('/clinvar', asyncHandler(async (req, res) => {
 
 // === Epigenetic Lifestyle Tracking Routes ===
 
-// GET /api/digital-twin/genome/epigenetic — Get tracked interventions
+// GET /api/meatspace/genome/epigenetic — Get tracked interventions
 router.get('/epigenetic', asyncHandler(async (req, res) => {
   const data = await epigeneticService.getInterventions();
   res.json(data);
 }));
 
-// GET /api/digital-twin/genome/epigenetic/recommendations — Get curated recommendations
+// GET /api/meatspace/genome/epigenetic/recommendations — Get curated recommendations
 router.get('/epigenetic/recommendations', asyncHandler(async (req, res) => {
   const categories = req.query.categories ? req.query.categories.split(',') : [];
   const recommendations = epigeneticService.getRecommendations(categories);
   res.json({ recommendations });
 }));
 
-// GET /api/digital-twin/genome/epigenetic/compliance — Get compliance summary
+// GET /api/meatspace/genome/epigenetic/compliance — Get compliance summary
 router.get('/epigenetic/compliance', asyncHandler(async (req, res) => {
   const days = parseInt(req.query.days, 10) || 30;
   const summary = await epigeneticService.getComplianceSummary(days);
   res.json(summary);
 }));
 
-// POST /api/digital-twin/genome/epigenetic — Add intervention
+// POST /api/meatspace/genome/epigenetic — Add intervention
 router.post('/epigenetic', asyncHandler(async (req, res) => {
   const data = validateRequest(epigeneticAddInterventionSchema, req.body);
   const result = await epigeneticService.addIntervention(data);
   res.status(201).json(result);
 }));
 
-// POST /api/digital-twin/genome/epigenetic/:id/log — Log daily entry
+// POST /api/meatspace/genome/epigenetic/:id/log — Log daily entry
 router.post('/epigenetic/:id/log', asyncHandler(async (req, res) => {
   const data = validateRequest(epigeneticLogEntrySchema, req.body);
   const result = await epigeneticService.logEntry(req.params.id, data);
@@ -187,7 +187,7 @@ router.post('/epigenetic/:id/log', asyncHandler(async (req, res) => {
   res.status(201).json(result);
 }));
 
-// PUT /api/digital-twin/genome/epigenetic/:id — Update intervention
+// PUT /api/meatspace/genome/epigenetic/:id — Update intervention
 router.put('/epigenetic/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(epigeneticUpdateInterventionSchema, req.body);
   const result = await epigeneticService.updateIntervention(req.params.id, data);
@@ -201,7 +201,7 @@ router.put('/epigenetic/:id', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// DELETE /api/digital-twin/genome/epigenetic/:id — Delete intervention
+// DELETE /api/meatspace/genome/epigenetic/:id — Delete intervention
 router.delete('/epigenetic/:id', asyncHandler(async (req, res) => {
   const result = await epigeneticService.deleteIntervention(req.params.id);
   if (result.error) {
@@ -214,7 +214,7 @@ router.delete('/epigenetic/:id', asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
-// DELETE /api/digital-twin/genome — Delete all genome data
+// DELETE /api/meatspace/genome — Delete all genome data
 router.delete('/', asyncHandler(async (req, res) => {
   await genomeService.deleteGenome();
   await clinvarService.deleteClinvar();

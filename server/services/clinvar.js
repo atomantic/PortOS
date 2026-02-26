@@ -6,7 +6,7 @@ import { createInterface } from 'readline';
 import { pipeline } from 'stream/promises';
 import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 
-const GENOME_DIR = PATHS.digitalTwin;
+const GENOME_DIR = PATHS.meatspace;
 const CLINVAR_GZ = join(GENOME_DIR, 'clinvar-raw.txt.gz');
 const CLINVAR_INDEX = join(GENOME_DIR, 'clinvar-index.json');
 const CLINVAR_META = join(GENOME_DIR, 'clinvar-meta.json');

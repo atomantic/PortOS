@@ -3,7 +3,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 
-const DATA_DIR = PATHS.digitalTwin;
+const DATA_DIR = PATHS.meatspace;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
 
 const DEFAULT_DATA = {

@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
-const GENOME_DIR = PATHS.digitalTwin;
+const GENOME_DIR = PATHS.meatspace;
 const RAW_FILE = join(GENOME_DIR, 'genome-raw.txt');
 const META_FILE = join(GENOME_DIR, 'genome.json');
 
