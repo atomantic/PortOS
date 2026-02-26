@@ -27,7 +27,8 @@ export const PATHS = {
   scripts: join(__lib_dirname, '../../data/cos/scripts'),
   reports: join(__lib_dirname, '../../data/cos/reports'),
   // AI Agent Personalities data
-  agentPersonalities: join(__lib_dirname, '../../data/agents')
+  agentPersonalities: join(__lib_dirname, '../../data/agents'),
+  meatspace: join(__lib_dirname, '../../data/meatspace')
 };
 
 /**

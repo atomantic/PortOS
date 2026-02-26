@@ -1259,6 +1259,24 @@ export const addGoalMilestone = (goalId, data) => request(`/digital-twin/identit
 export const completeGoalMilestone = (goalId, milestoneId) =>
   request(`/digital-twin/identity/goals/${goalId}/milestones/${milestoneId}/complete`, { method: 'PUT' });
 
+// MeatSpace - Health Tracker
+export const getMeatspaceOverview = () => request('/meatspace');
+export const getMeatspaceConfig = () => request('/meatspace/config');
+export const updateMeatspaceConfig = (data) => request('/meatspace/config', {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const updateMeatspaceLifestyle = (data) => request('/meatspace/lifestyle', {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const getDeathClock = () => request('/meatspace/death-clock');
+export const getLEV = () => request('/meatspace/lev');
+export const importMeatspaceTSV = (content) => request('/meatspace/import/tsv', {
+  method: 'POST',
+  body: JSON.stringify({ content })
+});
+
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
