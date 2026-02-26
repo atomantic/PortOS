@@ -43,11 +43,11 @@ Plans:
   3. Backup runs automatically on a daily schedule and can be triggered manually from the dashboard
   4. Dashboard widget displays last backup time, next scheduled time, and health status (green/yellow/red)
   5. User can restore from a named snapshot with dry-run preview, and can selectively restore individual directories
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- Backup engine, scheduler, REST routes, validation schemas, and client API functions (BAK-01, BAK-02, BAK-03)
+- [ ] 02-02-PLAN.md -- Dashboard backup widget with health status, manual trigger, snapshot list, and restore UI (BAK-04, BAK-05, BAK-06, BAK-07)
 
 ### Phase 3: Apple Health Integration
 **Goal**: Apple Health data flows into PortOS via JSON ingest and bulk XML import, with health metrics visible on the MeatSpace dashboard
