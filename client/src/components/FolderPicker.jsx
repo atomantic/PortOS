@@ -211,7 +211,7 @@ export default function FolderPicker({ value, onChange }) {
                 type="button"
                 onClick={handleSelect}
                 disabled={!currentPath || loading || !!error}
-                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Check size={18} />
                 Select This Folder

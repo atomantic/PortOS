@@ -58,8 +58,9 @@ router.get('/directories', asyncHandler(async (req, res) => {
   // On Windows, include available drive letters so users can navigate between drives
   let drives = null;
   if (platform() === 'win32') {
+    // Only check common drive letters (C-Z) to avoid slow floppy/network drives (A-B)
     drives = [];
-    for (let i = 65; i <= 90; i++) {
+    for (let i = 67; i <= 90; i++) {
       const letter = String.fromCharCode(i);
       const drivePath = `${letter}:${sep}`;
       try { if (existsSync(drivePath)) drives.push(drivePath); } catch { /* skip inaccessible drives */ }

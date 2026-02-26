@@ -38,7 +38,7 @@ module.exports = {
         HOST: '0.0.0.0'
       },
       watch: ['server'],
-      ignore_watch: ['node_modules', '*.test.js'],
+      ignore_watch: ['node_modules', '**/*.test.js'],
       max_memory_restart: '500M'
     },
     {

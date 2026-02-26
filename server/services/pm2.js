@@ -499,7 +499,9 @@ async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Ho
     console.log(`🔧 Patched ${ecosystemFile} for Windows → ${tempFile}`);
     return await spawnPm2StartEcosystem(cwd, tempFile, processNames, pm2Home);
   } finally {
-    // Await cleanup so the temp file isn't removed while PM2 may still be reading it
+    // spawnPm2StartEcosystem resolves on child 'close' (PM2 CLI has exited, config already loaded).
+    // Small delay as extra safety before removing the temp file.
+    await new Promise(r => setTimeout(r, 500));
     await unlink(tempPath).catch(() => {});
   }
 }
