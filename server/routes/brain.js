@@ -666,7 +666,7 @@ router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
     args = [link.localPath];
   }
 
-  spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+  spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   console.log(`📂 Opened folder: ${link.localPath}`);
 
   res.json({ message: 'Folder opened', path: link.localPath });

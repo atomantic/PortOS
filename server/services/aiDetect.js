@@ -124,7 +124,8 @@ async function executeCliDetection(provider, prompt, cwd) {
     const child = spawn(provider.command, args, {
       cwd,
       env: process.env,
-      shell: false
+      shell: false,
+      windowsHide: true
     });
 
     child.stdout.on('data', (data) => {

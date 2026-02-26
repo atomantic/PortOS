@@ -56,7 +56,8 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
       const child = spawn(provider.command, args, {
         env: { ...process.env, ...provider.envVars },
-        shell: false
+        shell: false,
+        windowsHide: true
       });
 
       child.stdout.on('data', (data) => {

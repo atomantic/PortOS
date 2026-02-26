@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { mkdir, writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { homedir } from 'os';
+import { homedir, platform } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
@@ -23,7 +23,7 @@ router.get('/directories', asyncHandler(async (req, res) => {
 
   // Default to parent of PortOS project if no path provided
   const defaultPath = resolve(join(__dirname, '../../..'));
-  const targetPath = dirPath ? resolve(dirPath) : defaultPath;
+  const targetPath = dirPath === '~' ? homedir() : dirPath ? resolve(dirPath) : defaultPath;
 
   // Validate path exists and is a directory
   if (!existsSync(targetPath)) {
@@ -55,10 +55,23 @@ router.get('/directories', asyncHandler(async (req, res) => {
   const parentPath = dirname(targetPath);
   const canGoUp = parentPath !== targetPath; // Can't go above root
 
+  // On Windows, include available drive letters so users can navigate between drives
+  let drives = null;
+  if (platform() === 'win32') {
+    // Only check common drive letters (C-Z) to avoid slow floppy/network drives (A-B)
+    drives = [];
+    for (let i = 67; i <= 90; i++) {
+      const letter = String.fromCharCode(i);
+      const drivePath = `${letter}:${sep}`;
+      try { if (existsSync(drivePath)) drives.push(drivePath); } catch { /* skip inaccessible drives */ }
+    }
+  }
+
   res.json({
     currentPath: targetPath,
     parentPath: canGoUp ? parentPath : null,
-    directories
+    directories,
+    ...(drives && { drives })
   });
 }));
 
@@ -238,7 +251,8 @@ async function scaffoldApp(req, res) {
     const { stderr } = await new Promise((resolve) => {
       const child = spawn('npm', ['create', 'vite@latest', dirName, '--', '--template', 'react'], {
         cwd: parentDir,
-        shell: process.platform === 'win32'
+        shell: process.platform === 'win32',
+        windowsHide: true
       });
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
@@ -1135,7 +1149,7 @@ module.exports = {
 
   // Run npm install
   const installCmd = template === 'portos-stack' ? 'npm run install:all' : 'npm install';
-  const { stderr: installErr } = await execAsync(installCmd, { cwd: repoPath })
+  const { stderr: installErr } = await execAsync(installCmd, { cwd: repoPath, windowsHide: true })
     .catch(err => ({ stderr: err.message }));
 
   if (installErr && !installErr.includes('npm warn')) {
@@ -1145,7 +1159,7 @@ module.exports = {
   }
 
   // Initialize git
-  await execAsync('git init', { cwd: repoPath });
+  await execAsync('git init', { cwd: repoPath, windowsHide: true });
 
   // Create .gitignore - more comprehensive for portos-stack
   const gitignoreContent = template === 'portos-stack'
@@ -1182,8 +1196,8 @@ Thumbs.db
     : 'node_modules\n.env\ndist\n';
 
   await writeFile(join(repoPath, '.gitignore'), gitignoreContent);
-  await execAsync('git add -A', { cwd: repoPath });
-  await execAsync('git commit -m "Initial commit"', { cwd: repoPath });
+  await execAsync('git add -A', { cwd: repoPath, windowsHide: true });
+  await execAsync('git commit -m "Initial commit"', { cwd: repoPath, windowsHide: true });
   addStep('Initialize git', 'done');
 
   // Create GitHub repo if requested
@@ -1193,7 +1207,7 @@ Thumbs.db
     const ghArgs = ['repo', 'create', repoName, '--source=.', '--push', '--private'];
 
     const { stderr: ghErr } = await new Promise((resolve) => {
-      const child = spawn('gh', ghArgs, { cwd: repoPath, shell: false });
+      const child = spawn('gh', ghArgs, { cwd: repoPath, shell: false, windowsHide: true });
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
       child.on('close', () => resolve({ stderr }));

@@ -2,11 +2,8 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { execPm2 } from './pm2.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-
-const execAsync = promisify(exec);
 
 /**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
@@ -509,9 +506,8 @@ export async function streamDetection(socket, dirPath) {
   // Step 5: Check PM2 status
   emit('pm2', 'running', { message: 'Checking PM2 processes...' });
   // Use custom PM2_HOME if detected from ecosystem config
-  const pm2Env = result.pm2Home ? { ...process.env, PM2_HOME: result.pm2Home } : process.env;
-  const pm2Cmd = 'pm2 jlist';
-  const { stdout } = await execAsync(pm2Cmd, { env: pm2Env }).catch(() => ({ stdout: '[]' }));
+  const pm2Env = result.pm2Home ? { ...process.env, PM2_HOME: result.pm2Home } : undefined;
+  const { stdout } = await execPm2(['jlist'], pm2Env ? { env: pm2Env } : {}).catch(() => ({ stdout: '[]' }));
   // pm2 jlist may output ANSI codes and warnings before JSON
   let jsonStart = stdout.indexOf('[{');
   if (jsonStart < 0) {

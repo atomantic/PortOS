@@ -200,7 +200,7 @@ After the script finishes, report the exploration summary including SIM earned a
     intervalMs: DAY,
     scheduledTime: '09:00',
     weekdaysOnly: true,
-    enabled: true,
+    enabled: false,
     priority: 'HIGH',
     autonomyLevel: 'yolo',
     promptTemplate: `[Autonomous Job] JIRA Sprint Manager
@@ -245,7 +245,7 @@ Phase 3 — Report:
     category: 'autobiography-prompt',
     interval: 'daily',
     intervalMs: DAY,
-    enabled: true,
+    enabled: false,
     priority: 'LOW',
     type: 'script',
     scriptHandler: 'autobiography-prompt',

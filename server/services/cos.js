@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, execFile } from 'child_process';
+import { execPm2 } from './pm2.js';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveProvider } from './providers.js';
@@ -30,8 +31,10 @@ export const cosEvents = _cosEvents;
 
 const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.env.PORT_UI || 5555}`;
 
-const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
+const _execAsync = promisify(exec);
+const _execFileAsync = promisify(execFile);
+const execAsync = (cmd, opts) => _execAsync(cmd, { ...opts, windowsHide: true });
+const execFileAsync = (cmd, args, opts) => _execFileAsync(cmd, args, { ...opts, windowsHide: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -287,6 +290,7 @@ const DEFAULT_CONFIG = {
   appImprovementEnabled: true,             // Deprecated: use improvementEnabled
   improvementEnabled: true,                // Allow CoS to run improvement tasks on all apps (including PortOS)
   avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil'
+  dynamicAvatar: true,                     // Avatar changes based on active agent context
   // Always-on mode settings
   alwaysOn: true,                          // CoS starts automatically and stays active
   appReviewCooldownMs: 1800000,            // 30 min between working on same app (was 1 hour)
@@ -1978,7 +1982,7 @@ export async function runHealthCheck() {
   };
 
   // Check PM2 processes
-  const pm2Result = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
+  const pm2Result = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
   // pm2 jlist may output ANSI codes and warnings before JSON, extract the JSON array
   // Look for '[{' (array with objects) or '[]' (empty array) to avoid matching ANSI codes like [31m
   const pm2Output = pm2Result.stdout || '[]';
@@ -2060,7 +2064,7 @@ export async function runHealthCheck() {
   // Get system memory
   const memCmd = process.platform === 'win32' ? 'wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /VALUE' :
     process.platform === 'darwin' ? 'vm_stat' : 'free -m';
-  const memResult = await execAsync(memCmd).catch(() => ({ stdout: '' }));
+  const memResult = await execAsync(memCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
   metrics.memory = { raw: memResult.stdout.slice(0, 500) }; // Truncate for storage
 
   // Store health check result with lock to prevent race conditions

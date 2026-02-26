@@ -361,7 +361,8 @@ router.post('/:id/open-editor', loadApp, asyncHandler(async (req, res) => {
     cwd: app.repoPath,
     detached: true,
     stdio: 'ignore',
-    shell: false  // Security: Ensure no shell interpretation
+    shell: false,  // Security: Ensure no shell interpretation
+    windowsHide: true
   });
   child.unref();
 
@@ -393,7 +394,8 @@ router.post('/:id/open-folder', loadApp, asyncHandler(async (req, res) => {
 
   const child = spawn(cmd, args, {
     detached: true,
-    stdio: 'ignore'
+    stdio: 'ignore',
+    windowsHide: true
   });
   child.unref();
 

@@ -70,7 +70,8 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   const childProcess = spawn(provider.command, args, {
     cwd: workspacePath,
-    env: { ...process.env, ...provider.envVars }
+    env: { ...process.env, ...provider.envVars },
+    windowsHide: true
   });
 
   // Pass prompt via stdin to avoid OS argv limits

@@ -30,7 +30,7 @@
     ],
     "autoStart": false,
     "selfImprovementEnabled": true,
-    "dynamicAvatar": false
+    "dynamicAvatar": true
   },
   "stats": {
     "tasksCompleted": 0,

@@ -1,13 +1,32 @@
 import express from 'express';
-import { spawn, exec as execCb } from 'child_process';
+import { spawn } from 'child_process';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { promisify } from 'util';
+import { createRequire } from 'module';
 
-const exec = promisify(execCb);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Resolve PM2 binary to avoid pm2.cmd on Windows (creates visible CMD windows)
+const require = createRequire(import.meta.url);
+const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
+
+/** Execute a PM2 CLI command via node (bypasses pm2.cmd) */
+function execPm2(pm2Args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(stderr || `pm2 exited with code ${code}`));
+      resolve({ stdout, stderr });
+    });
+    child.on('error', reject);
+  });
+}
 
 const app = express();
 const PORT = process.env.PORT || 5560;
@@ -45,7 +64,7 @@ app.get('/api/history', async (req, res) => {
 
 // API: Get PM2 status
 app.get('/api/status', async (req, res) => {
-  const { stdout } = await exec('pm2 jlist').catch(() => ({ stdout: '[]' }));
+  const { stdout } = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
   const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, '');
   const jsonStart = stripped.indexOf('[');
   const jsonEnd = stripped.lastIndexOf(']');
@@ -79,7 +98,7 @@ app.post('/api/restart/:process', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Unknown process' });
   }
   console.log(`🔄 [Autofixer UI] Restarting process: ${processName}`);
-  const { stdout, stderr } = await exec(`pm2 restart ${processName}`).catch(err => ({
+  const { stdout, stderr } = await execPm2(['restart', processName]).catch(err => ({
     stdout: '',
     stderr: err.message
   }));
@@ -98,7 +117,7 @@ app.post('/api/stop/:process', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Unknown process' });
   }
   console.log(`⏹️ [Autofixer UI] Stopping process: ${processName}`);
-  const { stdout, stderr } = await exec(`pm2 stop ${processName}`).catch(err => ({
+  const { stdout, stderr } = await execPm2(['stop', processName]).catch(err => ({
     stdout: '',
     stderr: err.message
   }));
@@ -865,14 +884,15 @@ app.get('/logs', async (req, res) => {
   req.on('close', cleanup);
   res.on('close', cleanup);
 
-  // Get initial logs
-  const initialLogsCmd = `pm2 logs ${processName} --lines 50 --nostream --raw`;
-
-  exec(initialLogsCmd, (error, stdout) => {
+  // Get initial logs via node pm2/bin/pm2 (bypasses pm2.cmd on Windows)
+  const initialChild = spawn(process.execPath, [PM2_BIN, 'logs', processName, '--lines', '50', '--nostream', '--raw'], { windowsHide: true });
+  let initialStdout = '';
+  initialChild.stdout.on('data', (d) => { initialStdout += d.toString(); });
+  initialChild.on('close', () => {
     if (res.writableEnded) return;
 
-    if (!error && stdout) {
-      const lines = stdout.split('\n').filter(line => line.trim());
+    if (initialStdout) {
+      const lines = initialStdout.split('\n').filter(line => line.trim());
       lines.forEach(line => {
         const event = {
           type: 'log',
@@ -884,8 +904,8 @@ app.get('/logs', async (req, res) => {
       });
     }
 
-    // Stream new logs
-    pm2Process = spawn('pm2', ['logs', processName, '--lines', '0', '--raw'], { shell: process.platform === 'win32' });
+    // Stream new logs via node pm2/bin/pm2 (bypasses pm2.cmd on Windows)
+    pm2Process = spawn(process.execPath, [PM2_BIN, 'logs', processName, '--lines', '0', '--raw'], { windowsHide: true });
 
     pm2Process.stdout.on('data', (data) => {
       if (res.writableEnded) {

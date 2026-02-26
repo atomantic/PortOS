@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Folder, FolderOpen, ChevronUp, X, Check } from 'lucide-react';
+import { Folder, FolderOpen, ChevronUp, HardDrive, Home, X, Check, AlertCircle } from 'lucide-react';
 import * as api from '../services/api';
 
 export default function FolderPicker({ value, onChange }) {
@@ -7,17 +7,24 @@ export default function FolderPicker({ value, onChange }) {
   const [currentPath, setCurrentPath] = useState('');
   const [parentPath, setParentPath] = useState(null);
   const [directories, setDirectories] = useState([]);
+  const [drives, setDrives] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const modalRef = useRef(null);
 
   // Load directory contents
   const loadDirectory = async (path = null) => {
     setLoading(true);
-    const result = await api.getDirectories(path).catch(() => null);
+    setError(null);
+    const result = await api.getDirectories(path).catch((err) => {
+      setError(err.message || 'Failed to load directory');
+      return null;
+    });
     if (result) {
       setCurrentPath(result.currentPath);
       setParentPath(result.parentPath);
       setDirectories(result.directories || []);
+      setDrives(result.drives ?? null);
     }
     setLoading(false);
   };
@@ -100,18 +107,60 @@ export default function FolderPicker({ value, onChange }) {
               </button>
             </div>
 
-            {/* Current Path */}
-            <div className="px-4 py-2 bg-port-bg border-b border-port-border">
-              <p className="text-sm font-mono text-gray-400 truncate" title={currentPath}>
+            {/* Current Path + Quick Nav */}
+            <div className="px-4 py-2 bg-port-bg border-b border-port-border flex items-center gap-2">
+              <p className="flex-1 text-sm font-mono text-gray-400 truncate" title={currentPath}>
                 {currentPath}
               </p>
+              {/* Home directory button */}
+              <button
+                type="button"
+                onClick={() => handleNavigate('~')}
+                className="p-1 text-gray-500 hover:text-white shrink-0"
+                title="Home directory"
+              >
+                <Home size={16} />
+              </button>
             </div>
+
+            {/* Windows Drive Selector */}
+            {drives && drives.length > 0 && (
+              <div className="px-4 py-2 border-b border-port-border flex items-center gap-1 flex-wrap">
+                <HardDrive size={14} className="text-gray-500 shrink-0 mr-1" />
+                {drives.map((drive) => (
+                  <button
+                    key={drive}
+                    type="button"
+                    onClick={() => handleNavigate(drive)}
+                    className={`px-2 py-0.5 text-xs font-mono rounded transition-colors ${
+                      currentPath.toUpperCase().startsWith(drive.charAt(0).toUpperCase())
+                        ? 'bg-port-accent text-white'
+                        : 'bg-port-border text-gray-400 hover:text-white hover:bg-port-border/80'
+                    }`}
+                  >
+                    {drive.charAt(0)}:
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Directory List */}
             <div className="flex-1 overflow-auto p-2 min-h-[300px]">
               {loading ? (
                 <div className="flex items-center justify-center h-full text-gray-500">
                   Loading...
+                </div>
+              ) : error ? (
+                <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-500 px-4">
+                  <AlertCircle size={24} className="text-port-error" />
+                  <p className="text-sm text-center">{error}</p>
+                  <button
+                    type="button"
+                    onClick={() => loadDirectory(null)}
+                    className="mt-2 text-xs text-port-accent hover:underline"
+                  >
+                    Go to default directory
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -161,7 +210,8 @@ export default function FolderPicker({ value, onChange }) {
               <button
                 type="button"
                 onClick={handleSelect}
-                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+                disabled={!currentPath || loading || !!error}
+                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Check size={18} />
                 Select This Folder

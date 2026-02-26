@@ -122,7 +122,7 @@ async function findUnixProcesses(pattern) {
   // Security: Pattern is validated above to only contain safe characters
   const cmd = `ps -ww -eo pid,ppid,%cpu,%mem,etime,command | grep -i "${safePattern}" | grep -v grep`;
 
-  const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }).catch(() => ({ stdout: '' }));
+  const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024, windowsHide: true }).catch(() => ({ stdout: '' }));
 
   const lines = result.stdout.trim().split('\n').filter(Boolean);
   const processes = [];
@@ -173,7 +173,7 @@ async function findWindowsProcesses(pattern) {
   // Security: Pattern is validated above to only contain safe characters
   const cmd = `wmic process where "name like '%${safePattern}%'" get ProcessId,ParentProcessId,PercentProcessorTime,WorkingSetSize,CreationDate,CommandLine /format:csv`;
 
-  const result = await execAsync(cmd).catch(() => ({ stdout: '' }));
+  const result = await execAsync(cmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
 
   const lines = result.stdout.trim().split('\n').filter(Boolean);
   const processes = [];
@@ -290,9 +290,9 @@ export async function killProcess(pid) {
   const platform = process.platform;
 
   if (platform === 'win32') {
-    await execAsync(`taskkill /PID ${safePid} /F`);
+    await execAsync(`taskkill /PID ${safePid} /F`, { windowsHide: true });
   } else {
-    await execAsync(`kill -9 ${safePid}`);
+    await execAsync(`kill -9 ${safePid}`, { windowsHide: true });
   }
 
   console.log(`🔪 Killed process ${safePid}`);
@@ -313,7 +313,7 @@ export async function getProcessInfo(pid) {
 
   if (platform === 'darwin' || platform === 'linux') {
     const cmd = `ps -ww -p ${safePid} -o pid,ppid,%cpu,%mem,etime,command`;
-    const result = await execAsync(cmd).catch(() => null);
+    const result = await execAsync(cmd, { windowsHide: true }).catch(() => null);
     if (!result) return null;
 
     const lines = result.stdout.trim().split('\n');

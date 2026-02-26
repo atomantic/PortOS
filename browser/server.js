@@ -69,7 +69,7 @@ async function launchBrowser() {
 
   console.log(`🌐 Launching Chrome (headless=${headlessMode}, profile=${profileDir}) CDP on ${CDP_HOST}:${CDP_PORT}`);
 
-  chromeProcess = spawn(chromePath, args, { stdio: 'ignore' });
+  chromeProcess = spawn(chromePath, args, { stdio: 'ignore', windowsHide: true });
 
   chromeProcess.on('exit', (code) => {
     console.log(`⚠️ Chrome exited with code ${code}`);

@@ -4,6 +4,7 @@ import { readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { execPm2 } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
@@ -137,7 +138,7 @@ router.post('/port', asyncHandler(async (req, res) => {
     ? `lsof -i :${port} -P -n | grep LISTEN`
     : `ss -lntp | grep :${port}`;
 
-  const { stdout } = await execAsync(command).catch(() => ({ stdout: '' }));
+  const { stdout } = await execAsync(command, { windowsHide: true }).catch(() => ({ stdout: '' }));
 
   if (stdout.trim()) {
     result.inUse = true;
@@ -166,7 +167,7 @@ router.post('/pm2', asyncHandler(async (req, res) => {
     throw new ServerError('Process name is required', { status: 400, code: 'MISSING_NAME' });
   }
 
-  const { stdout } = await execAsync('pm2 jlist').catch(() => ({ stdout: '[]' }));
+  const { stdout } = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
   const processes = safeJSONParse(stdout, []);
   const found = processes.find(p => p.name === name);
 

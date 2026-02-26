@@ -313,7 +313,7 @@ function checkForTaskCommit(taskId, workspacePath = ROOT_DIR) {
   try {
     const searchPattern = `[task-${taskId}]`;
     const result = execSync(`git log --all --oneline --grep="${searchPattern}" -1`, {
-      cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe']
+      cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true
     }).trim();
     return result.length > 0;
   } catch {
@@ -1389,7 +1389,7 @@ export async function spawnAgentForTask(task) {
         if (defaultBranch) {
           await git.checkout(workspacePath, defaultBranch).catch(() => {});
           // Fast-forward to latest origin
-          try { execSync(`git merge --ff-only origin/${defaultBranch}`, { cwd: workspacePath, stdio: 'ignore' }); } catch (err) { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); }
+          try { execSync(`git merge --ff-only origin/${defaultBranch}`, { cwd: workspacePath, stdio: 'ignore', windowsHide: true }); } catch (err) { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); }
         }
       }
 
@@ -1882,6 +1882,7 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
     env: {
       ...process.env,
       ...provider.envVars
@@ -2890,7 +2891,7 @@ export async function getAgentProcessStats(agentId) {
   const psCmd = process.platform === 'win32'
     ? `tasklist /FI "PID eq ${agent.pid}" /FO CSV /NH`
     : `ps -p ${agent.pid} -o pid=,pcpu=,rss=,state=`;
-  const result = await execAsync(psCmd).catch(() => ({ stdout: '' }));
+  const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
   const line = result.stdout.trim();
 
   if (!line) {

@@ -306,7 +306,7 @@ async function getProcessStats(pid) {
   const psCmd = process.platform === 'win32'
     ? `tasklist /FI "PID eq ${safePid}" /FO CSV /NH`
     : `ps -p ${safePid} -o pid=,pcpu=,rss=,state=`;
-  const result = await execAsync(psCmd).catch(() => ({ stdout: '' }));
+  const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
   const line = result.stdout.trim();
 
   if (!line) {
@@ -434,7 +434,8 @@ app.post('/spawn', async (req, res) => {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...envVars }
+    env: { ...process.env, ...envVars },
+    windowsHide: true
   });
 
   // Detect if stream-json format is active (Claude CLI with streaming)
@@ -711,7 +712,8 @@ app.post('/run', async (req, res) => {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...envVars }
+    env: { ...process.env, ...envVars },
+    windowsHide: true
   });
 
   const startTime = Date.now();
@@ -939,7 +941,7 @@ async function checkProcessRunning(pid) {
   const { promisify } = await import('util');
   const execAsync = promisify(exec);
 
-  const result = await execAsync(`ps -p ${safePid} -o pid=`).catch(() => ({ stdout: '' }));
+  const result = await execAsync(`ps -p ${safePid} -o pid=`, { windowsHide: true }).catch(() => ({ stdout: '' }));
   return result.stdout.trim() !== '';
 }
 

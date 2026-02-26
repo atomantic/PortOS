@@ -328,7 +328,8 @@ async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_
     const child = spawn(provider.command, args, {
       env: { ...process.env, ...provider.envVars },
       shell: false,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true
     });
 
     // Pipe prompt via stdin

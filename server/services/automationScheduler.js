@@ -132,7 +132,7 @@ export async function createSchedule(scheduleData) {
       randomWindow: scheduleData.schedule.randomWindow
     },
     rateLimit: scheduleData.rateLimit || {},
-    enabled: scheduleData.enabled !== false,
+    enabled: scheduleData.enabled === true,
     lastRun: null,
     runCount: 0,
     createdAt: now,

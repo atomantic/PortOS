@@ -15,7 +15,7 @@ import { join } from 'path';
  */
 function execGit(args, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd, shell: false });
+    const child = spawn('git', args, { cwd, shell: false, windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', d => { stdout += d.toString(); });

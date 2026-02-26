@@ -15,7 +15,8 @@ function execGit(args, cwd, options = {}) {
     const child = spawn('git', args, {
       cwd,
       shell: false,
-      maxBuffer: options.maxBuffer || 10 * 1024 * 1024
+      maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
+      windowsHide: true
     });
 
     let stdout = '';
@@ -341,7 +342,7 @@ export async function checkout(dir, branchName) {
 export async function createPR(dir, { title, body, base, head }) {
   return new Promise((resolve) => {
     const args = ['pr', 'create', '--title', title, '--body', body || '', '--base', base, '--head', head];
-    const child = spawn('gh', args, { cwd: dir, shell: false });
+    const child = spawn('gh', args, { cwd: dir, shell: false, windowsHide: true });
 
     let stdout = '';
     let stderr = '';

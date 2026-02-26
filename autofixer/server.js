@@ -2,13 +2,30 @@ import { spawn } from 'child_process';
 import { readFile, writeFile, mkdir, access } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { promisify } from 'util';
-import { execFile as execFileCb } from 'child_process';
+import { createRequire } from 'module';
 
-const IS_WIN = process.platform === 'win32';
-const execFileAsync = (cmd, args, opts = {}) => promisify(execFileCb)(cmd, args, { shell: IS_WIN, ...opts });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Resolve PM2 binary to avoid pm2.cmd on Windows (creates visible CMD windows)
+const require = createRequire(import.meta.url);
+const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
+
+/** Execute a PM2 CLI command via node (bypasses pm2.cmd) */
+function execPm2(pm2Args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(stderr || `pm2 exited with code ${code}`));
+      resolve({ stdout, stderr });
+    });
+    child.on('error', reject);
+  });
+}
 
 // Paths
 const DATA_DIR = join(__dirname, '../data');
@@ -99,7 +116,7 @@ async function saveSession(sessionId, prompt, output, metadata) {
 
 // Get PM2 process list
 async function getProcessList() {
-  const { stdout } = await execFileAsync('pm2', ['jlist']);
+  const { stdout } = await execPm2(['jlist']);
   const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, '');
   const jsonStart = stripped.indexOf('[{');
   const jsonEnd = stripped.lastIndexOf('}]');
@@ -114,8 +131,8 @@ async function getProcessList() {
 
 // Get error logs for a process
 async function getProcessLogs(processName) {
-  const { stdout: errLogs } = await execFileAsync('pm2', ['logs', processName, '--lines', '100', '--nostream', '--err']).catch(() => ({ stdout: '' }));
-  const { stdout: outLogs } = await execFileAsync('pm2', ['logs', processName, '--lines', '50', '--nostream', '--out']).catch(() => ({ stdout: '' }));
+  const { stdout: errLogs } = await execPm2(['logs', processName, '--lines', '100', '--nostream', '--err']).catch(() => ({ stdout: '' }));
+  const { stdout: outLogs } = await execPm2(['logs', processName, '--lines', '50', '--nostream', '--out']).catch(() => ({ stdout: '' }));
   return { errLogs, outLogs };
 }
 
@@ -174,7 +191,8 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
     const child = spawn('claude', ['-p', prompt], {
       cwd: app.repoPath,
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false
+      shell: false,
+      windowsHide: true
     });
 
     child.stdout.on('data', (data) => {

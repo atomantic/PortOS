@@ -508,19 +508,19 @@ IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev bran
 
 // Unified default interval settings for all 14 task types
 const DEFAULT_TASK_INTERVALS = {
-  'security':            { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'code-quality':        { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'test-coverage':       { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'performance':         { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'accessibility':       { type: INTERVAL_TYPES.ONCE, enabled: true, providerId: null, model: null, prompt: null },
-  'console-errors':      { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'dependency-updates':  { type: INTERVAL_TYPES.WEEKLY, enabled: true, providerId: null, model: null, prompt: null },
-  'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: true, providerId: null, model: null, prompt: null },
-  'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
-  'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
-  'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: true, providerId: null, model: null, prompt: null },
-  'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null, prompt: null },
-  'typing':              { type: INTERVAL_TYPES.ONCE, enabled: true, providerId: null, model: null, prompt: null },
+  'security':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'code-quality':        { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'test-coverage':       { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'performance':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'accessibility':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
+  'console-errors':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'dependency-updates':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
+  'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
+  'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
+  'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null },
+  'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
+  'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null }
 };
 
@@ -693,14 +693,14 @@ async function saveSchedule(schedule) {
 
 export async function getTaskInterval(taskType) {
   const schedule = await loadSchedule();
-  return schedule.tasks[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null };
+  return schedule.tasks[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null };
 }
 
 export async function updateTaskInterval(taskType, settings) {
   const schedule = await loadSchedule();
 
   if (!schedule.tasks[taskType]) {
-    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: true, providerId: null, model: null };
+    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null };
   }
 
   schedule.tasks[taskType] = {

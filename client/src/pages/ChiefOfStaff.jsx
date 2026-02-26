@@ -384,7 +384,7 @@ export default function ChiefOfStaff() {
         <>
           {/* Desktop: collapsed strip or full panel */}
           {desktopPanelCollapsed ? (
-            <div className="hidden lg:flex flex-col items-center py-4 border-r border-indigo-500/20 bg-slate-900/60">
+            <div className="hidden lg:flex flex-col items-center py-4 border-r border-indigo-500/20 bg-slate-900/60 overflow-hidden">
               <button
                 onClick={toggleDesktopPanel}
                 className="p-2 text-gray-400 hover:text-white transition-colors"
@@ -393,7 +393,6 @@ export default function ChiefOfStaff() {
               >
                 <PanelLeftOpen size={18} />
               </button>
-              <StatusIndicator running={status?.running} />
             </div>
           ) : (
             <div className="hidden lg:block relative">
@@ -436,7 +435,7 @@ export default function ChiefOfStaff() {
       ) : desktopPanelCollapsed ? (
         /* Collapsed SVG strip - desktop only, mobile shows nothing */
         <>
-          <div className="hidden lg:flex flex-col items-center gap-3 py-4 border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
+          <div className="hidden lg:flex flex-col items-center gap-3 py-4 border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 overflow-hidden">
             <button
               onClick={toggleDesktopPanel}
               className="p-2 text-gray-400 hover:text-white transition-colors"
@@ -445,8 +444,6 @@ export default function ChiefOfStaff() {
             >
               <PanelLeftOpen size={18} />
             </button>
-            <StatusIndicator running={status?.running} />
-            <StateLabel state={agentState} compact />
           </div>
           {/* Mobile: still show the compact header */}
           <div className="lg:hidden border-b border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
