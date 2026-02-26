@@ -34,10 +34,10 @@ Requirements for this milestone batch. Each maps to roadmap phases.
 
 ### Cross-Insights
 
-- [ ] **INS-01**: Rule-based genome-to-health correlations using curated 117 markers against actual blood/body data
-- [ ] **INS-02**: LLM-generated taste-to-identity theme analysis connecting preferences to identity patterns
+- [x] **INS-01**: Rule-based genome-to-health correlations using curated 117 markers against actual blood/body data
+- [x] **INS-02**: LLM-generated taste-to-identity theme analysis connecting preferences to identity patterns
 - [ ] **INS-03**: Insights dashboard UI with confidence levels, source attribution, and domain grouping
-- [ ] **INS-04**: LLM narrative summaries of cross-domain patterns refreshable on demand
+- [x] **INS-04**: LLM narrative summaries of cross-domain patterns refreshable on demand
 
 ### Unified Search
 
@@ -105,10 +105,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HLT-04 | Phase 3 | Complete |
 | HLT-05 | Phase 3 | Complete |
 | HLT-06 | Phase 3 | Complete |
-| INS-01 | Phase 4 | Pending |
-| INS-02 | Phase 4 | Pending |
+| INS-01 | Phase 4 | Complete |
+| INS-02 | Phase 4 | Complete |
 | INS-03 | Phase 4 | Pending |
-| INS-04 | Phase 4 | Pending |
+| INS-04 | Phase 4 | Complete |
 | SRC-01 | Phase 5 | Pending |
 | SRC-02 | Phase 5 | Pending |
 | SRC-03 | Phase 5 | Pending |
