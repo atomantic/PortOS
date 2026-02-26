@@ -1228,6 +1228,37 @@ export const deleteEpigeneticIntervention = (id) => request(`/digital-twin/genom
   method: 'DELETE'
 });
 
+// Digital Twin - Identity
+export const getIdentityStatus = () => request('/digital-twin/identity');
+export const getChronotype = () => request('/digital-twin/identity/chronotype');
+export const deriveChronotype = () => request('/digital-twin/identity/chronotype/derive', { method: 'POST' });
+export const updateChronotypeBehavioral = (data) => request('/digital-twin/identity/chronotype', {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const getLongevity = () => request('/digital-twin/identity/longevity');
+export const deriveLongevity = () => request('/digital-twin/identity/longevity/derive', { method: 'POST' });
+export const getGoals = () => request('/digital-twin/identity/goals');
+export const setBirthDate = (birthDate) => request('/digital-twin/identity/goals/birth-date', {
+  method: 'PUT',
+  body: JSON.stringify({ birthDate })
+});
+export const createGoal = (data) => request('/digital-twin/identity/goals', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateGoal = (id, data) => request(`/digital-twin/identity/goals/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteGoal = (id) => request(`/digital-twin/identity/goals/${id}`, { method: 'DELETE' });
+export const addGoalMilestone = (goalId, data) => request(`/digital-twin/identity/goals/${goalId}/milestones`, {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const completeGoalMilestone = (goalId, milestoneId) =>
+  request(`/digital-twin/identity/goals/${goalId}/milestones/${milestoneId}/complete`, { method: 'PUT' });
+
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);

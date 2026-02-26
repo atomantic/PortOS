@@ -7,6 +7,8 @@ import { getTasteProfile } from './taste-questionnaire.js';
 const IDENTITY_DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(IDENTITY_DIR, 'identity.json');
 const CHRONOTYPE_FILE = join(IDENTITY_DIR, 'chronotype.json');
+const LONGEVITY_FILE = join(IDENTITY_DIR, 'longevity.json');
+const GOALS_FILE = join(IDENTITY_DIR, 'goals.json');
 
 // === Marker Definitions ===
 
@@ -68,12 +70,41 @@ const SCHEDULE_TEMPLATES = {
   }
 };
 
+// === Longevity & Cardiovascular Marker Definitions ===
+
+const LONGEVITY_MARKERS = {
+  rs2802292: { name: 'foxo3a', gene: 'FOXO3A', weight: 0.25, label: 'Longevity / FOXO3A' },
+  rs2229765: { name: 'igf1r', gene: 'IGF1R', weight: 0.20, label: 'Growth Factor Receptor' },
+  rs5882: { name: 'cetp', gene: 'CETP', weight: 0.20, label: 'HDL Cholesterol' },
+  rs12366: { name: 'ipmk', gene: 'IPMK', weight: 0.15, label: 'Nutrient Sensing' },
+  rs10936599: { name: 'terc', gene: 'TERC', weight: 0.20, label: 'Telomere Length' }
+};
+
+const CARDIOVASCULAR_MARKERS = {
+  rs6025: { name: 'factorV', gene: 'F5', weight: 0.20, label: 'Factor V Leiden' },
+  rs1333049: { name: 'cad9p21', gene: '9p21.3', weight: 0.20, label: 'Coronary Artery Disease' },
+  rs10455872: { name: 'lpa', gene: 'LPA', weight: 0.15, label: 'Lipoprotein(a)' },
+  rs1799963: { name: 'prothrombin', gene: 'F2', weight: 0.15, label: 'Prothrombin Thrombophilia' },
+  rs1800795: { name: 'il6', gene: 'IL-6', weight: 0.15, label: 'Inflammation / IL-6' },
+  rs1800629: { name: 'tnfa', gene: 'TNF-alpha', weight: 0.15, label: 'Inflammation / TNF-alpha' }
+};
+
+// Longevity signal: beneficial = +1 (lifespan bonus), concern = -1 (lifespan penalty)
+const LONGEVITY_SIGNAL = { beneficial: 1, typical: 0, concern: -1 };
+
+// Cardiovascular risk: concern = +1 (adds risk), beneficial = -1 (reduces risk)
+const CARDIO_SIGNAL = { beneficial: -1, typical: 0, concern: 1, major_concern: 1.5 };
+
+// US Social Security Administration actuarial baseline by decade (average M/F)
+const SSA_BASELINE_LIFE_EXPECTANCY = 78.5;
+
 // === Default Data Structures ===
 
 const DEFAULT_IDENTITY = {
   sections: {
     genome: { status: 'unavailable', label: 'Genome', updatedAt: null },
     chronotype: { status: 'unavailable', label: 'Chronotype', updatedAt: null },
+    longevity: { status: 'unavailable', label: 'Longevity', updatedAt: null },
     aesthetics: { status: 'unavailable', label: 'Aesthetics', updatedAt: null },
     goals: { status: 'unavailable', label: 'Goals', updatedAt: null }
   },
@@ -88,6 +119,29 @@ const DEFAULT_CHRONOTYPE = {
   behavioralData: null,
   recommendations: null,
   derivedAt: null
+};
+
+const DEFAULT_LONGEVITY = {
+  longevityMarkers: {},
+  cardiovascularMarkers: {},
+  longevityScore: 0,
+  cardiovascularRisk: 0,
+  lifeExpectancy: {
+    baseline: SSA_BASELINE_LIFE_EXPECTANCY,
+    adjusted: null,
+    longevityAdjustment: 0,
+    cardiovascularAdjustment: 0
+  },
+  confidence: 0,
+  derivedAt: null
+};
+
+const DEFAULT_GOALS = {
+  birthDate: null,
+  lifeExpectancy: null,
+  timeHorizons: null,
+  goals: [],
+  updatedAt: null
 };
 
 // === File I/O ===
@@ -146,6 +200,145 @@ export function extractCaffeineMarkers(savedMarkers) {
   }
 
   return results;
+}
+
+export function extractLongevityMarkers(savedMarkers) {
+  const results = {};
+  const markerValues = Object.values(savedMarkers || {});
+
+  for (const [rsid, def] of Object.entries(LONGEVITY_MARKERS)) {
+    const found = markerValues.find(m => m.rsid === rsid);
+    if (found) {
+      const signal = LONGEVITY_SIGNAL[found.status] ?? 0;
+      results[def.name] = {
+        rsid,
+        gene: def.gene,
+        label: def.label,
+        genotype: found.genotype,
+        status: found.status,
+        weight: def.weight,
+        signal
+      };
+    }
+  }
+
+  return results;
+}
+
+export function extractCardiovascularMarkers(savedMarkers) {
+  const results = {};
+  const markerValues = Object.values(savedMarkers || {});
+
+  for (const [rsid, def] of Object.entries(CARDIOVASCULAR_MARKERS)) {
+    const found = markerValues.find(m => m.rsid === rsid);
+    if (found) {
+      const signal = CARDIO_SIGNAL[found.status] ?? 0;
+      results[def.name] = {
+        rsid,
+        gene: def.gene,
+        label: def.label,
+        genotype: found.genotype,
+        status: found.status,
+        weight: def.weight,
+        signal
+      };
+    }
+  }
+
+  return results;
+}
+
+export function computeLifeExpectancy(longevityMarkers, cardiovascularMarkers, birthDate) {
+  // Longevity score: weighted average of signals (+1 beneficial, -1 concern)
+  let longevityScore = 0;
+  let longevityWeight = 0;
+  for (const marker of Object.values(longevityMarkers)) {
+    longevityScore += marker.signal * marker.weight;
+    longevityWeight += marker.weight;
+  }
+  if (longevityWeight > 0) longevityScore /= longevityWeight;
+
+  // Cardiovascular risk: weighted average of signals (+1 concern adds risk)
+  let cardioRisk = 0;
+  let cardioWeight = 0;
+  for (const marker of Object.values(cardiovascularMarkers)) {
+    cardioRisk += marker.signal * marker.weight;
+    cardioWeight += marker.weight;
+  }
+  if (cardioWeight > 0) cardioRisk /= cardioWeight;
+
+  // Longevity adjustment: max ±5 years from favorable/unfavorable longevity markers
+  const longevityAdjustment = Math.round(longevityScore * 5 * 100) / 100 || 0;
+
+  // Cardiovascular adjustment: max ±4 years from cardio risk markers
+  const cardiovascularAdjustment = Math.round(-cardioRisk * 4 * 100) / 100 || 0;
+
+  const adjusted = Math.round((SSA_BASELINE_LIFE_EXPECTANCY + longevityAdjustment + cardiovascularAdjustment) * 10) / 10;
+
+  // Confidence based on marker coverage
+  const longevityCount = Object.keys(longevityMarkers).length;
+  const cardioCount = Object.keys(cardiovascularMarkers).length;
+  const maxLongevity = Object.keys(LONGEVITY_MARKERS).length;
+  const maxCardio = Object.keys(CARDIOVASCULAR_MARKERS).length;
+  const coverage = (longevityCount + cardioCount) / (maxLongevity + maxCardio);
+  const confidence = Math.round(Math.min(1, coverage) * 100) / 100;
+
+  // Time horizons if birth date provided
+  let timeHorizons = null;
+  if (birthDate) {
+    const birth = new Date(birthDate);
+    const now = new Date();
+    const ageYears = (now - birth) / (365.25 * 24 * 60 * 60 * 1000);
+    const yearsRemaining = Math.max(0, Math.round((adjusted - ageYears) * 10) / 10);
+    // Healthy years: estimate ~85% of remaining years are active/healthy
+    const healthyYearsRemaining = Math.round(yearsRemaining * 0.85 * 10) / 10;
+    const percentLifeComplete = Math.round((ageYears / adjusted) * 1000) / 10;
+
+    timeHorizons = {
+      ageYears: Math.round(ageYears * 10) / 10,
+      yearsRemaining,
+      healthyYearsRemaining,
+      percentLifeComplete: Math.min(100, percentLifeComplete)
+    };
+  }
+
+  return {
+    longevityScore: Math.round(longevityScore * 1000) / 1000,
+    cardiovascularRisk: Math.round(cardioRisk * 1000) / 1000,
+    lifeExpectancy: {
+      baseline: SSA_BASELINE_LIFE_EXPECTANCY,
+      adjusted,
+      longevityAdjustment,
+      cardiovascularAdjustment
+    },
+    timeHorizons,
+    confidence
+  };
+}
+
+export function computeGoalUrgency(goal, timeHorizons) {
+  if (!timeHorizons || !goal.horizon) return null;
+
+  const horizonMap = {
+    '1-year': 1,
+    '3-year': 3,
+    '5-year': 5,
+    '10-year': 10,
+    '20-year': 20,
+    'lifetime': timeHorizons.yearsRemaining
+  };
+
+  const horizonYears = horizonMap[goal.horizon] ?? 5;
+  const yearsRemaining = timeHorizons.yearsRemaining;
+
+  // Urgency: higher when horizon approaches or exceeds remaining years
+  // 0 = plenty of time, 1 = urgent
+  const rawUrgency = 1 - Math.min(1, yearsRemaining / (horizonYears * 2));
+  // Boost urgency for goals whose horizon exceeds remaining healthy years
+  const healthPressure = horizonYears > timeHorizons.healthyYearsRemaining ? 0.2 : 0;
+  const urgency = Math.min(1, Math.round((rawUrgency + healthPressure) * 100) / 100);
+
+  return urgency;
 }
 
 export function computeChronotype(geneticMarkers, behavioralData) {
@@ -302,6 +495,27 @@ export async function getIdentityStatus() {
     };
   }
 
+  // Check longevity status
+  const longevity = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
+  if (longevity.derivedAt) {
+    const markerCount = Object.keys(longevity.longevityMarkers).length +
+      Object.keys(longevity.cardiovascularMarkers).length;
+    identity.sections.longevity = {
+      status: 'active',
+      label: 'Longevity',
+      markerCount,
+      adjustedLifeExpectancy: longevity.lifeExpectancy?.adjusted,
+      confidence: longevity.confidence,
+      updatedAt: longevity.derivedAt
+    };
+  } else {
+    identity.sections.longevity = {
+      status: genomeSummary?.uploaded ? 'pending' : 'unavailable',
+      label: 'Longevity',
+      updatedAt: null
+    };
+  }
+
   // Check aesthetics (taste profile) status
   const tasteProfile = await getTasteProfile();
   if (tasteProfile?.completedCount > 0) {
@@ -316,14 +530,27 @@ export async function getIdentityStatus() {
     identity.sections.aesthetics = { status: 'unavailable', label: 'Aesthetics', updatedAt: null };
   }
 
-  // Goals status — check if GOALS.md exists
-  const goalsPath = join(PATHS.root, 'GOALS.md');
-  const goalsExist = await readFile(goalsPath, 'utf-8').catch(() => null);
-  identity.sections.goals = {
-    status: goalsExist ? 'active' : 'unavailable',
-    label: 'Goals',
-    updatedAt: goalsExist ? new Date().toISOString() : null
-  };
+  // Goals status — check goals.json for user-defined goals
+  const goalsData = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const activeGoals = goalsData.goals?.filter(g => g.status === 'active') || [];
+  if (activeGoals.length > 0) {
+    identity.sections.goals = {
+      status: 'active',
+      label: 'Goals',
+      goalCount: activeGoals.length,
+      hasBirthDate: !!goalsData.birthDate,
+      updatedAt: goalsData.updatedAt
+    };
+  } else if (goalsData.birthDate) {
+    identity.sections.goals = {
+      status: 'pending',
+      label: 'Goals',
+      hasBirthDate: true,
+      updatedAt: goalsData.updatedAt
+    };
+  } else {
+    identity.sections.goals = { status: 'unavailable', label: 'Goals', updatedAt: null };
+  }
 
   identity.updatedAt = new Date().toISOString();
   await saveJSON(IDENTITY_FILE, identity);
@@ -379,4 +606,174 @@ export async function updateChronotypeBehavioral(overrides) {
   await saveJSON(CHRONOTYPE_FILE, existing);
 
   return deriveChronotype();
+}
+
+// === Longevity Service Functions ===
+
+export async function getLongevity() {
+  const existing = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
+  if (existing.derivedAt) return existing;
+  return deriveLongevity();
+}
+
+export async function deriveLongevity(birthDate) {
+  const genomeSummary = await getGenomeSummary();
+  const savedMarkers = genomeSummary?.savedMarkers || {};
+
+  const longevityMarkers = extractLongevityMarkers(savedMarkers);
+  const cardiovascularMarkers = extractCardiovascularMarkers(savedMarkers);
+
+  // Use provided birthDate or fall back to stored goals birthDate
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const effectiveBirthDate = birthDate || goals.birthDate || null;
+
+  const { longevityScore, cardiovascularRisk, lifeExpectancy, timeHorizons, confidence } =
+    computeLifeExpectancy(longevityMarkers, cardiovascularMarkers, effectiveBirthDate);
+
+  const longevity = {
+    longevityMarkers,
+    cardiovascularMarkers,
+    longevityScore,
+    cardiovascularRisk,
+    lifeExpectancy,
+    timeHorizons,
+    confidence,
+    derivedAt: new Date().toISOString()
+  };
+
+  await saveJSON(LONGEVITY_FILE, longevity);
+  const markerCount = Object.keys(longevityMarkers).length + Object.keys(cardiovascularMarkers).length;
+  console.log(`🧬 Longevity derived: ${lifeExpectancy.adjusted}y (${markerCount} markers, confidence: ${confidence})`);
+
+  return longevity;
+}
+
+// === Goal Service Functions ===
+
+export async function getGoals() {
+  return loadJSON(GOALS_FILE, DEFAULT_GOALS);
+}
+
+export async function setBirthDate(birthDate) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  goals.birthDate = birthDate;
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+
+  // Re-derive longevity with new birth date
+  const longevity = await deriveLongevity(birthDate);
+
+  // Recalculate urgency for all active goals
+  if (longevity.timeHorizons) {
+    for (const goal of goals.goals) {
+      if (goal.status === 'active') {
+        goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+      }
+    }
+    goals.lifeExpectancy = longevity.lifeExpectancy;
+    goals.timeHorizons = longevity.timeHorizons;
+    await saveJSON(GOALS_FILE, goals);
+  }
+
+  return goals;
+}
+
+export async function createGoal({ title, description, horizon, category }) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const longevity = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
+
+  const id = `goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const goal = {
+    id,
+    title,
+    description: description || '',
+    horizon: horizon || '5-year',
+    category: category || 'mastery',
+    urgency: null,
+    status: 'active',
+    milestones: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  // Calculate urgency if time horizons available
+  if (longevity.timeHorizons) {
+    goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+  }
+
+  goals.goals.push(goal);
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+
+  console.log(`🎯 Goal created: "${title}" (${horizon}, urgency: ${goal.urgency ?? 'n/a'})`);
+  return goal;
+}
+
+export async function updateGoal(goalId, updates) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const idx = goals.goals.findIndex(g => g.id === goalId);
+  if (idx === -1) return null;
+
+  const goal = goals.goals[idx];
+  const allowed = ['title', 'description', 'horizon', 'category', 'status'];
+  for (const key of allowed) {
+    if (updates[key] !== undefined) goal[key] = updates[key];
+  }
+  goal.updatedAt = new Date().toISOString();
+
+  // Recalculate urgency if horizon changed
+  const longevity = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
+  if (longevity.timeHorizons) {
+    goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+  }
+
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+  return goal;
+}
+
+export async function deleteGoal(goalId) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const idx = goals.goals.findIndex(g => g.id === goalId);
+  if (idx === -1) return false;
+
+  goals.goals.splice(idx, 1);
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+  return true;
+}
+
+export async function addMilestone(goalId, { title, targetDate }) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goal = goals.goals.find(g => g.id === goalId);
+  if (!goal) return null;
+
+  const milestone = {
+    id: `ms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    title,
+    targetDate: targetDate || null,
+    completedAt: null,
+    createdAt: new Date().toISOString()
+  };
+
+  goal.milestones.push(milestone);
+  goal.updatedAt = new Date().toISOString();
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+  return milestone;
+}
+
+export async function completeMilestone(goalId, milestoneId) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goal = goals.goals.find(g => g.id === goalId);
+  if (!goal) return null;
+
+  const milestone = goal.milestones.find(m => m.id === milestoneId);
+  if (!milestone) return null;
+
+  milestone.completedAt = new Date().toISOString();
+  goal.updatedAt = new Date().toISOString();
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+  return milestone;
 }

@@ -25,7 +25,8 @@ import {
   Fingerprint,
   Globe,
   Dna,
-  PenLine
+  PenLine,
+  Target
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -37,6 +38,7 @@ export const TABS = [
   { id: 'taste', label: 'Taste', icon: Palette },
   { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'genome', label: 'Genome', icon: Dna },
+  { id: 'goals', label: 'Goals', icon: Target },
   { id: 'interview', label: 'Interview', icon: MessageSquare },
   { id: 'autobiography', label: 'Autobiography', icon: PenLine },
   { id: 'import', label: 'Import', icon: Upload },
