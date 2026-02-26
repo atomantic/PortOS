@@ -16,6 +16,7 @@ import Uploads from './pages/Uploads';
 import Shell from './pages/Shell';
 import BrowserPage from './pages/Browser';
 import Jira from './pages/Jira';
+import Insights from './pages/Insights';
 import Instances from './pages/Instances';
 import MeatSpace from './pages/MeatSpace';
 
@@ -67,6 +68,8 @@ export default function App() {
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
+          <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
+          <Route path="insights/:tab" element={<Insights />} />
           <Route path="instances" element={<Instances />} />
           <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
           <Route path="meatspace/:tab" element={<MeatSpace />} />

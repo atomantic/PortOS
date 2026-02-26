@@ -47,7 +47,8 @@ import {
   Flame,
   Skull,
   HeartPulse,
-  ClipboardList
+  ClipboardList,
+  Lightbulb
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -124,6 +125,7 @@ const navItems = [
       { to: '/digital-twin/test', label: 'Test', icon: CheckCircle }
     ]
   },
+  { to: '/insights/overview', label: 'Insights', icon: Lightbulb, single: true },
   { to: '/instances', label: 'Instances', icon: Network, single: true },
   {
     label: 'MeatSpace',
@@ -525,6 +527,7 @@ export default function Layout() {
           const isFullWidth = location.pathname.startsWith('/cos') ||
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
+            location.pathname.startsWith('/insights') ||
             location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||
