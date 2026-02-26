@@ -70,16 +70,23 @@ pm2 logs
 - [x] **M39**: Agent-Centric Drill-Down - Redesigned Agents section with agent-first hierarchy, deep-linkable URLs, and scoped sub-tabs
 - [x] **M40**: Agent Skill System - Task-type-specific prompts, context compaction, negative routing examples, deterministic workflow skills. See [Agent Skills](./docs/features/agent-skills.md)
 - [x] **M41**: CyberCity Immersive Overhaul - Procedural synthwave audio, enhanced post-processing, reflective wet-street ground, settings system
+- [x] **M42 P1-P3**: Unified Digital Twin Identity System - Identity orchestrator, chronotype derivation, personalized taste prompting, behavioral feedback loop, mortality-aware goal tracking
+- [x] **M42 P4**: Unified Digital Twin Identity System - Identity Tab UI dashboard with completeness header, 5 summary cards, derive actions
 - [x] **M43**: Moltworld Platform Support - Second platform integration for AI agents in a shared voxel world
+- [x] **M44 P1-P5**: MeatSpace - Health tracker with death clock, LEV 2045 tracker, alcohol logging, blood/body/epigenetic/eye tracking, lifestyle questionnaire, TSV import, dashboard widget, compact grid overview
+
+### In Progress
+
+- [ ] **M44 P6**: MeatSpace - Genome/Epigenetic Migration cleanup (genome routes moved, but route comments still reference `/api/digital-twin/genome/` and IdentityTab still renders a Genome card with broken link to `/digital-twin/genome`)
 
 ### Planned
 
 - [ ] **M34 P5-P7**: Digital Twin - Multi-modal capture, advanced testing, personas
-- [x] **M42 P4**: Unified Digital Twin Identity System - Identity Tab UI dashboard with completeness header, 5 summary cards, derive actions
 - [ ] **M42 P5**: Unified Digital Twin Identity System - Cross-Insights Engine. See [Identity System](./docs/features/identity-system.md)
-- [x] **M44 P1-P5**: MeatSpace - Health tracker with death clock, LEV 2045 tracker, alcohol logging, blood/body/epigenetic tracking, lifestyle questionnaire, TSV import, dashboard widget, compact grid overview
-- [ ] **M44 P6**: MeatSpace - Genome/Epigenetic Migration from Digital Twin to MeatSpace
 - [ ] **M44 P7**: MeatSpace - Apple Health Integration (live sync via Health Auto Export app + bulk XML import)
+- [ ] **M45**: Data Backup & Recovery - Scheduled backup of `./data/` to external drive or NAS. All persistence is JSON files with zero redundancy — one bad write or disk failure loses brain, identity, health, and memory data. Incremental backup with restore verification.
+- [ ] **M46**: Unified Search (Cmd+K) - Global search across brain, memory, history, agents, tasks, and apps. Hybrid vector + BM25 extended to all data sources. Keyboard-driven launcher overlay.
+- [ ] **M47**: Push Notifications - Webhook-based alerts when agents complete tasks, critical errors occur, or goals stall. Discord/Telegram integration for mobile awareness without needing the dashboard open.
 
 ---
 
@@ -111,12 +118,87 @@ Bring Apple Health data into MeatSpace via two complementary paths: live sync fr
 
 *Touches: server/routes/health.js, server/services/healthIngest.js, MeatSpace UI, data/health/*
 
+### M45: Data Backup & Recovery
+
+All PortOS data lives in `./data/` as JSON files with no redundancy. A corrupted write, accidental deletion, or disk failure loses everything — brain captures, digital identity, health records, memory embeddings, agent state, and run history.
+
+**Scheduled Backup**
+- Configurable backup target (external drive path, NAS mount, or rsync destination)
+- Incremental backups using file modification timestamps — only copy changed files
+- Configurable schedule (daily default) via existing automation scheduler
+- Retention policy: keep N daily + N weekly snapshots, prune older
+- Backup manifest with file checksums for integrity verification
+
+**Restore**
+- `POST /api/backup/restore` — restore from a named snapshot
+- Dry-run mode that shows what would change before applying
+- Per-directory selective restore (e.g., restore only `data/brain/` without touching `data/cos/`)
+
+**Dashboard Widget**
+- Last backup time, next scheduled backup, total backup size
+- Backup health status (green/yellow/red based on age and integrity)
+- One-click manual backup trigger
+
+*Touches: new server/services/backup.js, server/routes/backup.js, Dashboard widget, settings.json, automation scheduler*
+
+### M46: Unified Search (Cmd+K)
+
+Global keyboard-driven search across all PortOS data sources from any page.
+
+**Search Sources**
+- Brain captures (ideas, projects, people, admin)
+- Semantic memory (vector + BM25 hybrid, already exists)
+- Command history and AI run history
+- Agent activity and task logs
+- Apps registry
+- Digital twin documents, autobiography, taste summaries
+- MeatSpace health entries
+
+**UI**
+- `Cmd+K` / `Ctrl+K` opens search overlay from any page
+- Type-ahead with categorized results (Brain, Memory, Apps, History, etc.)
+- Result cards with source icon, snippet, and timestamp
+- Click navigates to deep-linked location (e.g., specific brain capture, agent run, history entry)
+
+**Implementation**
+- Server-side `/api/search` endpoint that fans out to existing service search functions
+- Client-side `GlobalSearch` component mounted in Layout.jsx
+- Debounced input with 200ms delay
+- Results ranked by relevance with source-type boosting
+
+*Touches: new server/routes/search.js, new server/services/search.js, new client/src/components/GlobalSearch.jsx, Layout.jsx*
+
+### M47: Push Notifications
+
+External notification delivery for critical events when not actively viewing the dashboard.
+
+**Notification Channels**
+- Discord webhook (post to a private channel)
+- Telegram bot (send to chat ID)
+- Generic webhook (POST JSON to any URL)
+- Configurable per-channel: which event types to send
+
+**Events**
+- Agent task completed (with success/failure status and summary)
+- Critical errors (PM2 crash, autofixer triggered)
+- Goal milestone reached
+- CoS health alert (agent stuck, high failure rate)
+- Backup completed or failed (M45)
+
+**Configuration**
+- Settings page section for notification channels
+- Per-channel event type toggles
+- Test button to verify delivery
+- Rate limiting to prevent notification spam (max N per hour per channel)
+
+*Touches: new server/services/pushNotify.js, server/routes/settings.js, Settings UI, cosEvents.js, errorRecovery.js*
+
 ### Tier 1: Identity Integration (aligns with M42 direction)
 
-- **Chronotype-Aware Scheduling** — Derive peak-focus windows from genome sleep markers; schedule deep-work tasks during peak hours, routine tasks during low-energy. Display energy curve on Schedule tab. *Touches: taskSchedule.js, genome.js, CoS Schedule tab*
-- **Identity Context Injection** — Build identity brief from EXISTENTIAL.md, taste, personality, autobiography; inject as system preamble for AI calls via toolkit. Per-task-type toggle. *Touches: portos-ai-toolkit, runner.js, CoS Config*
-- **Mortality-Aware Goal Widget** — Life urgency score per goal from birth date + genome longevity markers. Visual timeline of projected remaining years. *(Overlaps M42 P3)* *Touches: Dashboard widgets, goalProgress.js, genome.js*
-- **Behavioral Feedback Loop** — "Sounds like me / Doesn't sound like me" toggle on agent-generated content. Adaptive style model with weighted scoring. *(Overlaps M34 P3)* *Touches: Agent Tools UI, Digital Twin service*
+- **Chronotype-Aware Scheduling** — Chronotype derivation exists (M42 P1) but isn't applied to task scheduling yet. Use peak-focus windows from genome sleep markers to schedule deep-work tasks during peak hours, routine tasks during low-energy. Display energy curve on Schedule tab. *Touches: taskSchedule.js, genome.js, CoS Schedule tab*
+- **Identity Context Injection** — Identity context is used for taste questions (M42 P2.5) but not yet injected as a system preamble for general AI calls. Build identity brief from EXISTENTIAL.md, taste, personality, autobiography; inject via toolkit. Per-task-type toggle. *Touches: portos-ai-toolkit, runner.js, CoS Config*
+- ~~**Mortality-Aware Goal Widget**~~ ✅ Shipped as M42 P3
+- ~~**Behavioral Feedback Loop**~~ ✅ Shipped as M34 P3
 
 ### Tier 2: Deeper Autonomy
 
@@ -134,7 +216,7 @@ Bring Apple Health data into MeatSpace via two complementary paths: live sync fr
 
 ### Tier 4: Developer Experience
 
-- **Unified Search (Cmd+K)** — Global search across brain, memory, history, agents, tasks, apps. Hybrid vector + BM25 extended to all data sources. *Touches: New GlobalSearch component, Layout.jsx*
+- ~~**Unified Search (Cmd+K)**~~ → Promoted to M46
 - **Dashboard Customization** — Drag-and-drop widget reordering, show/hide toggles, named layouts ("morning briefing", "deep work"). *Touches: Dashboard.jsx, settings.js, dnd-kit*
 - **Workspace Contexts** — Active project context that syncs shell, git, tasks, and browser to current project. Persists across navigation. *Touches: Settings state, Layout context, Shell/Git/Browser*
 - **Inline Code Review Annotations** — Surface self-improvement findings as inline annotations in a code viewer. One-click "fix this" spawns CoS task. *Touches: New code viewer, selfImprovement.js*
@@ -188,8 +270,8 @@ All 10 audit items (S1–S10) from the 2025-02-19 security audit have been resol
 
 ## Next Actions
 
-1. ~~**M42 P1: Identity Orchestrator & Chronotype**~~ ✅ - Identity service, chronotype derivation from genome sleep/caffeine markers, 4 API endpoints, 36 tests
-2. ~~**M42 P2.5: Personalized Taste Prompting**~~ ✅ - LLM-personalized follow-ups using identity context, 2 new taste sections (Fashion & Digital), "Go Deeper" flow
-3. **M7: App Templates** - Implement template management UI and app scaffolding from templates
-4. ~~**M34 P3: Behavioral Feedback Loop**~~ ✅ - "Sounds like me" validation on test responses and taste summaries, feedback stats dashboard, document weight recalculation
-5. ~~**M42 P3: Mortality-Aware Goal Tracking**~~ ✅ - Longevity/cardiovascular marker extraction, life expectancy estimation, goal CRUD with urgency scoring, Goals tab UI, 38 new tests
+1. **M44 P6**: Finish genome/epigenetic migration cleanup — update route comments, remove Genome card from IdentityTab or redirect to `/meatspace/genome`
+2. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights
+3. **M45**: Data Backup & Recovery — protect `./data/` from data loss
+4. **M44 P7**: Apple Health Integration — live sync + bulk XML import (spec above)
+5. **M46**: Unified Search (Cmd+K) — cross-cutting search across all data sources

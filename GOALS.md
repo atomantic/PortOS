@@ -1,10 +1,10 @@
 # PortOS — Goals
 
-> A self-hosted operating system for your dev machine that centralizes app management, AI agent orchestration, personal knowledge capture, and digital identity modeling into a single dashboard — accessible anywhere via Tailscale.
+> A self-hosted operating system for your dev machine that centralizes app management, AI agent orchestration, personal knowledge capture, digital identity modeling, and health tracking into a single dashboard — accessible anywhere via Tailscale.
 
 ## Purpose
 
-PortOS transforms a local development machine into an intelligent personal operating system. This app is intended to help the user manage their life, their goals, their projects, and their machines. It exists to solve the fragmentation of developer workflows — managing apps, orchestrating AI agents, capturing knowledge, and modeling personal identity are all scattered across dozens of tools with no unified interface. PortOS brings these together in a single dashboard that runs on your own hardware, keeps your data local, and is accessible from any device on your private Tailscale network.
+PortOS transforms a local development machine into an intelligent personal operating system. This app is intended to help the user manage their life, their health, their goals, their projects, and their machines. It exists to solve the fragmentation of developer workflows — managing apps, orchestrating AI agents, capturing knowledge, tracking health, and modeling personal identity are all scattered across dozens of tools with no unified interface. PortOS brings these together in a single dashboard that runs on your own hardware, keeps your data local, and is accessible from any device on your private Tailscale network.
 
 ## Core Goals
 
@@ -44,11 +44,15 @@ Preserve personal knowledge, identity, decision-making patterns, and life story 
 
 Tailscale VPN enables secure access from any device without public internet exposure. The entire system — dashboard, shell, browser, AI agents — is available from your phone, tablet, or any remote machine on your mesh network.
 
+### 10. Health & Longevity
+
+Help the user live a long, healthy life. MeatSpace tracks physical health data — alcohol consumption, blood work, body metrics, epigenetic age, eye health, genome markers, and lifestyle factors — and surfaces it alongside mortality projections and longevity escape velocity tracking. Combined with genome-derived life expectancy and mortality-aware goal scoring, the system makes health data actionable: not just recording what happened, but informing what to do next. The same goal-tracking system that manages digital projects manages meatspace goals — exercise targets, biomarker improvements, habit changes — with the same urgency scoring and progress visualization.
+
 ## Secondary Goals
 
-- **Behavioral Feedback Loop**: "Sounds like me" response validation with adaptive weighting to continuously refine the digital twin
-- **Mortality-Aware Goal Tracking**: Birth date + genome longevity markers to urgency-score goals based on projected lifespan
 - **Multi-Modal Identity Capture**: Voice, video, and image-based identity modeling beyond text
+- **Apple Health Integration**: Live sync from iOS and bulk historical import to unify all health data in one place
+- **Chronotype-Aware Scheduling**: Align task scheduling to natural energy patterns derived from genome sleep markers
 
 ## Non-Goals
 
@@ -64,29 +68,20 @@ PortOS is built for Adam Eivy — a single developer managing active git repos, 
 
 ## Current State
 
+See [PLAN.md](./PLAN.md) for detailed milestone tracking and roadmap.
+
 | Goal | Status | Notes |
 |------|--------|-------|
-| Centralized App Management | Complete | Core infrastructure (M0-M4, M9, M17-M18) all shipped. |
-| Autonomous AI Orchestration | In Progress | CoS fully operational (M14, M19-M31, M35, M37, M40). Learning system active. Continuous refinement. |
-| Personal Knowledge Management | In Progress | Brain (M32) and Memory (M16, M31) complete. Digest system running. Ongoing quality tuning. |
-| Digital Identity Modeling | In Progress | Soul (M33), Digital Twin (M34 P1-P2,P4), Genome, Autobiography complete. Identity orchestrator (M42) planned next. |
-| Developer Productivity Toolkit | Complete | Shell, git, browser (M36), history, usage, CyberCity (M41) all shipped. |
-| Self-Improving Intelligence | In Progress | Task learning (M25), self-improvement (M23), autonomous jobs (M37) active. Self-healing metrics recently added. |
-| Full Digital Autonomy | In Progress | Agent tools (M38), Moltworld (M43), scheduling (M26, M30) operational. Expanding platform coverage. |
-| Knowledge Legacy | Early | Autobiography prompts (M34 P5) launched. Genome data captured. Long-term preservation strategy not yet defined. |
+| Centralized App Management | Complete | Core infrastructure, app wizard, streaming import, PM2 standardization. |
+| Autonomous AI Orchestration | Ongoing | CoS, agent runner, skill system, autonomous jobs, task learning all operational. Continuous refinement. |
+| Personal Knowledge Management | Ongoing | Brain capture, semantic memory, weekly digests, memory classification all complete. Quality tuning continues. |
+| Digital Identity Modeling | Ongoing | Soul, digital twin, identity orchestrator (M42 P1-P4), behavioral feedback, taste profiling, autobiography all shipped. Cross-insights engine (M42 P5) next. |
+| Developer Productivity Toolkit | Complete | Shell, git, browser, history, usage, JIRA, CyberCity all shipped. |
+| Self-Improving Intelligence | Ongoing | Task learning, self-improvement analysis, autonomous jobs, self-healing metrics active. |
+| Full Digital Autonomy | Ongoing | Agent tools, Moltworld, scheduling, skill system operational. Expanding platform coverage and autonomy tiers. |
+| Knowledge Legacy | Early | Autobiography, genome, behavioral profiles captured. Legacy export format not yet built. |
 | Anywhere Access | Complete | Tailscale integration working. Mobile-responsive UI. All features accessible remotely. |
-
-## Direction
-
-PortOS is entering its **identity integration phase**. The next major work (M42) unifies the digital twin, genome, chronotype, and behavioral data under a single identity orchestrator. This enables:
-
-1. **Chronotype-aware scheduling** — CoS tasks aligned to your natural energy patterns derived from genome sleep markers
-2. **Personalized AI prompting** — Every AI interaction informed by unified identity context
-3. **Mortality-aware goals** — Urgency scoring based on projected lifespan
-
-Beyond M42, the trajectory is toward deeper autonomy (agents that need less supervision), richer identity modeling (multi-modal capture, behavioral feedback loops), and knowledge preservation as a durable legacy.
-
-Recent momentum: 43 milestones shipped, security audit (S1-S10) complete, v0.18.5 on dev. The project iterates rapidly — 3 minor versions in the last month with both features and hardening in each release.
+| Health & Longevity | Ongoing | MeatSpace shipped with death clock, LEV tracker, alcohol/blood/body/epigenetic/eye/genome/lifestyle tracking. Apple Health integration planned. |
 
 ## Operational Goals
 
