@@ -1394,6 +1394,19 @@ export const triggerBackup = () => request('/backup/run', { method: 'POST' });
 export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
 export const restoreBackup = (data) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data) });
 
+// Insights
+export const getGenomeHealthCorrelations = () => request('/insights/genome-health');
+export const getInsightThemes = () => request('/insights/themes');
+export const refreshInsightThemes = (providerId, model) => request('/insights/themes/refresh', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const getInsightNarrative = () => request('/insights/narrative');
+export const refreshInsightNarrative = (providerId, model) => request('/insights/narrative/refresh', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+
 // Instances (Federation)
 export const getInstances = () => request('/instances');
 export const getSelfInstance = () => request('/instances/self');
