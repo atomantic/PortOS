@@ -210,7 +210,7 @@ export default function FolderPicker({ value, onChange }) {
               <button
                 type="button"
                 onClick={handleSelect}
-                disabled={!currentPath}
+                disabled={!currentPath || loading || !!error}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
               >
                 <Check size={18} />

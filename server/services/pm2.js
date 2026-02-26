@@ -4,14 +4,12 @@ import { existsSync } from 'fs';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 import { extractJSONArray, safeJSONParse } from '../lib/fileUtils.js';
 
 const IS_WIN = process.platform === 'win32';
 
 // Resolve PM2 CLI binary path from our local dependency using require.resolve
 // to handle hoisted node_modules correctly.
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 
@@ -34,8 +32,8 @@ function isJsScript(script) {
  */
 export function spawnPm2(pm2Args, opts = {}) {
   return spawn(process.execPath, [PM2_BIN, ...pm2Args], {
-    windowsHide: true,
-    ...opts
+    ...opts,
+    windowsHide: true
   });
 }
 
@@ -47,14 +45,17 @@ export function spawnPm2(pm2Args, opts = {}) {
  * @returns {Promise<{stdout: string, stderr: string}>}
  */
 export function execPm2(pm2Args, opts = {}) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const child = spawnPm2(pm2Args, opts);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (data) => { stdout += data.toString(); });
     child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', () => resolve({ stdout, stderr }));
-    child.on('error', () => resolve({ stdout, stderr }));
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(stderr || `pm2 exited with code ${code}`));
+      resolve({ stdout, stderr });
+    });
+    child.on('error', (err) => reject(err));
   });
 }
 

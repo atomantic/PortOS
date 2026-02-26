@@ -33,8 +33,8 @@ const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.e
 
 const _execAsync = promisify(exec);
 const _execFileAsync = promisify(execFile);
-const execAsync = (cmd, opts) => _execAsync(cmd, { windowsHide: true, ...opts });
-const execFileAsync = (cmd, args, opts) => _execFileAsync(cmd, args, { windowsHide: true, ...opts });
+const execAsync = (cmd, opts) => _execAsync(cmd, { ...opts, windowsHide: true });
+const execFileAsync = (cmd, args, opts) => _execFileAsync(cmd, args, { ...opts, windowsHide: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

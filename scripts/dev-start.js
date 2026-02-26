@@ -7,7 +7,6 @@
  */
 import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
