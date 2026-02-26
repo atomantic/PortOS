@@ -42,6 +42,7 @@ import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
+import meatspaceRoutes from './routes/meatspace.js';
 import settingsRoutes from './routes/settings.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSocket } from './services/socket.js';
@@ -205,7 +206,7 @@ app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/digital-twin/social-accounts', socialAccountsRoutes);
-app.use('/api/digital-twin/genome', genomeRoutes);
+app.use('/api/meatspace/genome', genomeRoutes);
 app.use('/api/digital-twin/identity', identityRoutes);
 app.use('/api/digital-twin/autobiography', autobiographyRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
@@ -213,6 +214,7 @@ app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/jira', jiraRoutes);
 app.use('/api/instances', instancesRoutes);
+app.use('/api/meatspace', meatspaceRoutes);
 app.use('/api/settings', settingsRoutes);
 
 // Initialize script runner

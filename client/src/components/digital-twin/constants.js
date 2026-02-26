@@ -24,7 +24,6 @@ import {
   AlertOctagon,
   Fingerprint,
   Globe,
-  Dna,
   PenLine,
   Target
 } from 'lucide-react';
@@ -37,7 +36,6 @@ export const TABS = [
   { id: 'enrich', label: 'Enrich', icon: Sparkles },
   { id: 'taste', label: 'Taste', icon: Palette },
   { id: 'accounts', label: 'Accounts', icon: Globe },
-  { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'identity', label: 'Identity', icon: Fingerprint },
   { id: 'goals', label: 'Goals', icon: Target },
   { id: 'interview', label: 'Interview', icon: MessageSquare },

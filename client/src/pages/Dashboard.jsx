@@ -7,6 +7,7 @@ import CosDashboardWidget from '../components/CosDashboardWidget';
 import GoalProgressWidget from '../components/GoalProgressWidget';
 import UpcomingTasksWidget from '../components/UpcomingTasksWidget';
 import DecisionLogWidget from '../components/DecisionLogWidget';
+import DeathClockWidget from '../components/DeathClockWidget';
 import QuickBrainCapture from '../components/QuickBrainCapture';
 import QuickTaskWidget from '../components/QuickTaskWidget';
 import * as api from '../services/api';
@@ -129,8 +130,9 @@ export default function Dashboard() {
       </div>
 
       {/* Row 4 — Status, stats, decisions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <SystemHealthWidget />
+        <DeathClockWidget />
         {apps.length > 0 && (
           <div className="bg-port-card border border-port-border rounded-xl p-4 h-full">
             <h3 className="text-sm font-semibold text-white mb-3">Quick Stats</h3>

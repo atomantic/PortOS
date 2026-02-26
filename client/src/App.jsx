@@ -17,6 +17,7 @@ import Shell from './pages/Shell';
 import BrowserPage from './pages/Browser';
 import Jira from './pages/Jira';
 import Instances from './pages/Instances';
+import MeatSpace from './pages/MeatSpace';
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
@@ -67,6 +68,8 @@ export default function App() {
           <Route path="shell" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="instances" element={<Instances />} />
+          <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
+          <Route path="meatspace/:tab" element={<MeatSpace />} />
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />
           <Route path="city" element={<CyberCity />} />

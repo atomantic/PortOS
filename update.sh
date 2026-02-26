@@ -27,11 +27,12 @@ echo ""
 node scripts/setup-ghostty.js
 echo ""
 
+# Restart PM2 apps
+echo "Restarting PortOS..."
+npm run pm2:restart
+echo ""
+
 echo "==================================="
 echo "  Update Complete!"
 echo "==================================="
-echo ""
-echo "Restart PortOS:"
-echo "  Development:  npm run dev"
-echo "  Production:   npm run pm2:restart"
 echo ""

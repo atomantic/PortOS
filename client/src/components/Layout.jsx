@@ -44,7 +44,10 @@ import {
   Building2,
   Ticket,
   Network,
-  Flame
+  Flame,
+  Skull,
+  HeartPulse,
+  ClipboardList
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -112,7 +115,6 @@ const navItems = [
       { to: '/digital-twin/documents', label: 'Documents', icon: FileText },
       { to: '/digital-twin/enrich', label: 'Enrich', icon: Sparkles },
       { to: '/digital-twin/export', label: 'Export', icon: Download },
-      { to: '/digital-twin/genome', label: 'Genome', icon: Dna },
       { to: '/digital-twin/goals', label: 'Goals', icon: Target },
       { to: '/digital-twin/identity', label: 'Identity', icon: Fingerprint },
       { to: '/digital-twin/import', label: 'Import', icon: Upload },
@@ -123,6 +125,17 @@ const navItems = [
     ]
   },
   { to: '/instances', label: 'Instances', icon: Network, single: true },
+  {
+    label: 'MeatSpace',
+    icon: Skull,
+    children: [
+      { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
+      { to: '/meatspace/blood', label: 'Blood & Body', icon: HeartPulse },
+      { to: '/meatspace/genome', label: 'Genome', icon: Dna },
+      { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
+      { to: '/meatspace/overview', label: 'Overview', icon: Activity }
+    ]
+  },
   { to: '/security', label: 'Security', icon: Camera, single: true },
   { to: '/shell', label: 'Shell', icon: SquareTerminal, single: true },
   { to: '/agents', label: 'Social Agents', icon: Users, single: true },
@@ -512,6 +525,7 @@ export default function Layout() {
           const isFullWidth = location.pathname.startsWith('/cos') ||
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
+            location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||
             location.pathname.startsWith('/city');
