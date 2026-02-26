@@ -64,6 +64,22 @@ export const getAppleHealthCorrelation = (from, to) => {
   if (to) params.set('to', to);
   return request(`/health/correlation?${params}`);
 };
+export const uploadAppleHealthXml = (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  // Use fetch directly — the request helper sets Content-Type: application/json
+  // which conflicts with multipart/form-data. Browser sets correct boundary automatically.
+  return fetch(`${API_BASE}/health/import/xml`, {
+    method: 'POST',
+    body: formData,
+  }).then(async res => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    return res.json();
+  });
+};
 
 // Health
 export const checkHealth = () => request('/system/health');
