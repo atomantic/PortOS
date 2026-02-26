@@ -486,9 +486,10 @@ async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Ho
     return spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home);
   }
 
-  // Write patched config to a temp file
-  // JSON.stringify works because require() already resolved all __dirname,
-  // path.join(), process.env references to concrete values
+  // Write patched config to a temp file.
+  // JSON.stringify is safe here because require() already executed the CJS module,
+  // resolving all dynamic expressions (__dirname, path.join, process.env) to plain
+  // string/number/boolean values. The resulting apps array has no functions or symbols.
   const tempFile = `_portos_pm2_${Date.now()}.config.cjs`;
   const tempPath = join(cwd, tempFile);
 
@@ -498,7 +499,7 @@ async function startFromEcosystemWindows(cwd, ecosystemFile, processNames, pm2Ho
     console.log(`🔧 Patched ${ecosystemFile} for Windows → ${tempFile}`);
     return await spawnPm2StartEcosystem(cwd, tempFile, processNames, pm2Home);
   } finally {
-    // Clean up temp file (don't await, fire-and-forget)
-    unlink(tempPath).catch(() => {});
+    // Await cleanup so the temp file isn't removed while PM2 may still be reading it
+    await unlink(tempPath).catch(() => {});
   }
 }
