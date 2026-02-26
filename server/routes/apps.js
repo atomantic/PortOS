@@ -74,9 +74,22 @@ router.get('/', asyncHandler(async (req, res) => {
       processes = parsed.processes;
     }
 
+    // Auto-derive uiPort/apiPort from processes when not explicitly set
+    let { uiPort, apiPort } = app;
+    if (!uiPort && processes?.length) {
+      const uiProc = processes.find(p => p.ports?.ui);
+      if (uiProc) uiPort = uiProc.ports.ui;
+    }
+    if (!apiPort && processes?.length) {
+      const apiProc = processes.find(p => p.ports?.api);
+      if (apiProc) apiPort = apiProc.ports.api;
+    }
+
     return {
       ...app,
       processes,
+      uiPort,
+      apiPort,
       pm2Status: statuses,
       overallStatus
     };
@@ -96,7 +109,19 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     statuses[processName] = status;
   }
 
-  res.json({ ...app, pm2Status: statuses });
+  // Auto-derive uiPort/apiPort from processes when not explicitly set
+  let { uiPort, apiPort } = app;
+  const processes = app.processes || [];
+  if (!uiPort && processes.length) {
+    const uiProc = processes.find(p => p.ports?.ui);
+    if (uiProc) uiPort = uiProc.ports.ui;
+  }
+  if (!apiPort && processes.length) {
+    const apiProc = processes.find(p => p.ports?.api);
+    if (apiProc) apiPort = apiProc.ports.api;
+  }
+
+  res.json({ ...app, uiPort, apiPort, pm2Status: statuses });
 }));
 
 // POST /api/apps - Create new app
