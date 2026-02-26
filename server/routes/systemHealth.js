@@ -20,10 +20,10 @@ router.get('/health', async (req, res) => {
 });
 
 /**
- * GET /api/health/system - Comprehensive system health summary
+ * GET /api/system/health/details - Comprehensive system health summary
  * Returns system metrics, app status, and CoS status for dashboard display
  */
-router.get('/health/system', async (req, res) => {
+router.get('/health/details', async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel

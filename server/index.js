@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-import healthRoutes from './routes/health.js';
+import systemHealthRoutes from './routes/systemHealth.js';
 import appsRoutes from './routes/apps.js';
 import portsRoutes from './routes/ports.js';
 import logsRoutes from './routes/logs.js';
@@ -171,7 +171,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.set('io', io);
 
 // API Routes
-app.use('/api', healthRoutes);
+app.use('/api/system', systemHealthRoutes);
 app.use('/api/apps', appsRoutes);
 app.use('/api/ports', portsRoutes);
 app.use('/api/logs', logsRoutes);

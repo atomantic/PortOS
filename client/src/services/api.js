@@ -41,8 +41,8 @@ async function request(endpoint, options = {}) {
 }
 
 // Health
-export const checkHealth = () => request('/health');
-export const getSystemHealth = (options) => request('/health/system', options);
+export const checkHealth = () => request('/system/health');
+export const getSystemHealth = (options) => request('/system/health/details', options);
 
 // Apps
 export const getApps = () => request('/apps');
