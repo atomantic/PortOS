@@ -16,15 +16,20 @@ export const chronotypeBehavioralInputSchema = z.object({
 
 // --- Longevity Schemas ---
 
+const validCalendarDate = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format')
+  .refine((value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return false;
+    const [y, m, d] = value.split('-').map(Number);
+    return date.getUTCFullYear() === y && date.getUTCMonth() + 1 === m && date.getUTCDate() === d;
+  }, 'Must be a valid calendar date');
+
 export const birthDateInputSchema = z.object({
-  birthDate: z.string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format')
-    .refine((value) => {
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
-      const [y, m, d] = value.split('-').map(Number);
-      return date.getUTCFullYear() === y && date.getUTCMonth() + 1 === m && date.getUTCDate() === d;
-    }, 'Must be a valid calendar date')
+  birthDate: validCalendarDate.refine(
+    (value) => new Date(value) <= new Date(),
+    'Birth date cannot be in the future'
+  )
 });
 
 // --- Goal Schemas ---
@@ -56,5 +61,5 @@ export const updateGoalInputSchema = z.object({
 
 export const addMilestoneInputSchema = z.object({
   title: z.string().min(1).max(200),
-  targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format').optional()
+  targetDate: validCalendarDate.optional()
 });
