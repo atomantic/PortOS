@@ -41,10 +41,10 @@ Requirements for this milestone batch. Each maps to roadmap phases.
 
 ### Unified Search
 
-- [ ] **SRC-01**: Cmd+K / Ctrl+K opens search overlay from any page
+- [x] **SRC-01**: Cmd+K / Ctrl+K opens search overlay from any page
 - [x] **SRC-02**: Server-side `/api/search` endpoint fans out keyword queries to existing service search functions
 - [x] **SRC-03**: Results categorized by source (Brain, Memory, Apps, History, Health, etc.) with icons and snippets
-- [ ] **SRC-04**: Click result navigates to deep-linked location (specific brain capture, agent run, health entry, etc.)
+- [x] **SRC-04**: Click result navigates to deep-linked location (specific brain capture, agent run, health entry, etc.)
 
 ## v2 Requirements
 
@@ -109,10 +109,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INS-02 | Phase 4 | Complete |
 | INS-03 | Phase 4 | Complete |
 | INS-04 | Phase 4 | Complete |
-| SRC-01 | Phase 5 | Pending |
+| SRC-01 | Phase 5 | Complete |
 | SRC-02 | Phase 5 | Complete |
 | SRC-03 | Phase 5 | Complete |
-| SRC-04 | Phase 5 | Pending |
+| SRC-04 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 24 total

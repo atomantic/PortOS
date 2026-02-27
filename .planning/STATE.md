@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-27T00:01:05.000Z"
+last_updated: "2026-02-27T00:16:48.314Z"
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 9
-  completed_plans: 8
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-26)
 
 **Core value:** Ship five next actions that transform PortOS from siloed features into a connected, protected, and searchable system
-**Current focus:** Phase 5 (unified search) — Plan 01 complete (server foundation), Plan 02 next (search overlay UI)
+**Current focus:** MILESTONE COMPLETE — all 5 phases shipped (genome migration, backup/recovery, Apple Health, cross-domain insights, unified search)
 
 ## Current Position
 
-Phase: 5 of 5 (Unified Search) — IN PROGRESS
-Plan: 1 of 2 in current phase (05-01 complete)
-Status: Plan 05-01 complete — search service + route + schema + client API function built
-Last activity: 2026-02-26 -- Plan 05-01 complete (fanOutSearch engine, GET /api/search route, searchQuerySchema, search() client fn)
+Phase: 5 of 5 (Unified Search) — COMPLETE
+Plan: 2 of 2 in current phase (05-02 complete)
+Status: ALL PLANS COMPLETE — milestone v1.0 fully shipped
+Last activity: 2026-02-27 -- Plan 05-02 complete (Cmd+K overlay, useCmdKSearch hook, CmdKSearch portal modal, Layout mount)
 
-Progress: [█████████░] 90%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -48,6 +48,7 @@ Progress: [█████████░] 90%
 | 04-cross-domain-insights-engine | 1 | 174s | 174s |
 | 04-cross-domain-insights-engine | 2 | 238s | 238s |
 | 05-unified-search | 1 | ~8min | ~8min |
+| 05-unified-search | 2 | ~15min | ~15min |
 
 **Recent Trend:**
 - Last 5 plans: 03-01 (210s), 03-02 (180s), 03-03 (~15min), 04-01 (174s), 04-02 (238s)
@@ -95,6 +96,11 @@ Recent decisions affecting current work:
 - [Phase 05-unified-search plan 01]: Health adapter is synchronous (no I/O) — searches known metric names + display aliases in-memory, no file reads needed
 - [Phase 05-unified-search plan 01]: fanOutSearch returns only non-empty sources — zero-result sources are omitted from the response
 - [Phase 05-unified-search plan 01]: Brain adapter fans out to 5 sub-types via Promise.allSettled and merges into a single source block
+- [Phase 05-unified-search plan 02]: CmdKSearch renders via createPortal(document.body) for z-index isolation above sidebar
+- [Phase 05-unified-search plan 02]: Flat result list derived from grouped sources to keep focusedIndex as a simple number across all categories
+- [Phase 05-unified-search plan 02]: 300ms debounce + 2-char minimum matches Spotlight/Raycast UX conventions
+- [Phase 05-unified-search plan 02]: Top 3 results per source by default with Show More per-source expansion
+- [Phase 05-unified-search plan 02]: Cmd+K fires in input context intentionally — search is a global action with highest priority (Spotlight parity)
 
 ### Pending Todos
 
@@ -106,6 +112,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: 05-01-PLAN.md complete — fanOutSearch engine, GET /api/search route, searchQuerySchema, search() client fn all shipped
+Last session: 2026-02-27
+Stopped at: 05-02-PLAN.md complete — Cmd+K overlay UI shipped; ALL PHASES AND PLANS COMPLETE (milestone v1.0)
 Resume file: None
