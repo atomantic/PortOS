@@ -40,6 +40,9 @@ async function request(endpoint, options = {}) {
   return response.json();
 }
 
+// Search
+export const search = (q) => request(`/search?q=${encodeURIComponent(q)}`);
+
 // Apple Health
 export const ingestAppleHealth = (data) => request('/health/ingest', {
   method: 'POST',
