@@ -57,6 +57,7 @@ import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
+import CmdKSearch from './CmdKSearch';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -539,6 +540,8 @@ export default function Layout() {
           );
         })()}
       </div>
+      {/* Cmd+K search overlay — mounted in layout so it's available on every page */}
+      <CmdKSearch />
     </div>
   );
 }
