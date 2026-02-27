@@ -160,6 +160,7 @@ export default function OverviewTab() {
   const [data, setData] = useState(null);
   const [alcohol, setAlcohol] = useState(null);
   const [body, setBody] = useState(null);
+  const [healthBody, setHealthBody] = useState(null);
   const [blood, setBlood] = useState(null);
   const [epigenetic, setEpigenetic] = useState(null);
   const [eyes, setEyes] = useState(null);
@@ -167,17 +168,19 @@ export default function OverviewTab() {
   const navigate = useNavigate();
 
   const fetchData = useCallback(async () => {
-    const [overview, alc, bod, bld, epi, eye] = await Promise.all([
+    const [overview, alc, bod, bld, epi, eye, hBody] = await Promise.all([
       api.getMeatspaceOverview().catch(() => null),
       api.getAlcoholSummary().catch(() => null),
       api.getBodyHistory().catch(() => null),
       api.getBloodTests().catch(() => null),
       api.getEpigeneticTests().catch(() => null),
       api.getEyeExams().catch(() => null),
+      api.getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']).catch(() => null),
     ]);
     setData(overview);
     setAlcohol(alc);
     setBody(bod);
+    setHealthBody(hBody);
     setBlood(bld);
     setEpigenetic(epi);
     setEyes(eye);
@@ -203,7 +206,15 @@ export default function OverviewTab() {
   }
 
   const { deathClock, lev, summary } = data;
-  const latestBody = Array.isArray(body) ? body[body.length - 1] : null;
+  const manualBody = Array.isArray(body) ? body.findLast(b => b.weightLbs) ?? null : null;
+  // Use Apple Health body data if it's more recent than manual entries
+  const hWeight = healthBody?.body_mass;
+  const hFat = healthBody?.body_fat_percentage;
+  const hLean = healthBody?.lean_body_mass;
+  const useHealth = hWeight?.date && (!manualBody?.date || hWeight.date > manualBody.date);
+  const latestBody = useHealth
+    ? { weightLbs: Math.round(hWeight.value * 10) / 10, fatPct: hFat ? Math.round(hFat.value * 1000) / 10 : null, leanLbs: hLean ? Math.round(hLean.value * 10) / 10 : null }
+    : manualBody;
   const latestBlood = blood?.tests?.[blood.tests.length - 1] ?? null;
   const latestEpigenetic = epigenetic?.tests?.[epigenetic.tests.length - 1] ?? null;
   const latestEye = eyes?.exams?.[eyes.exams.length - 1] ?? null;
@@ -264,11 +275,12 @@ export default function OverviewTab() {
           icon={Scale}
           iconColor="text-blue-400"
           label="Body"
-          onClick={() => navigate('/meatspace/blood')}
+          onClick={() => navigate('/meatspace/body')}
           metrics={[
             { label: 'Weight', value: latestBody?.weightLbs ? `${latestBody.weightLbs} lbs` : '—' },
             { label: 'Body fat', value: latestBody?.fatPct != null ? `${latestBody.fatPct}%` : '—' },
-            { label: 'Muscle', value: latestBody?.musclePct != null ? `${latestBody.musclePct}%` : '—' },
+            { label: latestBody?.leanLbs ? 'Lean' : 'Muscle',
+              value: latestBody?.leanLbs ? `${latestBody.leanLbs} lbs` : latestBody?.musclePct != null ? `${latestBody.musclePct}%` : '—' },
           ]}
         />
         <HealthTile
@@ -285,7 +297,7 @@ export default function OverviewTab() {
           icon={Dna}
           iconColor="text-violet-400"
           label="Epigenetic"
-          onClick={() => navigate('/meatspace/blood')}
+          onClick={() => navigate('/meatspace/age')}
           metrics={[
             { label: 'Bio age', value: latestEpigenetic?.biologicalAge != null ? `${latestEpigenetic.biologicalAge}y` : '—',
               color: latestEpigenetic?.biologicalAge != null && latestEpigenetic?.chronologicalAge != null
@@ -299,7 +311,7 @@ export default function OverviewTab() {
           icon={Eye}
           iconColor="text-cyan-400"
           label="Eyes"
-          onClick={() => navigate('/meatspace/blood')}
+          onClick={() => navigate('/meatspace/eyes')}
           metrics={[
             { label: 'Exams', value: eyes?.exams?.length ?? '—' },
             { label: 'Latest', value: latestEye?.date ?? '—' },

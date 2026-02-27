@@ -39,7 +39,7 @@ module.exports = {
       },
       watch: ['server'],
       ignore_watch: ['node_modules', '**/*.test.js'],
-      max_memory_restart: '500M'
+      max_memory_restart: '2G'
     },
     {
       name: 'portos-cos',
@@ -61,7 +61,7 @@ module.exports = {
       max_restarts: 5,
       min_uptime: '30s',
       restart_delay: 10000,
-      max_memory_restart: '1G',
+      max_memory_restart: '2G',
       // Important: This process manages long-running agent processes
       // Keep kill_timeout high to allow graceful shutdown of agents
       kill_timeout: 30000

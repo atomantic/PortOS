@@ -29,6 +29,7 @@
       }
     ],
     "autoStart": false,
+    "alwaysOn": false,
     "selfImprovementEnabled": true,
     "dynamicAvatar": true
   },

@@ -49,6 +49,20 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(sanitizeProvider(provider));
   }));
 
+  // PUT /active must be defined before PUT /:id to avoid the wildcard
+  // catching "active" as a provider ID (which causes 404 "Provider not found")
+  router.put('/active', asyncHandler(async (req, res) => {
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ error: 'Provider ID required' });
+    }
+    const provider = await providerService.setActiveProvider(id);
+    if (!provider) {
+      return res.status(404).json({ error: 'Provider not found' });
+    }
+    res.json(sanitizeProvider(provider));
+  }));
+
   router.get('/samples', asyncHandler(async (req, res) => {
     const providers = await providerService.getSampleProviders();
     res.json({ providers: providers.map(sanitizeProvider) });

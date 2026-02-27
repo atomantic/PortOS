@@ -35,6 +35,11 @@ export async function addBloodTest(test) {
   return test;
 }
 
+export async function saveBloodTests(data) {
+  await ensureMeatspaceDir();
+  await writeFile(BLOOD_TESTS_FILE, JSON.stringify(data, null, 2));
+}
+
 // === Body Composition ===
 
 export async function getBodyHistory() {

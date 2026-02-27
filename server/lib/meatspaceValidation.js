@@ -112,9 +112,3 @@ export const eyeExamUpdateSchema = z.object({
 });
 
 // =============================================================================
-// TSV IMPORT
-// =============================================================================
-
-export const tsvImportSchema = z.object({
-  content: z.string().min(1).max(10 * 1024 * 1024)
-});

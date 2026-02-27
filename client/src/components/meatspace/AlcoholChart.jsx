@@ -13,7 +13,7 @@ const VIEWS = [
 
 const GRAMS_PER_STD_DRINK = 14;
 
-export default function AlcoholChart({ sex = 'male', onRefreshKey }) {
+export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('30d');
@@ -105,7 +105,7 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey }) {
             {VIEWS.map(v => (
               <button
                 key={v.id}
-                onClick={() => setView(v.id)}
+                onClick={() => { setView(v.id); onViewChange?.(v.id); }}
                 className={`px-2 py-1 text-xs rounded transition-colors ${
                   view === v.id
                     ? 'bg-port-accent/10 text-port-accent'

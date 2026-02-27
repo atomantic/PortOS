@@ -68,8 +68,9 @@ export default function AIProviders() {
   };
 
   const handleSetActive = async (id) => {
-    await api.setActiveProvider(id);
-    setActiveProviderId(id);
+    if (!id) return;
+    const result = await api.setActiveProvider(id).catch(() => null);
+    if (result) setActiveProviderId(id);
   };
 
   const handleTest = async (id) => {

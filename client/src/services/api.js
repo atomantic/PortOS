@@ -60,6 +60,9 @@ export const getAppleHealthSummary = (metricName, from, to) => {
   if (to) params.set('to', to);
   return request(`/health/metrics/${metricName}?${params}`);
 };
+export const getAvailableHealthMetrics = () => request('/health/metrics/available');
+export const getLatestHealthMetrics = (metricNames) =>
+  request(`/health/metrics/latest?metrics=${metricNames.join(',')}`);
 export const getAppleHealthRange = () => request('/health/range');
 export const getAppleHealthCorrelation = (from, to) => {
   const params = new URLSearchParams();
@@ -1334,10 +1337,6 @@ export const updateAlcoholDrink = (date, index, data) => request(`/meatspace/alc
 });
 export const removeAlcoholDrink = (date, index) => request(`/meatspace/alcohol/log/${date}/${index}`, {
   method: 'DELETE'
-});
-export const importMeatspaceTSV = (content) => request('/meatspace/import/tsv', {
-  method: 'POST',
-  body: JSON.stringify({ content })
 });
 export const getBloodTests = () => request('/meatspace/blood');
 export const addBloodTest = (data) => request('/meatspace/blood', {

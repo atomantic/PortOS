@@ -11,12 +11,10 @@ import {
   epigeneticTestSchema,
   eyeExamSchema,
   eyeExamUpdateSchema,
-  tsvImportSchema
 } from '../lib/meatspaceValidation.js';
 import * as meatspaceService from '../services/meatspace.js';
 import * as alcoholService from '../services/meatspaceAlcohol.js';
 import * as healthService from '../services/meatspaceHealth.js';
-import { importTSV } from '../services/meatspaceImport.js';
 
 const router = Router();
 
@@ -254,21 +252,5 @@ router.delete('/eyes/:index', asyncHandler(async (req, res) => {
   res.json(removed);
 }));
 
-// =============================================================================
-// IMPORT
-// =============================================================================
-
-/**
- * POST /api/meatspace/import/tsv
- * Import TSV spreadsheet (5MB limit handled by express.json middleware)
- */
-router.post('/import/tsv', asyncHandler(async (req, res) => {
-  const { content } = validateRequest(tsvImportSchema, req.body);
-  const stats = await importTSV(content);
-  if (stats.error) {
-    throw new ServerError(stats.error, { status: 400, code: 'IMPORT_FAILED' });
-  }
-  res.json(stats);
-}));
 
 export default router;
