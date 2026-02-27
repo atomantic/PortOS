@@ -6,7 +6,6 @@ import {
 const PREFERRED_MARKERS = ['cholesterol', 'glucose', 'ldl', 'hdl', 'triglycerides'];
 
 function compute30DayRollingAvg(dailyData, testDate) {
-  const cutoff = new Date(testDate);
   const windowStart = new Date(testDate);
   windowStart.setDate(windowStart.getDate() - 30);
   const startStr = windowStart.toISOString().split('T')[0];

@@ -434,7 +434,7 @@ app.post('/spawn', async (req, res) => {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...envVars, CLAUDECODE: undefined },
+    env: (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })(),
     windowsHide: true
   });
 
@@ -712,7 +712,7 @@ app.post('/run', async (req, res) => {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...envVars, CLAUDECODE: undefined },
+    env: (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })(),
     windowsHide: true
   });
 

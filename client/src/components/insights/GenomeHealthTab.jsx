@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Dna, Heart, Zap, Activity, TestTube, Droplets, Sun, Leaf } from 'lucide-react';
+import { ChevronDown, ChevronRight, Dna, Heart, HeartPulse, Zap, Activity, TestTube, Droplet, Droplets, Sun, Leaf, Sparkles, Apple, Coffee, Shield, ShieldCheck, ShieldAlert, Flame, Brain, BrainCog, Moon, Dumbbell, Salad, Eye, Bone, Pill, Ribbon, Wind, Scissors, Ear } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { getGenomeHealthCorrelations } from '../../services/api';
 import InsightCard from './InsightCard';
@@ -9,14 +9,20 @@ import EmptyState from './EmptyState';
 
 // Map string icon names from server to Lucide components
 const ICON_MAP = {
-  Heart,
-  Zap,
-  Activity,
-  TestTube,
-  Droplets,
-  Sun,
-  Leaf,
-  Dna
+  Heart, HeartPulse, Zap, Activity, TestTube, Droplet, Droplets, Sun, Leaf, Dna,
+  Sparkles, Apple, Coffee, Shield, ShieldCheck, ShieldAlert, Flame, Brain, BrainCog,
+  Moon, Dumbbell, Salad, Eye, Bone, Pill, Ribbon, Wind, Scissors, Ear
+};
+
+// Server sends single-word Tailwind color names; map to class with shade
+const COLOR_CLASS_MAP = {
+  rose: 'text-rose-400', red: 'text-red-400', purple: 'text-purple-400',
+  blue: 'text-blue-400', emerald: 'text-emerald-400', amber: 'text-amber-400',
+  green: 'text-green-400', orange: 'text-orange-400', indigo: 'text-indigo-400',
+  cyan: 'text-cyan-400', violet: 'text-violet-400', sky: 'text-sky-400',
+  yellow: 'text-yellow-400', lime: 'text-lime-400', pink: 'text-pink-400',
+  teal: 'text-teal-400', stone: 'text-stone-400', fuchsia: 'text-fuchsia-400',
+  slate: 'text-slate-400', zinc: 'text-zinc-400', gray: 'text-gray-400'
 };
 
 // Map marker status to confidence level key
@@ -39,7 +45,7 @@ function CategorySection({ category }) {
         className="w-full flex items-center justify-between px-4 py-3 bg-port-card hover:bg-port-border/20 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <Icon size={18} className={category.color ? `text-${category.color}` : 'text-port-accent'} />
+          <Icon size={18} className={COLOR_CLASS_MAP[category.color] ?? 'text-port-accent'} />
           <span className="text-sm font-semibold text-white">{category.label}</span>
           <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
             {category.markers.length} markers

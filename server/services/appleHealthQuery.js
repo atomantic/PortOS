@@ -140,11 +140,16 @@ export async function getDailyAggregates(metricName, from, to) {
       // Sum qty per day
       value = points.reduce((sum, p) => sum + (p.qty ?? 0), 0);
     } else if (metricName === 'heart_rate') {
-      // Average of Avg values
+      // Average of Avg values (JSON ingest) or qty values (XML ingest)
       const avgPoints = points.filter(p => p.Avg !== undefined);
-      value = avgPoints.length > 0
-        ? avgPoints.reduce((sum, p) => sum + p.Avg, 0) / avgPoints.length
-        : null;
+      const qtyPoints = points.filter(p => p.qty !== undefined);
+      if (avgPoints.length > 0) {
+        value = avgPoints.reduce((sum, p) => sum + p.Avg, 0) / avgPoints.length;
+      } else if (qtyPoints.length > 0) {
+        value = qtyPoints.reduce((sum, p) => sum + p.qty, 0) / qtyPoints.length;
+      } else {
+        value = null;
+      }
     } else if (metricName === 'heart_rate_variability_sdnn') {
       // Average qty per day
       const qtyPoints = points.filter(p => p.qty !== undefined);
@@ -152,9 +157,19 @@ export async function getDailyAggregates(metricName, from, to) {
         ? qtyPoints.reduce((sum, p) => sum + p.qty, 0) / qtyPoints.length
         : null;
     } else if (metricName === 'sleep_analysis') {
-      // Take totalSleep directly from the most recent point
-      const sleepPoint = points.find(p => p.totalSleep !== undefined);
-      value = sleepPoint?.totalSleep ?? null;
+      // Return full sleep summary with stage breakdown from most recent aggregated point
+      const sleepPoint = [...points].reverse().find(p => p.totalSleep !== undefined);
+      if (sleepPoint) {
+        results.push({
+          date: dateStr,
+          value: Math.round((sleepPoint.totalSleep ?? 0) * 100) / 100,
+          deep: sleepPoint.deep ?? 0,
+          rem: sleepPoint.rem ?? 0,
+          core: sleepPoint.core ?? 0,
+          awake: sleepPoint.awake ?? 0
+        });
+      }
+      continue;
     } else {
       // Default: average qty
       const qtyPoints = points.filter(p => p.qty !== undefined);

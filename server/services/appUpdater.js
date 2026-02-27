@@ -31,6 +31,9 @@ function runCommand(cmd, args, cwd) {
   });
 }
 
+// Per-app lock to prevent concurrent updates
+const updatingApps = new Set();
+
 /**
  * Run a full update cycle for an app:
  * 1. git pull --rebase --autostash
@@ -43,6 +46,20 @@ function runCommand(cmd, args, cwd) {
  * @returns {Promise<{success: boolean, steps: object[]}>}
  */
 export async function updateApp(app, emit) {
+  const dir = app.repoPath;
+  if (updatingApps.has(dir)) {
+    return { success: false, steps: [{ step: 'lock', success: false, message: 'Update already in progress' }] };
+  }
+  updatingApps.add(dir);
+
+  try {
+    return await _doUpdate(app, emit);
+  } finally {
+    updatingApps.delete(dir);
+  }
+}
+
+async function _doUpdate(app, emit) {
   const dir = app.repoPath;
   const steps = [];
 
@@ -58,10 +75,11 @@ export async function updateApp(app, emit) {
     const subDir = sub ? join(dir, sub) : dir;
     if (existsSync(join(subDir, 'package.json'))) {
       const label = sub || 'root';
-      emit('npm-install', 'running', `Installing ${label} dependencies...`);
+      const stepId = `npm-install:${label}`;
+      emit(stepId, 'running', `Installing ${label} dependencies...`);
       await runCommand('npm', ['install'], subDir);
-      emit('npm-install', 'done', `${label} dependencies installed`);
-      steps.push({ step: `npm-install:${label}`, success: true });
+      emit(stepId, 'done', `${label} dependencies installed`);
+      steps.push({ step: stepId, success: true });
     }
   }
 

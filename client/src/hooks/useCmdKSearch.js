@@ -5,7 +5,7 @@ export function useCmdKSearch() {
 
   useEffect(() => {
     const handler = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k' && !e.repeat) {
         e.preventDefault();
         setOpen(prev => !prev);
       }

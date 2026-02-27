@@ -1883,12 +1883,7 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
-    env: {
-      ...process.env,
-      ...provider.envVars,
-      // Strip Claude Code session markers so child CLI processes don't detect nesting
-      CLAUDECODE: undefined
-    }
+    env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })()
   });
 
   registerSpawnedAgent(claudeProcess.pid, {

@@ -55,7 +55,7 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
       let output = '';
 
       const child = spawn(provider.command, args, {
-        env: { ...process.env, ...provider.envVars, CLAUDECODE: undefined },
+        env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
         shell: false,
         windowsHide: true
       });
