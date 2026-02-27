@@ -48,6 +48,8 @@ import {
   Skull,
   HeartPulse,
   ClipboardList,
+  Eye,
+  Scale,
   Lightbulb
 } from 'lucide-react';
 import packageJson from '../../package.json';
@@ -132,8 +134,11 @@ const navItems = [
     label: 'MeatSpace',
     icon: Skull,
     children: [
+      { to: '/meatspace/age', label: 'Age', icon: Clock },
       { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
-      { to: '/meatspace/blood', label: 'Blood & Body', icon: HeartPulse },
+      { to: '/meatspace/blood', label: 'Blood', icon: HeartPulse },
+      { to: '/meatspace/body', label: 'Body', icon: Scale },
+      { to: '/meatspace/eyes', label: 'Eyes', icon: Eye },
       { to: '/meatspace/genome', label: 'Genome', icon: Dna },
       { to: '/meatspace/health', label: 'Health', icon: Heart },
       { to: '/meatspace/import', label: 'Import', icon: Upload },

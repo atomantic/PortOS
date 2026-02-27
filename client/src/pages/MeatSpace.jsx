@@ -4,8 +4,11 @@ import { Skull } from 'lucide-react';
 import { TABS } from '../components/meatspace/constants';
 
 import OverviewTab from '../components/meatspace/tabs/OverviewTab';
+import AgeTab from '../components/meatspace/tabs/AgeTab';
 import AlcoholTab from '../components/meatspace/tabs/AlcoholTab';
 import BloodTab from '../components/meatspace/tabs/BloodTab';
+import BodyTab from '../components/meatspace/tabs/BodyTab';
+import EyesTab from '../components/meatspace/tabs/EyesTab';
 import GenomeTab from '../components/meatspace/tabs/GenomeTab';
 import HealthTab from '../components/meatspace/tabs/HealthTab';
 import ImportTab from '../components/meatspace/tabs/ImportTab';
@@ -24,10 +27,16 @@ export default function MeatSpace() {
     switch (activeTab) {
       case 'overview':
         return <OverviewTab />;
+      case 'age':
+        return <AgeTab />;
       case 'alcohol':
         return <AlcoholTab />;
       case 'blood':
         return <BloodTab />;
+      case 'body':
+        return <BodyTab />;
+      case 'eyes':
+        return <EyesTab />;
       case 'genome':
         return <GenomeTab />;
       case 'health':

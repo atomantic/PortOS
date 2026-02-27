@@ -275,7 +275,7 @@ export default function OverviewTab() {
           icon={Scale}
           iconColor="text-blue-400"
           label="Body"
-          onClick={() => navigate('/meatspace/blood')}
+          onClick={() => navigate('/meatspace/body')}
           metrics={[
             { label: 'Weight', value: latestBody?.weightLbs ? `${latestBody.weightLbs} lbs` : '—' },
             { label: 'Body fat', value: latestBody?.fatPct != null ? `${latestBody.fatPct}%` : '—' },
@@ -297,7 +297,7 @@ export default function OverviewTab() {
           icon={Dna}
           iconColor="text-violet-400"
           label="Epigenetic"
-          onClick={() => navigate('/meatspace/blood')}
+          onClick={() => navigate('/meatspace/age')}
           metrics={[
             { label: 'Bio age', value: latestEpigenetic?.biologicalAge != null ? `${latestEpigenetic.biologicalAge}y` : '—',
               color: latestEpigenetic?.biologicalAge != null && latestEpigenetic?.chronologicalAge != null
@@ -311,7 +311,7 @@ export default function OverviewTab() {
           icon={Eye}
           iconColor="text-cyan-400"
           label="Eyes"
-          onClick={() => navigate('/meatspace/blood')}
+          onClick={() => navigate('/meatspace/eyes')}
           metrics={[
             { label: 'Exams', value: eyes?.exams?.length ?? '—' },
             { label: 'Latest', value: latestEye?.date ?? '—' },

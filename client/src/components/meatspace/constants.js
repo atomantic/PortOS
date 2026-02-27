@@ -1,18 +1,24 @@
 import {
   Skull,
   Beer,
+  Clock,
   Dna,
+  Eye,
   HeartPulse,
   ClipboardList,
   Activity,
+  Scale,
   Stethoscope,
   Upload
 } from 'lucide-react';
 
 export const TABS = [
   { id: 'overview', label: 'Overview', icon: Activity },
+  { id: 'age', label: 'Age', icon: Clock },
   { id: 'alcohol', label: 'Alcohol', icon: Beer },
-  { id: 'blood', label: 'Blood & Body', icon: HeartPulse },
+  { id: 'blood', label: 'Blood', icon: HeartPulse },
+  { id: 'body', label: 'Body', icon: Scale },
+  { id: 'eyes', label: 'Eyes', icon: Eye },
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'health', label: 'Health', icon: Stethoscope },
   { id: 'import', label: 'Import', icon: Upload },
