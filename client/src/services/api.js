@@ -60,6 +60,7 @@ export const getAppleHealthSummary = (metricName, from, to) => {
   if (to) params.set('to', to);
   return request(`/health/metrics/${metricName}?${params}`);
 };
+export const getAvailableHealthMetrics = () => request('/health/metrics/available');
 export const getAppleHealthRange = () => request('/health/range');
 export const getAppleHealthCorrelation = (from, to) => {
   const params = new URLSearchParams();

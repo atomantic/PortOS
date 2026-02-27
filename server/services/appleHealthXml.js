@@ -14,10 +14,72 @@ import { extractDateStr, readDayFile, writeDayFile } from './appleHealthIngest.j
 // === Mapping Tables ===
 
 const XML_TO_METRIC_NAME = {
-  'hkquantitytypeidentifierstepcount': 'step_count',
+  // Core vitals
   'hkquantitytypeidentifierheartrate': 'heart_rate',
   'hkquantitytypeidentifierheartratevariancessdnn': 'heart_rate_variability_sdnn',
+  'hkquantitytypeidentifierrestingheartrate': 'resting_heart_rate',
+  'hkquantitytypeidentifierwalkingheartrateaverage': 'walking_heart_rate_average',
+  'hkquantitytypeidentifierheartraterecoveryoneminute': 'heart_rate_recovery',
+  'hkquantitytypeidentifieroxygensaturation': 'blood_oxygen_saturation',
+  'hkquantitytypeidentifierrespiratoryrate': 'respiratory_rate',
+  'hkquantitytypeidentifierbodytemperature': 'body_temperature',
+  'hkquantitytypeidentifiervo2max': 'vo2_max',
+
+  // Activity
+  'hkquantitytypeidentifierstepcount': 'step_count',
+  'hkquantitytypeidentifieractiveenergyburned': 'active_energy',
+  'hkquantitytypeidentifierbasalenergyburned': 'basal_energy_burned',
+  'hkquantitytypeidentifierdistancewalkingrunning': 'walking_running_distance',
+  'hkquantitytypeidentifierflightsclimbed': 'flights_climbed',
+  'hkquantitytypeidentifierappleexercisetime': 'apple_exercise_time',
+  'hkquantitytypeidentifierapplestandtime': 'apple_stand_time',
+  'hkcategorytypeidentifierapplestandhour': 'apple_stand_hour',
+  'hkquantitytypeidentifierphysicaleffort': 'physical_effort',
+  'hkquantitytypeidentifiertimeindaylight': 'time_in_daylight',
+
+  // Walking metrics
+  'hkquantitytypeidentifierwalkingspeed': 'walking_speed',
+  'hkquantitytypeidentifierwalkingsteplength': 'walking_step_length',
+  'hkquantitytypeidentifierwalkingdoublesupportpercentage': 'walking_double_support_percentage',
+  'hkquantitytypeidentifierwalkingasymmetrypercentage': 'walking_asymmetry_percentage',
+  'hkquantitytypeidentifierstairdescentspeed': 'stair_speed_down',
+  'hkquantitytypeidentifierstairascentspeed': 'stair_speed_up',
+  'hkquantitytypeidentifierapplewalkingsteadiness': 'walking_steadiness',
+  'hkquantitytypeidentifiersixminutewalktestdistance': 'six_minute_walk_test',
+
+  // Running
+  'hkquantitytypeidentifierrunningspeed': 'running_speed',
+  'hkquantitytypeidentifierrunningpower': 'running_power',
+  'hkquantitytypeidentifierrunningverticaloscillation': 'running_vertical_oscillation',
+  'hkquantitytypeidentifierrunninggroundcontacttime': 'running_ground_contact_time',
+  'hkquantitytypeidentifierrunningstridelength': 'running_stride_length',
+
+  // Cycling
+  'hkquantitytypeidentifierdistancecycling': 'distance_cycling',
+  'hkquantitytypeidentifiercyclingspeed': 'cycling_speed',
+  'hkquantitytypeidentifiercyclingcadence': 'cycling_cadence',
+  'hkquantitytypeidentifiercyclingpower': 'cycling_power',
+  'hkquantitytypeidentifiercyclingfunctionalthresholdpower': 'cycling_ftp',
+
+  // Body measurements
+  'hkquantitytypeidentifierbodymass': 'body_mass',
+  'hkquantitytypeidentifierbodymassindex': 'body_mass_index',
+  'hkquantitytypeidentifierbodyfatpercentage': 'body_fat_percentage',
+  'hkquantitytypeidentifierleanbodymass': 'lean_body_mass',
+  'hkquantitytypeidentifierheight': 'height',
+
+  // Sleep
   'hkcategorytypeidentifiersleepanalysis': 'sleep_analysis',
+  'hkquantitytypeidentifierapplesleepingbreathingdisturbances': 'breathing_disturbances',
+
+  // Audio exposure
+  'hkquantitytypeidentifierenvironmentalaudioexposure': 'environmental_audio_exposure',
+  'hkquantitytypeidentifierheadphoneaudioexposure': 'headphone_audio_exposure',
+  'hkquantitytypeidentifierenvironmentalsoundreduction': 'environmental_sound_reduction',
+
+  // Other categories
+  'hkcategorytypeidentifierhandwashingevent': 'handwashing',
+  'hkcategorytypeidentifiermindfulsession': 'mindful_session',
 };
 
 // HKQuantityTypeIdentifierHeartRateVariabilitySDNN mapped by direct lowercase below
@@ -137,62 +199,17 @@ function aggregateSleepAnalysis(points) {
 
 // === Main Export ===
 
+const FLUSH_INTERVAL = 200000; // Flush to disk every 200K records to stay under memory limits
+
 /**
- * Stream-parse an Apple Health export.xml file using SAX.
- * Accumulates records, aggregates step/sleep metrics, then writes day files.
+ * Flush accumulated day buckets to disk: aggregate, merge with existing, write, clear.
  *
- * @param {string} filePath - Absolute path to the XML file (temp upload)
- * @param {Object|null} io - Socket.IO server instance for progress events
- * @returns {Promise<{ days: number, records: number }>}
+ * @param {Object} dayBuckets - { [dateStr]: { [metricName]: [...dataPoints] } }
+ * @returns {Promise<Set<string>>} Set of date strings that were flushed
  */
-export async function importAppleHealthXml(filePath, io = null) {
-  // dayBuckets: { [dateStr]: { [metricName]: [...dataPoints] } }
-  const dayBuckets = {};
-  let processedRecords = 0;
-
-  await new Promise((resolve, reject) => {
-    const saxStream = sax.createStream(false, { lowercase: true });
-
-    saxStream.on('opentag', (node) => {
-      if (node.name !== 'record') return;
-
-      const normalized = normalizeXmlRecord(node);
-      if (!normalized) return;
-
-      const { metricName, dateStr, dataPoint } = normalized;
-
-      if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
-      if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
-      dayBuckets[dateStr][metricName].push(dataPoint);
-
-      processedRecords++;
-
-      if (processedRecords % 10000 === 0) {
-        io?.emit('health:xml:progress', { processed: processedRecords });
-        console.log(`🍎 XML import progress: ${processedRecords} records`);
-      }
-    });
-
-    saxStream.on('error', function (e) {
-      console.error(`❌ XML parse error at record ${processedRecords}: ${e.message}`);
-      // Clear error and resume — Apple Health XML can have minor malformations
-      this._parser.error = null;
-      this._parser.resume();
-    });
-
-    saxStream.on('end', resolve);
-    saxStream.on('close', resolve);
-
-    const readStream = createReadStream(filePath);
-    readStream.on('error', reject);
-    readStream.pipe(saxStream);
-  });
-
-  console.log(`🍎 XML parsing done: ${processedRecords} raw records across ${Object.keys(dayBuckets).length} days — starting aggregation`);
-
-  // === Aggregate and write day files, freeing each bucket after write ===
+async function flushDayBuckets(dayBuckets) {
+  const flushedDates = new Set();
   const allDates = Object.keys(dayBuckets);
-  let daysCount = allDates.length;
 
   for (const dateStr of allDates) {
     const metrics = dayBuckets[dateStr];
@@ -219,14 +236,91 @@ export async function importAppleHealthXml(filePath, io = null) {
     }
 
     await writeDayFile(dateStr, dayData);
+    flushedDates.add(dateStr);
     delete dayBuckets[dateStr];
   }
+
+  return flushedDates;
+}
+
+/**
+ * Stream-parse an Apple Health export.xml file using SAX.
+ * Accumulates records in batches, flushing to disk periodically to avoid OOM.
+ *
+ * @param {string} filePath - Absolute path to the XML file (temp upload)
+ * @param {Object|null} io - Socket.IO server instance for progress events
+ * @returns {Promise<{ days: number, records: number }>}
+ */
+export async function importAppleHealthXml(filePath, io = null) {
+  // dayBuckets: { [dateStr]: { [metricName]: [...dataPoints] } }
+  const dayBuckets = {};
+  let processedRecords = 0;
+  let lastFlush = 0;
+  const allDays = new Set();
+  let flushing = false;
+
+  const inputStream = createReadStream(filePath);
+
+  await new Promise((resolve, reject) => {
+    const saxStream = sax.createStream(false, { lowercase: true });
+
+    saxStream.on('opentag', (node) => {
+      if (node.name !== 'record') return;
+
+      const normalized = normalizeXmlRecord(node);
+      if (!normalized) return;
+
+      const { metricName, dateStr, dataPoint } = normalized;
+
+      if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
+      if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
+      dayBuckets[dateStr][metricName].push(dataPoint);
+      allDays.add(dateStr);
+
+      processedRecords++;
+
+      if (processedRecords % 10000 === 0) {
+        io?.emit('health:xml:progress', { processed: processedRecords });
+        console.log(`🍎 XML import progress: ${processedRecords} records`);
+      }
+
+      // Batch flush to prevent OOM — pause input stream, flush to disk, resume
+      if (processedRecords - lastFlush >= FLUSH_INTERVAL && !flushing) {
+        flushing = true;
+        lastFlush = processedRecords;
+        inputStream.pause();
+        flushDayBuckets(dayBuckets).then(() => {
+          console.log(`🍎 Flushed batch at ${processedRecords} records (${allDays.size} days total)`);
+          flushing = false;
+          inputStream.resume();
+        }).catch(reject);
+      }
+    });
+
+    saxStream.on('error', function (e) {
+      console.error(`❌ XML parse error at record ${processedRecords}: ${e.message}`);
+      // Clear error and resume — Apple Health XML can have minor malformations
+      this._parser.error = null;
+      this._parser.resume();
+    });
+
+    saxStream.on('end', resolve);
+    saxStream.on('close', resolve);
+
+    inputStream.on('error', reject);
+    inputStream.pipe(saxStream);
+  });
+
+  console.log(`🍎 XML parsing done: ${processedRecords} raw records across ${allDays.size} days — flushing remaining`);
+
+  // Final flush for remaining records
+  await flushDayBuckets(dayBuckets);
 
   // Clean up temp file
   unlink(filePath, () => {});
 
-  io?.emit('health:xml:complete', { days: daysCount, records: processedRecords });
-  console.log(`🍎 XML import complete: ${processedRecords} records across ${daysCount} days`);
+  io?.emit('health:xml:complete', { days: allDays.size, records: processedRecords });
+  console.log(`🍎 XML import complete: ${processedRecords} records across ${allDays.size} days`);
 
-  return { days: daysCount, records: processedRecords };
+  return { days: allDays.size, records: processedRecords };
 }

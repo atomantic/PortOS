@@ -13,7 +13,8 @@ import {
   getMetricSummary,
   getDailyAggregates,
   getAvailableDateRange,
-  getCorrelationData
+  getCorrelationData,
+  getAvailableMetrics
 } from '../services/appleHealthQuery.js';
 
 const isZip = (file) =>
@@ -52,6 +53,13 @@ router.post('/ingest', asyncHandler(async (req, res) => {
   const validated = validateRequest(healthIngestSchema, req.body);
   const result = await ingestHealthData(validated);
   res.json(result);
+}));
+
+// GET /api/health/metrics/available
+// Returns list of metrics that have data in recent day files
+router.get('/metrics/available', asyncHandler(async (req, res) => {
+  const metrics = await getAvailableMetrics();
+  res.json(metrics);
 }));
 
 // GET /api/health/metrics/:metricName

@@ -16,6 +16,13 @@ const METRIC_ALIASES = {
   'heart_rate_variability_sdnn': 'heart_rate_variability',
 };
 
+// Metrics that should be summed per day rather than averaged
+const SUM_METRICS = new Set([
+  'step_count', 'active_energy', 'basal_energy_burned', 'flights_climbed',
+  'apple_exercise_time', 'apple_stand_time', 'walking_running_distance',
+  'distance_cycling', 'time_in_daylight'
+]);
+
 // === Directory Listing ===
 
 /**
@@ -136,7 +143,22 @@ export async function getDailyAggregates(metricName, from, to) {
     if (points.length === 0) continue;
 
     let value;
-    if (metricName === 'step_count') {
+    if (metricName === 'sleep_analysis') {
+      // Sum all aggregated sleep entries (batch flushing may produce multiple per day)
+      const sleepPoints = points.filter(p => p.totalSleep !== undefined);
+      if (sleepPoints.length > 0) {
+        const deep = sleepPoints.reduce((s, p) => s + (p.deep ?? 0), 0);
+        const rem = sleepPoints.reduce((s, p) => s + (p.rem ?? 0), 0);
+        const core = sleepPoints.reduce((s, p) => s + (p.core ?? 0), 0);
+        const awake = sleepPoints.reduce((s, p) => s + (p.awake ?? 0), 0);
+        results.push({
+          date: dateStr,
+          value: Math.round((deep + rem + core) * 100) / 100,
+          deep, rem, core, awake
+        });
+      }
+      continue;
+    } else if (SUM_METRICS.has(metricName)) {
       // Sum qty per day
       value = points.reduce((sum, p) => sum + (p.qty ?? 0), 0);
     } else if (metricName === 'heart_rate') {
@@ -150,28 +172,8 @@ export async function getDailyAggregates(metricName, from, to) {
       } else {
         value = null;
       }
-    } else if (metricName === 'heart_rate_variability_sdnn') {
-      // Average qty per day
-      const qtyPoints = points.filter(p => p.qty !== undefined);
-      value = qtyPoints.length > 0
-        ? qtyPoints.reduce((sum, p) => sum + p.qty, 0) / qtyPoints.length
-        : null;
-    } else if (metricName === 'sleep_analysis') {
-      // Return full sleep summary with stage breakdown from most recent aggregated point
-      const sleepPoint = [...points].reverse().find(p => p.totalSleep !== undefined);
-      if (sleepPoint) {
-        results.push({
-          date: dateStr,
-          value: Math.round((sleepPoint.totalSleep ?? 0) * 100) / 100,
-          deep: sleepPoint.deep ?? 0,
-          rem: sleepPoint.rem ?? 0,
-          core: sleepPoint.core ?? 0,
-          awake: sleepPoint.awake ?? 0
-        });
-      }
-      continue;
     } else {
-      // Default: average qty
+      // Default: average qty (works for HRV, SpO2, walking metrics, etc.)
       const qtyPoints = points.filter(p => p.qty !== undefined);
       value = qtyPoints.length > 0
         ? qtyPoints.reduce((sum, p) => sum + p.qty, 0) / qtyPoints.length
@@ -184,6 +186,48 @@ export async function getDailyAggregates(metricName, from, to) {
   }
 
   return results;
+}
+
+// === Available Metrics Discovery ===
+
+/**
+ * Scan day files to discover which metrics have data.
+ * Samples every 30th file plus the last 30 to catch both sparse metrics
+ * (e.g. Withings body weight every few weeks) and recent daily metrics.
+ *
+ * @returns {Promise<Array<{name: string, dayCount: number}>>}
+ */
+export async function getAvailableMetrics() {
+  const dates = await listDayFiles();
+  // Sample evenly across full history + dense recent window
+  const sample = new Set();
+  for (let i = 0; i < dates.length; i += 30) sample.add(dates[i]);
+  for (const d of dates.slice(-30)) sample.add(d);
+
+  const metricCounts = new Map();
+  for (const dateStr of sample) {
+    const dayData = await readDayFile(dateStr);
+    const metrics = dayData.metrics ?? {};
+    for (const name of Object.keys(metrics)) {
+      if (metrics[name]?.length > 0) {
+        metricCounts.set(name, (metricCounts.get(name) ?? 0) + 1);
+      }
+    }
+  }
+
+  // Also check aliases (e.g. heart_rate_variability → heart_rate_variability_sdnn)
+  const reverseAliases = Object.fromEntries(
+    Object.entries(METRIC_ALIASES).map(([alias, original]) => [original, alias])
+  );
+  for (const [original, alias] of Object.entries(reverseAliases)) {
+    if (metricCounts.has(original) && !metricCounts.has(alias)) {
+      metricCounts.set(alias, metricCounts.get(original));
+    }
+  }
+
+  return Array.from(metricCounts.entries())
+    .map(([name, dayCount]) => ({ name, dayCount }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // === Correlation Data ===

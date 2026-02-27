@@ -3,6 +3,7 @@ import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Ch
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import AlcoholChart from '../AlcoholChart';
+import AlcoholHrvCorrelation from '../AlcoholHrvCorrelation';
 import StandardDrinkCalculator from '../StandardDrinkCalculator';
 
 const COMMON_DRINKS = [
@@ -56,6 +57,10 @@ export default function AlcoholTab() {
   const [editingKey, setEditingKey] = useState(null); // "date:index"
   const [editForm, setEditForm] = useState({ name: '', oz: '', abv: '', count: 1 });
 
+  // Correlation chart state
+  const [chartView, setChartView] = useState('30d');
+  const [correlationData, setCorrelationData] = useState(null);
+
   const fetchData = useCallback(async () => {
     const [summaryData, entries] = await Promise.all([
       api.getAlcoholSummary().catch(() => null),
@@ -69,6 +74,17 @@ export default function AlcoholTab() {
   useEffect(() => {
     fetchData();
   }, [fetchData, refreshKey]);
+
+  // Fetch correlation data for HRV chart
+  const chartDays = { '7d': 7, '30d': 30, '90d': 90 }[chartView] || 30;
+  const correlationFrom = (() => { const d = new Date(); d.setDate(d.getDate() - chartDays); return d.toISOString().split('T')[0]; })();
+  const correlationTo = new Date().toISOString().split('T')[0];
+
+  useEffect(() => {
+    api.getAppleHealthCorrelation(correlationFrom, correlationTo)
+      .then(setCorrelationData)
+      .catch(() => setCorrelationData(null));
+  }, [correlationFrom, correlationTo]);
 
   const handleQuickAdd = async (drink) => {
     setLogging(true);
@@ -208,8 +224,11 @@ export default function AlcoholTab() {
         </div>
       )}
 
-      {/* Consumption Chart */}
-      <AlcoholChart sex={summary?.sex} onRefreshKey={refreshKey} />
+      {/* Consumption + HRV Correlation Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <AlcoholChart sex={summary?.sex} onRefreshKey={refreshKey} onViewChange={setChartView} />
+        {correlationData && <AlcoholHrvCorrelation data={correlationData} range={chartView} />}
+      </div>
 
       {/* Log a Drink */}
       <div className="bg-port-card border border-port-border rounded-xl p-6">
