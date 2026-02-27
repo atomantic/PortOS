@@ -70,7 +70,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   const childProcess = spawn(provider.command, args, {
     cwd: workspacePath,
-    env: { ...process.env, ...provider.envVars },
+    env: { ...process.env, ...provider.envVars, CLAUDECODE: undefined },
     windowsHide: true
   });
 

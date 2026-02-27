@@ -1885,7 +1885,9 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     windowsHide: true,
     env: {
       ...process.env,
-      ...provider.envVars
+      ...provider.envVars,
+      // Strip Claude Code session markers so child CLI processes don't detect nesting
+      CLAUDECODE: undefined
     }
   });
 

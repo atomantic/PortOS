@@ -326,7 +326,7 @@ async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_
     let resolved = false;
 
     const child = spawn(provider.command, args, {
-      env: { ...process.env, ...provider.envVars },
+      env: { ...process.env, ...provider.envVars, CLAUDECODE: undefined },
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
