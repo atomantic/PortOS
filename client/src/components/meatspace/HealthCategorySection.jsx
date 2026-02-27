@@ -6,6 +6,7 @@ import SleepCard from './SleepCard';
 
 export default function HealthCategorySection({ category, from, to, expanded, onToggle, availableMetrics }) {
   const [metricData, setMetricData] = useState({});
+  const [latestValues, setLatestValues] = useState({});
   const [loading, setLoading] = useState(false);
   const lastRangeRef = useRef(null);
 
@@ -31,10 +32,21 @@ export default function HealthCategorySection({ category, from, to, expanded, on
     ).then(results => {
       if (cancelled) return;
       const dataMap = {};
-      for (const r of results) dataMap[r.key] = r.data;
+      const emptyMetrics = [];
+      for (const r of results) {
+        dataMap[r.key] = r.data;
+        if (r.data.length === 0) emptyMetrics.push(r.key);
+      }
       setMetricData(dataMap);
       lastRangeRef.current = rangeKey;
       setLoading(false);
+
+      // Fetch latest values for metrics with no data in this range
+      if (emptyMetrics.length > 0) {
+        api.getLatestHealthMetrics(emptyMetrics)
+          .then(latest => { if (!cancelled) setLatestValues(prev => ({ ...prev, ...latest })); })
+          .catch(() => {});
+      }
     });
 
     return () => { cancelled = true; };
@@ -59,7 +71,13 @@ export default function HealthCategorySection({ category, from, to, expanded, on
             metric.key === 'sleep_analysis' ? (
               <SleepCard key={metric.key} data={metricData[metric.key] ?? []} loading={loading} />
             ) : (
-              <MetricCard key={metric.key} data={metricData[metric.key] ?? []} loading={loading} config={metric} />
+              <MetricCard
+                key={metric.key}
+                data={metricData[metric.key] ?? []}
+                loading={loading}
+                config={metric}
+                latestValue={latestValues[metric.key] ?? null}
+              />
             )
           )}
         </div>

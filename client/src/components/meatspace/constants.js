@@ -57,6 +57,32 @@ export const REFERENCE_RANGES = {
   platelets: { min: 150, max: 400, unit: 'K/uL', label: 'Platelets' },
   // Thyroid
   tsh: { min: 0.4, max: 4.0, unit: 'mIU/L', label: 'TSH' },
+  // Metabolic Panel (extended)
+  na: { min: 136, max: 144, unit: 'mmol/L', label: 'Sodium' },
+  k: { min: 3.5, max: 5.2, unit: 'mmol/L', label: 'Potassium' },
+  ci: { min: 98, max: 106, unit: 'mmol/L', label: 'Chloride' },
+  co2: { min: 22, max: 32, unit: 'mmol/L', label: 'CO2' },
+  calcium: { min: 8.6, max: 10.3, unit: 'mg/dL', label: 'Calcium' },
+  protein: { min: 6.0, max: 8.3, unit: 'g/dL', label: 'Total Protein' },
+  albumin: { min: 3.5, max: 5.5, unit: 'g/dL', label: 'Albumin' },
+  globulin: { min: 1.5, max: 4.5, unit: 'g/dL', label: 'Globulin' },
+  a_g_ratio: { min: 1.0, max: 2.5, unit: '', label: 'A/G Ratio' },
+  bilirubin: { min: 0.1, max: 1.2, unit: 'mg/dL', label: 'Bilirubin' },
+  bili_direct: { min: 0.0, max: 0.5, unit: 'mg/dL', label: 'Bilirubin Direct' },
+  alk_phos: { min: 36, max: 130, unit: 'U/L', label: 'Alkaline Phosphatase' },
+  sgot_ast: { min: 10, max: 40, unit: 'U/L', label: 'AST (SGOT)' },
+  alt: { min: 7, max: 56, unit: 'U/L', label: 'ALT (SGPT)' },
+  hba1c: { min: 4.0, max: 5.6, unit: '%', label: 'HbA1c' },
+  anion_gap: { min: 3, max: 12, unit: 'mmol/L', label: 'Anion Gap' },
+  // Lipids (extended)
+  chol_hdl_ratio: { min: 0, max: 5.0, unit: '', label: 'Chol/HDL Ratio' },
+  non_hdl_col: { min: 0, max: 130, unit: 'mg/dL', label: 'Non-HDL Cholesterol' },
+  // CBC (extended)
+  mcv: { min: 80, max: 100, unit: 'fL', label: 'MCV' },
+  mch: { min: 27, max: 33, unit: 'pg', label: 'MCH' },
+  mchc: { min: 32, max: 36, unit: 'g/dL', label: 'MCHC' },
+  rdw: { min: 11.0, max: 15.0, unit: '%', label: 'RDW' },
+  mpv: { min: 7.5, max: 12.5, unit: 'fL', label: 'MPV' },
   // Other
   homocysteine: { min: 5, max: 15, unit: 'umol/L', label: 'Homocysteine' }
 };

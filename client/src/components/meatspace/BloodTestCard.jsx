@@ -49,11 +49,22 @@ export default function BloodTestCard({ test }) {
 }
 
 function getCategoryForKey(key) {
-  const lipids = ['cholesterol', 'hdl', 'ldl', 'triglycerides'];
-  const cbc = ['wbc', 'rbc', 'hemoglobin', 'hematocrit', 'platelets'];
-  const thyroid = ['tsh'];
+  const metabolic = [
+    'glucose', 'bun', 'creatinine', 'egfr', 'na', 'k', 'ci', 'co2',
+    'calcium', 'protein', 'albumin', 'globulin', 'a_g_ratio', 'bilirubin',
+    'bili_direct', 'alk_phos', 'sgot_ast', 'alt', 'hba1c', 'anion_gap', 'apoB'
+  ];
+  const lipids = ['cholesterol', 'hdl', 'ldl', 'triglycerides', 'chol_hdl_ratio', 'non_hdl_col'];
+  const cbc = [
+    'wbc', 'rbc', 'hemoglobin', 'hematocrit', 'platelets',
+    'mcv', 'mch', 'mchc', 'rdw', 'mpv',
+    'neutrophils_pct', 'lymphocytes_pct', 'monocytes_pct', 'eosinophils_pct', 'basophils_pct',
+    'abs_neutrophils', 'abs_lymphocytes', 'abs_monocytes', 'abs_eosinophils', 'abs_basophils'
+  ];
+  const thyroid = ['tsh', 'free_t4', 'free_t3'];
+  if (metabolic.includes(key)) return 'Metabolic Panel';
   if (lipids.includes(key)) return 'Lipids';
   if (cbc.includes(key)) return 'CBC';
   if (thyroid.includes(key)) return 'Thyroid';
-  return 'Metabolic Panel';
+  return 'Other';
 }

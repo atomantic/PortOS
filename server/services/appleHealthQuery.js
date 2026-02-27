@@ -230,6 +230,44 @@ export async function getAvailableMetrics() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// === Latest Values ===
+
+/**
+ * Get the most recent recorded value for each requested metric.
+ * Scans backward from the newest day file until a value is found for each metric.
+ *
+ * @param {string[]} metricNames - Metric names to look up
+ * @returns {Promise<Object>} Map of metricName → { date, value } or null
+ */
+export async function getLatestMetricValues(metricNames) {
+  const dates = await listDayFiles();
+  const result = {};
+  const remaining = new Set(metricNames);
+
+  for (let i = dates.length - 1; i >= 0 && remaining.size > 0; i--) {
+    const dateStr = dates[i];
+    const dayData = await readDayFile(dateStr);
+    const metrics = dayData.metrics ?? {};
+
+    for (const name of [...remaining]) {
+      const points = metrics[name] || metrics[METRIC_ALIASES[name]] || [];
+      if (points.length === 0) continue;
+
+      // Use the last point's qty as the value
+      const lastPoint = points[points.length - 1];
+      const value = lastPoint.qty ?? lastPoint.Avg ?? lastPoint.value ?? null;
+      if (value != null) {
+        result[name] = { date: dateStr, value: Math.round(value * 100) / 100 };
+        remaining.delete(name);
+      }
+    }
+  }
+
+  // Fill nulls for metrics with no data at all
+  for (const name of remaining) result[name] = null;
+  return result;
+}
+
 // === Correlation Data ===
 
 /**
