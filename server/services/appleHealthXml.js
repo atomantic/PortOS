@@ -17,7 +17,6 @@ const XML_TO_METRIC_NAME = {
   'hkquantitytypeidentifierstepcount': 'step_count',
   'hkquantitytypeidentifierheartrate': 'heart_rate',
   'hkquantitytypeidentifierheartratevariancessdnn': 'heart_rate_variability_sdnn',
-  'hkquantitytypeidentifierheartratevariancessdnn': 'heart_rate_variability_sdnn',
   'hkcategorytypeidentifiersleepanalysis': 'sleep_analysis',
 };
 
