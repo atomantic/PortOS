@@ -56,46 +56,6 @@
           "ports": { "cdp": 5556, "health": 5557 }
         }
       ]
-    },
-    "example-app-1": {
-      "id": "example-app-1",
-      "name": "My Web App",
-      "repoPath": "/Users/you/projects/my-web-app",
-      "type": "vite+express",
-      "uiPort": 3000,
-      "apiPort": 3001,
-      "uiUrl": "http://localhost:3000",
-      "startCommands": [
-        "npm run dev"
-      ],
-      "pm2ProcessNames": [
-        "my-web-app"
-      ],
-      "envFile": ".env",
-      "icon": null,
-      "editorCommand": "code .",
-      "createdAt": "2024-01-01T00:00:00.000Z",
-      "updatedAt": "2024-01-01T00:00:00.000Z"
-    },
-    "example-app-2": {
-      "id": "example-app-2",
-      "name": "API Server",
-      "repoPath": "/Users/you/projects/api-server",
-      "type": "single-node-server",
-      "uiPort": null,
-      "apiPort": 4000,
-      "uiUrl": null,
-      "startCommands": [
-        "npm start"
-      ],
-      "pm2ProcessNames": [
-        "api-server"
-      ],
-      "envFile": ".env",
-      "icon": null,
-      "editorCommand": "code .",
-      "createdAt": "2024-01-01T00:00:00.000Z",
-      "updatedAt": "2024-01-01T00:00:00.000Z"
     }
   }
 }
