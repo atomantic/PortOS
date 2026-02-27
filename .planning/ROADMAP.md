@@ -77,8 +77,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- Backend insights engine: insightsService.js with genome-health correlations, LLM taste-identity themes, cross-domain narrative; REST routes, Zod validation, client API functions (INS-01, INS-02, INS-04)
-- [ ] 04-02-PLAN.md -- Insights dashboard UI: /insights/:tab page with Overview, Genome-Health, Taste-Identity, Cross-Domain tabs; shared components, App.jsx routes, Layout.jsx nav entry (INS-03, INS-01, INS-02, INS-04)
+- [x] 04-01-PLAN.md -- Backend insights engine: insightsService.js with genome-health correlations, LLM taste-identity themes, cross-domain narrative; REST routes, Zod validation, client API functions (INS-01, INS-02, INS-04)
+- [x] 04-02-PLAN.md -- Insights dashboard UI: /insights/:tab page with Overview, Genome-Health, Taste-Identity, Cross-Domain tabs; shared components, App.jsx routes, Layout.jsx nav entry (INS-03, INS-01, INS-02, INS-04)
 
 ### Phase 5: Unified Search (Cmd+K)
 **Goal**: Any piece of information in PortOS is one keystroke away via a global search overlay
