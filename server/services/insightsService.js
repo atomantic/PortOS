@@ -301,7 +301,7 @@ export async function getThemeAnalysis() {
   if (!cached) {
     return { available: false, reason: 'not_generated' };
   }
-  return cached;
+  return { ...cached, available: true };
 }
 
 /**
@@ -383,7 +383,7 @@ export async function getCrossDomainNarrative() {
   if (!cached) {
     return { available: false, reason: 'not_generated' };
   }
-  return cached;
+  return { ...cached, available: true };
 }
 
 /**
