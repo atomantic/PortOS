@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [release]
 
 permissions:
   contents: write
@@ -100,7 +100,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Archive changelog and sync dev
+      - name: Archive changelog and sync main
         if: steps.tag-check.outputs.exists == 'false'
         run: |
           # Get current version (the one we just released)
@@ -109,27 +109,24 @@ jobs:
           MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
           MAJOR_MINOR="$MAJOR.$MINOR"
 
-          # Archive changelog on main first (single source of truth)
-          # This avoids cherry-pick divergence that causes merge conflicts on the next PR
+          # Archive changelog on release branch first
           PATTERN_FILE=".changelog/v${MAJOR_MINOR}.x.md"
           VERSIONED_FILE=".changelog/v${CURRENT_VERSION}.md"
 
           if [ -f "$PATTERN_FILE" ]; then
-            # Rename and version the changelog file on main
             git mv "$PATTERN_FILE" "$VERSIONED_FILE"
 
-            # Replace version placeholders in the renamed file
             sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"
             rm "${VERSIONED_FILE}.bak"
 
             git add "$VERSIONED_FILE"
             git commit -m "docs: archive changelog for v${CURRENT_VERSION} [skip ci]"
-            git push origin main
+            git push origin release
           fi
 
-          # Checkout dev and merge main to share the changelog commit history
-          git fetch origin dev
-          git checkout dev
+          # Checkout main and merge release to share the changelog archive
           git fetch origin main
-          git merge origin/main -m "merge: incorporate v${CURRENT_VERSION} changelog archive [skip ci]"
-          git push origin dev
+          git checkout main
+          git fetch origin release
+          git merge origin/release -m "merge: incorporate v${CURRENT_VERSION} changelog archive [skip ci]"
+          git push origin main
