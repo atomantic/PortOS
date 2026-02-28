@@ -196,6 +196,7 @@ export async function createApp(appData) {
     uiPort: appData.uiPort || null,
     devUiPort: appData.devUiPort || null,
     apiPort: appData.apiPort || null,
+    buildCommand: appData.buildCommand || null,
     startCommands: appData.startCommands || ['npm run dev'],
     pm2ProcessNames: appData.pm2ProcessNames || [appData.name.toLowerCase().replace(/\s+/g, '-')],
     envFile: appData.envFile || '.env',

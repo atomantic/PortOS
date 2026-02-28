@@ -292,6 +292,85 @@ describe('Apps Routes', () => {
     });
   });
 
+  describe('GET /api/apps - devUiPort enrichment', () => {
+    it('should include devUiPort derived from process ports.devUi', async () => {
+      const mockApps = [{
+        id: 'app-001',
+        name: 'Test App',
+        pm2ProcessNames: ['test-app'],
+        repoPath: '/tmp/test',
+        processes: [{ name: 'test-app', ports: { devUi: 5555 } }]
+      }];
+      appsService.getAllApps.mockResolvedValue(mockApps);
+      pm2Service.listProcesses.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/apps');
+
+      expect(response.status).toBe(200);
+      expect(response.body[0].devUiPort).toBe(5555);
+    });
+
+    it('should use explicit devUiPort over derived value', async () => {
+      const mockApps = [{
+        id: 'app-001',
+        name: 'Test App',
+        pm2ProcessNames: ['test-app'],
+        repoPath: '/tmp/test',
+        devUiPort: 4444,
+        processes: [{ name: 'test-app', ports: { devUi: 5555 } }]
+      }];
+      appsService.getAllApps.mockResolvedValue(mockApps);
+      pm2Service.listProcesses.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/apps');
+
+      expect(response.status).toBe(200);
+      expect(response.body[0].devUiPort).toBe(4444);
+    });
+  });
+
+  describe('POST /api/apps/:id/build', () => {
+    it('should return 404 if app not found', async () => {
+      appsService.getAppById.mockResolvedValue(null);
+
+      const response = await request(app).post('/api/apps/app-999/build');
+
+      expect(response.status).toBe(404);
+    });
+
+    it('should reject build commands not starting with npm or npx', async () => {
+      const mockApp = {
+        id: 'app-001',
+        name: 'Test App',
+        repoPath: '/tmp',
+        buildCommand: 'rm -rf /',
+        pm2ProcessNames: ['test-app']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+
+      const response = await request(app).post('/api/apps/app-001/build');
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_BUILD_COMMAND');
+    });
+
+    it('should return 400 if repo path does not exist', async () => {
+      const mockApp = {
+        id: 'app-001',
+        name: 'Test App',
+        repoPath: '/nonexistent/path/that/does/not/exist',
+        buildCommand: 'npm run build',
+        pm2ProcessNames: ['test-app']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+
+      const response = await request(app).post('/api/apps/app-001/build');
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('PATH_NOT_FOUND');
+    });
+  });
+
   describe('GET /api/apps/:id/status', () => {
     it('should return PM2 status for app processes', async () => {
       const mockApp = {

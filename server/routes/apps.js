@@ -389,11 +389,20 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
 
   console.log(`🔨 Building ${app.name}: ${buildCommand}`);
 
+  const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const result = await new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd: app.repoPath, shell: false, windowsHide: true });
     let stdout = '';
     let stderr = '';
+    let settled = false;
     const MAX = 64 * 1024;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill('SIGTERM');
+        resolve({ success: false, stderr: `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`, code: -1 });
+      }
+    }, BUILD_TIMEOUT_MS);
     child.stdout.on('data', d => {
       stdout += d;
       if (stdout.length > MAX) stdout = stdout.slice(-MAX);
@@ -403,10 +412,18 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
       if (stderr.length > MAX) stderr = stderr.slice(-MAX);
     });
     child.on('close', code => {
-      resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code });
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code });
+      }
     });
     child.on('error', err => {
-      resolve({ success: false, stderr: err.message, code: -1 });
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ success: false, stderr: err.message, code: -1 });
+      }
     });
   });
 

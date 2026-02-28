@@ -124,6 +124,44 @@ describe('validation.js', () => {
       const result = appSchema.safeParse(app);
       expect(result.success).toBe(true);
     });
+
+    it('should accept valid devUiPort', () => {
+      const app = { name: 'Test', repoPath: '/path', devUiPort: 5555 };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(true);
+      expect(result.data.devUiPort).toBe(5555);
+    });
+
+    it('should allow devUiPort to be null', () => {
+      const app = { name: 'Test', repoPath: '/path', devUiPort: null };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject invalid devUiPort', () => {
+      const app = { name: 'Test', repoPath: '/path', devUiPort: 70000 };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(false);
+    });
+
+    it('should accept valid buildCommand', () => {
+      const app = { name: 'Test', repoPath: '/path', buildCommand: 'npm run build' };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(true);
+      expect(result.data.buildCommand).toBe('npm run build');
+    });
+
+    it('should reject buildCommand over 200 characters', () => {
+      const app = { name: 'Test', repoPath: '/path', buildCommand: 'a'.repeat(201) };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject non-string buildCommand', () => {
+      const app = { name: 'Test', repoPath: '/path', buildCommand: 123 };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(false);
+    });
   });
 
   describe('appUpdateSchema', () => {
