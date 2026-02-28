@@ -18,17 +18,58 @@ import { writeFile, readFile, rename } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { v4 as uuidv4 } from 'uuid'
+import { spawn } from 'child_process'
 import { cosEvents } from './cosEvents.js'
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js'
 import { createMutex } from '../lib/asyncMutex.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
 
 /**
+ * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
+ * Returns a summary object when the script exits.
+ */
+function runMoltworldExploration() {
+  const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'moltworld-explore.mjs')
+  const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [scriptPath, durationMinutes], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env }
+    })
+
+    const output = []
+    child.stdout.on('data', (chunk) => {
+      const line = chunk.toString().trim()
+      if (line) {
+        output.push(line)
+        console.log(`🌍 ${line}`)
+      }
+    })
+    child.stderr.on('data', (chunk) => {
+      const line = chunk.toString().trim()
+      if (line) console.error(`🌍 ${line}`)
+    })
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true, lines: output.length })
+      } else {
+        reject(new Error(`moltworld-explore.mjs exited with code ${code}`))
+      }
+    })
+
+    child.on('error', (err) => reject(err))
+  })
+}
+
+/**
  * Registry of script handlers for jobs that execute functions directly
  * instead of spawning AI agents. Key is the scriptHandler name, value is the function.
  */
 const SCRIPT_HANDLERS = {
-  'autobiography-prompt': autobiographyCheckAndPrompt
+  'autobiography-prompt': autobiographyCheckAndPrompt,
+  'moltworld-exploration': runMoltworldExploration
 }
 
 const __filename = fileURLToPath(import.meta.url)
@@ -45,7 +86,6 @@ const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-review': 'brain-review',
-  'job-moltworld-exploration': 'moltworld-exploration',
   'job-jira-sprint-manager': 'jira-sprint-manager',
   'job-autobiography-prompt': 'autobiography-prompt'
 }
@@ -165,27 +205,14 @@ Write the briefing in a concise, actionable format. Save it as a CoS report.`,
   {
     id: 'job-moltworld-exploration',
     name: 'Moltworld Exploration',
-    description: 'Explore the Moltworld voxel world — wander, think out loud, chat with nearby agents, and earn SIM tokens by staying online.',
+    description: 'Explore the Moltworld voxel world — wander, think out loud, chat with nearby agents, and earn SIM tokens by staying online. Runs as a standalone script (no AI agent). Uses LM Studio for thought generation.',
     category: 'moltworld-exploration',
     interval: 'daily',
     intervalMs: DAY,
     enabled: false,
     priority: 'LOW',
-    autonomyLevel: 'manager',
-    promptTemplate: `[Autonomous Job] Moltworld Exploration
-
-You are acting as my agent in Moltworld, a shared voxel world where AI agents move, build, think out loud, and earn SIM tokens.
-
-Run the exploration script to wander the world for 30 minutes:
-  node server/scripts/moltworld-explore.mjs 30
-
-This will:
-1. Join the world and move to random positions
-2. Think out loud with AI-generated thoughts
-3. Greet nearby agents
-4. Earn SIM tokens by staying online (0.1 SIM/hour)
-
-After the script finishes, report the exploration summary including SIM earned and agents encountered.`,
+    type: 'script',
+    scriptHandler: 'moltworld-exploration',
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -302,16 +329,23 @@ function createDefaultJobsData() {
  * Merge loaded data with defaults (add any missing default jobs)
  */
 function mergeWithDefaults(loaded) {
-  const existingIds = new Set(loaded.jobs.map(j => j.id))
+  const existingById = new Map(loaded.jobs.map(j => [j.id, j]))
   const now = new Date().toISOString()
 
   for (const defaultJob of DEFAULT_JOBS) {
-    if (!existingIds.has(defaultJob.id)) {
+    const existing = existingById.get(defaultJob.id)
+    if (!existing) {
       loaded.jobs.push({
         ...defaultJob,
         createdAt: now,
         updatedAt: now
       })
+    } else {
+      // Sync type/scriptHandler from defaults so persisted jobs become script jobs
+      if (defaultJob.type && existing.type !== defaultJob.type) {
+        existing.type = defaultJob.type
+        existing.scriptHandler = defaultJob.scriptHandler
+      }
     }
   }
 
