@@ -1,48 +1,10 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import GsdConcernsPanel from './GsdConcernsPanel';
-
-const PHASE_STATUS_COLORS = {
-  completed: 'bg-port-success',
-  'in-progress': 'bg-port-accent',
-  planned: 'bg-port-warning',
-  pending: 'bg-gray-600'
-};
-
-const LIFECYCLE_STEPS = ['research', 'plan', 'execute', 'verify'];
-
-function PhaseTimeline({ phases = [] }) {
-  if (phases.length === 0) return <p className="text-xs text-gray-500 italic">No phases found</p>;
-
-  return (
-    <div className="space-y-1.5">
-      {phases.map(phase => (
-        <div key={phase.id || phase.name} className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full shrink-0 ${PHASE_STATUS_COLORS[phase.status] || 'bg-gray-600'}`} />
-          <span className="text-xs text-gray-400 font-mono w-8 shrink-0">{phase.id || '??'}</span>
-          <span className="text-xs text-gray-300 truncate flex-1">{phase.title || phase.name}</span>
-          {phase.lifecycle && (
-            <div className="flex gap-0.5">
-              {LIFECYCLE_STEPS.map(step => (
-                <div
-                  key={step}
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    phase.lifecycle[step] === 'done' ? 'bg-port-success' :
-                    phase.lifecycle[step] === 'active' ? 'bg-port-accent' :
-                    'bg-gray-700'
-                  }`}
-                  title={`${step}: ${phase.lifecycle[step] || 'pending'}`}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
+import PhaseTimeline from '../../gsd/PhaseTimeline';
 
 export default function GsdProjectCard({ project, onRefresh }) {
   const [expanded, setExpanded] = useState(false);
@@ -83,6 +45,13 @@ export default function GsdProjectCard({ project, onRefresh }) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            to={`/apps/${project.appId}/gsd`}
+            onClick={e => e.stopPropagation()}
+            className="text-[10px] px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 flex items-center gap-1"
+          >
+            Dashboard <ExternalLink size={10} />
+          </Link>
           {project.hasConcerns && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-warning/20 text-port-warning">concerns</span>
           )}

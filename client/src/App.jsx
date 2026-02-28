@@ -31,6 +31,7 @@ const UsagePage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.
 const ProcessesPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.ProcessesPage })));
 const AgentsPage = lazy(() => import('./pages/DevTools').then(m => ({ default: m.AgentsPage })));
 const CyberCity = lazy(() => import('./pages/CyberCity'));
+const AppDetail = lazy(() => import('./pages/AppDetail'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -63,6 +64,8 @@ export default function App() {
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
           <Route path="apps/create" element={<CreateApp />} />
+          <Route path="apps/:appId" element={<AppDetail />} />
+          <Route path="apps/:appId/:tab" element={<AppDetail />} />
           <Route path="templates" element={<Templates />} />
           <Route path="security" element={<Security />} />
           <Route path="uploads" element={<Uploads />} />

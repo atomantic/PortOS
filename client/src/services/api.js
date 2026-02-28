@@ -130,6 +130,10 @@ export const getAppLogs = (id, lines = 100, processName) => {
   return request(`/apps/${id}/logs?${params}`);
 };
 
+export const getAppDocuments = (id) => request(`/apps/${id}/documents`);
+export const getAppDocument = (id, filename) => request(`/apps/${id}/documents/${filename}`);
+export const getAppAgents = (id, limit = 50) => request(`/apps/${id}/agents?limit=${limit}`);
+
 // Ports
 export const scanPorts = () => request('/ports/scan');
 export const checkPorts = (ports) => request('/ports/check', {

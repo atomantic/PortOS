@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import {
   Home,
@@ -61,6 +61,8 @@ import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
 import CmdKSearch from './CmdKSearch';
+import * as api from '../services/api';
+import socket from '../services/socket';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -74,7 +76,7 @@ const navItems = [
       { to: '/ai', label: 'Providers', icon: Bot }
     ]
   },
-  { to: '/apps', label: 'Apps', icon: Package, single: true },
+  { label: 'Apps', icon: Package, dynamic: 'apps', children: [] },
   { to: '/brain', label: 'Brain', icon: Brain, single: true },
   {
     label: 'Chief of Staff',
@@ -181,13 +183,39 @@ export default function Layout() {
     clearAll
   } = useNotifications();
 
+  // Fetch apps for sidebar navigation
+  const [sidebarApps, setSidebarApps] = useState([]);
+  useEffect(() => {
+    const fetchApps = () => {
+      api.getApps().then(apps => {
+        setSidebarApps((apps || []).filter(a => !a.archived).sort((a, b) => a.name.localeCompare(b.name)));
+      }).catch(() => {});
+    };
+    fetchApps();
+    socket.on('apps:changed', fetchApps);
+    return () => socket.off('apps:changed', fetchApps);
+  }, []);
+
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));
   }, [collapsed]);
 
+  // Build dynamic nav items with app children
+  const resolvedNavItems = useMemo(() => navItems.map(item => {
+    if (item.dynamic !== 'apps') return item;
+    return {
+      ...item,
+      children: sidebarApps.map(app => ({
+        to: `/apps/${app.id}`,
+        label: app.name,
+        icon: Package
+      }))
+    };
+  }), [sidebarApps]);
+
   // Auto-expand sections when on a child page
   useEffect(() => {
-    navItems.forEach(item => {
+    resolvedNavItems.forEach(item => {
       if (item.children) {
         const isChildActive = item.children.some(child =>
           child.to && (location.pathname === child.to || location.pathname.startsWith(child.to + '/'))
@@ -197,7 +225,7 @@ export default function Layout() {
         }
       }
     });
-  }, [location.pathname]);
+  }, [location.pathname, resolvedNavItems]);
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -478,7 +506,7 @@ export default function Layout() {
 
         {/* Nav items */}
         <nav className="flex-1 py-4 overflow-y-auto">
-          {navItems.map(renderNavItem)}
+          {resolvedNavItems.map(renderNavItem)}
         </nav>
 
         {/* Footer with version and notifications */}
@@ -541,7 +569,8 @@ export default function Layout() {
             location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||
-            location.pathname.startsWith('/city');
+            location.pathname.startsWith('/city') ||
+            /^\/apps\/[^/]+/.test(location.pathname);
           return (
             <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               {isFullWidth ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}

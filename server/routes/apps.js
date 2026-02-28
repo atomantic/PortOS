@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import { join, resolve } from 'path';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import * as appUpdater from '../services/appUpdater.js';
+import * as cos from '../services/cos.js';
 import { logAction } from '../services/history.js';
 import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -502,6 +505,108 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     console.log(`🔄 No config changes for ${app.name}`);
     res.json({ success: true, updated: false, app, processes: app.processes || [] });
   }
+}));
+
+// ============================================================
+// Document Endpoints
+// ============================================================
+
+const ALLOWED_DOCUMENTS = ['PLAN.md', 'CLAUDE.md', 'GOALS.md'];
+
+// GET /api/apps/:id/documents - List which documents exist
+router.get('/:id/documents', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+
+  if (!app.repoPath || !existsSync(app.repoPath)) {
+    return res.json({ documents: [], hasPlanning: false });
+  }
+
+  const documents = ALLOWED_DOCUMENTS.map(filename => ({
+    filename,
+    exists: existsSync(join(app.repoPath, filename))
+  }));
+
+  const hasPlanning = existsSync(join(app.repoPath, '.planning'));
+
+  res.json({ documents, hasPlanning });
+}));
+
+// GET /api/apps/:id/documents/:filename - Read a single document
+router.get('/:id/documents/:filename', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const { filename } = req.params;
+
+  if (!ALLOWED_DOCUMENTS.includes(filename)) {
+    throw new ServerError('Document not in allowlist', { status: 400, code: 'INVALID_DOCUMENT' });
+  }
+
+  if (!app.repoPath || !existsSync(app.repoPath)) {
+    throw new ServerError('App repo path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+
+  const filePath = join(app.repoPath, filename);
+  const resolved = resolve(filePath);
+
+  // Path traversal guard
+  if (!resolved.startsWith(resolve(app.repoPath))) {
+    throw new ServerError('Invalid document path', { status: 400, code: 'PATH_TRAVERSAL' });
+  }
+
+  if (!existsSync(resolved)) {
+    throw new ServerError('Document not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  const content = await readFile(resolved, 'utf-8');
+  res.json({ filename, content });
+}));
+
+// ============================================================
+// Agent History Endpoints
+// ============================================================
+
+// GET /api/apps/:id/agents - Recent CoS agents for this app
+router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const limit = parseInt(req.query.limit, 10) || 50;
+
+  // Get running agents filtered by this app
+  const runningAgents = await cos.getAgents().catch(() => []);
+  const appRunning = runningAgents.filter(a =>
+    a.metadata?.app === app.id || a.metadata?.taskApp === app.id
+  );
+
+  // Scan last 14 days of agent history for this app
+  const dates = await cos.getAgentDates().catch(() => []);
+  const recentDates = dates.slice(0, 14);
+  const historyAgents = [];
+
+  for (const { date } of recentDates) {
+    if (historyAgents.length >= limit) break;
+    const dayAgents = await cos.getAgentsByDate(date).catch(() => []);
+    const appAgents = dayAgents.filter(a =>
+      a.metadata?.app === app.id || a.metadata?.taskApp === app.id
+    );
+    historyAgents.push(...appAgents);
+  }
+
+  // Combine running + history, deduplicate by id, limit
+  const seenIds = new Set();
+  const combined = [];
+  for (const agent of [...appRunning, ...historyAgents]) {
+    if (seenIds.has(agent.id)) continue;
+    seenIds.add(agent.id);
+    combined.push(agent);
+    if (combined.length >= limit) break;
+  }
+
+  const running = combined.filter(a => a.status === 'running' || a.status === 'spawning').length;
+  const succeeded = combined.filter(a => a.status === 'completed').length;
+  const failed = combined.filter(a => a.status === 'failed' || a.status === 'error').length;
+
+  res.json({
+    agents: combined,
+    summary: { total: combined.length, running, succeeded, failed }
+  });
 }));
 
 export default router;
