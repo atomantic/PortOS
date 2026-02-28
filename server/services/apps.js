@@ -86,11 +86,33 @@ async function loadApps() {
     data.apps = {};
   }
 
-  // Ensure PortOS baseline app is always present
+  // Ensure PortOS baseline app is always present and up-to-date
+  const baseline = buildPortosApp();
   if (!data.apps[PORTOS_APP_ID]) {
-    data.apps[PORTOS_APP_ID] = buildPortosApp();
+    data.apps[PORTOS_APP_ID] = baseline;
     await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
     console.log('📦 Seeded baseline PortOS app into apps registry');
+  } else {
+    // Reconcile: merge new baseline fields into existing entry (preserves user overrides)
+    let dirty = false;
+    for (const [key, value] of Object.entries(baseline)) {
+      if (!(key in data.apps[PORTOS_APP_ID])) {
+        data.apps[PORTOS_APP_ID][key] = value;
+        dirty = true;
+      }
+    }
+    // Force-sync specific fields that should always match the code definition
+    const forceSync = ['uiPort', 'devUiPort', 'apiPort', 'buildCommand', 'startCommands', 'processes', 'pm2ProcessNames'];
+    for (const key of forceSync) {
+      if (JSON.stringify(data.apps[PORTOS_APP_ID][key]) !== JSON.stringify(baseline[key])) {
+        data.apps[PORTOS_APP_ID][key] = baseline[key];
+        dirty = true;
+      }
+    }
+    if (dirty) {
+      await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
+      console.log('📦 Reconciled PortOS baseline app with latest fields');
+    }
   }
 
   appsCache = data;

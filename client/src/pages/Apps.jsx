@@ -629,15 +629,17 @@ export default function Apps() {
                         <RefreshCw size={14} aria-hidden="true" className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
                         Refresh Config
                       </button>
-                      <button
-                        onClick={() => handleStandardize(app)}
-                        disabled={standardizing[app.id]}
-                        className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                        aria-label="Standardize PM2 config: move all ports to ecosystem.config.cjs"
-                      >
-                        <Wrench size={14} aria-hidden="true" className={standardizing[app.id] ? 'animate-spin' : ''} />
-                        {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
-                      </button>
+                      {app.id !== api.PORTOS_APP_ID && (
+                        <button
+                          onClick={() => handleStandardize(app)}
+                          disabled={standardizing[app.id]}
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                          aria-label="Standardize PM2 config: move all ports to ecosystem.config.cjs"
+                        >
+                          <Wrench size={14} aria-hidden="true" className={standardizing[app.id] ? 'animate-spin' : ''} />
+                          {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
