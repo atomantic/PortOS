@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, RotateCcw, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
@@ -23,6 +23,7 @@ export default function AppDetailView() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
+  const [buildLoading, setBuildLoading] = useState(false);
 
   const fetchApp = useCallback(async () => {
     const data = await api.getApp(appId).catch(() => null);
@@ -66,6 +67,15 @@ export default function AppDetailView() {
       return;
     }
     setActionLoading(null);
+  };
+
+  const handleBuild = async () => {
+    setBuildLoading(true);
+    const result = await api.buildApp(appId).catch(() => null);
+    setBuildLoading(false);
+    if (result?.success) {
+      toast.success(`${app.name} production build complete`);
+    }
   };
 
   const visibleTabs = APP_DETAIL_TABS;
@@ -166,6 +176,26 @@ export default function AppDetailView() {
               >
                 <ExternalLink size={14} />
                 <span className="text-xs">Launch</span>
+              </button>
+            )}
+            {app.devUiPort && app.overallStatus === 'online' && (
+              <button
+                onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
+                className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+              >
+                <ExternalLink size={14} />
+                <span className="text-xs">Launch Dev</span>
+              </button>
+            )}
+            {app.buildCommand && app.overallStatus === 'online' && (
+              <button
+                onClick={handleBuild}
+                disabled={buildLoading}
+                className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1 disabled:opacity-50"
+                aria-label={`Build production UI: ${app.buildCommand}`}
+              >
+                <Hammer size={14} className={buildLoading ? 'animate-bounce' : ''} />
+                <span className="text-xs">{buildLoading ? 'Building...' : 'Build'}</span>
               </button>
             )}
           </div>

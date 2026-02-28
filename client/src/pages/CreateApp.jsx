@@ -34,7 +34,9 @@ export default function CreateApp() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [uiPort, setUiPort] = useState('');
+  const [devUiPort, setDevUiPort] = useState('');
   const [apiPort, setApiPort] = useState('');
+  const [buildCommand, setBuildCommand] = useState('');
   const [startCommands, setStartCommands] = useState('');
   const [pm2Names, setPm2Names] = useState('');
   const [pm2Status, setPm2Status] = useState(null);
@@ -74,7 +76,9 @@ export default function CreateApp() {
       if (data.name) setName(data.name);
       if (data.description) setDescription(data.description);
       if (data.uiPort) setUiPort(String(data.uiPort));
+      if (data.devUiPort) setDevUiPort(String(data.devUiPort));
       if (data.apiPort) setApiPort(String(data.apiPort));
+      if (data.buildCommand) setBuildCommand(data.buildCommand);
       if (data.startCommands?.length) setStartCommands(data.startCommands.join('\n'));
       if (data.pm2ProcessNames?.length) setPm2Names(data.pm2ProcessNames.join(', '));
       if (data.pm2Status) {
@@ -93,7 +97,9 @@ export default function CreateApp() {
         if (result.name) setName(result.name);
         if (result.description) setDescription(result.description);
         if (result.uiPort) setUiPort(String(result.uiPort));
+        if (result.devUiPort) setDevUiPort(String(result.devUiPort));
         if (result.apiPort) setApiPort(String(result.apiPort));
+        if (result.buildCommand) setBuildCommand(result.buildCommand);
         if (result.startCommands?.length) setStartCommands(result.startCommands.join('\n'));
         if (result.pm2ProcessNames?.length) setPm2Names(result.pm2ProcessNames.join(', '));
       } else if (err) {
@@ -163,7 +169,9 @@ export default function CreateApp() {
       repoPath,
       icon,
       uiPort: uiPort ? parseInt(uiPort, 10) : null,
+      devUiPort: devUiPort ? parseInt(devUiPort, 10) : null,
       apiPort: apiPort ? parseInt(apiPort, 10) : null,
+      buildCommand: buildCommand || undefined,
       startCommands: startCommands.split('\n').filter(Boolean),
       pm2ProcessNames: pm2Names
         ? pm2Names.split(',').map(s => s.trim()).filter(Boolean)
@@ -186,7 +194,9 @@ export default function CreateApp() {
     setName('');
     setDescription('');
     setUiPort('');
+    setDevUiPort('');
     setApiPort('');
+    setBuildCommand('');
     setStartCommands('');
     setPm2Names('');
     setPm2Status(null);
@@ -374,9 +384,9 @@ export default function CreateApp() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-1">UI/Frontend Port</label>
+                <label className="block text-sm text-gray-400 mb-1">UI Port</label>
                 <input
                   type="number"
                   value={uiPort}
@@ -386,12 +396,22 @@ export default function CreateApp() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-400 mb-1">API/Backend Port</label>
+                <label className="block text-sm text-gray-400 mb-1">Dev UI Port</label>
+                <input
+                  type="number"
+                  value={devUiPort}
+                  onChange={(e) => setDevUiPort(e.target.value)}
+                  placeholder="3001"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">API Port</label>
                 <input
                   type="number"
                   value={apiPort}
                   onChange={(e) => setApiPort(e.target.value)}
-                  placeholder="3001"
+                  placeholder="3002"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
                 />
               </div>
@@ -408,6 +428,20 @@ export default function CreateApp() {
               />
               <p className="text-xs text-gray-500 mt-1">
                 Commands to start your app. Multiple lines = multiple PM2 processes.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Build Command</label>
+              <input
+                type="text"
+                value={buildCommand}
+                onChange={(e) => setBuildCommand(e.target.value)}
+                placeholder="npm run build"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none font-mono text-sm"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Command to build the production UI. Enables the Build button.
               </p>
             </div>
 

@@ -78,8 +78,8 @@ router.get('/', asyncHandler(async (req, res) => {
       processes = parsed.processes;
     }
 
-    // Auto-derive uiPort/apiPort from processes when not explicitly set
-    let { uiPort, apiPort } = app;
+    // Auto-derive uiPort/apiPort/devUiPort from processes when not explicitly set
+    let { uiPort, apiPort, devUiPort } = app;
     if (!uiPort && processes?.length) {
       const uiProc = processes.find(p => p.ports?.ui);
       if (uiProc) uiPort = uiProc.ports.ui;
@@ -88,11 +88,16 @@ router.get('/', asyncHandler(async (req, res) => {
       const apiProc = processes.find(p => p.ports?.api);
       if (apiProc) apiPort = apiProc.ports.api;
     }
+    if (!devUiPort && processes?.length) {
+      const devUiProc = processes.find(p => p.ports?.devUi);
+      if (devUiProc) devUiPort = devUiProc.ports.devUi;
+    }
 
     return {
       ...app,
       processes,
       uiPort,
+      devUiPort,
       apiPort,
       pm2Status: statuses,
       overallStatus
@@ -124,8 +129,8 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     overallStatus = 'not_started';
   }
 
-  // Auto-derive uiPort/apiPort from processes when not explicitly set
-  let { uiPort, apiPort } = app;
+  // Auto-derive uiPort/apiPort/devUiPort from processes when not explicitly set
+  let { uiPort, apiPort, devUiPort } = app;
   const processes = app.processes || [];
   if (!uiPort && processes.length) {
     const uiProc = processes.find(p => p.ports?.ui);
@@ -135,8 +140,12 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     const apiProc = processes.find(p => p.ports?.api);
     if (apiProc) apiPort = apiProc.ports.api;
   }
+  if (!devUiPort && processes.length) {
+    const devUiProc = processes.find(p => p.ports?.devUi);
+    if (devUiProc) devUiPort = devUiProc.ports.devUi;
+  }
 
-  res.json({ ...app, uiPort, apiPort, overallStatus, pm2Status: statuses });
+  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses });
 }));
 
 // POST /api/apps - Create new app
@@ -360,6 +369,55 @@ router.post('/:id/update', loadApp, asyncHandler(async (req, res) => {
   console.log(`${success ? '✅' : '❌'} Update ${success ? 'complete' : 'failed'} for ${app.name}`);
 
   res.json({ success, steps: result.steps, progress: progressSteps });
+}));
+
+// POST /api/apps/:id/build - Build production UI
+router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+
+  if (!existsSync(app.repoPath)) {
+    throw new ServerError('App repo path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+
+  const buildCommand = app.buildCommand || 'npm run build';
+  const [cmd, ...args] = buildCommand.split(/\s+/);
+
+  // Only allow npm/npx as build commands
+  if (!['npm', 'npx'].includes(cmd)) {
+    throw new ServerError('Build command must start with npm or npx', { status: 400, code: 'INVALID_BUILD_COMMAND' });
+  }
+
+  console.log(`🔨 Building ${app.name}: ${buildCommand}`);
+
+  const result = await new Promise((resolve) => {
+    const child = spawn(cmd, args, { cwd: app.repoPath, shell: false, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    const MAX = 64 * 1024;
+    child.stdout.on('data', d => {
+      stdout += d;
+      if (stdout.length > MAX) stdout = stdout.slice(-MAX);
+    });
+    child.stderr.on('data', d => {
+      stderr += d;
+      if (stderr.length > MAX) stderr = stderr.slice(-MAX);
+    });
+    child.on('close', code => {
+      resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code });
+    });
+    child.on('error', err => {
+      resolve({ success: false, stderr: err.message, code: -1 });
+    });
+  });
+
+  await logAction('build', app.id, app.name, { buildCommand }, result.success);
+  console.log(`${result.success ? '✅' : '❌'} Build ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+
+  if (!result.success) {
+    throw new ServerError(`Build failed: ${result.stderr || `exit code ${result.code}`}`, { status: 500, code: 'BUILD_FAILED' });
+  }
+
+  res.json({ success: true, output: result.stdout });
 }));
 
 // GET /api/apps/:id/status - Get PM2 status

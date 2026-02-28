@@ -10,7 +10,9 @@ export default function EditAppModal({ app, onClose, onSave }) {
     icon: app.icon || 'package',
     repoPath: app.repoPath,
     uiPort: app.uiPort || '',
+    devUiPort: app.devUiPort || '',
     apiPort: app.apiPort || '',
+    buildCommand: app.buildCommand || '',
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
     editorCommand: app.editorCommand || 'code .',
@@ -70,7 +72,9 @@ export default function EditAppModal({ app, onClose, onSave }) {
       icon: formData.icon,
       repoPath: formData.repoPath,
       uiPort: formData.uiPort ? parseInt(formData.uiPort, 10) : null,
+      devUiPort: formData.devUiPort ? parseInt(formData.devUiPort, 10) : null,
       apiPort: formData.apiPort ? parseInt(formData.apiPort, 10) : null,
+      buildCommand: formData.buildCommand || undefined,
       startCommands: formData.startCommands.split('\n').filter(Boolean),
       pm2ProcessNames: formData.pm2ProcessNames
         ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
@@ -144,7 +148,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm text-gray-400 mb-1">UI Port</label>
               <input
@@ -156,13 +160,23 @@ export default function EditAppModal({ app, onClose, onSave }) {
               />
             </div>
             <div>
+              <label className="block text-sm text-gray-400 mb-1">Dev UI Port</label>
+              <input
+                type="number"
+                value={formData.devUiPort}
+                onChange={e => setFormData({ ...formData, devUiPort: e.target.value })}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
+                placeholder="3001"
+              />
+            </div>
+            <div>
               <label className="block text-sm text-gray-400 mb-1">API Port</label>
               <input
                 type="number"
                 value={formData.apiPort}
                 onChange={e => setFormData({ ...formData, apiPort: e.target.value })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none"
-                placeholder="3001"
+                placeholder="3002"
               />
             </div>
           </div>
@@ -174,6 +188,17 @@ export default function EditAppModal({ app, onClose, onSave }) {
               onChange={e => setFormData({ ...formData, startCommands: e.target.value })}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none font-mono text-sm"
               rows={2}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Build Command</label>
+            <input
+              type="text"
+              value={formData.buildCommand}
+              onChange={e => setFormData({ ...formData, buildCommand: e.target.value })}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-none font-mono text-sm"
+              placeholder="npm run build"
             />
           </div>
 

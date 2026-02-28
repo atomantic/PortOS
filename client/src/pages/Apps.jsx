@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, ChevronDown, ChevronUp, Ticket, GitBranch, Download } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, ChevronDown, ChevronUp, Ticket, GitBranch, Download, Hammer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import StatusBadge from '../components/StatusBadge';
@@ -88,6 +88,7 @@ export default function Apps() {
   const [refreshingConfig, setRefreshingConfig] = useState({});
   const [standardizing, setStandardizing] = useState({});
   const [updating, setUpdating] = useState({});
+  const [building, setBuilding] = useState({});
   const [archiving, setArchiving] = useState({});
   const [showArchived, setShowArchived] = useState(false);
   const [jiraTickets, setJiraTickets] = useState({});
@@ -148,6 +149,15 @@ export default function Apps() {
     if (result?.success) {
       const stepCount = result.steps?.length || 0;
       toast.success(`Updated ${app.name} (${stepCount} steps)`);
+    }
+  };
+
+  const handleBuild = async (app) => {
+    setBuilding(prev => ({ ...prev, [app.id]: true }));
+    const result = await api.buildApp(app.id).catch(() => null);
+    setBuilding(prev => ({ ...prev, [app.id]: false }));
+    if (result?.success) {
+      toast.success(`${app.name} production build complete`);
     }
   };
 
@@ -377,7 +387,7 @@ export default function Apps() {
                       )}
                     </div>
 
-                    {/* Launch button */}
+                    {/* Launch buttons */}
                     {app.uiPort && app.overallStatus === 'online' && (
                       <button
                         onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
@@ -386,6 +396,16 @@ export default function Apps() {
                       >
                         <ExternalLink size={14} aria-hidden="true" />
                         <span className="text-xs">Launch</span>
+                      </button>
+                    )}
+                    {app.devUiPort && app.overallStatus === 'online' && (
+                      <button
+                        onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
+                        className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                        aria-label={`Launch ${app.name} Dev UI`}
+                      >
+                        <ExternalLink size={14} aria-hidden="true" />
+                        <span className="text-xs">Launch Dev</span>
                       </button>
                     )}
 
@@ -589,6 +609,17 @@ export default function Apps() {
                         <Download size={14} aria-hidden="true" className={updating[app.id] ? 'animate-bounce' : ''} />
                         {updating[app.id] ? 'Updating...' : 'Update'}
                       </button>
+                      {app.buildCommand && (
+                        <button
+                          onClick={() => handleBuild(app)}
+                          disabled={building[app.id]}
+                          className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                          aria-label={`Build production UI: ${app.buildCommand}`}
+                        >
+                          <Hammer size={14} aria-hidden="true" className={building[app.id] ? 'animate-bounce' : ''} />
+                          {building[app.id] ? 'Building...' : 'Build'}
+                        </button>
+                      )}
                       <button
                         onClick={() => handleRefreshConfig(app)}
                         disabled={refreshingConfig[app.id]}
