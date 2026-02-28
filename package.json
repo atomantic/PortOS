@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "1.21.1",
+  "version": "1.21.2",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -10,7 +10,7 @@
     "dev": "node scripts/dev-start.js",
     "dev:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "build": "cd client && npm run build",
-    "start": "npm run build && cd server && npm start",
+    "start": "npm run build && node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only portos-server",
     "pm2:start": "node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs",
     "pm2:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "pm2:restart": "node ./node_modules/pm2/bin/pm2 restart ecosystem.config.cjs",
