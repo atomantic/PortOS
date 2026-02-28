@@ -81,6 +81,31 @@ pm2 logs
 
 ### Planned
 
+- [ ] **GSD Tab: Smart State Detection & Guided Setup** — Extend `GET /api/apps/:id/documents` to return GSD status fields and update GSD tab empty state with stepped setup guide
+
+#### GSD Smart State Detection
+
+The GSD tab currently shows a binary state: project loaded or "No GSD project initialized". This misses intermediate states where partial GSD work exists (e.g., codebase mapped but no project created).
+
+**Server Changes** — Extend `GET /api/apps/:id/documents` response to include GSD status:
+- `hasCodebaseMap` — `.planning/codebase/` directory exists with analysis files
+- `hasProject` — `.planning/PROJECT.md` exists
+- `hasRoadmap` — `.planning/ROADMAP.md` exists
+- `hasState` — `.planning/STATE.md` exists
+- `hasConcerns` — `.planning/CONCERNS.md` exists
+
+Check via `existsSync()` against `app.repoPath + '/.planning/...'` (same pattern as existing document checks).
+
+**GSD Tab UI Changes** — Replace single empty state with stepped guide:
+| State | What to show |
+|---|---|
+| Nothing (no `.planning/`) | "Run `/gsd:map-codebase` to analyze your codebase" |
+| Has `.planning/codebase/` only | "Codebase mapped! Run `/gsd:new-project` to create a project" |
+| Has `PROJECT.md` but no `ROADMAP.md` | "Project created. Run `/gsd:plan-phase` or create a roadmap" |
+| Has `ROADMAP.md` + `STATE.md` | Full project view (current behavior) |
+
+*Touches: `server/routes/apps.js` (extend documents endpoint), `client/src/components/apps/tabs/GsdTab.jsx` (stepped empty state), `client/src/services/api.js` (consume new fields)*
+
 - [ ] **M34 P5-P7**: Digital Twin - Multi-modal capture, advanced testing, personas
 - [ ] **M42 P5**: Unified Digital Twin Identity System - Cross-Insights Engine. See [Identity System](./docs/features/identity-system.md)
 - [ ] **M44 P7**: MeatSpace - Apple Health Integration (live sync via Health Auto Export app + bulk XML import)
