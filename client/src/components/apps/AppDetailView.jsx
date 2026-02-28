@@ -22,7 +22,6 @@ export default function AppDetailView() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
-  const [hasGsd, setHasGsd] = useState(false);
 
   const fetchApp = useCallback(async () => {
     const data = await api.getApp(appId).catch(() => null);
@@ -38,14 +37,6 @@ export default function AppDetailView() {
   useEffect(() => {
     fetchApp();
   }, [fetchApp]);
-
-  // Check if app has a GSD project (silent - no toast on 404)
-  useEffect(() => {
-    if (!appId) return;
-    fetch(`/api/cos/gsd/projects/${appId}`).then(r => {
-      setHasGsd(r.ok);
-    }).catch(() => setHasGsd(false));
-  }, [appId]);
 
   // Real-time updates
   useEffect(() => {
@@ -72,9 +63,7 @@ export default function AppDetailView() {
     setActionLoading(null);
   };
 
-  const visibleTabs = hasGsd
-    ? APP_DETAIL_TABS
-    : APP_DETAIL_TABS.filter(t => t.id !== 'gsd');
+  const visibleTabs = APP_DETAIL_TABS;
 
   if (loading) {
     return (

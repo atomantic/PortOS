@@ -13,12 +13,14 @@ export default function GsdTab({ appId }) {
 
   const fetchProject = async () => {
     setLoading(true);
-    const data = await api.getGsdProject(appId).catch(() => null);
-    if (!data) {
-      setNotFound(true);
-    } else {
+    // Use silent fetch to avoid toast errors on 404
+    const resp = await fetch(`/api/cos/gsd/projects/${appId}`).catch(() => null);
+    if (resp?.ok) {
+      const data = await resp.json().catch(() => null);
       setProject(data);
-      setNotFound(false);
+      setNotFound(!data);
+    } else {
+      setNotFound(true);
     }
     setLoading(false);
   };
@@ -36,8 +38,13 @@ export default function GsdTab({ appId }) {
       <div className="max-w-5xl">
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <Compass size={32} className="text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 mb-2">No GSD project found</p>
-          <p className="text-xs text-gray-500">This app does not have a .planning/ directory</p>
+          <p className="text-gray-400 mb-2">No GSD project initialized</p>
+          <p className="text-sm text-gray-500 mb-4">
+            This app does not have a <code className="text-cyan-400">.planning/</code> directory yet.
+          </p>
+          <p className="text-xs text-gray-500">
+            Run <code className="text-cyan-400">/gsd:new-project</code> in Claude Code from the app's repo to initialize GSD project tracking.
+          </p>
         </div>
       </div>
     );
