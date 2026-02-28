@@ -48,6 +48,12 @@ export default function GsdTab() {
         </button>
       </div>
 
+      {/* Info */}
+      <p className="text-xs text-gray-500 leading-relaxed">
+        This tab monitors apps with <code className="text-port-accent">.planning/</code> directories created by the GSD workflow.
+        Use <code className="text-port-accent">/gsd:*</code> commands in Claude Code to plan and track work, then view status and create tasks from concerns here.
+      </p>
+
       {/* Project Cards */}
       {projects.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
