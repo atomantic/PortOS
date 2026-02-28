@@ -27,7 +27,13 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
       restart: api.restartApp
     }[action];
 
-    await actionFn(app.id);
+    const result = await actionFn(app.id);
+
+    if (result?.selfRestart) {
+      api.handleSelfRestart();
+      return;
+    }
+
     setLoading(null);
     onUpdate?.();
   };

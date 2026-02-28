@@ -133,7 +133,11 @@ export default function Apps() {
 
   const handleRestart = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'restart' }));
-    await api.restartApp(app.id).catch(() => null);
+    const result = await api.restartApp(app.id).catch(() => null);
+    if (result?.selfRestart) {
+      api.handleSelfRestart();
+      return;
+    }
     setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 

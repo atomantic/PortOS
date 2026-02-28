@@ -108,6 +108,27 @@ export const deleteApp = (id) => request(`/apps/${id}`, { method: 'DELETE' });
 export const startApp = (id) => request(`/apps/${id}/start`, { method: 'POST' });
 export const stopApp = (id) => request(`/apps/${id}/stop`, { method: 'POST' });
 export const restartApp = (id) => request(`/apps/${id}/restart`, { method: 'POST' });
+
+/**
+ * Handle PortOS self-restart: show a loading toast, poll for server recovery, then reload.
+ * Call this after restartApp() returns { selfRestart: true }.
+ */
+export function handleSelfRestart() {
+  toast.loading('Restarting PortOS...', { id: 'self-restart', duration: Infinity });
+  const poll = async () => {
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const ok = await fetch(`${API_BASE}/system/health`).then(() => true).catch(() => false);
+      if (ok) {
+        toast.success('PortOS restarted successfully', { id: 'self-restart' });
+        setTimeout(() => window.location.reload(), 1000);
+        return;
+      }
+    }
+    toast.error('PortOS restart timed out — try reloading manually', { id: 'self-restart' });
+  };
+  poll();
+}
 export const archiveApp = (id) => request(`/apps/${id}/archive`, { method: 'POST' });
 export const unarchiveApp = (id) => request(`/apps/${id}/unarchive`, { method: 'POST' });
 export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { method: 'POST' });

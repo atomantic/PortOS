@@ -308,6 +308,22 @@ router.post('/:id/stop', loadApp, asyncHandler(async (req, res) => {
 // POST /api/apps/:id/restart - Restart app
 router.post('/:id/restart', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
+
+  // Self-restart: respond first, then restart after a delay so the response reaches the client
+  if (app.id === PORTOS_APP_ID) {
+    await logAction('restart', app.id, app.name, { processNames: app.pm2ProcessNames }, true);
+    notifyAppsChanged('restart');
+    res.json({ success: true, selfRestart: true });
+    setTimeout(async () => {
+      console.log('🔄 Self-restart: restarting PortOS processes');
+      for (const name of app.pm2ProcessNames || []) {
+        await pm2Service.restartApp(name, app.pm2Home)
+          .catch(err => console.error(`❌ Self-restart failed for ${name}: ${err.message}`));
+      }
+    }, 500);
+    return;
+  }
+
   const results = {};
 
   for (const name of app.pm2ProcessNames || []) {

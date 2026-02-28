@@ -59,7 +59,11 @@ export default function AppDetailView() {
 
   const handleRestart = async () => {
     setActionLoading('restart');
-    await api.restartApp(appId).catch(() => null);
+    const result = await api.restartApp(appId).catch(() => null);
+    if (result?.selfRestart) {
+      api.handleSelfRestart();
+      return;
+    }
     setActionLoading(null);
   };
 
