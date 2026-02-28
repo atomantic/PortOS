@@ -87,6 +87,9 @@ pm2 logs
 - [ ] **M45**: Data Backup & Recovery - Scheduled backup of `./data/` to external drive or NAS. All persistence is JSON files with zero redundancy — one bad write or disk failure loses brain, identity, health, and memory data. Incremental backup with restore verification.
 - [ ] **M46**: Unified Search (Cmd+K) - Global search across brain, memory, history, agents, tasks, and apps. Hybrid vector + BM25 extended to all data sources. Keyboard-driven launcher overlay.
 - [ ] **M47**: Push Notifications - Webhook-based alerts when agents complete tasks, critical errors occur, or goals stall. Discord/Telegram integration for mobile awareness without needing the dashboard open.
+- [ ] **M48 P1-P4**: Google Calendar Integration - OAuth2, two-way event sync, chronotype-aware smart scheduling, CoS autonomous rescheduling, calendar UI with week/month views
+- [ ] **M49 P1-P4**: Life Goals & Todo Planning - Enhanced goal model with todos and milestones, calendar time-blocking, AI-powered periodic check-ins, mortality-aware progress dashboard
+- [ ] **M50 P1-P4**: Email Management - Gmail + Outlook integration, AI categorization and priority extraction, Digital Twin voice drafting, review-before-send outbox, Brain knowledge capture
 
 ---
 
@@ -193,6 +196,83 @@ External notification delivery for critical events when not actively viewing the
 
 *Touches: new server/services/pushNotify.js, server/routes/settings.js, Settings UI, cosEvents.js, errorRecovery.js*
 
+### M48: Google Calendar Integration
+
+Shared Google OAuth2 foundation — `server/services/googleAuth.js` handles OAuth2 consent flow, token storage/refresh, scope management. Tokens stored in `data/google/auth.json`. Reused by both Calendar and Gmail.
+
+**Phases:**
+
+- **P1: Calendar Read & OAuth** — Google OAuth2 service, calendar event listing, basic week/month calendar UI, settings page for Google connection
+- **P2: Calendar Write & Sync** — Event CRUD (create/update/delete synced to Google), two-way incremental sync using Google's `syncToken`, conflict detection (last-writer-wins, Google as source of truth for external events), configurable sync interval (default 5min)
+- **P3: Smart Scheduling & CoS** — Free slot finder API, chronotype-aware slot selection (reads `data/digital-twin/chronotype.json` for peak-focus windows), auto-schedule human tasks during optimal windows, CoS autonomous job `job-calendar-schedule` for rescheduling when conflicts arise
+- **P4: Calendar UI Polish** — Week/day/month views, color coding by source/type, dashboard calendar widget (today's events), linked goal/todo indicators on events
+
+**Data:** `data/google/auth.json` (OAuth tokens), `data/calendar/events.json` (local event cache with Google sync tokens), `data/calendar/config.json` (sync settings, working hours, chronotype preferences)
+
+**Routes:** `GET/POST/PUT/DELETE /api/calendar/events`, `POST /api/calendar/sync`, `GET /api/calendar/free-slots`, `POST /api/calendar/schedule-task`, `GET /api/google/oauth/start`, `GET /api/google/oauth/callback`, `GET /api/google/status`
+
+**Nav:** Top-level sidebar item "Calendar" (alphabetically between Chief of Staff and Dev Tools)
+
+*Touches: new server/services/googleAuth.js, server/services/calendar.js, server/services/calendarScheduler.js, server/routes/google.js, server/routes/calendar.js, client/src/pages/Calendar.jsx, client/src/components/calendar/tabs/, Layout.jsx, autonomousJobs.js, data/digital-twin/chronotype.json*
+
+### M49: Life Goals & Todo Planning
+
+Extends the existing goal system in `server/services/identity.js` and `data/digital-twin/goals.json`. Adds rich progress tracking, todo sub-tasks, calendar time-blocking, and AI-powered check-ins. Gets its own top-level Goals page (not buried under Digital Twin).
+
+**Phases:**
+
+- **P1: Enhanced Goal Model & Todos** — Extend goal schema with: progress percentage + history, velocity (percent/month + trend), projected completion date, todo sub-tasks with status/priority/time estimates, time tracking (total minutes, weekly average). Dedicated Goals page with goal list and detail view
+- **P2: Calendar Time-Blocking** (depends on M48 P2) — Schedule recurring goal work sessions on calendar, link calendar events to goals/todos via IDs, track actual time spent from calendar event durations, per-goal calendar config (preferred days, time slot preference, session duration)
+- **P3: Check-in & Evaluation** — Periodic check-in prompts (weekly/monthly configurable per goal), AI evaluator uses Digital Twin + progress data to assess trajectory, timeline adjustment recommendations when behind schedule, CoS autonomous job `job-goal-check-in` for weekly evaluations, check-in history with mood/notes
+- **P4: Dashboard & Visualization** — Goal progress dashboard widget with urgency badges, burn-down / progress timeline charts, integration with existing mortality-aware urgency scoring (M42 P3), "on track" / "behind" / "at risk" status indicators
+
+**Data:** Extended `data/digital-twin/goals.json` with `todos[]`, `progressHistory[]`, `velocity{}`, `checkIns[]`, `calendarConfig{}`, `timeTracking{}` per goal. `checkInSchedule{}` at root level.
+
+**Routes:** Extend `/api/digital-twin/identity/goals` with: `PUT /:id/progress`, `POST /:id/check-in`, `POST /:id/todos`, `PUT /:id/todos/:tid`, `POST /:id/schedule`, `POST /evaluate`
+
+**Nav:** Top-level sidebar item "Goals" (alphabetically between Digital Twin and Insights)
+
+*Touches: server/services/identity.js (extend), new server/services/goalEvaluator.js, server/routes/identity.js (extend), client/src/pages/Goals.jsx, client/src/components/goals/tabs/, Layout.jsx, autonomousJobs.js*
+
+### M50: Email Management
+
+Multi-provider email integration — Gmail via Google OAuth (shared with M48) + Outlook via Microsoft Graph API (separate OAuth2 flow). Provider abstraction layer so both behave identically from the service layer up.
+
+Always review before send — AI-generated drafts go to an outbox queue. The user reviews, edits, and approves each response before it's sent. No auto-send.
+
+**Phases:**
+
+- **P1: Email Read & Provider Auth** — Gmail API integration using shared Google OAuth (`gmail.modify` scope), Microsoft Graph API with separate OAuth2 for Outlook, provider abstraction layer (`emailProvider.js`), email listing with pagination, thread view, basic email inbox UI
+- **P2: AI Categorization & Priority Extraction** — LLM-powered classification (action required, informational, promotional, social, receipts), configurable rules for known senders (skip AI for obvious categories like GitHub notifications), todo extraction from email content (linkable to M49 goal todos), priority scoring, Brain system integration for knowledge capture from action/info emails
+- **P3: Response Drafting with Digital Twin** — Draft responses using Digital Twin voice/style (reads COMMUNICATION.md, PERSONALITY.md, VALUES.md + recent thread context), outbox queue with pending/approved/sent states, draft review/editing UI, all drafts require manual approval before sending
+- **P4: CoS Automation & Rules** — Automated classification on new emails via CoS job `job-email-triage`, rule-based pre-filtering, email-to-task pipeline (email todos → M49 goal todos), priority email notifications via existing notification system
+
+**Data:** `data/email/config.json` (sync settings, categories, rules, brain capture config), `data/email/cache/YYYY-MM-DD.jsonl` (date-bucketed email cache, bodies fetched on demand), `data/email/outbox.json` (draft queue with status tracking), `data/outlook/auth.json` (Microsoft OAuth tokens)
+
+**Routes:** `GET /api/email/messages`, `GET /api/email/threads/:threadId`, `POST /api/email/sync`, `POST /api/email/classify/:id`, `POST /api/email/draft/:id`, `GET/PUT/POST/DELETE /api/email/outbox/:id`, `POST /api/email/outbox/:id/approve`
+
+**Nav:** Top-level sidebar item "Email" (alphabetically between Digital Twin and Goals)
+
+**Dependency Graph:**
+
+```
+M48 P1 (Google OAuth + Calendar Read)
+  ├── M48 P2 (Calendar Write + Sync)
+  │     ├── M49 P2 (Calendar Time-Blocking)
+  │     └── M48 P3 (Smart Scheduling + CoS)
+  │           └── M48 P4 (Calendar UI Polish)
+  └── M50 P1 (Gmail + Outlook Read — reuses Google OAuth)
+        └── M50 P2 (AI Classification)
+              └── M50 P3 (Response Drafting)
+                    └── M50 P4 (CoS Automation)
+
+M49 P1 (Enhanced Goals + Todos) — independent, no deps
+  ├── M49 P2 (Calendar Integration — needs M48 P2)
+  └── M49 P3 (Check-ins) → M49 P4 (Dashboard)
+```
+
+*Touches: new server/services/email.js, server/services/emailProvider.js, server/services/emailClassifier.js, server/services/emailDrafter.js, server/routes/email.js, client/src/pages/Email.jsx, client/src/components/email/tabs/, Layout.jsx, brain.js, autonomousJobs.js, portos-ai-toolkit (Digital Twin context for drafting)*
+
 ### Tier 1: Identity Integration (aligns with M42 direction)
 
 - **Chronotype-Aware Scheduling** — Chronotype derivation exists (M42 P1) but isn't applied to task scheduling yet. Use peak-focus windows from genome sleep markers to schedule deep-work tasks during peak hours, routine tasks during low-energy. Display energy curve on Schedule tab. *Touches: taskSchedule.js, genome.js, CoS Schedule tab*
@@ -275,3 +355,6 @@ All 10 audit items (S1–S10) from the 2025-02-19 security audit have been resol
 3. **M45**: Data Backup & Recovery — protect `./data/` from data loss
 4. **M44 P7**: Apple Health Integration — live sync + bulk XML import (spec above)
 5. **M46**: Unified Search (Cmd+K) — cross-cutting search across all data sources
+6. **M48 P1**: Google Calendar — OAuth2 foundation + calendar read
+7. **M49 P1**: Life Goals — Enhanced goal model with todos and progress tracking
+8. **M48 P2**: Google Calendar — Event CRUD and two-way sync
