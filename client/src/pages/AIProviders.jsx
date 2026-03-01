@@ -404,6 +404,11 @@ export default function AIProviders() {
                       {provider.heavyModel && <span className="ml-1 text-red-400">{provider.heavyModel}</span>}
                     </p>
                   )}
+                  {provider.headlessArgs?.length > 0 && (
+                    <p className="text-xs break-words">
+                      Headless: <code className="text-gray-300 break-all">{provider.headlessArgs.join(' ')}</code>
+                    </p>
+                  )}
                   {provider.fallbackProvider && (
                     <p className="text-xs">
                       Fallback: <span className="text-port-accent">{providers.find(p => p.id === provider.fallbackProvider)?.name || provider.fallbackProvider}</span>
@@ -560,7 +565,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     timeout: provider?.timeout || 300000,
     enabled: provider?.enabled !== false,
     envVars: provider?.envVars || {},
-    secretEnvVars: provider?.secretEnvVars || []
+    secretEnvVars: provider?.secretEnvVars || [],
+    headlessArgs: provider?.headlessArgs?.join(' ') || ''
   });
 
   const [newEnvKey, setNewEnvKey] = useState('');
@@ -578,6 +584,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     const data = {
       ...formData,
       args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
+      headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
       timeout: parseInt(formData.timeout, 10)
     };
 
@@ -649,6 +656,20 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   placeholder="--print -p"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Headless Args (for simple prompt tasks)</label>
+                <input
+                  type="text"
+                  value={formData.headlessArgs}
+                  onChange={(e) => setFormData(prev => ({ ...prev, headlessArgs: e.target.value }))}
+                  placeholder='--no-session-persistence --disable-slash-commands --tools ""'
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Extra CLI flags for lightweight prompt-in/text-out mode (brain classifier, etc.)
+                </p>
               </div>
             </>
           )}

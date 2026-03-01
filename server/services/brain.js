@@ -54,6 +54,9 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
     return new Promise((resolve, reject) => {
       const args = [...(provider.args || [])];
+      if (provider.headlessArgs?.length) {
+        args.push(...provider.headlessArgs);
+      }
       if (model) {
         args.push('--model', model);
       }
