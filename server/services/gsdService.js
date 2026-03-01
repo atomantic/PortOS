@@ -198,13 +198,9 @@ export async function parseConcernsMd(filePath) {
 }
 
 /**
- * Parse PLAN.md in a phase directory
+ * Parse a single PLAN.md file content into frontmatter + tasks
  */
-export async function parsePhasePlan(phasePath) {
-  const planFile = join(phasePath, 'PLAN.md')
-  const content = await safeReadFile(planFile)
-  if (!content) return null
-
+function parsePlanContent(content) {
   const frontmatter = {}
   let bodyContent = content
 
@@ -221,10 +217,8 @@ export async function parsePhasePlan(phasePath) {
     bodyContent = content.slice(frontmatterMatch[0].length)
   }
 
-  // Extract checkpoint tasks (lines with checkbox markers)
   const tasks = []
-  const taskLines = bodyContent.split('\n')
-  for (const line of taskLines) {
+  for (const line of bodyContent.split('\n')) {
     const taskMatch = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)/)
     if (taskMatch) {
       tasks.push({
@@ -238,25 +232,74 @@ export async function parsePhasePlan(phasePath) {
 }
 
 /**
- * Parse VERIFICATION.md in a phase directory
+ * Scan phase directory for *-PLAN.md files (e.g. 01-01-PLAN.md, 03-02-PLAN.md)
+ * Returns array of sub-plans sorted by filename
+ */
+export async function parsePhasePlans(phasePath) {
+  const entries = await readdir(phasePath).catch(() => [])
+  const planFiles = entries.filter(f => f.endsWith('-PLAN.md')).sort()
+  if (planFiles.length === 0) return []
+
+  const plans = []
+  for (const filename of planFiles) {
+    const content = await safeReadFile(join(phasePath, filename))
+    if (!content) continue
+    plans.push({ filename, ...parsePlanContent(content) })
+  }
+  return plans
+}
+
+/**
+ * Parse SUMMARY.md files in a phase directory
+ */
+export async function parsePhaseSummaries(phasePath) {
+  const entries = await readdir(phasePath).catch(() => [])
+  const summaryFiles = entries.filter(f => f.endsWith('-SUMMARY.md')).sort()
+  if (summaryFiles.length === 0) return []
+
+  const summaries = []
+  for (const filename of summaryFiles) {
+    const content = await safeReadFile(join(phasePath, filename))
+    if (!content) continue
+    summaries.push({ filename, ...parsePlanContent(content) })
+  }
+  return summaries
+}
+
+/**
+ * Scan phase directory for *-VERIFICATION.md (e.g. 01-VERIFICATION.md)
  */
 export async function parseVerification(phasePath) {
-  const verifyFile = join(phasePath, 'VERIFICATION.md')
-  const content = await safeReadFile(verifyFile)
+  const entries = await readdir(phasePath).catch(() => [])
+  const verifyFile = entries.find(f => f.endsWith('-VERIFICATION.md'))
+  if (!verifyFile) return null
+
+  const content = await safeReadFile(join(phasePath, verifyFile))
   if (!content) return null
 
   let status = 'unknown'
   let score = null
 
-  // Look for status line
   const statusMatch = content.match(/status:\s*(\w+)/i)
   if (statusMatch) status = statusMatch[1].toLowerCase()
 
-  // Look for score
   const scoreMatch = content.match(/score:\s*([\d.]+)/i)
   if (scoreMatch) score = parseFloat(scoreMatch[1])
 
   return { status, score, raw: content }
+}
+
+/**
+ * Scan phase directory for *-RESEARCH.md (e.g. 01-RESEARCH.md)
+ */
+export async function parsePhaseResearch(phasePath) {
+  const entries = await readdir(phasePath).catch(() => [])
+  const researchFile = entries.find(f => f.endsWith('-RESEARCH.md'))
+  if (!researchFile) return null
+
+  const content = await safeReadFile(join(phasePath, researchFile))
+  if (!content) return null
+  return { filename: researchFile, raw: content }
 }
 
 /**
@@ -277,6 +320,7 @@ export async function getGsdProject(appIdOrPath) {
   const roadmap = await parseRoadmapMd(join(planningPath, 'ROADMAP.md'))
   const state = await parseStateMd(join(planningPath, 'STATE.md'))
   const concerns = await parseConcernsMd(join(planningPath, 'CONCERNS.md'))
+  const projectDoc = await safeReadFile(join(planningPath, 'PROJECT.md'))
 
   // Scan for phase directories
   const phases = []
@@ -287,13 +331,20 @@ export async function getGsdProject(appIdOrPath) {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       const phasePath = join(phasesDir, entry.name)
-      const plan = await parsePhasePlan(phasePath)
+      const plans = await parsePhasePlans(phasePath)
+      const summaries = await parsePhaseSummaries(phasePath)
       const verification = await parseVerification(phasePath)
+      const research = await parsePhaseResearch(phasePath)
+      const totalTasks = plans.reduce((sum, p) => sum + p.tasks.length, 0)
+      const completedTasks = plans.reduce((sum, p) => sum + p.tasks.filter(t => t.completed).length, 0)
       phases.push({
         id: entry.name,
-        path: phasePath,
-        plan,
-        verification
+        plans,
+        summaries,
+        verification,
+        research,
+        totalTasks,
+        completedTasks
       })
     }
     phases.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
@@ -308,6 +359,7 @@ export async function getGsdProject(appIdOrPath) {
     roadmap,
     state,
     concerns,
+    projectDoc: projectDoc ? { raw: projectDoc } : null,
     phases,
     config
   }
@@ -327,27 +379,24 @@ export async function getGsdPendingActions(appId) {
   const currentPhase = project.state?.frontmatter?.current_phase
 
   for (const phase of project.phases) {
-    const hasPlan = !!phase.plan
+    const hasPlans = phase.plans?.length > 0
     const hasVerification = !!phase.verification
-    const allTasksComplete = phase.plan?.tasks?.every(t => t.completed) ?? false
+    const allTasksComplete = phase.totalTasks > 0 && phase.completedTasks === phase.totalTasks
     const verificationPassed = phase.verification?.status === 'passed'
 
     let nextAction = null
-    if (!hasPlan) {
-      // No plan yet — needs research or planning
+    if (!hasPlans) {
       nextAction = 'plan'
     } else if (!allTasksComplete) {
-      // Plan exists but tasks incomplete — needs execution
       nextAction = 'execute'
     } else if (!hasVerification || !verificationPassed) {
-      // Tasks complete but not verified
       nextAction = 'verify'
     }
 
     if (nextAction) {
       actions.push({
         phaseId: phase.id,
-        currentStep: hasPlan ? (allTasksComplete ? 'executed' : 'planned') : 'unplanned',
+        currentStep: hasPlans ? (allTasksComplete ? 'executed' : 'planned') : 'unplanned',
         nextAction
       })
     }

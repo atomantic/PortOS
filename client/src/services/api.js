@@ -1466,6 +1466,15 @@ export const createGsdConcernTasks = (appId, data) => request(`/cos/gsd/projects
   method: 'POST',
   body: JSON.stringify(data)
 });
+export const triggerGsdPhaseAction = (appId, phaseId, action) => request(`/cos/gsd/projects/${appId}/phases/${phaseId}/action`, {
+  method: 'POST',
+  body: JSON.stringify({ action })
+});
+export const getGsdDocument = (appId, docName) => request(`/cos/gsd/projects/${appId}/documents/${docName}`);
+export const saveGsdDocument = (appId, docName, content, commitMessage) => request(`/cos/gsd/projects/${appId}/documents/${docName}`, {
+  method: 'PUT',
+  body: JSON.stringify({ content, ...(commitMessage && { commitMessage }) })
+});
 
 // Default export for simplified imports
 export default {

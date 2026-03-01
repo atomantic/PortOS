@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Compass, CheckCircle, ArrowRight, FolderSearch, FileText, Map, Play, Terminal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
-import PhaseTimeline from '../../gsd/PhaseTimeline';
+import GsdProjectHeader from '../../gsd/GsdProjectHeader';
+import PhaseCardList from '../../gsd/PhaseCardList';
 import GsdConcernsPanel from '../../cos/tabs/GsdConcernsPanel';
+import GsdDocumentsPanel from '../../gsd/GsdDocumentsPanel';
 import * as api from '../../../services/api';
 
 const STEP_DESCRIPTIONS = {
@@ -157,10 +160,82 @@ function GsdSetupGuide({ gsd, appId, repoPath, onRefresh }) {
   );
 }
 
+function NextActionBanner({ pendingActions, appId }) {
+  const [triggering, setTriggering] = useState(false);
+
+  if (!pendingActions?.length) return null;
+
+  // Show the first pending action
+  const action = pendingActions[0];
+  const actionLabels = {
+    plan: { label: 'Plan', desc: 'Create a detailed execution plan', style: 'border-port-warning/30 bg-port-warning/5' },
+    execute: { label: 'Execute', desc: 'Execute the plan for this phase', style: 'border-port-accent/30 bg-port-accent/5' },
+    verify: { label: 'Verify', desc: 'Verify the implementation', style: 'border-purple-600/30 bg-purple-600/5' },
+  };
+  const cfg = actionLabels[action.nextAction] || actionLabels.plan;
+
+  const handleTrigger = async () => {
+    setTriggering(true);
+    const result = await api.triggerGsdPhaseAction(appId, action.phaseId, action.nextAction).catch(() => null);
+    setTriggering(false);
+    if (result) {
+      toast.success(`${action.nextAction} task created for ${action.phaseId}`);
+    }
+  };
+
+  return (
+    <div className={`border rounded-lg p-4 flex items-center justify-between ${cfg.style}`}>
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <ArrowRight size={14} className="text-gray-400" />
+          <span className="text-sm font-medium text-white">Next: {cfg.label} phase {action.phaseId}</span>
+        </div>
+        <p className="text-xs text-gray-500">{cfg.desc}</p>
+      </div>
+      <button
+        onClick={handleTrigger}
+        disabled={triggering}
+        className="px-4 py-2 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-sm flex items-center gap-2 border border-port-accent/30 disabled:opacity-50"
+      >
+        <Play size={14} /> {triggering ? 'Creating...' : `${cfg.label} Phase`}
+      </button>
+    </div>
+  );
+}
+
 export default function GsdTab({ appId, repoPath }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [project, setProject] = useState(null);
+  const [pendingActions, setPendingActions] = useState([]);
   const [gsdStatus, setGsdStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const expandedPhase = searchParams.get('phase') || null;
+  const selectedDoc = searchParams.get('doc') || null;
+
+  const setExpandedPhase = (phaseId) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (phaseId && phaseId !== expandedPhase) {
+        next.set('phase', phaseId);
+      } else {
+        next.delete('phase');
+      }
+      return next;
+    }, { replace: true });
+  };
+
+  const setSelectedDoc = (docName) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (docName) {
+        next.set('doc', docName);
+      } else {
+        next.delete('doc');
+      }
+      return next;
+    }, { replace: true });
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -173,13 +248,21 @@ export default function GsdTab({ appId, repoPath }) {
 
     // Only fetch project data if we have a roadmap + state (full project)
     if (gsd.hasRoadmap && gsd.hasState) {
-      const resp = await fetch(`/api/cos/gsd/projects/${appId}`).catch(() => null);
-      if (resp?.ok) {
-        const data = await resp.json().catch(() => null);
+      const [projectResp, phasesResp] = await Promise.all([
+        fetch(`/api/cos/gsd/projects/${appId}`).catch(() => null),
+        fetch(`/api/cos/gsd/projects/${appId}/phases`).catch(() => null),
+      ]);
+      if (projectResp?.ok) {
+        const data = await projectResp.json().catch(() => null);
         setProject(data);
+      }
+      if (phasesResp?.ok) {
+        const data = await phasesResp.json().catch(() => null);
+        setPendingActions(data?.pendingActions || []);
       }
     } else {
       setProject(null);
+      setPendingActions([]);
     }
 
     setLoading(false);
@@ -198,31 +281,28 @@ export default function GsdTab({ appId, repoPath }) {
     return <GsdSetupGuide gsd={gsdStatus || {}} appId={appId} repoPath={repoPath} onRefresh={fetchData} />;
   }
 
-  const phaseCount = project?.phases?.length || 0;
-  const completedPhases = project?.phases?.filter(p => p.status === 'completed').length || 0;
-
   return (
     <div className="max-w-5xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-white">GSD Project</h3>
-          <p className="text-sm text-gray-500">{completedPhases}/{phaseCount} phases completed</p>
-        </div>
-        <button
-          onClick={fetchData}
-          className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
-        >
-          <RefreshCw size={14} /> Refresh
-        </button>
-      </div>
+      {/* Project Header */}
+      <GsdProjectHeader
+        project={project}
+        pendingActions={pendingActions}
+        appId={appId}
+        repoPath={repoPath}
+        onRefresh={fetchData}
+      />
 
-      {/* Phase Timeline */}
-      {project?.phases && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Phases</h4>
-          <PhaseTimeline phases={project.phases} />
-        </div>
-      )}
+      {/* Next Action Banner */}
+      <NextActionBanner pendingActions={pendingActions} appId={appId} />
+
+      {/* Phase Cards */}
+      <PhaseCardList
+        phases={project?.phases || []}
+        pendingActions={pendingActions}
+        appId={appId}
+        expandedPhase={expandedPhase}
+        onTogglePhase={setExpandedPhase}
+      />
 
       {/* Concerns */}
       {project?.concerns && (
@@ -235,20 +315,12 @@ export default function GsdTab({ appId, repoPath }) {
         </div>
       )}
 
-      {/* State Frontmatter */}
-      {project?.state?.frontmatter && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">State</h4>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            {Object.entries(project.state.frontmatter).map(([key, value]) => (
-              <div key={key} className="bg-port-bg rounded px-2 py-1">
-                <span className="text-gray-500">{key}:</span>{' '}
-                <span className="text-gray-300">{String(value)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Documents Panel */}
+      <GsdDocumentsPanel
+        appId={appId}
+        selectedDoc={selectedDoc}
+        onSelectDoc={setSelectedDoc}
+      />
     </div>
   );
 }

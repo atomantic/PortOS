@@ -83,6 +83,7 @@ pm2 logs
 
 - [x] **GSD Tab: Smart State Detection & Guided Setup** — Extend `GET /api/apps/:id/documents` to return GSD status fields and update GSD tab empty state with stepped setup guide
 - [x] **GSD Tab: One-Click Agent Spawn & Open Claude Code** — Run buttons on setup steps create CoS tasks, Open Claude Code button launches CLI in app directory
+- [x] **GSD Tab: Actionable Dashboard** — Fix phase file parsing bug, add phase action triggers, document CRUD, expandable phase cards with sub-plans/verification/research, deep-linkable phase and document views
 
 #### GSD Smart State Detection
 
