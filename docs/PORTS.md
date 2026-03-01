@@ -23,8 +23,8 @@ Common port labels:
 
 | Port | Process | Label | Description |
 |------|---------|-------|-------------|
-| 5554 | portos-server | api | Main API server |
-| 5555 | portos-client | ui | Vite dev server (React UI) |
+| 5554 | portos-client | ui | Vite dev server (React UI) |
+| 5555 | portos-server | api | Main API server |
 | 5556 | portos-browser | cdp | Chrome DevTools Protocol |
 | 5557 | portos-browser | health | Browser health check API |
 | 5558 | portos-cos | api | CoS Agent Runner (isolated process) |
@@ -101,10 +101,10 @@ PortOS automatically detects ports from env vars:
 ## Viewing Port Usage
 
 The PortOS apps list shows all ports for each process:
-- Single port: `process-name:5554`
+- Single port: `process-name:5555`
 - Multiple ports: `process-name (cdp:5556,health:5557)`
 
 Use the API to get detailed port information:
 ```bash
-curl http://localhost:5554/api/apps | jq '.[].processes'
+curl http://localhost:5555/api/apps | jq '.[].processes'
 ```

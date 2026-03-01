@@ -299,7 +299,7 @@ describe('Apps Routes', () => {
         name: 'Test App',
         pm2ProcessNames: ['test-app'],
         repoPath: '/tmp/test',
-        processes: [{ name: 'test-app', ports: { devUi: 5555 } }]
+        processes: [{ name: 'test-app', ports: { devUi: 5554 } }]
       }];
       appsService.getAllApps.mockResolvedValue(mockApps);
       pm2Service.listProcesses.mockResolvedValue([]);
@@ -307,7 +307,7 @@ describe('Apps Routes', () => {
       const response = await request(app).get('/api/apps');
 
       expect(response.status).toBe(200);
-      expect(response.body[0].devUiPort).toBe(5555);
+      expect(response.body[0].devUiPort).toBe(5554);
     });
 
     it('should use explicit devUiPort over derived value', async () => {
@@ -317,7 +317,7 @@ describe('Apps Routes', () => {
         pm2ProcessNames: ['test-app'],
         repoPath: '/tmp/test',
         devUiPort: 4444,
-        processes: [{ name: 'test-app', ports: { devUi: 5555 } }]
+        processes: [{ name: 'test-app', ports: { devUi: 5554 } }]
       }];
       appsService.getAllApps.mockResolvedValue(mockApps);
       pm2Service.listProcesses.mockResolvedValue([]);

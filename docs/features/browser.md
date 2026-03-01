@@ -7,7 +7,7 @@ Manage the persistent CDP/Playwright browser instance used by PortOS for web aut
 The browser runs as a separate PM2 process (`portos-browser`) that launches a Chromium instance with Chrome DevTools Protocol (CDP) enabled. The PortOS server communicates with it via HTTP health checks and the CDP debug endpoint.
 
 ```
-PortOS Server (5554)
+PortOS Server (5555)
   ├── /api/browser routes → browserService.js
   │     ├── Health check → portos-browser health endpoint (5557)
   │     ├── CDP pages → CDP debug endpoint (5556)

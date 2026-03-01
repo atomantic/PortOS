@@ -12,6 +12,7 @@ import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
+import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
@@ -85,7 +86,7 @@ export async function getPeers() {
   return data.peers;
 }
 
-export async function addPeer({ address, port = 5554, name }) {
+export async function addPeer({ address, port = DEFAULT_PEER_PORT, name }) {
   const peer = await withData(async (data) => {
     const entry = {
       id: crypto.randomUUID(),
@@ -287,7 +288,7 @@ async function announceSelf(address, port) {
   const data = await loadData();
   if (!data.self) return;
 
-  const selfPort = parseInt(process.env.PORT, 10) || 5554;
+  const selfPort = parseInt(process.env.PORT, 10) || DEFAULT_PEER_PORT;
   const url = `http://${address}:${port}/api/instances/peers/announce`;
 
   const controller = new AbortController();

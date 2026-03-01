@@ -11,7 +11,7 @@ PortOS is a monorepo application with a React frontend and Express.js backend, m
 │                                                                                     │
 │  ┌────────────────────┐             ┌──────────────────────────────────────┐        │
 │  │  React Client      │             │        Express Server                │        │
-│  │  (port 5555)       │    HTTP     │        (port 5554)                   │        │
+│  │  (port 5554)       │    HTTP     │        (port 5555)                   │        │
 │  │                    │ <---------> │                                      │        │
 │  │  ┌──────────────┐  │             │  ┌──────────┐  ┌──────────────────┐  │        │
 │  │  │    Pages     │  │             │  │  Routes  │──│    Services      │  │        │
@@ -304,8 +304,8 @@ Error severity levels:
 
 | Process | Port | Script | Purpose |
 |---------|------|--------|---------|
-| portos-server | 5554 | `server/index.js` | Main Express API server |
-| portos-client | 5555 | `client/` (Vite) | React frontend dev server |
+| portos-client | 5554 | `client/` (Vite) | React frontend dev server |
+| portos-server | 5555 | `server/index.js` | Main Express API server |
 | portos-browser | 5556 (CDP), 5557 (health) | `browser/server.js` | Persistent Chromium with CDP for web automation |
 | portos-cos | 5558 | `server/cos-runner/index.js` | Isolated CoS agent runner |
 | portos-autofixer | 5559 | `autofixer/server.js` | Autonomous crash detection and Claude CLI repair |

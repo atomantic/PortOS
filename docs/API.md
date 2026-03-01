@@ -1,11 +1,11 @@
 # API Reference
 
-PortOS exposes a REST API on port 5554 and WebSocket events via Socket.IO.
+PortOS exposes a REST API on port 5555 and WebSocket events via Socket.IO.
 
 ## Base URL
 
 ```
-http://localhost:5554/api
+http://localhost:5555/api
 ```
 
 ## Security Model
@@ -427,7 +427,7 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 
 ## WebSocket Events
 
-Connect to Socket.IO at `http://localhost:5554`.
+Connect to Socket.IO at `http://localhost:5555`.
 
 ### Log Streaming
 
@@ -573,7 +573,7 @@ socket.on('provider:status:changed', ({ providerId, status, reason }) => {
 ### Register an App
 
 ```bash
-curl -X POST http://localhost:5554/api/apps \
+curl -X POST http://localhost:5555/api/apps \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My App",
@@ -587,7 +587,7 @@ curl -X POST http://localhost:5554/api/apps \
 ### Execute AI Run
 
 ```bash
-curl -X POST http://localhost:5554/api/runs \
+curl -X POST http://localhost:5555/api/runs \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "List all files in the current directory",
@@ -598,7 +598,7 @@ curl -X POST http://localhost:5554/api/runs \
 ### Get PM2 Process Logs
 
 ```bash
-curl http://localhost:5554/api/logs/portos-server?lines=50
+curl http://localhost:5555/api/logs/portos-server?lines=50
 ```
 
 ## Error Responses

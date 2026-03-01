@@ -137,7 +137,7 @@ function SelfCard({ self, onUpdate }) {
 
 function AddPeerForm({ onAdd }) {
   const [address, setAddress] = useState('');
-  const [port, setPort] = useState('5554');
+  const [port, setPort] = useState('5555');
   const [name, setName] = useState('');
   const [adding, setAdding] = useState(false);
 
@@ -151,7 +151,7 @@ function AddPeerForm({ onAdd }) {
     setAdding(false);
     if (!result) return;
     setAddress('');
-    setPort('5554');
+    setPort('5555');
     setName('');
     onAdd();
     toast.success('Peer added');

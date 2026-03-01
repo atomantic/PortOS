@@ -22,7 +22,7 @@
  *   MOLTWORLD_MIN_INTERVAL      - Min seconds between joins (default: 180 = 3 min)
  *   MOLTWORLD_MAX_INTERVAL      - Max seconds between joins (default: 540 = 9 min)
  *   MOLTWORLD_USE_WS            - Set to "true" to route moves through PortOS WS relay
- *   PORTOS_API_BASE              - PortOS server URL (default: http://localhost:5554)
+ *   PORTOS_API_BASE              - PortOS server URL (default: http://localhost:5555)
  *   LMSTUDIO_BASE_URL           - LM Studio URL (default: http://localhost:1234)
  *   LMSTUDIO_MODEL              - Model name (default: gpt-oss-20b)
  *   LMSTUDIO_ENABLED            - Set to "false" to disable (default: true)
@@ -54,7 +54,7 @@ const MAX_INTERVAL_S = parseInt(process.env.MOLTWORLD_MAX_INTERVAL, 10) || 540;
 
 // PortOS WebSocket relay config
 const USE_WS = process.env.MOLTWORLD_USE_WS === 'true';
-const PORTOS_API_BASE = process.env.PORTOS_API_BASE || 'http://localhost:5554';
+const PORTOS_API_BASE = process.env.PORTOS_API_BASE || 'http://localhost:5555';
 
 // LM Studio config
 const LMSTUDIO_URL = process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234';

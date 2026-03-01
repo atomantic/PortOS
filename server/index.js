@@ -76,7 +76,7 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
-const PORT = process.env.PORT || 5554;
+const PORT = process.env.PORT || 5555;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Socket.IO with relative path support for Tailscale

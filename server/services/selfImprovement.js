@@ -13,8 +13,7 @@
  */
 
 import { cosEvents, getConfig } from './cos.js';
-
-const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.env.PORT_UI || 5555}`;
+import { PORTOS_UI_URL } from '../lib/ports.js';
 
 // Known routes to analyze
 const ROUTES = [

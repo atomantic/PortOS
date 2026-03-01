@@ -75,12 +75,12 @@ refactor: code restructuring
 
 ```
 PortOS/
-├── client/           # React + Vite frontend (port 5555)
+├── client/           # React + Vite frontend (port 5554)
 │   └── src/
 │       ├── components/
 │       ├── pages/
 │       └── services/
-├── server/           # Express.js API (port 5554)
+├── server/           # Express.js API (port 5555)
 │   ├── routes/
 │   ├── services/
 │   └── lib/

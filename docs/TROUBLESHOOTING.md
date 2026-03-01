@@ -56,8 +56,8 @@ cp -r data.sample/* data/
 
 ```bash
 # Verify server is listening on all interfaces
-netstat -an | grep 5554
-# Should show: *.5554 or 0.0.0.0:5554
+netstat -an | grep 5555
+# Should show: *.5555 or 0.0.0.0:5555
 ```
 
 ### WebSocket Disconnections

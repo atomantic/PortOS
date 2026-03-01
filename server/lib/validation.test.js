@@ -126,10 +126,10 @@ describe('validation.js', () => {
     });
 
     it('should accept valid devUiPort', () => {
-      const app = { name: 'Test', repoPath: '/path', devUiPort: 5555 };
+      const app = { name: 'Test', repoPath: '/path', devUiPort: 5554 };
       const result = appSchema.safeParse(app);
       expect(result.success).toBe(true);
-      expect(result.data.devUiPort).toBe(5555);
+      expect(result.data.devUiPort).toBe(5554);
     });
 
     it('should allow devUiPort to be null', () => {

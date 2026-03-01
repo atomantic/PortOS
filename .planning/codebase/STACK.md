@@ -93,11 +93,11 @@
 - Process environment variables via `ecosystem.config.cjs`:
   - `NODE_ENV`: 'development' (base)
   - `TZ`: 'UTC' (all timestamps in UTC)
-  - `PORT`: 5554 (API), configurable per process
+  - `PORT`: 5555 (API), configurable per process
   - `HOST`: '0.0.0.0' (server), '127.0.0.1' (CDP/CoS)
 
 **Build Configuration:**
-- Vite config: `client/vite.config.js` (port 5555, API proxy to 5554)
+- Vite config: `client/vite.config.js` (port 5554, API proxy to 5555)
 - Tailwind config: `client/tailwind.config.js` (custom design tokens)
 - PostCSS: `client/postcss.config.js` (Tailwind + Autoprefixer)
 - Server test: `server/vitest.config.js` (30% coverage threshold)
@@ -143,8 +143,8 @@
 ## Port Allocation
 
 Defined in `ecosystem.config.cjs`:
-- **5554**: Express API server (core PortOS backend)
-- **5555**: Vite client dev server (React UI)
+- **5554**: Vite client dev server (React UI)
+- **5555**: Express API server (core PortOS backend)
 - **5556**: Chrome CDP (browser remote debugging)
 - **5557**: Browser health check endpoint
 - **5558**: Chief of Staff (CoS) agent runner

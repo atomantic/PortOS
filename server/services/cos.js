@@ -29,7 +29,7 @@ import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
 
-const PORTOS_UI_URL = process.env.PORTOS_UI_URL || `http://localhost:${process.env.PORT_UI || 5555}`;
+import { PORTOS_UI_URL } from '../lib/ports.js';
 
 const _execAsync = promisify(exec);
 const _execFileAsync = promisify(execFile);

@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
+import { PORTS } from '../lib/ports.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
@@ -20,9 +21,9 @@ function buildPortosApp() {
     description: 'Local App OS portal for dev machines',
     repoPath: PATHS.root,
     type: 'express',
-    uiPort: 5554,
-    devUiPort: 5555,
-    apiPort: 5554,
+    uiPort: PORTS.API,
+    devUiPort: PORTS.UI,
+    apiPort: PORTS.API,
     buildCommand: 'npm run build',
     startCommands: ['npm start'],
     pm2ProcessNames: [
@@ -34,9 +35,9 @@ function buildPortosApp() {
       'portos-browser'
     ],
     processes: [
-      { name: 'portos-server', port: 5554, ports: { api: 5554 } },
+      { name: 'portos-server', port: PORTS.API, ports: { api: PORTS.API } },
       { name: 'portos-cos', port: 5558, ports: { api: 5558 } },
-      { name: 'portos-ui', port: 5555, ports: { devUi: 5555 } },
+      { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },
       { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
       { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
       { name: 'portos-browser', port: 5556, ports: { cdp: 5556, health: 5557 } }
@@ -400,8 +401,8 @@ export async function getReservedPorts() {
   }
 
   // Also reserve PortOS ports
-  ports.add(5554);
-  ports.add(5555);
+  ports.add(PORTS.API);
+  ports.add(PORTS.UI);
 
   return Array.from(ports).sort((a, b) => a - b);
 }

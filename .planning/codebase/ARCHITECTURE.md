@@ -21,7 +21,7 @@
 - Location: `client/src/`
 - Contains: React pages, reusable components, service clients, hooks, utilities
 - Depends on: HTTP API via `api.js`, WebSocket via `socket.js`
-- Used by: End users via Vite dev server (port 5555) or production build
+- Used by: End users via Vite dev server (port 5554) or production build
 
 **API Layer (Routes):**
 - Purpose: HTTP request handlers that validate input and delegate to services
@@ -121,11 +121,11 @@
 **Server Initialization:**
 - Location: `server/index.js`
 - Triggers: `npm run dev` or `pm2 start ecosystem.config.cjs`
-- Responsibilities: Create Express app, initialize Socket.IO, load routes, set middleware, start HTTP server on port 5554
+- Responsibilities: Create Express app, initialize Socket.IO, load routes, set middleware, start HTTP server on port 5555
 
 **Client Initialization:**
 - Location: `client/src/main.jsx` → `App.jsx`
-- Triggers: Vite dev server (port 5555) or production build
+- Triggers: Vite dev server (port 5554) or production build
 - Responsibilities: Set up React Router, initialize hooks, load Layout component with nested routes
 
 **PM2 CoS Runner Process:**

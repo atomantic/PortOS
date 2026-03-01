@@ -850,7 +850,7 @@ app.get('/', async (req, res) => {
 
     // Set dynamic PortOS Dashboard link
     document.getElementById('portosDashboardLink').href =
-      window.location.protocol + '//' + window.location.hostname + ':5555';
+      window.location.protocol + '//' + window.location.hostname + ':5554';
 
     // Initial load
     fetchApps();

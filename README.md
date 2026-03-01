@@ -77,7 +77,7 @@ pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-Access PortOS at http://localhost:5555 (or via Tailscale at http://[your-machine]:5555). PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm2 save` + `pm2 startup`).
+Access PortOS at http://localhost:5554 (or via Tailscale at http://[your-machine]:5554). PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm2 save` + `pm2 startup`).
 
 ## Network Access
 
@@ -93,8 +93,8 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 
 ```
 PortOS/
-├── client/              # React + Vite frontend (port 5555)
-├── server/              # Express.js API (port 5554)
+├── client/              # React + Vite frontend (port 5554)
+├── server/              # Express.js API (port 5555)
 ├── data/                # Runtime data (apps, providers, history)
 ├── data.sample/         # Sample configurations to copy
 ├── docs/                # Documentation and screenshots

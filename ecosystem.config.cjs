@@ -12,8 +12,8 @@ const BASE_ENV = {
 };
 
 const PORTS = {
-  API: 5554,           // Express API server
-  UI: 5555,            // Vite dev server (client)
+  API: 5555,           // Express API server
+  UI: 5554,            // Vite dev server (client)
   CDP: 5556,           // Chrome DevTools Protocol (browser automation)
   CDP_HEALTH: 5557,    // Browser health check endpoint
   COS: 5558,           // Chief of Staff agent runner

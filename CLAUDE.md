@@ -8,10 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install all dependencies
 npm run install:all
 
-# Start (builds client, serves production UI + API on port 5554)
+# Start (builds client, serves production UI + API on port 5555)
 npm start
 
-# Development (Vite hot-reload on 5555, API on 5554)
+# Development (Vite hot-reload on 5554, API on 5555)
 npm run dev
 
 # Run tests
@@ -30,14 +30,14 @@ PortOS is a single-user, internal tool running on a private network behind Tails
 
 ## Architecture
 
-PortOS is a monorepo with Express.js server (port 5554) and React/Vite client (port 5555). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.
+PortOS is a monorepo with Express.js server (port 5555) and React/Vite client (port 5554). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.
 
 ### Port Allocation
 
 PortOS uses ports 5554-5560. Define all ports in `ecosystem.config.cjs` using the `ports` object:
 
 ```javascript
-ports: { api: 5554, health: 5555 }  // labeled ports for documentation
+ports: { api: 5555, health: 5554 }  // labeled ports for documentation
 ```
 
 See `docs/PORTS.md` for the full port allocation guide.

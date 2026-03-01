@@ -148,16 +148,15 @@ export default function Security() {
     if (!streaming) return;
 
     const timestamp = Date.now();
-    const protocol = window.location.protocol;
 
     // Set video source to server stream
     if (videoRef.current && videoEnabled) {
-      videoRef.current.src = `${protocol}//${window.location.hostname}:5554/api/media/video?t=${timestamp}`;
+      videoRef.current.src = `/api/media/video?t=${timestamp}`;
     }
 
     // Set audio source to server stream and set up analyzer
     if (audioRef.current && audioEnabled) {
-      audioRef.current.src = `${protocol}//${window.location.hostname}:5554/api/media/audio?t=${timestamp}`;
+      audioRef.current.src = `/api/media/audio?t=${timestamp}`;
 
       audioRef.current.play().then(() => {
         setupAudioAnalyser(audioRef.current);

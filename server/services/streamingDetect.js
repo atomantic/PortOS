@@ -54,7 +54,7 @@ export function parseEcosystemConfig(content) {
 
   // Extract PORTS object - handles both flat and nested structures
   // Flat: const PORTS = { WEB: 5550, API: 5551 }
-  // Nested: const PORTS = { server: { api: 5554 }, client: { ui: 5555 } }
+  // Nested: const PORTS = { server: { api: 5555 }, client: { ui: 5554 } }
   const portsObjStart = content.match(/(?:const|let|var)\s+PORTS\s*=\s*\{/);
   if (portsObjStart) {
     const startIdx = portsObjStart.index + portsObjStart[0].length - 1;

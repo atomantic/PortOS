@@ -19,7 +19,7 @@ A separate `portos-cos` PM2 process that:
 ```
 ┌─────────────────┐     HTTP/Socket.IO    ┌─────────────────┐
 │  portos-server  │ ──────────────────►   │   portos-cos    │
-│    (5554)       │     spawn/terminate   │     (5558)      │
+│    (5555)       │     spawn/terminate   │     (5558)      │
 │                 │ ◄──────────────────   │                 │
 │  subAgentSpawner│     events/output     │  cos-runner     │
 └─────────────────┘                       └────────┬────────┘
