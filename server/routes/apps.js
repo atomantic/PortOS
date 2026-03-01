@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
@@ -9,7 +9,9 @@ import * as pm2Service from '../services/pm2.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as cos from '../services/cos.js';
 import { logAction } from '../services/history.js';
+import { z } from 'zod';
 import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
+import * as git from '../services/git.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
@@ -636,6 +638,11 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
 
 const ALLOWED_DOCUMENTS = ['PLAN.md', 'CLAUDE.md', 'GOALS.md'];
 
+const documentUpdateSchema = z.object({
+  content: z.string().max(500000),
+  commitMessage: z.string().max(200).optional()
+});
+
 // GET /api/apps/:id/documents - List which documents exist
 router.get('/:id/documents', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
@@ -691,6 +698,44 @@ router.get('/:id/documents/:filename', loadApp, asyncHandler(async (req, res) =>
 
   const content = await readFile(resolved, 'utf-8');
   res.json({ filename, content });
+}));
+
+// PUT /api/apps/:id/documents/:filename - Update a document and git commit
+router.put('/:id/documents/:filename', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const { filename } = req.params;
+
+  if (!ALLOWED_DOCUMENTS.includes(filename)) {
+    throw new ServerError('Document not in allowlist', { status: 400, code: 'INVALID_DOCUMENT' });
+  }
+
+  if (!app.repoPath || !existsSync(app.repoPath)) {
+    throw new ServerError('App repo path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+
+  const filePath = join(app.repoPath, filename);
+  const resolved = resolve(filePath);
+
+  if (!resolved.startsWith(resolve(app.repoPath))) {
+    throw new ServerError('Invalid document path', { status: 400, code: 'PATH_TRAVERSAL' });
+  }
+
+  const { content, commitMessage } = documentUpdateSchema.parse(req.body);
+  const created = !existsSync(resolved);
+
+  await writeFile(resolved, content, 'utf-8');
+  await git.stageFiles(app.repoPath, [filename]);
+
+  const status = await git.getStatus(app.repoPath);
+  if (status.clean) {
+    return res.json({ success: true, noChanges: true });
+  }
+
+  const message = commitMessage || `docs: update ${filename} via PortOS`;
+  const result = await git.commit(app.repoPath, message);
+  console.log(`📝 ${created ? 'Created' : 'Updated'} ${filename} in ${app.name} (${result.hash})`);
+
+  res.json({ success: true, hash: result.hash, created });
 }));
 
 // ============================================================
