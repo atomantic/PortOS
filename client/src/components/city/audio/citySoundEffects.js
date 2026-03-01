@@ -67,7 +67,7 @@ const playLightning = (ctx, output) => {
   const filter = ctx.createBiquadFilter();
   filter.type = 'highpass';
   filter.frequency.value = 400;
-  const distortion = ctx.createWaveShaperNode();
+  const distortion = ctx.createWaveShaper();
   const curve = new Float32Array(256);
   for (let i = 0; i < 256; i++) {
     const x = (i / 128) - 1;

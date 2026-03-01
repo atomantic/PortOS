@@ -42,5 +42,6 @@
 - **Route body destructuring**: Brain routes no longer crash when `req.body` is undefined
 - **AI call logging**: Brain service logs when AI calls start and how long they take for easier debugging
 - **HMR route errors**: Decline hot-module replacement on the route tree so Vite does a full reload instead of leaving React Router in a broken state on nested paths
+- **CyberCity lightning sound**: Fixed `createWaveShaperNode is not a function` crash — correct Web Audio API method is `createWaveShaper()`
 
 ## Removed
