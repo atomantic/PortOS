@@ -55,7 +55,7 @@ function CyberCityInner() {
   }
 
   return (
-    <div className="relative w-full h-full" style={{ background: '#030308' }}>
+    <div className="relative w-full h-full" style={{ background: '#030308', isolation: 'isolate' }}>
       <CityScene
         apps={apps}
         agentMap={agentMap}
