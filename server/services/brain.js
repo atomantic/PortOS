@@ -653,6 +653,21 @@ export async function deleteInboxEntry(inboxLogId) {
   return true;
 }
 
+/**
+ * Recover inbox entries stuck in 'classifying' status from a previous server restart.
+ * Resets them to 'needs_review' so the user can retry.
+ */
+export async function recoverStuckClassifications() {
+  const entries = await storage.getInboxLog({ status: 'classifying', limit: 100 });
+  for (const entry of entries) {
+    await storage.updateInboxLog(entry.id, { status: 'needs_review' });
+    console.log(`🧠 Recovered stuck classification: ${entry.id}`);
+  }
+  if (entries.length > 0) {
+    console.log(`🧠 Recovered ${entries.length} stuck classification(s)`);
+  }
+}
+
 // Re-export storage functions for convenience
 export const loadMeta = storage.loadMeta;
 export const updateMeta = storage.updateMeta;

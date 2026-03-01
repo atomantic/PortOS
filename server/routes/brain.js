@@ -96,7 +96,7 @@ router.post('/fix', asyncHandler(async (req, res) => {
  * Retry AI classification for a needs_review item
  */
 router.post('/inbox/:id/retry', asyncHandler(async (req, res) => {
-  const { providerOverride, modelOverride } = req.body;
+  const { providerOverride, modelOverride } = req.body || {};
   const result = await brainService.retryClassification(req.params.id, providerOverride, modelOverride);
   res.json(result);
 }));
@@ -332,7 +332,7 @@ router.get('/digests', asyncHandler(async (req, res) => {
  * Manually trigger daily digest generation
  */
 router.post('/digest/run', asyncHandler(async (req, res) => {
-  const { providerOverride, modelOverride } = req.body;
+  const { providerOverride, modelOverride } = req.body || {};
   const digest = await brainService.runDailyDigest(providerOverride, modelOverride);
   res.json(digest);
 }));
@@ -361,7 +361,7 @@ router.get('/reviews', asyncHandler(async (req, res) => {
  * Manually trigger weekly review generation
  */
 router.post('/review/run', asyncHandler(async (req, res) => {
-  const { providerOverride, modelOverride } = req.body;
+  const { providerOverride, modelOverride } = req.body || {};
   const review = await brainService.runWeeklyReview(providerOverride, modelOverride);
   res.json(review);
 }));

@@ -63,6 +63,7 @@ import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
+import { recoverStuckClassifications } from './services/brain.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -236,6 +237,8 @@ initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
 agentActionExecutor.init();
 
+// Recover any inbox entries stuck in 'classifying' from a previous crash/restart
+recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
 // Initialize backup scheduler for daily data backups
