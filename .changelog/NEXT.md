@@ -41,5 +41,6 @@
 - **Stuck classification recovery**: On server startup, any inbox entries left in `classifying` status are automatically reset to `needs_review`
 - **Route body destructuring**: Brain routes no longer crash when `req.body` is undefined
 - **AI call logging**: Brain service logs when AI calls start and how long they take for easier debugging
+- **HMR route errors**: Decline hot-module replacement on the route tree so Vite does a full reload instead of leaving React Router in a broken state on nested paths
 
 ## Removed

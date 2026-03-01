@@ -39,6 +39,12 @@ const PageLoader = () => (
   </div>
 );
 
+// Force full reload on HMR — partial hot-replacement of the route tree
+// causes stale lazy imports and React Router errors on nested paths
+if (import.meta.hot) {
+  import.meta.hot.decline();
+}
+
 export default function App() {
   return (
     <Suspense fallback={<PageLoader />}>
