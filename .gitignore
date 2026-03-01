@@ -1,9 +1,5 @@
 # Dependencies
 node_modules/
-# Sub-directory lock files (root package-lock.json is committed)
-client/package-lock.json
-server/package-lock.json
-browser/package-lock.json
 
 # Build output
 dist/

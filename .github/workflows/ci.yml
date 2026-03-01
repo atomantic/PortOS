@@ -29,15 +29,13 @@ jobs:
           cache: 'npm'
 
       - name: Install all dependencies
-        run: npm run install:all
+        run: npm ci
 
       - name: Run server tests
-        working-directory: ./server
-        run: npm test
+        run: npm test -w server
 
       - name: Build client
-        working-directory: ./client
-        run: npm run build
+        run: npm run build -w client
 
   lint:
     runs-on: ubuntu-latest
@@ -53,7 +51,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm run install:all
+        run: npm ci
 
       - name: Check for syntax errors
         run: node --check server/index.js

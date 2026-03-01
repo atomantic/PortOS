@@ -78,7 +78,7 @@ jobs:
           \`\`\`bash
           git clone https://github.com/atomantic/PortOS.git
           cd PortOS
-          npm run install:all
+          npm install
           pm2 start ecosystem.config.cjs
           \`\`\`"
           fi

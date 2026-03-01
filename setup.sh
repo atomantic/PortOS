@@ -21,8 +21,6 @@ fi
 
 echo "Installing dependencies..."
 npm install
-cd client && npm install && cd ..
-cd server && npm install && cd ..
 
 echo ""
 echo "Setting up data directory..."

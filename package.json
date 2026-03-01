@@ -1,37 +1,34 @@
 {
   "name": "portos",
-  "version": "1.28.2",
+  "version": "1.29.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
   "license": "MIT",
   "type": "module",
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
     "dev": "node scripts/dev-start.js",
     "dev:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
-    "build": "cd client && npm run build",
+    "build": "npm run build -w client",
     "start": "npm run build && node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent; node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs",
     "pm2:start": "node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs",
     "pm2:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "pm2:restart": "node ./node_modules/pm2/bin/pm2 restart ecosystem.config.cjs",
     "pm2:logs": "node ./node_modules/pm2/bin/pm2 logs",
     "pm2:status": "node ./node_modules/pm2/bin/pm2 status",
-    "install:all": "npm install && cd client && npm install && cd ../server && npm install && cd .. && npm run setup",
+    "install:all": "npm install && npm run setup",
     "setup": "node scripts/setup-data.js && node scripts/setup-browser.js",
     "setup:data": "node scripts/setup-data.js",
     "setup:browser": "node scripts/setup-browser.js",
     "setup:ghostty": "node scripts/setup-ghostty.js",
-    "update": "npm install && cd client && npm install && cd ../server && npm install && cd .. && npm run setup && npm run setup:ghostty",
-    "test": "cd server && npm test"
+    "update": "npm install && npm run setup && npm run setup:ghostty",
+    "test": "npm test -w server"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.2.1",
-    "@vitejs/plugin-react": "^5.1.4",
-    "pm2": "^6.0.14",
-    "vite": "^7.3.1"
-  },
-  "dependencies": {
-    "express": "^5.2.1",
-    "portos-ai-toolkit": "^0.6.0"
+    "pm2": "^6.0.14"
   }
 }
