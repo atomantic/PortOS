@@ -32,15 +32,22 @@ export default function ProductivityTab() {
     milestones: false
   });
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (autoRecalculate = false) => {
     setLoading(true);
     const productivity = await api.getCosProductivity().catch(() => null);
-    setData(productivity);
+    if (!productivity?.totals?.totalTasks && autoRecalculate) {
+      // No productivity.json yet — build it from agent history
+      await api.recalculateCosProductivity().catch(() => null);
+      const refreshed = await api.getCosProductivity().catch(() => null);
+      setData(refreshed);
+    } else {
+      setData(productivity);
+    }
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadData();
+    loadData(true);
   }, [loadData]);
 
   const handleRecalculate = useCallback(async () => {
