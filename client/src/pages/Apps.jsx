@@ -4,6 +4,8 @@ import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, Refr
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import StatusBadge from '../components/StatusBadge';
+import ActivityLog from '../components/apps/ActivityLog';
+import { useAppOperation } from '../hooks/useAppOperation';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -86,8 +88,6 @@ export default function Apps() {
   const [expandedId, setExpandedId] = useState(null);
   const [actionLoading, setActionLoading] = useState({});
   const [refreshingConfig, setRefreshingConfig] = useState({});
-  const [standardizing, setStandardizing] = useState({});
-  const [updating, setUpdating] = useState({});
   const [building, setBuilding] = useState({});
   const [archiving, setArchiving] = useState({});
   const [showArchived, setShowArchived] = useState(false);
@@ -99,6 +99,8 @@ export default function Apps() {
     setApps(data);
     setLoading(false);
   }, []);
+
+  const { steps, isOperating, operatingAppId, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete: fetchApps });
 
   useEffect(() => {
     fetchApps();
@@ -142,15 +144,7 @@ export default function Apps() {
     setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 
-  const handleUpdate = async (app) => {
-    setUpdating(prev => ({ ...prev, [app.id]: true }));
-    const result = await api.pullAndUpdateApp(app.id).catch(() => null);
-    setUpdating(prev => ({ ...prev, [app.id]: false }));
-    if (result?.success) {
-      const stepCount = result.steps?.length || 0;
-      toast.success(`Updated ${app.name} (${stepCount} steps)`);
-    }
-  };
+  const handleUpdate = (app) => startUpdate(app.id);
 
   const handleBuild = async (app) => {
     setBuilding(prev => ({ ...prev, [app.id]: true }));
@@ -168,36 +162,7 @@ export default function Apps() {
     fetchApps();
   };
 
-  const handleStandardize = async (app) => {
-    setStandardizing(prev => ({ ...prev, [app.id]: true }));
-
-    // Step 1: Analyze
-    const analysis = await api.analyzeStandardizationByApp(app.id).catch(err => {
-      toast.error(`Analysis failed: ${err.message}`);
-      return null;
-    });
-
-    if (!analysis?.success) {
-      setStandardizing(prev => ({ ...prev, [app.id]: false }));
-      return;
-    }
-
-    // Step 2: Apply
-    const result = await api.applyStandardizationByApp(app.id, analysis).catch(err => {
-      toast.error(`Apply failed: ${err.message}`);
-      return null;
-    });
-
-    setStandardizing(prev => ({ ...prev, [app.id]: false }));
-
-    if (result?.success) {
-      const msg = result.backupBranch
-        ? `Standardized! Backup: ${result.backupBranch}`
-        : `Standardized ${result.filesModified?.length || 0} files`;
-      toast.success(msg);
-      fetchApps();
-    }
-  };
+  const handleStandardize = (app) => startStandardize(app.id);
 
   const toggleExpand = async (id) => {
     const newExpandedId = expandedId === id ? null : id;
@@ -602,12 +567,12 @@ export default function Apps() {
                       </button>
                       <button
                         onClick={() => handleUpdate(app)}
-                        disabled={updating[app.id]}
+                        disabled={isOperating}
                         className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
                         aria-label="Pull latest code, install dependencies, run setup, and restart"
                       >
-                        <Download size={14} aria-hidden="true" className={updating[app.id] ? 'animate-bounce' : ''} />
-                        {updating[app.id] ? 'Updating...' : 'Update'}
+                        <Download size={14} aria-hidden="true" className={operatingAppId === app.id && operationType === 'update' ? 'animate-bounce' : ''} />
+                        {operatingAppId === app.id && operationType === 'update' ? 'Updating...' : 'Update'}
                       </button>
                       {app.buildCommand && (
                         <button
@@ -632,15 +597,20 @@ export default function Apps() {
                       {(!app.processes?.length || app.processes.some(p => !p.ports || Object.keys(p.ports).length === 0)) && (
                         <button
                           onClick={() => handleStandardize(app)}
-                          disabled={standardizing[app.id]}
+                          disabled={isOperating}
                           className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
                           aria-label="Standardize PM2 config: move all ports to ecosystem.config.cjs"
                         >
-                          <Wrench size={14} aria-hidden="true" className={standardizing[app.id] ? 'animate-spin' : ''} />
-                          {standardizing[app.id] ? 'Standardizing...' : 'Standardize PM2'}
+                          <Wrench size={14} aria-hidden="true" className={operatingAppId === app.id && operationType === 'standardize' ? 'animate-spin' : ''} />
+                          {operatingAppId === app.id && operationType === 'standardize' ? 'Standardizing...' : 'Standardize PM2'}
                         </button>
                       )}
                     </div>
+
+                    {/* Activity Log */}
+                    {operatingAppId === app.id && (
+                      <ActivityLog steps={steps} error={error} completed={completed} />
+                    )}
                   </div>
                 </div>
               )}

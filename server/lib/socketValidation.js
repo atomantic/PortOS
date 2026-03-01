@@ -50,6 +50,11 @@ export const appUpdateSchema = z.object({
   appId: z.string().min(1, 'appId is required')
 });
 
+// app:standardize — app ID for PM2 standardization
+export const appStandardizeSchema = z.object({
+  appId: z.string().min(1, 'appId is required')
+});
+
 // =============================================================================
 // VALIDATION HELPER
 // =============================================================================

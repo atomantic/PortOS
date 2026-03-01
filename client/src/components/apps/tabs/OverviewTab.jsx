@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, ExternalLink, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import EditAppModal from '../EditAppModal';
+import ActivityLog from '../ActivityLog';
+import { useAppOperation } from '../../../hooks/useAppOperation';
 import * as api from '../../../services/api';
 
 function KanbanBoard({ tickets }) {
@@ -72,12 +74,15 @@ function KanbanBoard({ tickets }) {
 
 export default function OverviewTab({ app, onRefresh }) {
   const [editingApp, setEditingApp] = useState(null);
-  const [updating, setUpdating] = useState(false);
   const [refreshingConfig, setRefreshingConfig] = useState(false);
-  const [standardizing, setStandardizing] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [jiraTickets, setJiraTickets] = useState(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
+
+  const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
+  const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete });
+  const updating = isOperating && operationType === 'update';
+  const standardizing = isOperating && operationType === 'standardize';
 
   useEffect(() => {
     if (app?.jira?.enabled && app.jira.instanceId && app.jira.projectKey) {
@@ -89,14 +94,7 @@ export default function OverviewTab({ app, onRefresh }) {
     }
   }, [app?.jira?.enabled, app?.jira?.instanceId, app?.jira?.projectKey]);
 
-  const handleUpdate = async () => {
-    setUpdating(true);
-    const result = await api.pullAndUpdateApp(app.id).catch(() => null);
-    setUpdating(false);
-    if (result?.success) {
-      toast.success(`Updated ${app.name} (${result.steps?.length || 0} steps)`);
-    }
-  };
+  const handleUpdate = () => startUpdate(app.id);
 
   const handleRefreshConfig = async () => {
     setRefreshingConfig(true);
@@ -105,29 +103,7 @@ export default function OverviewTab({ app, onRefresh }) {
     onRefresh();
   };
 
-  const handleStandardize = async () => {
-    setStandardizing(true);
-    const analysis = await api.analyzeStandardizationByApp(app.id).catch(err => {
-      toast.error(`Analysis failed: ${err.message}`);
-      return null;
-    });
-    if (!analysis?.success) {
-      setStandardizing(false);
-      return;
-    }
-    const result = await api.applyStandardizationByApp(app.id, analysis).catch(err => {
-      toast.error(`Apply failed: ${err.message}`);
-      return null;
-    });
-    setStandardizing(false);
-    if (result?.success) {
-      const msg = result.backupBranch
-        ? `Standardized! Backup: ${result.backupBranch}`
-        : `Standardized ${result.filesModified?.length || 0} files`;
-      toast.success(msg);
-      onRefresh();
-    }
-  };
+  const handleStandardize = () => startStandardize(app.id);
 
   const handleArchive = async () => {
     setArchiving(true);
@@ -268,7 +244,7 @@ export default function OverviewTab({ app, onRefresh }) {
         </button>
         <button
           onClick={handleUpdate}
-          disabled={updating}
+          disabled={isOperating}
           className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
         >
           <Download size={14} className={updating ? 'animate-bounce' : ''} />
@@ -284,7 +260,7 @@ export default function OverviewTab({ app, onRefresh }) {
         </button>
         <button
           onClick={handleStandardize}
-          disabled={standardizing}
+          disabled={isOperating}
           className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
         >
           <Wrench size={14} className={standardizing ? 'animate-spin' : ''} />
@@ -311,6 +287,9 @@ export default function OverviewTab({ app, onRefresh }) {
           </button>
         )}
       </div>
+
+      {/* Activity Log */}
+      <ActivityLog steps={steps} error={error} completed={completed} />
 
       {/* Edit Modal */}
       {editingApp && (

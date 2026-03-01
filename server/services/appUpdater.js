@@ -99,11 +99,20 @@ async function _doUpdate(app, emit) {
   const processNames = app.pm2ProcessNames || [];
   if (processNames.length > 0) {
     emit('restart', 'running', 'Restarting app...');
-    for (const name of processNames) {
-      await pm2Service.restartApp(name, app.pm2Home);
+    const restartResults = await Promise.all(
+      processNames.map(name =>
+        pm2Service.restartApp(name, app.pm2Home).then(() => null, e => e)
+      )
+    );
+    const failures = processNames.filter((_, i) => restartResults[i]);
+    if (failures.length > 0) {
+      const msg = `${processNames.length - failures.length}/${processNames.length} restarted (failed: ${failures.join(', ')})`;
+      emit('restart', 'warning', msg);
+      steps.push({ step: 'restart', success: true, warning: msg });
+    } else {
+      emit('restart', 'done', `Restarted ${processNames.length} process(es)`);
+      steps.push({ step: 'restart', success: true });
     }
-    emit('restart', 'done', `Restarted ${processNames.length} process(es)`);
-    steps.push({ step: 'restart', success: true });
   }
 
   return { success: true, steps };

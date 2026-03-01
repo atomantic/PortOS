@@ -50,6 +50,7 @@ import {
   Compass,
   Eye,
   Scale,
+  LayoutDashboard,
   Lightbulb
 } from 'lucide-react';
 import packageJson from '../../package.json';
@@ -203,11 +204,15 @@ export default function Layout() {
     if (item.dynamic !== 'apps') return item;
     return {
       ...item,
-      children: sidebarApps.map(app => ({
-        to: `/apps/${app.id}`,
-        label: app.name,
-        icon: Package
-      }))
+      children: [
+        { to: '/apps', label: 'Dashboard', icon: LayoutDashboard, end: true },
+        { separator: true },
+        ...sidebarApps.map(app => ({
+          to: `/apps/${app.id}`,
+          label: app.name,
+          icon: Package
+        }))
+      ]
     };
   }), [sidebarApps]);
 
@@ -387,7 +392,10 @@ export default function Layout() {
         {/* Children items */}
         {expandedSections[item.label] && !collapsed && (
           <div className="ml-4 mt-1">
-            {item.children.map((child) => {
+            {item.children.map((child, childIndex) => {
+              if (child.separator) {
+                return <div key={`child-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
+              }
               const ChildIcon = child.icon;
               if (child.external) {
                 const childHref = child.dynamicHost
@@ -409,13 +417,17 @@ export default function Layout() {
                   </a>
                 );
               }
+              const childActive = child.end
+                ? location.pathname === child.to
+                : isActive(child.to);
               return (
                 <NavLink
                   key={child.to}
                   to={child.to}
+                  end={child.end}
                   onClick={() => setMobileOpen(false)}
                   className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                    isActive(child.to)
+                    childActive
                       ? 'bg-port-accent/10 text-port-accent'
                       : 'text-gray-500 hover:text-white hover:bg-port-border/50'
                   }`}

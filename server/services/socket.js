@@ -25,7 +25,8 @@ import {
   shellInputSchema,
   shellResizeSchema,
   shellStopSchema,
-  appUpdateSchema
+  appUpdateSchema,
+  appStandardizeSchema
 } from '../lib/socketValidation.js';
 import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
@@ -297,6 +298,74 @@ export function initSocket(io) {
         socket.emit('app:update:complete', { success: result.success, steps: result.steps });
         console.log(`✅ Socket update complete for ${app.name}`);
       }
+    });
+
+    // App standardize handler — streams progress via socket
+    socket.on('app:standardize', async (rawData) => {
+      const data = validateSocketData(appStandardizeSchema, rawData, socket, 'app:standardize');
+      if (!data) return;
+
+      const app = await appsService.getAppById(data.appId);
+      if (!app) {
+        socket.emit('app:standardize:error', { message: 'App not found' });
+        return;
+      }
+
+      console.log(`🔧 Socket standardize started for ${app.name}`);
+      const emit = (step, status, message) => {
+        socket.emit('app:standardize:step', { step, status, message, timestamp: Date.now() });
+      };
+
+      // Step 1: Analyze
+      emit('analyze', 'running', 'Analyzing project configuration...');
+      const analysis = await pm2Standardizer.analyzeApp(app.repoPath)
+        .catch(err => ({ success: false, error: err.message }));
+
+      if (!analysis.success) {
+        emit('analyze', 'error', analysis.error);
+        socket.emit('app:standardize:error', { message: analysis.error });
+        return;
+      }
+      emit('analyze', 'done', `Found ${analysis.proposedChanges.processes?.length || 0} processes`);
+
+      // Step 2: Backup
+      emit('backup', 'running', 'Creating git backup...');
+      const backup = await pm2Standardizer.createGitBackup(app.repoPath)
+        .catch(err => ({ success: false, reason: err.message }));
+
+      if (backup.success) {
+        emit('backup', 'done', `Backup branch: ${backup.branch}`);
+      } else {
+        emit('backup', 'skipped', backup.reason || 'No git repository');
+      }
+
+      // Step 3: Apply
+      emit('apply', 'running', 'Writing ecosystem.config.cjs...');
+      const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis)
+        .catch(err => ({ success: false, errors: [err.message] }));
+
+      if (result.errors?.length > 0) {
+        emit('apply', 'error', result.errors.join(', '));
+        socket.emit('app:standardize:error', { message: result.errors.join(', ') });
+        return;
+      }
+      emit('apply', 'done', `Modified ${result.filesModified.length} files`);
+
+      // Update app with new PM2 process names
+      if (analysis.proposedChanges?.processes) {
+        const pm2ProcessNames = analysis.proposedChanges.processes.map(p => p.name);
+        await appsService.updateApp(data.appId, { pm2ProcessNames });
+      }
+
+      socket.emit('app:standardize:complete', {
+        success: true,
+        result: {
+          backupBranch: result.backupBranch,
+          filesModified: result.filesModified,
+          processes: analysis.proposedChanges.processes
+        }
+      });
+      console.log(`✅ Socket standardize complete for ${app.name}`);
     });
 
     // Shell session handlers
