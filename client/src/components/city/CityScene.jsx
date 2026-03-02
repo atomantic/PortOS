@@ -20,12 +20,26 @@ import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
 import CityEffects from './CityEffects';
 import CitySky from './CitySky';
+import PlayerController from './PlayerController';
+import CameraTransition from './CameraTransition';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData, settings, playSfx }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, productivityData, settings, playSfx, keysRef }) {
   const [positions, setPositions] = useState(null);
+  const [proximityApp, setProximityApp] = useState(null);
+  const [transitioning, setTransitioning] = useState(false);
+
+  const explorationMode = settings?.explorationMode || false;
 
   const handlePositionsReady = useCallback((pos) => {
     setPositions(pos);
+  }, []);
+
+  const handleBuildingProximity = useCallback((app) => {
+    setProximityApp(app);
+  }, []);
+
+  const handleTransitionComplete = useCallback(() => {
+    setTransitioning(false);
   }, []);
 
   const stoppedCount = apps.filter(a => !a.archived && a.overallStatus !== 'online').length;
@@ -38,7 +52,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       camera={{ position: [0, 25, 45], fov: 50 }}
       dpr={dpr}
       shadows={false}
-      style={{ background: '#030308' }}
+      style={{ background: '#030308', cursor: explorationMode ? 'crosshair' : 'auto' }}
       gl={{ antialias: true }}
     >
       <CitySky settings={settings} />
@@ -56,6 +70,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         onPositionsReady={handlePositionsReady}
         playSfx={playSfx}
         settings={settings}
+        proximityAppId={proximityApp?.id}
       />
       <CityDataStreams positions={positions} />
       <CityTraffic positions={positions} />
@@ -72,12 +87,28 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityEmbers />
       <CityParticles settings={settings} />
       <CityEffects settings={settings} />
-      <OrbitControls
-        maxPolarAngle={Math.PI / 2.2}
-        minDistance={5}
-        maxDistance={120}
-        enableDamping
-        dampingFactor={0.05}
+      {explorationMode && (
+        <PlayerController
+          keysRef={keysRef}
+          positions={positions}
+          onBuildingProximity={handleBuildingProximity}
+          onBuildingClick={onBuildingClick}
+          apps={apps}
+          active={explorationMode}
+        />
+      )}
+      {!explorationMode && !transitioning && (
+        <OrbitControls
+          maxPolarAngle={Math.PI / 2.2}
+          minDistance={5}
+          maxDistance={120}
+          enableDamping
+          dampingFactor={0.05}
+        />
+      )}
+      <CameraTransition
+        active={explorationMode}
+        onTransitionComplete={handleTransitionComplete}
       />
     </Canvas>
   );

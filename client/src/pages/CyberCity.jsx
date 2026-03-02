@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
 import useCityAudio from '../hooks/useCityAudio';
+import useKeyboardControls from '../hooks/useKeyboardControls';
 import * as api from '../services/api';
 import CityScene from '../components/city/CityScene';
 import CityHud from '../components/city/CityHud';
@@ -11,13 +12,19 @@ import CitySettingsPanel from '../components/city/CitySettingsPanel';
 
 function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, loading, connected } = useCityData();
-  const { settings } = useCitySettingsContext();
+  const { settings, updateSetting } = useCitySettingsContext();
   const { playSfx } = useCityAudio(settings);
   const navigate = useNavigate();
   const location = useLocation();
   const [productivityData, setProductivityData] = useState(null);
 
   const showSettings = location.pathname === '/city/settings';
+
+  const handleToggleExploration = useCallback(() => {
+    updateSetting('explorationMode', !settings?.explorationMode);
+  }, [updateSetting, settings?.explorationMode]);
+
+  const keysRef = useKeyboardControls(handleToggleExploration);
 
   // Fetch productivity data for HUD vitals and billboards
   useEffect(() => {
@@ -64,6 +71,7 @@ function CyberCityInner() {
         productivityData={productivityData}
         settings={settings}
         playSfx={playSfx}
+        keysRef={keysRef}
       />
       <CityHud
         cosStatus={cosStatus}
@@ -73,6 +81,8 @@ function CyberCityInner() {
         connected={connected}
         apps={apps}
         productivityData={productivityData}
+        onToggleExploration={handleToggleExploration}
+        explorationMode={settings?.explorationMode}
       />
       <CityScanlines settings={settings} />
       {showSettings && <CitySettingsPanel />}

@@ -3,6 +3,48 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import CityActivityLog from './CityActivityLog';
 import CityAgentBar from './CityAgentBar';
 
+// WASD controls hint shown briefly on first exploration entry
+function ControlsHint({ visible }) {
+  const [show, setShow] = useState(false);
+  const hasShownRef = useRef(false);
+
+  useEffect(() => {
+    if (visible && !hasShownRef.current) {
+      hasShownRef.current = true;
+      setShow(true);
+      const timer = setTimeout(() => setShow(false), 5000);
+      return () => clearTimeout(timer);
+    }
+    if (!visible) setShow(false);
+  }, [visible]);
+
+  if (!show) return null;
+
+  return (
+    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none animate-in fade-in duration-500">
+      <div className="bg-black/85 border border-cyan-500/40 rounded-lg px-6 py-4 text-center">
+        <div className="font-pixel text-[11px] text-cyan-400 tracking-wider mb-3" style={{ textShadow: '0 0 8px rgba(6,182,212,0.5)' }}>
+          EXPLORATION MODE
+        </div>
+        <div className="grid grid-cols-3 gap-1 w-fit mx-auto mb-3">
+          <div />
+          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">W</div>
+          <div />
+          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">A</div>
+          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">S</div>
+          <div className="font-pixel text-[10px] text-gray-300 bg-gray-800/60 border border-gray-600/40 rounded px-2 py-1 text-center">D</div>
+        </div>
+        <div className="font-pixel text-[8px] text-gray-500 tracking-wide space-y-1">
+          <div>MOUSE: LOOK AROUND (CLICK TO LOCK)</div>
+          <div>SHIFT: SPRINT</div>
+          <div>E: INTERACT WITH BUILDING</div>
+          <div>TAB: FLY OUT</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Format uptime from page load
 const formatUptime = (seconds) => {
   const h = Math.floor(seconds / 3600);
@@ -94,7 +136,7 @@ function HealthBar({ value, max, color }) {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, productivityData }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, productivityData, onToggleExploration, explorationMode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [time, setTime] = useState(new Date());
@@ -274,6 +316,22 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
       {/* Bottom: Agent status bar */}
       <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
 
+      {/* Center crosshair in exploration mode */}
+      {explorationMode && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+          <div className="relative w-6 h-6">
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
+            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
+            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-cyan-400/40" />
+          </div>
+        </div>
+      )}
+
+      {/* Controls hint overlay */}
+      <ControlsHint visible={explorationMode} />
+
       {/* Bottom-left: Settings gear + legend + corner decoration */}
       <div className="absolute bottom-16 left-3">
         {/* Status legend */}
@@ -296,6 +354,24 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
             <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ARCHIVED</span>
           </div>
         </div>
+
+        {/* Drop In / Fly Out button */}
+        <button
+          onClick={onToggleExploration}
+          className={`pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2 hover:bg-cyan-500/10 transition-all group ${
+            explorationMode
+              ? 'border-cyan-400/60 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
+              : 'border-cyan-500/30 hover:border-cyan-400/60'
+          }`}
+          title={explorationMode ? 'Return to orbital view (Tab)' : 'Enter street-level exploration (Tab)'}
+        >
+          <HudCorner position="tl" />
+          <HudCorner position="br" />
+          <div className="font-pixel text-[10px] text-cyan-400 tracking-wider" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
+            {explorationMode ? '[ FLY OUT ]' : '[ DROP IN ]'}
+          </div>
+          <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center">(Tab)</div>
+        </button>
 
         <button
           onClick={() => navigate(location.pathname === '/city/settings' ? '/city' : '/city/settings')}

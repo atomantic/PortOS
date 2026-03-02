@@ -17,6 +17,7 @@
 - **Deep-linkable GSD Views**: Phase expansion and document selection persist in URL params (`?phase=03-apple-health-integration&doc=ROADMAP.md`)
 - **AI thought evaluation**: Brain classifier adds commentary, insights, and connections about each captured thought — surfacing questions worth exploring and suggested next steps
 - **Slop cleanup**: Raw brain dumps are automatically cleaned up — grammar fixed, shorthand expanded, restructured for clarity while preserving original meaning and voice
+- **CyberCity Drop In Mode**: Street-level 3rd-person exploration with a cyberpunk wireframe avatar — walk around the city with WASD, sprint with Shift, mouse look via pointer lock, approach buildings to see expanded holographic panels, press E to enter. Toggle between orbital and street view via HUD button or Tab hotkey
 
 ## Changed
 

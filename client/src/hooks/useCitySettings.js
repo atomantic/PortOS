@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = {
   sfxVolume: 0.5,
   qualityPreset: 'high',
   timeOfDay: 'sunset',
+  explorationMode: false,
   ...QUALITY_PRESETS.high,
 };
 

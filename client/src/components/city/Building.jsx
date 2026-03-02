@@ -267,7 +267,7 @@ function NeonEdgeStrip({ position, height, color, delay }) {
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2 }) {
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
@@ -485,11 +485,12 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       />
 
       {/* Holographic label */}
-      {(hovered || isOnline || app.archived) && (
+      {(hovered || isOnline || app.archived || isProximity) && (
         <HolographicPanel
           app={app}
           agentCount={agentCount}
           position={[0, height + 1.8, 0]}
+          expanded={isProximity}
         />
       )}
     </group>

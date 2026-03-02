@@ -270,6 +270,19 @@ export default function CitySettingsPanel() {
 
           <div className="border-t border-cyan-500/10" />
 
+          {/* Exploration */}
+          <div>
+            <SectionHeader title="EXPLORATION" subtitle="Street-level 3rd-person mode" />
+            <SettingToggle
+              label="DROP IN MODE"
+              value={settings.explorationMode}
+              onChange={(v) => updateSetting('explorationMode', v)}
+              description="Toggle street-level exploration (Tab)"
+            />
+          </div>
+
+          <div className="border-t border-cyan-500/10" />
+
           {/* Reset */}
           <button
             onClick={resetSettings}

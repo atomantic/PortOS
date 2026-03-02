@@ -13,7 +13,7 @@ const hashString = (str) => {
   return Math.abs(hash);
 };
 
-export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness }) {
+export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity }) {
   const agentData = agentMap.get(app.id);
   const agents = agentData?.agents || [];
   const height = getBuildingHeight(app);
@@ -54,6 +54,7 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
         onClick={() => onBuildingClick?.(app)}
         playSfx={playSfx}
         neonBrightness={neonBrightness}
+        isProximity={isProximity}
       />
 
       {/* Process buildings in ring around main building */}
