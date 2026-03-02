@@ -31,8 +31,8 @@ const phaseActionSchema = z.object({
 })
 
 const documentUpdateSchema = z.object({
-  content: z.string(),
-  commitMessage: z.string().optional()
+  content: z.string().max(500000),
+  commitMessage: z.string().max(200).optional()
 })
 
 const GSD_ALLOWED_DOCUMENTS = ['PROJECT.md', 'ROADMAP.md', 'STATE.md', 'CONCERNS.md', 'RETROSPECTIVE.md', 'MILESTONES.md']

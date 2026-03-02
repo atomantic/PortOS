@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { RefreshCw, Terminal, Play, Settings } from 'lucide-react';
 import * as api from '../../services/api';
 

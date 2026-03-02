@@ -27,7 +27,8 @@ export default function Shell() {
   const [connected, setConnected] = useState(false);
 
   // Read query params once on mount for initial session options
-  if (!initialOptsRef.current) {
+  useEffect(() => {
+    if (initialOptsRef.current) return;
     const cwd = searchParams.get('cwd');
     const cmd = searchParams.get('cmd');
     if (cwd || cmd) {
@@ -37,7 +38,7 @@ export default function Shell() {
     } else {
       initialOptsRef.current = {};
     }
-  }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initialize terminal once
   useEffect(() => {

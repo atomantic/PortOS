@@ -12,9 +12,13 @@ export function useAppOperation({ onComplete } = {}) {
   const [error, setError] = useState(null);
   const [completed, setCompleted] = useState(false);
   const clearTimerRef = useRef(null);
+  const cleanupRef = useRef(null);
 
-  // Clear auto-dismiss timer on unmount
-  useEffect(() => () => clearTimeout(clearTimerRef.current), []);
+  // Clear timer and remove socket listeners on unmount
+  useEffect(() => () => {
+    clearTimeout(clearTimerRef.current);
+    cleanupRef.current?.();
+  }, []);
 
   const handleStep = useCallback((data) => {
     setSteps(prev => {
@@ -68,8 +72,11 @@ export function useAppOperation({ onComplete } = {}) {
       socket.off('app:update:step', onStep);
       socket.off('app:update:error', onError);
       socket.off('app:update:complete', onDone);
+      cleanupRef.current = null;
     };
 
+    cleanupRef.current?.();
+    cleanupRef.current = cleanup;
     socket.on('app:update:step', onStep);
     socket.on('app:update:error', onError);
     socket.on('app:update:complete', onDone);
@@ -100,8 +107,11 @@ export function useAppOperation({ onComplete } = {}) {
       socket.off('app:standardize:step', onStep);
       socket.off('app:standardize:error', onError);
       socket.off('app:standardize:complete', onDone);
+      cleanupRef.current = null;
     };
 
+    cleanupRef.current?.();
+    cleanupRef.current = cleanup;
     socket.on('app:standardize:step', onStep);
     socket.on('app:standardize:error', onError);
     socket.on('app:standardize:complete', onDone);

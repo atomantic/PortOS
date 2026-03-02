@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import CityGround from './CityGround';
@@ -28,8 +28,17 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
+  const prevExplorationRef = useRef(false);
 
   const explorationMode = settings?.explorationMode || false;
+
+  // Set transitioning=true when exploration mode toggles
+  useEffect(() => {
+    if (prevExplorationRef.current !== explorationMode) {
+      setTransitioning(true);
+      prevExplorationRef.current = explorationMode;
+    }
+  }, [explorationMode]);
 
   const handlePositionsReady = useCallback((pos) => {
     setPositions(pos);
