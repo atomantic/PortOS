@@ -47,94 +47,101 @@ export default function PlayerAvatar({ isMoving, facingAngle }) {
     if (rightLegRef.current) rightLegRef.current.rotation.x = swing;
   });
 
+  // Foot bottom = hip(0.55) - footOffset(0.32) - halfFootHeight(0.02) = 0.21
+  // Shift body down by 0.18 so feet rest at Y=0.03, just above ground
+  const bodyOffset = -0.18;
+
   return (
     <group ref={groupRef}>
-      {/* Head - wireframe icosahedron */}
-      <group position={[0, 1.05, 0]}>
-        <mesh>
-          <icosahedronGeometry args={[0.12, 0]} />
-          <meshBasicMaterial color={NEON_COLOR} wireframe transparent opacity={0.7} />
-        </mesh>
-        {/* Visor */}
-        <mesh position={[0, 0, 0.08]}>
-          <boxGeometry args={[0.18, 0.05, 0.04]} />
-          <meshBasicMaterial color={VISOR_COLOR} transparent opacity={0.8} />
-        </mesh>
-        {/* Eyes */}
-        <mesh position={[-0.04, 0, 0.11]}>
-          <boxGeometry args={[0.03, 0.02, 0.01]} />
-          <meshBasicMaterial color={EYE_COLOR} />
-        </mesh>
-        <mesh position={[0.04, 0, 0.11]}>
-          <boxGeometry args={[0.03, 0.02, 0.01]} />
-          <meshBasicMaterial color={EYE_COLOR} />
-        </mesh>
-      </group>
+      {/* Body group offset so feet touch ground */}
+      <group position={[0, bodyOffset, 0]}>
+        {/* Head - wireframe icosahedron */}
+        <group position={[0, 1.05, 0]}>
+          <mesh>
+            <icosahedronGeometry args={[0.12, 0]} />
+            <meshBasicMaterial color={NEON_COLOR} wireframe transparent opacity={0.7} />
+          </mesh>
+          {/* Visor */}
+          <mesh position={[0, 0, 0.08]}>
+            <boxGeometry args={[0.18, 0.05, 0.04]} />
+            <meshBasicMaterial color={VISOR_COLOR} transparent opacity={0.8} />
+          </mesh>
+          {/* Eyes */}
+          <mesh position={[-0.04, 0, 0.11]}>
+            <boxGeometry args={[0.03, 0.02, 0.01]} />
+            <meshBasicMaterial color={EYE_COLOR} />
+          </mesh>
+          <mesh position={[0.04, 0, 0.11]}>
+            <boxGeometry args={[0.03, 0.02, 0.01]} />
+            <meshBasicMaterial color={EYE_COLOR} />
+          </mesh>
+        </group>
 
-      {/* Torso */}
-      <group position={[0, 0.75, 0]}>
-        <mesh>
-          <boxGeometry args={[0.3, 0.4, 0.2]} />
-          <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
-        </mesh>
-        {/* Neon wireframe edges */}
-        <lineSegments geometry={torsoEdges}>
-          <lineBasicMaterial color={NEON_COLOR} transparent opacity={0.8} />
-        </lineSegments>
-      </group>
-
-      {/* Left arm - pivoted at shoulder */}
-      <group position={[-0.22, 0.9, 0]}>
-        <group ref={leftArmRef}>
-          <mesh position={[0, -0.125, 0]}>
-            <cylinderGeometry args={[0.04, 0.04, 0.25, 6]} />
+        {/* Torso */}
+        <group position={[0, 0.75, 0]}>
+          <mesh>
+            <boxGeometry args={[0.3, 0.4, 0.2]} />
             <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
           </mesh>
+          {/* Neon wireframe edges */}
+          <lineSegments geometry={torsoEdges}>
+            <lineBasicMaterial color={NEON_COLOR} transparent opacity={0.8} />
+          </lineSegments>
+        </group>
+
+        {/* Left arm - pivoted at shoulder */}
+        <group position={[-0.22, 0.9, 0]}>
+          <group ref={leftArmRef}>
+            <mesh position={[0, -0.125, 0]}>
+              <cylinderGeometry args={[0.04, 0.04, 0.25, 6]} />
+              <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
+            </mesh>
+          </group>
+        </group>
+
+        {/* Right arm - pivoted at shoulder */}
+        <group position={[0.22, 0.9, 0]}>
+          <group ref={rightArmRef}>
+            <mesh position={[0, -0.125, 0]}>
+              <cylinderGeometry args={[0.04, 0.04, 0.25, 6]} />
+              <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
+            </mesh>
+          </group>
+        </group>
+
+        {/* Left leg - pivoted at hip */}
+        <group position={[-0.08, 0.55, 0]}>
+          <group ref={leftLegRef}>
+            <mesh position={[0, -0.15, 0]}>
+              <cylinderGeometry args={[0.05, 0.05, 0.3, 6]} />
+              <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
+            </mesh>
+            {/* Foot */}
+            <mesh position={[0, -0.32, 0.03]}>
+              <boxGeometry args={[0.07, 0.04, 0.12]} />
+              <meshBasicMaterial color={NEON_COLOR} transparent opacity={0.6} />
+            </mesh>
+          </group>
+        </group>
+
+        {/* Right leg - pivoted at hip */}
+        <group position={[0.08, 0.55, 0]}>
+          <group ref={rightLegRef}>
+            <mesh position={[0, -0.15, 0]}>
+              <cylinderGeometry args={[0.05, 0.05, 0.3, 6]} />
+              <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
+            </mesh>
+            {/* Foot */}
+            <mesh position={[0, -0.32, 0.03]}>
+              <boxGeometry args={[0.07, 0.04, 0.12]} />
+              <meshBasicMaterial color={NEON_COLOR} transparent opacity={0.6} />
+            </mesh>
+          </group>
         </group>
       </group>
 
-      {/* Right arm - pivoted at shoulder */}
-      <group position={[0.22, 0.9, 0]}>
-        <group ref={rightArmRef}>
-          <mesh position={[0, -0.125, 0]}>
-            <cylinderGeometry args={[0.04, 0.04, 0.25, 6]} />
-            <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
-          </mesh>
-        </group>
-      </group>
-
-      {/* Left leg - pivoted at hip */}
-      <group position={[-0.08, 0.55, 0]}>
-        <group ref={leftLegRef}>
-          <mesh position={[0, -0.15, 0]}>
-            <cylinderGeometry args={[0.05, 0.05, 0.3, 6]} />
-            <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
-          </mesh>
-          {/* Foot */}
-          <mesh position={[0, -0.32, 0.03]}>
-            <boxGeometry args={[0.07, 0.04, 0.12]} />
-            <meshBasicMaterial color={NEON_COLOR} transparent opacity={0.6} />
-          </mesh>
-        </group>
-      </group>
-
-      {/* Right leg - pivoted at hip */}
-      <group position={[0.08, 0.55, 0]}>
-        <group ref={rightLegRef}>
-          <mesh position={[0, -0.15, 0]}>
-            <cylinderGeometry args={[0.05, 0.05, 0.3, 6]} />
-            <meshBasicMaterial color={BODY_COLOR} transparent opacity={0.9} />
-          </mesh>
-          {/* Foot */}
-          <mesh position={[0, -0.32, 0.03]}>
-            <boxGeometry args={[0.07, 0.04, 0.12]} />
-            <meshBasicMaterial color={NEON_COLOR} transparent opacity={0.6} />
-          </mesh>
-        </group>
-      </group>
-
-      {/* Glow disc at feet */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+      {/* Glow disc at ground level (outside body offset) */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
         <circleGeometry args={[0.4, 16]} />
         <meshBasicMaterial
           color={NEON_COLOR}
