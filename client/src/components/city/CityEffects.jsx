@@ -30,7 +30,8 @@ const ExposureShader = {
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
       // Reverse power curve: lifts shadows/midtones, preserves highlights
-      color.rgb = 1.0 - pow(max(1.0 - color.rgb, 0.0), vec3(1.0 / uExposure));
+      float safeExposure = max(uExposure, 0.001);
+      color.rgb = 1.0 - pow(max(1.0 - color.rgb, 0.0), vec3(1.0 / safeExposure));
       gl_FragColor = color;
     }
   `,
@@ -137,6 +138,7 @@ const ColorGradingShader = {
 export default function CityEffects({ settings }) {
   const composerRef = useRef();
   const grainPassRef = useRef();
+  const exposurePassRef = useRef();
   const { gl, scene, camera, size } = useThree();
 
   const bloomEnabled = settings?.bloomEnabled ?? true;
@@ -164,13 +166,13 @@ export default function CityEffects({ settings }) {
       composer.addPass(bloomPass);
     }
 
-    // Exposure pass — runs after bloom so it lifts shadows/midtones
-    // without feeding extra brightness into the bloom calculation
-    if (sceneExposure !== 1.0) {
-      const exposurePass = new ShaderPass(ExposureShader);
-      exposurePass.uniforms.uExposure.value = sceneExposure;
-      composer.addPass(exposurePass);
-    }
+    // Exposure pass — always added, enabled/disabled via ref to avoid
+    // recreating the composer when the slider is dragged
+    const exposurePass = new ShaderPass(ExposureShader);
+    exposurePass.enabled = sceneExposure !== 1.0;
+    exposurePass.uniforms.uExposure.value = sceneExposure;
+    exposurePassRef.current = exposurePass;
+    composer.addPass(exposurePass);
 
     if (colorGrading) {
       const cgPass = new ShaderPass(ColorGradingShader);
@@ -196,9 +198,13 @@ export default function CityEffects({ settings }) {
     return () => {
       composer.dispose();
     };
-  }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, sceneExposure, chromaticAberration, filmGrain, colorGrading]);
+  }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, chromaticAberration, filmGrain, colorGrading]);
 
   useFrame(({ clock }) => {
+    if (exposurePassRef.current) {
+      exposurePassRef.current.enabled = sceneExposure !== 1.0;
+      exposurePassRef.current.uniforms.uExposure.value = sceneExposure;
+    }
     if (grainPassRef.current) {
       grainPassRef.current.uniforms.uTime.value = clock.getElapsedTime();
     }

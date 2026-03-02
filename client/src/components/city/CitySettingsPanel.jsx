@@ -262,7 +262,7 @@ export default function CitySettingsPanel() {
               max={2.5}
               step={0.1}
               format={(v) => `${v.toFixed(1)}x`}
-              description="Post-bloom brightness lift — brightens assets without adding bloom"
+              description="Post-bloom exposure adjustment — darkens or brightens assets without adding bloom"
             />
             <SettingSlider
               label="AMBIENT BRIGHTNESS"
