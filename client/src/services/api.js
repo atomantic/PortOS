@@ -1494,9 +1494,9 @@ export const unarchiveGitHubRepo = (fullName) =>
   request(`/github/repos/${encodeURIComponent(fullName)}/unarchive`, { method: 'POST' });
 export const getGitHubSecrets = () => request('/github/secrets');
 export const setGitHubSecret = (name, value) =>
-  request(`/github/secrets/${name}`, { method: 'PUT', body: JSON.stringify({ value }) });
+  request(`/github/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ value }) });
 export const syncGitHubSecret = (name) =>
-  request(`/github/secrets/${name}/sync`, { method: 'POST' });
+  request(`/github/secrets/${encodeURIComponent(name)}/sync`, { method: 'POST' });
 
 // Default export for simplified imports
 export default {
