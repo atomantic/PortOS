@@ -29,9 +29,9 @@ const ExposureShader = {
     varying vec2 vUv;
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
-      // Reverse power curve: lifts shadows/midtones, preserves highlights
+      // Reverse power curve: lifts shadows/midtones, preserves highlights; higher uExposure -> brighter
       float safeExposure = max(uExposure, 0.001);
-      color.rgb = 1.0 - pow(max(1.0 - color.rgb, 0.0), vec3(1.0 / safeExposure));
+      color.rgb = 1.0 - pow(max(1.0 - color.rgb, 0.0), vec3(safeExposure));
       gl_FragColor = color;
     }
   `,
