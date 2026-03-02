@@ -61,7 +61,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityLights settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />
-      <CityCelestial settings={settings} />
+      {!explorationMode && <CityCelestial settings={settings} />}
       <CitySkyline />
       <CityGround settings={settings} />
 
