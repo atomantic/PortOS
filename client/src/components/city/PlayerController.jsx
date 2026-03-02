@@ -111,7 +111,7 @@ export default function PlayerController({
 
     // Movement direction relative to camera yaw
     const forward = new THREE.Vector3(-Math.sin(yawRef.current), 0, -Math.cos(yawRef.current));
-    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
 
     const moveDir = new THREE.Vector3(0, 0, 0);
     if (keys.has('w') || keys.has('arrowup')) moveDir.add(forward);
