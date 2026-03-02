@@ -7,7 +7,8 @@ const router = Router();
 // GET /api/settings
 router.get('/', asyncHandler(async (req, res) => {
   const settings = await getSettings();
-  res.json(settings);
+  const { secrets, ...safe } = settings;
+  res.json(safe);
 }));
 
 // PUT /api/settings

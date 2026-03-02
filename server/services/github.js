@@ -78,12 +78,13 @@ async function runWithConcurrency(tasks, limit) {
  * Sync repos from GitHub using gh CLI
  */
 export async function syncRepos() {
+  const data = await load();
+  const owner = data.githubUser || 'atomantic';
   const raw = await execGh([
-    'repo', 'list', 'atomantic', '--limit', '200',
+    'repo', 'list', owner, '--limit', '200',
     '--json', 'name,nameWithOwner,description,pushedAt,isArchived,isPrivate,isFork,parent,licenseInfo'
   ]);
   const remoteRepos = JSON.parse(raw);
-  const data = await load();
 
   // Build set of remote repo names to detect deletions
   const remoteNames = new Set();
@@ -199,11 +200,13 @@ export async function syncSecretToRepos(name) {
   let synced = 0;
   let failed = 0;
   const errors = [];
+  const succeeded = new Set();
 
   const tasks = targetRepos.map(repo => async () => {
     const result = await syncOneSecret(name, value, repo.fullName);
     if (result.success) {
       synced++;
+      succeeded.add(repo.fullName);
     } else {
       failed++;
       errors.push({ repo: repo.fullName, error: result.error });
@@ -212,10 +215,10 @@ export async function syncSecretToRepos(name) {
 
   await runWithConcurrency(tasks, CONCURRENCY);
 
-  // Update last sync timestamp on repos
-  for (const repo of targetRepos) {
-    if (data.repos[repo.fullName]) {
-      data.repos[repo.fullName].lastSecretSync = new Date().toISOString();
+  // Update last sync timestamp only on repos where sync succeeded
+  for (const fullName of succeeded) {
+    if (data.repos[fullName]) {
+      data.repos[fullName].lastSecretSync = new Date().toISOString();
     }
   }
   await save(data);

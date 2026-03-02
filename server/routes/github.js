@@ -61,8 +61,12 @@ router.get('/secrets', asyncHandler(async (req, res) => {
  * PUT /api/github/secrets/:name — set secret value + auto-sync to repos
  */
 router.put('/secrets/:name', asyncHandler(async (req, res) => {
+  const name = req.params.name;
+  if (!/^[A-Z0-9_]{1,100}$/.test(name)) {
+    return res.status(400).json({ error: 'Invalid secret name. Use uppercase letters, digits, and underscores only.' });
+  }
   const { value } = validateRequest(githubSecretSchema, req.body);
-  const result = await githubService.setSecret(req.params.name, value);
+  const result = await githubService.setSecret(name, value);
   res.json(result);
 }));
 
@@ -70,7 +74,11 @@ router.put('/secrets/:name', asyncHandler(async (req, res) => {
  * POST /api/github/secrets/:name/sync — re-sync existing secret to flagged repos
  */
 router.post('/secrets/:name/sync', asyncHandler(async (req, res) => {
-  const result = await githubService.syncSecretToRepos(req.params.name);
+  const name = req.params.name;
+  if (!/^[A-Z0-9_]{1,100}$/.test(name)) {
+    return res.status(400).json({ error: 'Invalid secret name.' });
+  }
+  const result = await githubService.syncSecretToRepos(name);
   res.json(result);
 }));
 

@@ -84,9 +84,9 @@ export default function GitHub() {
   };
 
   const handleSaveSecret = async () => {
-    if (!newSecretName.trim() || !newSecretValue.trim()) return;
+    if (!newSecretName.trim() || !newSecretValue) return;
     setSavingSecret(true);
-    const result = await setGitHubSecret(newSecretName.trim(), newSecretValue.trim()).catch((err) => {
+    const result = await setGitHubSecret(newSecretName.trim(), newSecretValue).catch((err) => {
       toast.error(`Failed to save secret: ${err.message}`);
       return null;
     });
@@ -261,7 +261,7 @@ export default function GitHub() {
           />
           <button
             onClick={handleSaveSecret}
-            disabled={savingSecret || !newSecretName.trim() || !newSecretValue.trim()}
+            disabled={savingSecret || !newSecretName.trim() || !newSecretValue}
             className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded text-sm disabled:opacity-50"
           >
             {savingSecret ? 'Saving...' : 'Save Secret'}
