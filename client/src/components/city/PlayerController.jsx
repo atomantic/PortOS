@@ -61,7 +61,7 @@ export default function PlayerController({
     if (!pointerLockedRef.current || !active) return;
     yawRef.current -= e.movementX * 0.002;
     pitchRef.current += e.movementY * 0.002;
-    pitchRef.current = Math.max(-0.4, Math.min(1.2, pitchRef.current));
+    pitchRef.current = Math.max(-0.1, Math.min(1.2, pitchRef.current));
   }, [active]);
 
   useEffect(() => {
@@ -184,8 +184,13 @@ export default function PlayerController({
 
     // Camera follow - spherical offset from player
     const camX = playerPos.current.x + Math.sin(yawRef.current) * Math.cos(pitchRef.current) * CAMERA_DISTANCE;
-    const camY = playerPos.current.y + HEAD_HEIGHT + Math.sin(pitchRef.current) * CAMERA_DISTANCE;
+    const camY = Math.max(0.5, playerPos.current.y + HEAD_HEIGHT + Math.sin(pitchRef.current) * CAMERA_DISTANCE);
     const camZ = playerPos.current.z + Math.cos(yawRef.current) * Math.cos(pitchRef.current) * CAMERA_DISTANCE;
+
+    // Ensure near plane is tight enough for street-level viewing
+    camera.near = 0.1;
+    camera.far = 500;
+    camera.updateProjectionMatrix();
 
     const targetCamPos = new THREE.Vector3(camX, camY, camZ);
     camera.position.lerp(targetCamPos, CAMERA_LERP);
