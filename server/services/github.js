@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { getSettings, updateSettings } from './settings.js';
 
 const DATA_DIR = PATHS.data;
@@ -136,7 +137,7 @@ export async function getRepos() {
 export async function updateRepoFlags(fullName, updates) {
   const data = await load();
   const repo = data.repos[fullName];
-  if (!repo) throw new Error(`Repo not found: ${fullName}`);
+  if (!repo) throw new ServerError(`Repo not found: ${fullName}`, { status: 404, code: 'REPO_NOT_FOUND' });
 
   if (updates.flags) {
     repo.flags = { ...repo.flags, ...updates.flags };
@@ -186,7 +187,7 @@ export async function setSecret(name, value) {
 export async function syncSecretToRepos(name) {
   const settings = await getSettings();
   const value = settings.secrets?.[name];
-  if (!value) throw new Error(`No value stored for secret: ${name}`);
+  if (!value) throw new ServerError(`No value stored for secret: ${name}`, { status: 400, code: 'SECRET_NOT_CONFIGURED' });
 
   const data = await load();
   const targetRepos = Object.values(data.repos).filter(

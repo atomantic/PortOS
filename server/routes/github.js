@@ -76,7 +76,7 @@ router.put('/secrets/:name', asyncHandler(async (req, res) => {
 router.post('/secrets/:name/sync', asyncHandler(async (req, res) => {
   const name = req.params.name;
   if (!/^[A-Z0-9_]{1,100}$/.test(name)) {
-    return res.status(400).json({ error: 'Invalid secret name.' });
+    return res.status(400).json({ error: 'Invalid secret name. Use uppercase letters, digits, and underscores only.' });
   }
   const result = await githubService.syncSecretToRepos(name);
   res.json(result);

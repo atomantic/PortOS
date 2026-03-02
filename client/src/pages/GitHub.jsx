@@ -268,7 +268,7 @@ export default function GitHub() {
           </button>
         </div>
         <p className="text-xs text-gray-500 mt-2">
-          Secrets are stored locally and pushed to repos via <code>gh secret set</code>. Values are never sent to the browser.
+          Secrets are stored locally and pushed to repos via <code>gh secret set</code>. Stored values are never returned from the server.
         </p>
       </div>
 
