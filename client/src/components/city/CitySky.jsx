@@ -1,7 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
 
 const SUN_RADIUS = 100;
 

@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
 
 // Animated accent light that slowly shifts color, with reactive brightness
 function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef, neonScaleRef }) {

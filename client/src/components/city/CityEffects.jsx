@@ -198,6 +198,7 @@ export default function CityEffects({ settings }) {
     return () => {
       composer.dispose();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sceneExposure intentionally omitted; updated via exposurePassRef in useFrame to avoid recreating the composer on slider drag
   }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, chromaticAberration, filmGrain, colorGrading]);
 
   useFrame(({ clock }) => {

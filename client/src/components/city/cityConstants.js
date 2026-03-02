@@ -265,9 +265,22 @@ export const getBuildingHeight = (app) => {
 // Resolve the time-of-day preset for a given sky theme
 // Returns theme-specific overrides if available, otherwise default timeOfDay preset
 export const getTimeOfDayPreset = (timeOfDay, skyTheme) => {
-  const themeOverrides = CITY_COLORS.skyThemes[skyTheme];
-  if (themeOverrides && themeOverrides[timeOfDay]) return themeOverrides[timeOfDay];
-  return CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const skyThemes = CITY_COLORS.skyThemes;
+  const timeOfDayPresets = CITY_COLORS.timeOfDay;
+
+  if (skyThemes && hasOwn.call(skyThemes, skyTheme)) {
+    const themeOverrides = skyThemes[skyTheme];
+    if (themeOverrides && hasOwn.call(themeOverrides, timeOfDay)) {
+      return themeOverrides[timeOfDay];
+    }
+  }
+
+  if (timeOfDayPresets && hasOwn.call(timeOfDayPresets, timeOfDay)) {
+    return timeOfDayPresets[timeOfDay];
+  }
+
+  return timeOfDayPresets.sunset;
 };
 
 // Get a deterministic neon accent color per app (for windows/decorations)
