@@ -8,6 +8,35 @@ import * as THREE from 'three';
 
 extend({ EffectComposer, RenderPass, UnrealBloomPass, ShaderPass });
 
+// Exposure/brightness lift shader -- applied after bloom so it brightens the scene
+// without feeding extra luminosity into the bloom pass.
+// Uses a reverse power curve: shadows lift dramatically, highlights barely change.
+const ExposureShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uExposure: { value: 1.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uExposure;
+    varying vec2 vUv;
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      // Reverse power curve: lifts shadows/midtones, preserves highlights; higher uExposure -> brighter
+      float safeExposure = max(uExposure, 0.001);
+      color.rgb = 1.0 - pow(max(1.0 - color.rgb, 0.0), vec3(safeExposure));
+      gl_FragColor = color;
+    }
+  `,
+};
+
 // Chromatic Aberration shader -- offset R/B channels at screen edges
 const ChromaticAberrationShader = {
   uniforms: {
@@ -109,10 +138,12 @@ const ColorGradingShader = {
 export default function CityEffects({ settings }) {
   const composerRef = useRef();
   const grainPassRef = useRef();
+  const exposurePassRef = useRef();
   const { gl, scene, camera, size } = useThree();
 
   const bloomEnabled = settings?.bloomEnabled ?? true;
   const bloomStrength = settings?.bloomStrength ?? 0.5;
+  const sceneExposure = settings?.sceneExposure ?? 1.0;
   const chromaticAberration = settings?.chromaticAberration ?? true;
   const filmGrain = settings?.filmGrain ?? true;
   const colorGrading = settings?.colorGrading ?? true;
@@ -134,6 +165,14 @@ export default function CityEffects({ settings }) {
       );
       composer.addPass(bloomPass);
     }
+
+    // Exposure pass — always added, enabled/disabled via ref to avoid
+    // recreating the composer when the slider is dragged
+    const exposurePass = new ShaderPass(ExposureShader);
+    exposurePass.enabled = sceneExposure !== 1.0;
+    exposurePass.uniforms.uExposure.value = sceneExposure;
+    exposurePassRef.current = exposurePass;
+    composer.addPass(exposurePass);
 
     if (colorGrading) {
       const cgPass = new ShaderPass(ColorGradingShader);
@@ -159,9 +198,14 @@ export default function CityEffects({ settings }) {
     return () => {
       composer.dispose();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sceneExposure intentionally omitted; updated via exposurePassRef in useFrame to avoid recreating the composer on slider drag
   }, [gl, scene, camera, size.width, size.height, bloomEnabled, bloomStrength, chromaticAberration, filmGrain, colorGrading]);
 
   useFrame(({ clock }) => {
+    if (exposurePassRef.current) {
+      exposurePassRef.current.enabled = sceneExposure !== 1.0;
+      exposurePassRef.current.uniforms.uExposure.value = sceneExposure;
+    }
     if (grainPassRef.current) {
       grainPassRef.current.uniforms.uTime.value = clock.getElapsedTime();
     }

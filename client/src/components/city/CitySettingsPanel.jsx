@@ -225,9 +225,45 @@ export default function CitySettingsPanel() {
 
           <div className="border-t border-cyan-500/10" />
 
+          {/* Sky Theme */}
+          <div>
+            <SectionHeader title="SKY THEME" subtitle="Change the world atmosphere" />
+            <div className="grid grid-cols-2 gap-1.5">
+              {[
+                { key: 'cyberpunk', label: 'CYBERPUNK', desc: 'Dark neon-lit night city' },
+                { key: 'dreamworld', label: 'DREAMWORLD', desc: 'Bright open-world sky with clouds' },
+              ].map(theme => (
+                <button
+                  key={theme.key}
+                  onClick={() => updateSetting('skyTheme', theme.key)}
+                  title={theme.desc}
+                  className={`font-pixel text-[9px] py-2 rounded border transition-all tracking-wide ${
+                    settings.skyTheme === theme.key
+                      ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                      : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+                  }`}
+                >
+                  {theme.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="border-t border-cyan-500/10" />
+
           {/* Scene Lighting */}
           <div>
             <SectionHeader title="SCENE LIGHTING" subtitle="Brightness and time of day" />
+            <SettingSlider
+              label="EXPOSURE"
+              value={settings.sceneExposure ?? 1.0}
+              onChange={(v) => updateSetting('sceneExposure', v)}
+              min={0.5}
+              max={2.5}
+              step={0.1}
+              format={(v) => `${v.toFixed(1)}x`}
+              description="Post-bloom exposure adjustment — darkens or brightens assets without adding bloom"
+            />
             <SettingSlider
               label="AMBIENT BRIGHTNESS"
               value={settings.ambientBrightness}

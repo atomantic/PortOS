@@ -1,7 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
 
 // Vertex shader for shooting star trail
 const TRAIL_VERT = `
@@ -193,7 +193,8 @@ function ShootingStar({ index, playSfx, daylightRef }) {
 export default function CityShootingStars({ playSfx, settings }) {
   const daylightRef = useRef(0);
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
-  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const skyTheme = settings?.skyTheme ?? 'cyberpunk';
+  const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
   const targetDaylight = preset.daylightFactor ?? 0;
 
   useFrame((_, delta) => {

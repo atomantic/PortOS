@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
 
 // Animated accent light that slowly shifts color, with reactive brightness
 function AnimatedLight({ position, baseColor, baseIntensity, distance, shiftRange = 0.1, speed = 0.5, brightnessRef, neonScaleRef }) {
@@ -84,7 +84,8 @@ export default function CityLights({ settings }) {
   brightnessRef.current = settings?.ambientBrightness ?? 1.2;
 
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
-  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const skyTheme = settings?.skyTheme ?? 'cyberpunk';
+  const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
 
   // Neon scale: dim neon point lights during daytime (30% at noon, 100% at night)
   const neonScaleRef = useRef(1);

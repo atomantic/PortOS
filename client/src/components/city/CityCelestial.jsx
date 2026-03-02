@@ -1,7 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
 
 // Orbital ring line geometry
 function OrbitalRing({ radius, tilt, color, opacity = 0.15, nightFactorRef }) {
@@ -69,7 +69,8 @@ export default function CityCelestial({ settings }) {
   const nightFactorRef = useRef(1);
 
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
-  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const skyTheme = settings?.skyTheme ?? 'cyberpunk';
+  const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
   const targetDaylight = preset.daylightFactor ?? 0;
 
   useFrame(({ clock }, delta) => {

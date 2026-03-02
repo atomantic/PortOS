@@ -10,6 +10,7 @@ const QUALITY_PRESETS = {
     particleDensity: 0.5, scanlineOverlay: false,
     ambientBrightness: 1.0,
     neonBrightness: 1.0,
+    sceneExposure: 1.0,
     dpr: [1, 1],
   },
   medium: {
@@ -19,6 +20,7 @@ const QUALITY_PRESETS = {
     particleDensity: 0.75, scanlineOverlay: true,
     ambientBrightness: 1.0,
     neonBrightness: 1.0,
+    sceneExposure: 1.0,
     dpr: [1, 1.25],
   },
   high: {
@@ -28,6 +30,7 @@ const QUALITY_PRESETS = {
     particleDensity: 1.0, scanlineOverlay: true,
     ambientBrightness: 1.2,
     neonBrightness: 1.2,
+    sceneExposure: 1.0,
     dpr: [1, 1.5],
   },
   ultra: {
@@ -37,6 +40,7 @@ const QUALITY_PRESETS = {
     particleDensity: 1.5, scanlineOverlay: true,
     ambientBrightness: 1.5,
     neonBrightness: 1.5,
+    sceneExposure: 1.2,
     dpr: [1, 2],
   },
 };
@@ -47,6 +51,7 @@ const DEFAULT_SETTINGS = {
   sfxEnabled: true,
   sfxVolume: 0.5,
   qualityPreset: 'high',
+  skyTheme: 'cyberpunk',
   timeOfDay: 'sunset',
   explorationMode: false,
   ...QUALITY_PRESETS.high,

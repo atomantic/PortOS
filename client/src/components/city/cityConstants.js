@@ -109,6 +109,98 @@ export const CITY_COLORS = {
       ambientIntensity: 0.1,
     },
   },
+  // Sky themes: visual palette overrides for time-of-day presets
+  // 'cyberpunk' uses default timeOfDay colors above
+  // 'dreamworld' bright purple/blue open-world sky with clouds
+  skyThemes: {
+    cyberpunk: null, // uses default timeOfDay colors
+    dreamworld: {
+      sunrise: {
+        hour: 6,
+        zenith: '#4a2080',
+        midSky: '#6a3aaa',
+        horizonHigh: '#ff9070',
+        horizonLow: '#ffcc88',
+        sunCore: '#ffdd66',
+        sunGlow: '#ffaa55',
+        sunLight: '#ffeecc',
+        sunIntensity: 3.0,
+        sunScale: 1.2,
+        isMoon: false,
+        daylightFactor: 0.5,
+        groundColor: '#4a4a60',
+        groundRoughness: 0.5,
+        hemiSkyColor: '#cc88ff',
+        hemiGroundColor: '#4a3a50',
+        hemiIntensity: 0.8,
+        ambientColor: '#6644aa',
+        ambientIntensity: 0.35,
+      },
+      noon: {
+        hour: 12,
+        zenith: '#4466cc',
+        midSky: '#6688dd',
+        horizonHigh: '#88aaee',
+        horizonLow: '#aaccff',
+        sunCore: '#ffffee',
+        sunGlow: '#ffffcc',
+        sunLight: '#ffffff',
+        sunIntensity: 5.0,
+        sunScale: 0.8,
+        isMoon: false,
+        daylightFactor: 1.0,
+        groundColor: '#556680',
+        groundRoughness: 0.4,
+        hemiSkyColor: '#99bbff',
+        hemiGroundColor: '#445566',
+        hemiIntensity: 1.6,
+        ambientColor: '#7799cc',
+        ambientIntensity: 0.5,
+      },
+      sunset: {
+        hour: 18,
+        zenith: '#2a1860',
+        midSky: '#5530a0',
+        horizonHigh: '#ff6088',
+        horizonLow: '#ffaa60',
+        sunCore: '#ffcc44',
+        sunGlow: '#ff8866',
+        sunLight: '#ffddbb',
+        sunIntensity: 2.5,
+        sunScale: 1.2,
+        isMoon: false,
+        daylightFactor: 0.4,
+        groundColor: '#302848',
+        groundRoughness: 0.55,
+        hemiSkyColor: '#bb6688',
+        hemiGroundColor: '#2a2040',
+        hemiIntensity: 0.6,
+        ambientColor: '#4a2266',
+        ambientIntensity: 0.3,
+      },
+      midnight: {
+        hour: 0,
+        zenith: '#0a0830',
+        midSky: '#161248',
+        horizonHigh: '#2a2266',
+        horizonLow: '#3a3080',
+        sunCore: '#ccccff',
+        sunGlow: '#9999dd',
+        sunLight: '#556688',
+        sunIntensity: 0.3,
+        sunScale: 0.7,
+        isMoon: true,
+        daylightFactor: 0.05,
+        groundColor: '#141230',
+        groundRoughness: 0.7,
+        hemiSkyColor: '#221e55',
+        hemiGroundColor: '#0a0818',
+        hemiIntensity: 0.1,
+        ambientColor: '#1a1644',
+        ambientIntensity: 0.15,
+      },
+    },
+  },
 };
 
 export const BOROUGH_PARAMS = {
@@ -168,6 +260,27 @@ export const getBuildingHeight = (app) => {
   const hash = hashString(app.name || app.id);
   const variation = (hash % 100) / 100 * BUILDING_PARAMS.heightVariation;
   return base + processBonus + variation;
+};
+
+// Resolve the time-of-day preset for a given sky theme
+// Returns theme-specific overrides if available, otherwise default timeOfDay preset
+export const getTimeOfDayPreset = (timeOfDay, skyTheme) => {
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const skyThemes = CITY_COLORS.skyThemes;
+  const timeOfDayPresets = CITY_COLORS.timeOfDay;
+
+  if (skyThemes && hasOwn.call(skyThemes, skyTheme)) {
+    const themeOverrides = skyThemes[skyTheme];
+    if (themeOverrides && hasOwn.call(themeOverrides, timeOfDay)) {
+      return themeOverrides[timeOfDay];
+    }
+  }
+
+  if (timeOfDayPresets && hasOwn.call(timeOfDayPresets, timeOfDay)) {
+    return timeOfDayPresets[timeOfDay];
+  }
+
+  return timeOfDayPresets.sunset;
 };
 
 // Get a deterministic neon accent color per app (for windows/decorations)

@@ -1,7 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
 
 const SUN_RADIUS = 100;
 
@@ -103,12 +103,13 @@ const lerpColor = (target, a, b, t) => {
   target.b = a.b + (b.b - a.b) * t;
 };
 
-// Pre-allocate parsed preset colors
+// Pre-allocate parsed preset colors (keyed by "theme:timeOfDay")
 const presetColors = {};
-const getPresetColors = (name) => {
-  if (!presetColors[name]) {
-    const p = CITY_COLORS.timeOfDay[name];
-    presetColors[name] = {
+const getPresetColors = (name, skyTheme) => {
+  const cacheKey = `${skyTheme}:${name}`;
+  if (!presetColors[cacheKey]) {
+    const p = getTimeOfDayPreset(name, skyTheme);
+    presetColors[cacheKey] = {
       zenith: new THREE.Color(p.zenith),
       midSky: new THREE.Color(p.midSky),
       horizonHigh: new THREE.Color(p.horizonHigh),
@@ -122,7 +123,7 @@ const getPresetColors = (name) => {
       isMoon: p.isMoon,
     };
   }
-  return presetColors[name];
+  return presetColors[cacheKey];
 };
 
 // Sun/Moon mesh
@@ -173,17 +174,33 @@ export default function CitySky({ settings }) {
   const timeOfDayRef = useRef(settings?.timeOfDay ?? 'sunset');
   timeOfDayRef.current = settings?.timeOfDay ?? 'sunset';
 
+  const skyThemeRef = useRef(settings?.skyTheme ?? 'cyberpunk');
+  const previousSkyThemeRef = useRef(skyThemeRef.current);
+
   const currentPresetRef = useRef(timeOfDayRef.current);
   const transitionRef = useRef(1.0);
+
+  const nextSkyTheme = settings?.skyTheme ?? 'cyberpunk';
+  if (previousSkyThemeRef.current !== nextSkyTheme) {
+    previousSkyThemeRef.current = nextSkyTheme;
+    skyThemeRef.current = nextSkyTheme;
+    transitionRef.current = 0;
+  } else {
+    skyThemeRef.current = nextSkyTheme;
+  }
 
   const bodyGroupRef = useRef();
   const lightRef = useRef();
   const currentScaleRef = useRef(1.0);
-  const currentHourRef = useRef(18); // start at sunset
+  const initialPreset = getTimeOfDayPreset(settings?.timeOfDay ?? 'sunset', settings?.skyTheme ?? 'cyberpunk');
+  const currentHourRef = useRef(initialPreset.hour ?? 18);
 
   const skyMaterial = useMemo(() => {
-    const preset = getPresetColors('sunset');
-    const initPos = getArcPosition(18);
+    const initialTheme = settings?.skyTheme ?? 'cyberpunk';
+    const initialTod = settings?.timeOfDay ?? 'sunset';
+    const initialHour = getTimeOfDayPreset(initialTod, initialTheme).hour ?? 18;
+    const preset = getPresetColors(initialTod, initialTheme);
+    const initPos = getArcPosition(initialHour);
     return new THREE.ShaderMaterial({
       vertexShader: SkyDomeShader.vertexShader,
       fragmentShader: SkyDomeShader.fragmentShader,
@@ -194,7 +211,7 @@ export default function CitySky({ settings }) {
         uHorizonLow: { value: preset.horizonLow.clone() },
         uSunDirection: { value: new THREE.Vector3(...initPos).normalize() },
         uSunIntensity: { value: preset.sunIntensity },
-        uIsMoon: { value: 0.0 },
+        uIsMoon: { value: preset.isMoon ? 1.0 : 0.0 },
         uTime: { value: 0 },
       },
       side: THREE.BackSide,
@@ -214,7 +231,7 @@ export default function CitySky({ settings }) {
     transitionRef.current = Math.min(1.0, transitionRef.current + delta * 1.5);
     const lerpFactor = transitionRef.current < 1 ? delta * 3 : 1;
 
-    const preset = getPresetColors(target);
+    const preset = getPresetColors(target, skyThemeRef.current);
 
     // Lerp hour along shortest path on the 24h clock
     let hourDiff = preset.hour - currentHourRef.current;

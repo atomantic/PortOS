@@ -2,7 +2,7 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid } from '@react-three/drei';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
 
 // Reflective puddle/wet-ground patches
 function WetPatch({ position, size, color }) {
@@ -58,7 +58,8 @@ export default function CityGround({ settings }) {
   const groundMatRef = useRef();
 
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
-  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const skyTheme = settings?.skyTheme ?? 'cyberpunk';
+  const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
   const groundColorTarget = useRef(new THREE.Color(preset.groundColor ?? '#0a0a20'));
   groundColorTarget.current.set(preset.groundColor ?? '#0a0a20');
   const targetRoughness = preset.groundRoughness ?? 0.7;

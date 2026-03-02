@@ -19,6 +19,7 @@ import CityDataRain from './CityDataRain';
 import CityNeonSigns from './CityNeonSigns';
 import CityEmbers from './CityEmbers';
 import CityEffects from './CityEffects';
+import CityClouds from './CityClouds';
 import CitySky from './CitySky';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
@@ -56,6 +57,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       gl={{ antialias: true }}
     >
       <CitySky settings={settings} />
+      <CityClouds settings={settings} />
       <CityLights settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />

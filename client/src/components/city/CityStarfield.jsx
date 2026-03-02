@@ -1,7 +1,7 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { CITY_COLORS } from './cityConstants';
+import { getTimeOfDayPreset } from './cityConstants';
 
 const STAR_VERT = `
   attribute float size;
@@ -83,7 +83,8 @@ export default function CityStarfield({ settings }) {
   }, []);
 
   const timeOfDay = settings?.timeOfDay ?? 'sunset';
-  const preset = CITY_COLORS.timeOfDay[timeOfDay] ?? CITY_COLORS.timeOfDay.sunset;
+  const skyTheme = settings?.skyTheme ?? 'cyberpunk';
+  const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
   const targetDaylight = preset.daylightFactor ?? 0;
 
   useFrame(({ clock }, delta) => {
