@@ -32,6 +32,7 @@ export default function GitHub() {
   const [lastSync, setLastSync] = useState(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [sort, setSort] = useState('recent'); // 'recent' | 'alpha'
   const [syncingSecret, setSyncingSecret] = useState(null);
 
   // Add secret form
@@ -153,14 +154,15 @@ export default function GitHub() {
       list = list.filter(r => r.isArchived);
     }
 
-    // Sort: active first, then by pushed date
+    // Sort: active first, then by selected sort
     list.sort((a, b) => {
       if (a.isArchived !== b.isArchived) return a.isArchived ? 1 : -1;
+      if (sort === 'alpha') return a.name.localeCompare(b.name);
       return new Date(b.pushedAt || 0) - new Date(a.pushedAt || 0);
     });
 
     return list;
-  }, [repos, search, filter]);
+  }, [repos, search, filter, sort]);
 
   const secretEntries = Object.entries(secrets);
 
@@ -311,6 +313,13 @@ export default function GitHub() {
                 {f === 'npm' ? 'NPM Projects' : f === 'secrets' ? 'Has Secrets' : f === 'archived' ? 'Archived' : 'All'}
               </button>
             ))}
+            <button
+              onClick={() => setSort(s => s === 'recent' ? 'alpha' : 'recent')}
+              className="px-3 py-2 text-sm rounded bg-port-bg text-gray-400 hover:text-white border border-port-border"
+              title={`Sort by ${sort === 'recent' ? 'name' : 'recent activity'}`}
+            >
+              {sort === 'recent' ? 'A-Z' : 'Recent'}
+            </button>
           </div>
         </div>
 

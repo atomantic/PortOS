@@ -85,8 +85,12 @@ export async function syncRepos() {
   const remoteRepos = JSON.parse(raw);
   const data = await load();
 
+  // Build set of remote repo names to detect deletions
+  const remoteNames = new Set();
+
   for (const repo of remoteRepos) {
     const fullName = repo.nameWithOwner;
+    remoteNames.add(fullName);
     const existing = data.repos[fullName] || {};
     data.repos[fullName] = {
       name: repo.name,
@@ -104,9 +108,16 @@ export async function syncRepos() {
     };
   }
 
+  // Remove repos that no longer exist on GitHub
+  const removed = Object.keys(data.repos).filter(name => !remoteNames.has(name));
+  for (const name of removed) {
+    delete data.repos[name];
+  }
+
   data.lastRepoSync = new Date().toISOString();
   await save(data);
-  console.log(`🔄 Synced ${remoteRepos.length} repos from GitHub`);
+  const removedMsg = removed.length ? `, removed ${removed.length} deleted` : '';
+  console.log(`🔄 Synced ${remoteRepos.length} repos from GitHub${removedMsg}`);
   return data;
 }
 
