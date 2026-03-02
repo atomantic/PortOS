@@ -7,7 +7,7 @@ const NEON_COLOR = '#06b6d4';
 const VISOR_COLOR = '#06b6d4';
 const EYE_COLOR = '#ff3366';
 
-export default function PlayerAvatar({ isMoving, facingAngle }) {
+export default function PlayerAvatar({ isMovingRef, facingAngleRef }) {
   const groupRef = useRef();
   const leftArmRef = useRef();
   const rightArmRef = useRef();
@@ -24,7 +24,7 @@ export default function PlayerAvatar({ isMoving, facingAngle }) {
     if (!groupRef.current) return;
 
     // Facing direction
-    groupRef.current.rotation.y = facingAngle;
+    groupRef.current.rotation.y = facingAngleRef.current;
 
     // Idle bob
     const t = performance.now() / 1000;
@@ -32,7 +32,7 @@ export default function PlayerAvatar({ isMoving, facingAngle }) {
     groupRef.current.position.y = bob;
 
     // Walk animation
-    if (isMoving) {
+    if (isMovingRef.current) {
       walkPhaseRef.current += delta * 12;
     } else {
       // Damp walk phase toward zero

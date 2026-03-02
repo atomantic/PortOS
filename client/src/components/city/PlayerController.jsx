@@ -212,8 +212,8 @@ export default function PlayerController({
   return (
     <group ref={avatarGroupRef}>
       <PlayerAvatar
-        isMoving={isMovingRef.current}
-        facingAngle={facingAngleRef.current}
+        isMovingRef={isMovingRef}
+        facingAngleRef={facingAngleRef}
       />
     </group>
   );
