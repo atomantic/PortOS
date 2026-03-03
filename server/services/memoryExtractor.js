@@ -5,7 +5,7 @@
  * Supports structured MEMORY blocks and pattern-based extraction.
  */
 
-import { createMemory } from './memory.js';
+import { createMemory } from './memoryBackend.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';

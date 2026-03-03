@@ -11,7 +11,7 @@
 
 import { getInboxLog, getPeople, getProjects, getIdeas, getAdminItems, getMemoryEntries, getLinks } from './brainStorage.js';
 import { searchBM25 } from './memoryBM25.js';
-import { getMemories } from './memory.js';
+import { getMemories } from './memoryBackend.js';
 import { getAllApps } from './apps.js';
 import { getHistory } from './history.js';
 

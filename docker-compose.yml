@@ -1,0 +1,30 @@
+# PortOS Docker Services
+# PostgreSQL + pgvector for scalable memory storage
+#
+# Usage:
+#   docker compose up -d        # Start services
+#   docker compose down         # Stop services
+#   docker compose logs -f db   # View database logs
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: portos-db
+    restart: unless-stopped
+    ports:
+      - "5561:5432"
+    environment:
+      POSTGRES_DB: portos
+      POSTGRES_USER: portos
+      POSTGRES_PASSWORD: portos
+    volumes:
+      - portos-pgdata:/var/lib/postgresql/data
+      - ./server/scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portos"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  portos-pgdata:

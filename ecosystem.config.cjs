@@ -18,7 +18,8 @@ const PORTS = {
   CDP_HEALTH: 5557,    // Browser health check endpoint
   COS: 5558,           // Chief of Staff agent runner
   AUTOFIXER: 5559,     // Autofixer API
-  AUTOFIXER_UI: 5560   // Autofixer UI
+  AUTOFIXER_UI: 5560,  // Autofixer UI
+  POSTGRES: 5561       // PostgreSQL + pgvector (Docker, memory system)
 };
 
 module.exports = {
@@ -35,7 +36,8 @@ module.exports = {
       env: {
         ...BASE_ENV,
         PORT: PORTS.API,
-        HOST: '0.0.0.0'
+        HOST: '0.0.0.0',
+        PGPORT: PORTS.POSTGRES
       },
       watch: ['server'],
       ignore_watch: ['node_modules', '**/*.test.js'],

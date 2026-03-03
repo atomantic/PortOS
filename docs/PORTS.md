@@ -30,6 +30,7 @@ Common port labels:
 | 5558 | portos-cos | api | CoS Agent Runner (isolated process) |
 | 5559 | portos-autofixer | api | Autofixer daemon API |
 | 5560 | portos-autofixer-ui | ui | Autofixer web UI |
+| 5561 | portos-db | db | PostgreSQL + pgvector (Docker, memory system) |
 
 ## Defining Ports in ecosystem.config.cjs
 

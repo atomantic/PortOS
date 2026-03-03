@@ -8,7 +8,7 @@ See [GOALS.md](./GOALS.md) for project goals and direction.
 - Frontend: React + Tailwind CSS + Vite (port 5555)
 - Backend: Express.js (port 5554)
 - Process Manager: PM2
-- Data Storage: JSON files in `./data/`
+- Data Storage: JSON files in `./data/`, PostgreSQL + pgvector (memory system)
 
 ### Commands
 ```bash
@@ -74,6 +74,8 @@ pm2 logs
 - [x] **M42 P4**: Unified Digital Twin Identity System - Identity Tab UI dashboard with completeness header, 5 summary cards, derive actions
 - [x] **M43**: Moltworld Platform Support - Second platform integration for AI agents in a shared voxel world
 - [x] **M44 P1-P5**: MeatSpace - Health tracker with death clock, LEV 2045 tracker, alcohol logging, blood/body/epigenetic/eye tracking, lifestyle questionnaire, TSV import, dashboard widget, compact grid overview
+
+- [x] **M51**: Memory System PostgreSQL Upgrade - PostgreSQL + pgvector backend with HNSW vector search, tsvector full-text search, federation sync, and pg_dump backup integration
 
 ### In Progress
 

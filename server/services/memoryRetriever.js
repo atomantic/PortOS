@@ -5,9 +5,9 @@
  * Combines semantic search with importance scoring.
  */
 
-import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memory.js';
+import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens, truncateToTokens } from './memoryEmbeddings.js';
-import { DEFAULT_MEMORY_CONFIG } from './memory.js';
+import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 
 // Search mode preference
 const SEARCH_MODE = 'hybrid'; // 'hybrid' | 'vector' | 'bm25'

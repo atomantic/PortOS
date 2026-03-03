@@ -13,6 +13,7 @@ import { access, readFile, readdir, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
+import { checkHealth } from '../lib/db.js';
 
 // Module-level state
 let isRunning = false;
@@ -121,6 +122,10 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
   changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags).catch(fail);
   console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
+  // Dump PostgreSQL alongside the file backup
+  const pgDumpPath = join(snapshotDir, 'portos-db.sql');
+  const pgResult = await dumpPostgres(pgDumpPath).catch(() => ({ success: false }));
+
   manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json')).catch(fail);
 
   const lastRun = new Date().toISOString();
@@ -134,7 +139,60 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
 
   if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length });
 
-  return complete({ snapshotId, filesChanged: changedFiles.length, lastRun, manifest });
+  return complete({ snapshotId, filesChanged: changedFiles.length, lastRun, manifest, pgDump: pgResult });
+}
+
+/**
+ * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
+ * Silently skips if PostgreSQL is not available.
+ * @param {string} outputPath - Path to write the SQL dump file
+ * @returns {Promise<{success: boolean, size?: number, error?: string}>}
+ */
+export async function dumpPostgres(outputPath) {
+  const health = await checkHealth();
+  if (!health.connected || !health.hasSchema) {
+    return { success: false, error: 'PostgreSQL not available' };
+  }
+
+  const pgHost = process.env.PGHOST || 'localhost';
+  const pgPort = process.env.PGPORT || '5561';
+  const pgDb = process.env.PGDATABASE || 'portos';
+  const pgUser = process.env.PGUSER || 'portos';
+
+  return new Promise((resolve) => {
+    const proc = spawn('pg_dump', [
+      '-h', pgHost,
+      '-p', pgPort,
+      '-U', pgUser,
+      '-d', pgDb,
+      '--no-owner',
+      '--no-acl',
+      '-f', outputPath
+    ], {
+      shell: false,
+      env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' }
+    });
+
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+    proc.on('close', async (code) => {
+      if (code === 0) {
+        const info = await stat(outputPath).catch(() => null);
+        console.log(`💾 pg_dump complete: ${info ? Math.round(info.size / 1024) + 'KB' : 'unknown size'}`);
+        resolve({ success: true, size: info?.size ?? 0 });
+      } else {
+        console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
+        resolve({ success: false, error: stderr.trim() });
+      }
+    });
+
+    proc.on('error', (err) => {
+      // pg_dump not installed — skip silently
+      console.warn(`⚠️ pg_dump not available: ${err.message}`);
+      resolve({ success: false, error: err.message });
+    });
+  });
 }
 
 /**

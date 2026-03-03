@@ -7,9 +7,11 @@
  */
 import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const PM2 = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 const ECO = 'ecosystem.config.cjs';
 
@@ -19,6 +21,12 @@ function pm2(...args) {
     windowsHide: true
   });
 }
+
+// Ensure PostgreSQL is running (gracefully skips if Docker unavailable)
+execFileSync(process.execPath, [join(__dirname, 'setup-db.js')], {
+  stdio: 'inherit',
+  windowsHide: true
+});
 
 // Stop and delete existing PortOS processes (ignore errors if none exist)
 try { pm2('stop', ECO); } catch {}

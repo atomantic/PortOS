@@ -1,0 +1,161 @@
+/**
+ * Memory Federation Sync Service
+ *
+ * Enables memory synchronization between PortOS instances via the
+ * sync_sequence column in PostgreSQL. Peers pull changes since their
+ * last known sequence number.
+ *
+ * Sync Protocol:
+ *   1. Each memory row has an auto-incrementing sync_sequence (BIGSERIAL)
+ *   2. Peers request GET /api/memory/sync?since={lastSequence}&limit=100
+ *   3. Response includes memories changed since that sequence + the max sequence
+ *   4. Peer stores the max sequence and uses it for the next poll
+ *   5. Conflict resolution: last-writer-wins by updated_at timestamp
+ */
+
+import { query, withTransaction } from '../lib/db.js';
+
+/**
+ * Get memories changed since a given sync sequence.
+ * Used by peers to pull incremental updates.
+ *
+ * @param {number} sinceSequence - Return changes after this sequence number (0 = all)
+ * @param {number} limit - Max records to return per batch
+ * @returns {Promise<{memories: Array, maxSequence: number, hasMore: boolean}>}
+ */
+export async function getChangesSince(sinceSequence = 0, limit = 100) {
+  const result = await query(
+    `SELECT id, type, content, summary, category, tags,
+            embedding, embedding_model, confidence, importance,
+            access_count, last_accessed, status,
+            source_task_id, source_agent_id, source_app_id,
+            expires_at, created_at, updated_at, sync_sequence
+     FROM memories
+     WHERE sync_sequence > $1
+     ORDER BY sync_sequence ASC
+     LIMIT $2`,
+    [sinceSequence, limit]
+  );
+
+  const memories = result.rows.map(row => ({
+    id: row.id,
+    type: row.type,
+    content: row.content,
+    summary: row.summary,
+    category: row.category,
+    tags: row.tags || [],
+    embedding: row.embedding,
+    embeddingModel: row.embedding_model,
+    confidence: row.confidence,
+    importance: row.importance,
+    accessCount: row.access_count,
+    lastAccessed: row.last_accessed?.toISOString() ?? null,
+    status: row.status,
+    sourceTaskId: row.source_task_id,
+    sourceAgentId: row.source_agent_id,
+    sourceAppId: row.source_app_id,
+    expiresAt: row.expires_at?.toISOString() ?? null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    syncSequence: parseInt(row.sync_sequence, 10)
+  }));
+
+  const maxSequence = memories.length > 0
+    ? memories[memories.length - 1].syncSequence
+    : sinceSequence;
+
+  // Check if there are more records beyond this batch
+  const countResult = await query(
+    'SELECT COUNT(*) AS remaining FROM memories WHERE sync_sequence > $1',
+    [maxSequence]
+  );
+  const hasMore = parseInt(countResult.rows[0].remaining, 10) > 0;
+
+  return { memories, maxSequence, hasMore };
+}
+
+/**
+ * Apply incoming changes from a remote peer.
+ * Uses last-writer-wins conflict resolution based on updated_at.
+ *
+ * @param {Array} incomingMemories - Array of memory objects from remote peer
+ * @returns {Promise<{applied: number, skipped: number, conflicts: number}>}
+ */
+export async function applyRemoteChanges(incomingMemories) {
+  let applied = 0;
+  let skipped = 0;
+  let conflicts = 0;
+
+  return withTransaction(async (client) => {
+    for (const mem of incomingMemories) {
+      // Check if memory exists locally
+      const existing = await client.query(
+        'SELECT id, updated_at FROM memories WHERE id = $1',
+        [mem.id]
+      );
+
+      if (existing.rows.length === 0) {
+        // New memory — insert it
+        await client.query(
+          `INSERT INTO memories (
+            id, type, content, summary, category, tags,
+            embedding, embedding_model, confidence, importance,
+            access_count, last_accessed, status,
+            source_task_id, source_agent_id, source_app_id,
+            expires_at, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10,
+            $11, $12, $13,
+            $14, $15, $16,
+            $17, $18, $19
+          )`,
+          [
+            mem.id, mem.type, mem.content, mem.summary, mem.category, mem.tags || [],
+            mem.embedding, mem.embeddingModel, mem.confidence, mem.importance,
+            mem.accessCount || 0, mem.lastAccessed,
+            mem.status, mem.sourceTaskId, mem.sourceAgentId, mem.sourceAppId,
+            mem.expiresAt, mem.createdAt, mem.updatedAt
+          ]
+        );
+        applied++;
+      } else {
+        // Exists — last-writer-wins by updated_at
+        const localUpdatedAt = existing.rows[0].updated_at;
+        const remoteUpdatedAt = new Date(mem.updatedAt);
+
+        if (remoteUpdatedAt > localUpdatedAt) {
+          await client.query(
+            `UPDATE memories SET
+              type = $2, content = $3, summary = $4, category = $5, tags = $6,
+              embedding = $7, embedding_model = $8, confidence = $9, importance = $10,
+              status = $11, expires_at = $12, updated_at = $13
+            WHERE id = $1`,
+            [
+              mem.id, mem.type, mem.content, mem.summary, mem.category, mem.tags || [],
+              mem.embedding, mem.embeddingModel, mem.confidence, mem.importance,
+              mem.status, mem.expiresAt, mem.updatedAt
+            ]
+          );
+          applied++;
+          conflicts++;
+        } else {
+          skipped++; // Local version is newer or equal
+        }
+      }
+    }
+
+    return { applied, skipped, conflicts };
+  });
+}
+
+/**
+ * Get the current maximum sync sequence number.
+ * Used by peers to determine if they're up-to-date.
+ *
+ * @returns {Promise<number>}
+ */
+export async function getMaxSequence() {
+  const result = await query('SELECT COALESCE(MAX(sync_sequence), 0) AS max_seq FROM memories');
+  return parseInt(result.rows[0].max_seq, 10);
+}

@@ -3,8 +3,11 @@
  */
 
 import { Router } from 'express';
-import * as memory from '../services/memory.js';
+import * as memory from '../services/memoryBackend.js';
+import { getBackendName } from '../services/memoryBackend.js';
 import * as embeddings from '../services/memoryEmbeddings.js';
+import * as memorySync from '../services/memorySync.js';
+import { checkHealth } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
@@ -71,6 +74,36 @@ router.get('/timeline', asyncHandler(async (req, res) => {
 router.get('/graph', asyncHandler(async (req, res) => {
   const graph = await memory.getGraphData();
   res.json(graph);
+}));
+
+// GET /api/memory/backend/status - Check memory backend status
+router.get('/backend/status', asyncHandler(async (req, res) => {
+  const dbHealth = await checkHealth();
+  res.json({ backend: getBackendName(), db: dbHealth });
+}));
+
+// GET /api/memory/sync - Federation sync: get changes since sequence
+router.get('/sync', asyncHandler(async (req, res) => {
+  if (getBackendName() !== 'postgres') {
+    throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
+  }
+  const since = parseInt(req.query.since, 10) || 0;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 100, 1000);
+  const result = await memorySync.getChangesSince(since, limit);
+  res.json(result);
+}));
+
+// POST /api/memory/sync - Federation sync: apply remote changes
+router.post('/sync', asyncHandler(async (req, res) => {
+  if (getBackendName() !== 'postgres') {
+    throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
+  }
+  const { memories } = req.body;
+  if (!Array.isArray(memories)) {
+    throw new ServerError('Request body must contain a memories array', { status: 400 });
+  }
+  const result = await memorySync.applyRemoteChanges(memories);
+  res.json(result);
 }));
 
 // GET /api/memory/embeddings/status - Check embedding service status
