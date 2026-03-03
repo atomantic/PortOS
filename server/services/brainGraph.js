@@ -84,23 +84,33 @@ export async function getBrainGraphData() {
     }
   }
 
-  // 4. Compute tag-based edges (Jaccard >= 0.3)
+  // 4. Compute tag-based edges (Jaccard >= 0.3) using inverted index
+  const tagIndex = new Map(); // tag → Set of node indices
   for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i], b = nodes[j];
-      const edgeKey = [a.id, b.id].sort().join('-');
-      if (seenEdges.has(edgeKey)) continue;
-
-      const similarity = jaccardSimilarity(a.tags, b.tags);
-      if (similarity >= 0.3) {
-        seenEdges.add(edgeKey);
-        edges.push({
-          source: a.id,
-          target: b.id,
-          type: 'shared_tag',
-          weight: similarity
-        });
+    for (const tag of nodes[i].tags || []) {
+      if (!tagIndex.has(tag)) tagIndex.set(tag, new Set());
+      tagIndex.get(tag).add(i);
+    }
+  }
+  const candidatePairs = new Set();
+  for (const indices of tagIndex.values()) {
+    const arr = [...indices];
+    for (let x = 0; x < arr.length; x++) {
+      for (let y = x + 1; y < arr.length; y++) {
+        const lo = Math.min(arr[x], arr[y]), hi = Math.max(arr[x], arr[y]);
+        candidatePairs.add(`${lo}:${hi}`);
       }
+    }
+  }
+  for (const pair of candidatePairs) {
+    const [i, j] = pair.split(':').map(Number);
+    const a = nodes[i], b = nodes[j];
+    const edgeKey = [a.id, b.id].sort().join('-');
+    if (seenEdges.has(edgeKey)) continue;
+    const similarity = jaccardSimilarity(a.tags, b.tags);
+    if (similarity >= 0.3) {
+      seenEdges.add(edgeKey);
+      edges.push({ source: a.id, target: b.id, type: 'shared_tag', weight: similarity });
     }
   }
 

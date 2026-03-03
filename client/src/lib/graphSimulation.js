@@ -41,11 +41,16 @@ function tickSim(nodes, edges, alpha) {
 }
 
 const MAX_ITERATIONS = 300;
+const LARGE_GRAPH_THRESHOLD = 200;
 
 function settleSimulation(nodes, edges) {
+  // Scale iterations down for large graphs to keep the main thread responsive
+  const cap = nodes.length > LARGE_GRAPH_THRESHOLD
+    ? Math.max(50, Math.round(MAX_ITERATIONS * (LARGE_GRAPH_THRESHOLD / nodes.length)))
+    : MAX_ITERATIONS;
   let alpha = 1;
   let iter = 0;
-  while (alpha > ALPHA_MIN && iter < MAX_ITERATIONS) {
+  while (alpha > ALPHA_MIN && iter < cap) {
     tickSim(nodes, edges, alpha);
     alpha *= ALPHA_DECAY;
     iter++;

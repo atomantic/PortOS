@@ -45,7 +45,12 @@ export async function loadBridgeMap() {
     return bridgeMap;
   }
   const raw = await readFile(BRIDGE_MAP_PATH, 'utf-8');
-  bridgeMap = JSON.parse(raw);
+  try {
+    bridgeMap = JSON.parse(raw);
+  } catch (err) {
+    console.error(`❌ Corrupt bridge map, resetting: ${err.message}`);
+    bridgeMap = {};
+  }
   return bridgeMap;
 }
 
