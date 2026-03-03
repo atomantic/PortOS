@@ -9,8 +9,8 @@ import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './
 import { generateQueryEmbedding, estimateTokens, truncateToTokens } from './memoryEmbeddings.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 
-// Search mode preference
-const SEARCH_MODE = 'hybrid'; // 'hybrid' | 'vector' | 'fts'
+// Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
+const SEARCH_MODE = 'hybrid';
 
 /**
  * Get relevant memories for a task

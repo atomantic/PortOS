@@ -24,7 +24,6 @@ function rowToMemory(row) {
     summary: row.summary,
     category: row.category,
     tags: row.tags || [],
-    relatedMemories: row.related_memories || [],
     sourceTaskId: row.source_task_id,
     sourceAgentId: row.source_agent_id,
     sourceAppId: row.source_app_id,

@@ -18,7 +18,7 @@ const pool = new Pool({
   password: process.env.PGPASSWORD || 'portos',
   max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000
+  connectionTimeoutMillis: 2000
 });
 
 pool.on('error', (err) => {

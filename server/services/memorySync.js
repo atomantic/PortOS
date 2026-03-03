@@ -63,7 +63,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100) {
     expiresAt: row.expires_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
-    syncSequence: row.sync_sequence
+    syncSequence: String(row.sync_sequence)
   }));
 
   const maxSequence = memories.length > 0
