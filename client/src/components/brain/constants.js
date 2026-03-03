@@ -1,10 +1,11 @@
-import { MessageSquare, Database, Calendar, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network } from 'lucide-react';
 
 // Main navigation tabs
 export const TABS = [
   { id: 'inbox', label: 'Inbox', icon: MessageSquare },
   { id: 'links', label: 'Links', icon: Link2 },
   { id: 'memory', label: 'Memory', icon: Database },
+  { id: 'graph', label: 'Graph', icon: Network },
   { id: 'digest', label: 'Digest', icon: Calendar },
   { id: 'trust', label: 'Trust', icon: Shield },
   { id: 'config', label: 'Config', icon: Settings }
@@ -97,6 +98,15 @@ export function getConfidenceColor(confidence) {
   if (confidence >= 0.6) return CONFIDENCE_COLORS.medium;
   return CONFIDENCE_COLORS.low;
 }
+
+// Brain entity type hex colors for graph visualization
+export const BRAIN_TYPE_HEX = {
+  people: '#a855f7',
+  projects: '#3b82f6',
+  ideas: '#eab308',
+  admin: '#22c55e',
+  memories: '#ec4899'
+};
 
 // Format relative time
 export function formatRelativeTime(dateString) {

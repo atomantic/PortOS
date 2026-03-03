@@ -1042,6 +1042,9 @@ export const cloneBrainLink = (id) => request(`/brain/links/${id}/clone`, { meth
 export const pullBrainLink = (id) => request(`/brain/links/${id}/pull`, { method: 'POST' });
 export const openBrainLinkFolder = (id) => request(`/brain/links/${id}/open-folder`, { method: 'POST' });
 
+// Brain - Graph
+export const getBrainGraph = () => request('/brain/graph');
+
 // Media - Server media devices
 export const getMediaDevices = () => request('/media/devices');
 export const getMediaStatus = () => request('/media/status');

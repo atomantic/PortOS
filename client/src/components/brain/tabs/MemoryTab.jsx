@@ -105,12 +105,15 @@ export default function MemoryTab({ onRefresh }) {
           return null;
         });
         break;
-      case 'memories':
-        result = await api.updateBrainMemory(editingId, editForm).catch(err => {
+      case 'memories': {
+        const { tagInput, ...memData } = editForm;
+        if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
+        result = await api.updateBrainMemory(editingId, memData).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
+      }
     }
 
     if (result) {
@@ -149,12 +152,15 @@ export default function MemoryTab({ onRefresh }) {
           return null;
         });
         break;
-      case 'memories':
-        result = await api.createBrainMemory(addForm).catch(err => {
+      case 'memories': {
+        const { tagInput, ...memData } = addForm;
+        if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
+        result = await api.createBrainMemory(memData).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
+      }
     }
 
     if (result) {
@@ -240,7 +246,7 @@ export default function MemoryTab({ onRefresh }) {
 
   const startEdit = (record) => {
     setEditingId(record.id);
-    setEditForm({ ...record });
+    setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
   };
 
   const renderForm = (form, setForm, isEdit = false) => {
@@ -408,8 +414,8 @@ export default function MemoryTab({ onRefresh }) {
             <input
               type="text"
               placeholder="Tags (comma separated)"
-              value={(form.tags || []).join(', ')}
-              onChange={(e) => setForm({ ...form, tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+              value={form.tagInput ?? (form.tags || []).join(', ')}
+              onChange={(e) => setForm({ ...form, tagInput: e.target.value })}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
             />
           </div>

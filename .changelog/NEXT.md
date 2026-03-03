@@ -9,6 +9,8 @@
 - Source filter toggle (All/CoS/Brain) and source badges on Memory tab
 - `appId` filtering on memory list and search APIs
 - Migration script for existing brain data (`server/scripts/migrateBrainToMemories.js`)
+- Brain Graph tab (`/brain/graph`): 3D force-directed visualization of brain entities with semantic similarity, shared-tag, and linked edges; type filter checkboxes, text search, detail panel
+- Shared graph simulation library (`client/src/lib/graphSimulation.js`) extracted from CoS MemoryGraph
 
 ## Changed
 
@@ -16,5 +18,7 @@
 - Setup scripts now show `npm start` as the primary production command alongside `npm run pm2:start`
 
 ## Fixed
+
+- Brain Memory tag input now allows typing commas (stores raw string, splits to array on save)
 
 ## Removed

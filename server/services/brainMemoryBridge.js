@@ -38,7 +38,7 @@ const TYPE_MAP = {
 
 let bridgeMap = null;
 
-async function loadBridgeMap() {
+export async function loadBridgeMap() {
   if (bridgeMap) return bridgeMap;
   if (!existsSync(BRIDGE_MAP_PATH)) {
     bridgeMap = {};
@@ -55,7 +55,7 @@ async function saveBridgeMap() {
   await writeFile(BRIDGE_MAP_PATH, JSON.stringify(bridgeMap, null, 2));
 }
 
-function bridgeKey(brainType, brainId) {
+export function bridgeKey(brainType, brainId) {
   return `${brainType}:${brainId}`;
 }
 
@@ -118,7 +118,7 @@ function composeReviewContent(r) {
   return parts.join('\n');
 }
 
-const CONTENT_COMPOSERS = {
+export const CONTENT_COMPOSERS = {
   people: composePeopleContent,
   projects: composeProjectContent,
   ideas: composeIdeaContent,

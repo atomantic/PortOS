@@ -32,6 +32,7 @@ import {
   linksQuerySchema
 } from '../lib/brainValidation.js';
 import * as githubCloner from '../services/githubCloner.js';
+import { getBrainGraphData } from '../services/brainGraph.js';
 
 const router = Router();
 
@@ -711,6 +712,19 @@ router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
   console.log(`📂 Opened folder: ${link.localPath}`);
 
   res.json({ message: 'Folder opened', path: link.localPath });
+}));
+
+// =============================================================================
+// GRAPH
+// =============================================================================
+
+/**
+ * GET /api/brain/graph
+ * Get brain entity graph data for visualization
+ */
+router.get('/graph', asyncHandler(async (req, res) => {
+  const data = await getBrainGraphData();
+  res.json(data);
 }));
 
 export default router;

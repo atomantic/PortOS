@@ -11,6 +11,7 @@ import {
 import InboxTab from '../components/brain/tabs/InboxTab';
 import LinksTab from '../components/brain/tabs/LinksTab';
 import MemoryTab from '../components/brain/tabs/MemoryTab';
+import BrainGraph from '../components/brain/tabs/BrainGraph';
 import DigestTab from '../components/brain/tabs/DigestTab';
 import TrustTab from '../components/brain/tabs/TrustTab';
 import ConfigTab from '../components/brain/tabs/ConfigTab';
@@ -52,6 +53,8 @@ export default function Brain() {
         return <LinksTab onRefresh={fetchData} />;
       case 'memory':
         return <MemoryTab onRefresh={fetchData} />;
+      case 'graph':
+        return <BrainGraph />;
       case 'digest':
         return <DigestTab onRefresh={fetchData} />;
       case 'trust':
