@@ -1,76 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, ExternalLink, Download } from 'lucide-react';
+import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
+import KanbanBoard from '../../KanbanBoard';
 import EditAppModal from '../EditAppModal';
 import ActivityLog from '../ActivityLog';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import * as api from '../../../services/api';
-
-function KanbanBoard({ tickets }) {
-  const columns = {
-    'To Do': tickets.filter(t => t.statusCategory === 'To Do'),
-    'In Progress': tickets.filter(t => t.statusCategory === 'In Progress'),
-    'Done': tickets.filter(t => t.statusCategory === 'Done')
-  };
-
-  const columnConfig = {
-    'To Do': { bg: 'bg-gray-500/10', border: 'border-gray-500/30', dot: 'bg-gray-500' },
-    'In Progress': { bg: 'bg-port-accent/10', border: 'border-port-accent/30', dot: 'bg-port-accent' },
-    'Done': { bg: 'bg-port-success/10', border: 'border-port-success/30', dot: 'bg-port-success' }
-  };
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-      {Object.entries(columns).map(([category, categoryTickets]) => {
-        const config = columnConfig[category];
-        return (
-          <div key={category} className={`${config.bg} border ${config.border} rounded-lg p-3 min-h-[120px]`}>
-            <div className="flex items-center gap-2 mb-3">
-              <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-              <span className="text-sm font-medium text-white">{category}</span>
-              <span className="text-xs text-gray-500">({categoryTickets.length})</span>
-            </div>
-            <div className="space-y-2">
-              {categoryTickets.map(ticket => (
-                <a
-                  key={ticket.key}
-                  href={ticket.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block p-2 bg-port-card border border-port-border rounded-lg hover:border-port-accent/50 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-1">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-mono text-port-accent">{ticket.key}</span>
-                        {ticket.priority && (
-                          <span className={`text-xs ${
-                            ticket.priority === 'Highest' || ticket.priority === 'High' ? 'text-port-error' :
-                            ticket.priority === 'Medium' ? 'text-port-warning' : 'text-gray-500'
-                          }`}>{ticket.priority}</span>
-                        )}
-                        {ticket.storyPoints && (
-                          <span className="text-xs text-cyan-400">{ticket.storyPoints}pt</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-white line-clamp-2">{ticket.summary}</div>
-                      <div className="text-xs text-gray-500 mt-1">{ticket.issueType}</div>
-                    </div>
-                    <ExternalLink size={12} className="text-gray-500 shrink-0" />
-                  </div>
-                </a>
-              ))}
-              {categoryTickets.length === 0 && (
-                <div className="text-xs text-gray-500 text-center py-4">No tickets</div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export default function OverviewTab({ app, onRefresh }) {
   const [editingApp, setEditingApp] = useState(null);
@@ -217,7 +153,7 @@ export default function OverviewTab({ app, onRefresh }) {
                   <span>Loading tickets...</span>
                 </div>
               ) : jiraTickets?.length > 0 ? (
-                <KanbanBoard tickets={jiraTickets} />
+                <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} />
               ) : (
                 <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
                   No tickets assigned to you in the current sprint

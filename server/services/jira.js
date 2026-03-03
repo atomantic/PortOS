@@ -288,7 +288,8 @@ export async function getTransitions(instanceId, ticketId) {
   return response.data.transitions.map(t => ({
     id: t.id,
     name: t.name,
-    to: t.to?.name
+    to: t.to?.name,
+    toCategory: t.to?.statusCategory?.name
   }));
 }
 
