@@ -277,6 +277,13 @@ export async function updateMemory(id, updates) {
           [id, relId]
         );
       }
+      // Bump updated_at so link changes appear in sync and timeline
+      if (fields.length === 0) {
+        await client.query(
+          'UPDATE memories SET updated_at = NOW() WHERE id = $1',
+          [id]
+        );
+      }
     });
     memory.relatedMemories = updates.relatedMemories;
   } else {

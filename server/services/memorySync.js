@@ -11,9 +11,12 @@
  *   3. Response includes memories changed since that sequence + the max sequence
  *   4. Peer stores the max sequence and uses it for the next poll
  *   5. Conflict resolution: last-writer-wins by updated_at timestamp
+ *
+ * Note: memory_links (relationships) are not synced — only the memories table
+ * is replicated. Relationship data is instance-local.
  */
 
-import { query, withTransaction, arrayToPgvector } from '../lib/db.js';
+import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
 
 /**
  * Get memories changed since a given sync sequence.
@@ -48,7 +51,7 @@ export async function getChangesSince(sinceSequence = 0, limit = 100) {
     summary: row.summary,
     category: row.category,
     tags: row.tags || [],
-    embedding: row.embedding,
+    embedding: pgvectorToArray(row.embedding),
     embeddingModel: row.embedding_model,
     confidence: row.confidence,
     importance: row.importance,
