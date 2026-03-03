@@ -845,6 +845,7 @@ export const consolidateMemories = (options = {}) => request('/memory/consolidat
   body: JSON.stringify(options)
 });
 export const getEmbeddingStatus = () => request('/memory/embeddings/status');
+export const getMemoryBackendStatus = () => request('/memory/backend/status', { silent: true });
 export const approveMemory = (id) => request(`/memory/${id}/approve`, { method: 'POST' });
 export const rejectMemory = (id) => request(`/memory/${id}/reject`, { method: 'POST' });
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { RefreshCw, Trash2, X, Check, XCircle, Pencil } from 'lucide-react';
+import { RefreshCw, Trash2, X, Check, XCircle, Pencil, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
@@ -30,6 +30,7 @@ export default function MemoryTab({ apps = [] }) {
     }, { replace: true });
   }, [setSearchParams]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
+  const [backendStatus, setBackendStatus] = useState(null);
   const [editingMemory, setEditingMemory] = useState(null);
 
   // Embedding provider/model configuration
@@ -56,16 +57,18 @@ export default function MemoryTab({ apps = [] }) {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    const [memoriesRes, pendingRes, statsRes, embRes] = await Promise.all([
+    const [memoriesRes, pendingRes, statsRes, embRes, backendRes] = await Promise.all([
       api.getMemories({ limit: 100, ...filters }).catch(() => ({ memories: [] })),
       api.getMemories({ status: 'pending_approval', limit: 50 }).catch(() => ({ memories: [] })),
       api.getMemoryStats().catch(() => null),
-      api.getEmbeddingStatus().catch(() => null)
+      api.getEmbeddingStatus().catch(() => null),
+      api.getMemoryBackendStatus().catch(() => null)
     ]);
     setMemories(memoriesRes.memories || []);
     setPendingMemories(pendingRes.memories || []);
     setStats(statsRes);
     setEmbeddingStatus(embRes);
+    setBackendStatus(backendRes);
     setLoading(false);
   }, [filters]);
 
@@ -106,6 +109,26 @@ export default function MemoryTab({ apps = [] }) {
 
   return (
     <div className="space-y-6">
+      {/* Backend status banner */}
+      {backendStatus?.backend === 'file' && (
+        <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4 flex items-start gap-3">
+          <AlertTriangle className="text-port-warning shrink-0 mt-0.5" size={20} />
+          <div className="flex-1">
+            <p className="text-port-warning font-medium">PostgreSQL unavailable — using file storage</p>
+            {backendStatus.db?.error && (
+              <p className="text-sm text-gray-400 mt-1">{backendStatus.db.error}</p>
+            )}
+            <p className="text-sm text-gray-500 mt-1">Semantic search and cross-instance sync are disabled.</p>
+          </div>
+          <button
+            onClick={fetchData}
+            className="px-3 py-1.5 text-sm bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded-lg transition-colors shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>

@@ -4,6 +4,7 @@ import { listProcesses } from '../services/pm2.js';
 import * as apps from '../services/apps.js';
 import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instances.js';
+import { checkHealth } from '../lib/db.js';
 
 const router = Router();
 
@@ -27,11 +28,12 @@ router.get('/health/details', async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, allApps, cosStatus, self] = await Promise.all([
+  const [pm2Processes, allApps, cosStatus, self, dbHealth] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAllApps({ includeArchived: false }).catch(() => []),
     cos.getStatus().catch(() => null),
-    getSelf().catch(() => null)
+    getSelf().catch(() => null),
+    checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' }))
   ]);
 
   // System metrics
@@ -87,6 +89,14 @@ router.get('/health/details', async (req, res) => {
   if (processStats.totalRestarts > 10) {
     if (overallHealth !== 'critical') overallHealth = 'warning';
     warnings.push({ type: 'restarts', message: `${processStats.totalRestarts} total restarts` });
+  }
+
+  if (!dbHealth.connected) {
+    if (overallHealth !== 'critical') overallHealth = 'warning';
+    warnings.push({ type: 'database', message: `PostgreSQL disconnected${dbHealth.error ? `: ${dbHealth.error}` : ''}` });
+  } else if (!dbHealth.hasSchema) {
+    if (overallHealth !== 'critical') overallHealth = 'warning';
+    warnings.push({ type: 'database', message: 'PostgreSQL connected but schema missing' });
   }
 
   // CoS status
@@ -147,7 +157,8 @@ router.get('/health/details', async (req, res) => {
     },
     processes: processStats,
     apps: appStats,
-    cos: cosInfo
+    cos: cosInfo,
+    database: dbHealth
   });
 });
 

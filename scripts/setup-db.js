@@ -11,6 +11,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -78,26 +79,76 @@ function waitForHealth(maxAttempts = 30) {
   return false;
 }
 
+// Platform-specific Docker install/start hints
+function getDockerHints(issue) {
+  const platform = process.platform;
+  const hints = { install: '', start: '' };
+
+  if (platform === 'darwin') {
+    hints.install = 'Install Docker Desktop: https://www.docker.com/products/docker-desktop/';
+    hints.start = 'Open Docker Desktop or run: open -a Docker';
+  } else if (platform === 'win32') {
+    hints.install = 'Install Docker Desktop: https://www.docker.com/products/docker-desktop/';
+    hints.start = 'Start Docker Desktop from the Start menu';
+  } else {
+    hints.install = 'Install Docker Engine: https://docs.docker.com/engine/install/';
+    hints.start = 'Start Docker: sudo systemctl start docker';
+  }
+
+  return issue === 'not_installed' ? hints.install : hints.start;
+}
+
+// Prompt user to continue without Docker (TTY only)
+function promptContinue(message, hint) {
+  return new Promise((resolve) => {
+    // Non-TTY (CI, piped scripts) — skip silently
+    if (!process.stdin.isTTY) {
+      console.log(`⏭️  ${message}`);
+      console.log(`   ${hint}`);
+      console.log('   Memory system will use file-based JSON storage');
+      resolve(true);
+      return;
+    }
+
+    console.log(`⚠️  ${message}`);
+    console.log(`   ${hint}`);
+    console.log('');
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('   Continue without Docker (file-based storage)? [Y/n] ', (answer) => {
+      rl.close();
+      const trimmed = answer.trim().toLowerCase();
+      // Default is Y (continue)
+      resolve(trimmed === '' || trimmed === 'y' || trimmed === 'yes');
+    });
+  });
+}
+
+async function handleDockerUnavailable(message, issue) {
+  const hint = getDockerHints(issue);
+  const shouldContinue = await promptContinue(message, hint);
+
+  if (shouldContinue) {
+    console.log('   Memory system will use file-based JSON storage');
+    process.exit(0);
+  } else {
+    console.log('   Exiting — install/start Docker and try again');
+    process.exit(1);
+  }
+}
+
 console.log('🗄️  Setting up PostgreSQL + pgvector...');
 
 if (!hasDocker()) {
-  console.log('⏭️  Docker not found — skipping database setup');
-  console.log('   Memory system will use file-based JSON storage');
-  console.log('   Install Docker to enable PostgreSQL: https://docs.docker.com/get-docker/');
-  process.exit(0);
+  await handleDockerUnavailable('Docker not found — skipping database setup', 'not_installed');
 }
 
 if (!isDockerRunning()) {
-  console.log('⏭️  Docker daemon not running — skipping database setup');
-  console.log('   Memory system will use file-based JSON storage');
-  console.log('   Start Docker Desktop or run: sudo systemctl start docker');
-  process.exit(0);
+  await handleDockerUnavailable('Docker daemon not running — skipping database setup', 'not_running');
 }
 
 if (!hasCompose()) {
-  console.log('⏭️  docker compose not available — skipping database setup');
-  console.log('   Memory system will use file-based JSON storage');
-  process.exit(0);
+  await handleDockerUnavailable('docker compose not available — skipping database setup', 'not_installed');
 }
 
 if (isContainerRunning()) {

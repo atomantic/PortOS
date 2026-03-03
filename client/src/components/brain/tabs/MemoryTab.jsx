@@ -10,7 +10,8 @@ import {
   ChevronDown,
   ChevronRight,
   CheckCircle2,
-  Search
+  Search,
+  AlertTriangle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -33,6 +34,7 @@ export default function MemoryTab({ onRefresh }) {
   const [addForm, setAddForm] = useState({});
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [backendStatus, setBackendStatus] = useState(null);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -67,6 +69,14 @@ export default function MemoryTab({ onRefresh }) {
   useEffect(() => {
     fetchRecords();
   }, [fetchRecords]);
+
+  const fetchBackendStatus = useCallback(() => {
+    api.getMemoryBackendStatus().then(setBackendStatus).catch(() => null);
+  }, []);
+
+  useEffect(() => {
+    fetchBackendStatus();
+  }, [fetchBackendStatus]);
 
   const handleSave = async () => {
     let result;
@@ -553,6 +563,26 @@ export default function MemoryTab({ onRefresh }) {
 
   return (
     <div className="space-y-4">
+      {/* Backend status banner */}
+      {backendStatus?.backend === 'file' && (
+        <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4 flex items-start gap-3">
+          <AlertTriangle className="text-port-warning shrink-0 mt-0.5" size={20} />
+          <div className="flex-1">
+            <p className="text-port-warning font-medium">PostgreSQL unavailable — using file storage</p>
+            {backendStatus.db?.error && (
+              <p className="text-sm text-gray-400 mt-1">{backendStatus.db.error}</p>
+            )}
+            <p className="text-sm text-gray-500 mt-1">Semantic search and cross-instance sync are disabled.</p>
+          </div>
+          <button
+            onClick={fetchBackendStatus}
+            className="px-3 py-1.5 text-sm bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded-lg transition-colors shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Type tabs */}
       <div className="flex items-center gap-2 flex-wrap">
         {MEMORY_TABS.map((tab) => {
