@@ -48,7 +48,7 @@ const drillTypeConfigSchema = z.object({
   timeLimitSec: z.number().int().min(10).max(600).optional(),
   count: z.number().int().min(1).max(50).optional(),
   maxDigits: z.number().int().min(1).max(4).optional(),
-  bases: z.array(z.number().int().min(2).max(20)).optional(),
+  bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
   tolerancePct: z.number().min(1).max(50).optional()
 });

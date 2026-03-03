@@ -1440,7 +1440,7 @@ export const submitPostSession = (data) => request('/meatspace/post/sessions', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const getPostStats = (days) => request(`/meatspace/post/stats${days ? `?days=${days}` : ''}`);
+export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
 export const generatePostDrill = (type, config = {}) => request('/meatspace/post/drill', {
   method: 'POST',
   body: JSON.stringify({ type, config })

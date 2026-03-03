@@ -97,7 +97,7 @@ export async function submitPostSession(sessionData) {
     cadence: sessionData.cadence || 'daily',
     modules: sessionData.modules,
     tasks: rescoredTasks,
-    score: computeSessionScore(rescoredTasks, sessionData.modules),
+    score: computeSessionScore(rescoredTasks),
     tags: sessionData.tags || {}
   };
 
@@ -191,7 +191,8 @@ export function generateMultiplication(count = 10, maxDigits = 2) {
   return { type: 'multiplication', config: { count, maxDigits }, questions };
 }
 
-export function generatePowers(bases = [2, 3, 5], maxExponent = 10, count = 8) {
+export function generatePowers(bases, maxExponent = 10, count = 8) {
+  bases = Array.isArray(bases) && bases.length > 0 ? bases : [2, 3, 5];
   const questions = [];
   for (let i = 0; i < count; i++) {
     const base = bases[Math.floor(Math.random() * bases.length)];
@@ -277,7 +278,7 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   return { score: Math.min(100, Math.max(0, score)), questions: recomputed };
 }
 
-function computeSessionScore(tasks, modules) {
+function computeSessionScore(tasks) {
   if (!tasks?.length) return 0;
   const totalScore = tasks.reduce((sum, t) => sum + t.score, 0);
   return Math.round(totalScore / tasks.length);
