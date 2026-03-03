@@ -87,3 +87,24 @@ export async function checkHealth() {
 export async function close() {
   await pool.end();
 }
+
+/**
+ * Convert pgvector string representation to float array.
+ * pgvector returns vectors as '[0.1,0.2,...]' strings.
+ */
+export function pgvectorToArray(vec) {
+  if (Array.isArray(vec)) return vec;
+  if (typeof vec === 'string') {
+    return vec.replace(/^\[|\]$/g, '').split(',').map(Number);
+  }
+  return null;
+}
+
+/**
+ * Format a float array (or pgvector string) as pgvector literal '[0.1,0.2,...]'
+ */
+export function arrayToPgvector(arr) {
+  if (!arr) return null;
+  if (typeof arr === 'string') return arr;
+  return `[${arr.join(',')}]`;
+}

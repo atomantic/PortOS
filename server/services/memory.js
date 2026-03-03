@@ -10,13 +10,13 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, updateAgent } from './cos.js';
-import { findTopK, findAboveThreshold, clusterBySimilarity, cosineSimilarity } from '../lib/vectorMath.js';
+import { cosEvents } from './cos.js';
+import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
 import { readJSONFile } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
+import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 
 export { DEFAULT_MEMORY_CONFIG };
 
@@ -119,15 +119,6 @@ async function deleteMemoryFiles(id) {
   if (existsSync(memoryDir)) {
     await rm(memoryDir, { recursive: true });
   }
-}
-
-/**
- * Generate summary from content using simple truncation
- * Note: LLM-based summaries could improve quality but add latency and cost
- */
-function generateSummary(content, maxLength = 150) {
-  if (content.length <= maxLength) return content;
-  return content.substring(0, maxLength - 3) + '...';
 }
 
 /**
@@ -406,27 +397,6 @@ export async function deleteMemory(id, hard = false) {
 
     return { success: true, id };
   });
-}
-
-/**
- * Helper to decrement agent's pendingApproval count
- */
-async function decrementAgentPendingApproval(sourceAgentId) {
-  if (!sourceAgentId) return;
-
-  const { getAgent } = await import('./cos.js');
-  const agent = await getAgent(sourceAgentId).catch(() => null);
-  if (!agent?.memoryExtraction?.pendingApproval) return;
-
-  const currentPending = agent.memoryExtraction.pendingApproval;
-  if (currentPending > 0) {
-    await updateAgent(sourceAgentId, {
-      memoryExtraction: {
-        ...agent.memoryExtraction,
-        pendingApproval: currentPending - 1
-      }
-    });
-  }
 }
 
 /**
