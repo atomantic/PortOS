@@ -11,6 +11,7 @@ export default function PostTab() {
   const [view, setView] = useState('launcher');
   const [config, setConfig] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
+  const [sessionTags, setSessionTags] = useState({});
   const session = usePostSession();
 
   useEffect(() => {
@@ -26,7 +27,8 @@ export default function PostTab() {
     setRecentSessions(sessions);
   }
 
-  function handleStart(drillConfigs) {
+  function handleStart(drillConfigs, tags) {
+    setSessionTags(tags || {});
     session.startSession(drillConfigs);
     setView('running');
   }
@@ -85,6 +87,7 @@ export default function PostTab() {
       return (
         <PostSessionResults
           session={session}
+          tags={sessionTags}
           onSaved={handleSaved}
           onBack={handleBack}
         />

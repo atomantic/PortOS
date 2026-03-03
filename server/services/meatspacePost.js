@@ -39,7 +39,7 @@ async function ensureMeatspaceDir() {
 
 export async function getPostConfig() {
   const config = await readJSONFile(CONFIG_FILE, DEFAULT_CONFIG);
-  return { ...DEFAULT_CONFIG, ...config };
+  return deepMerge(DEFAULT_CONFIG, config);
 }
 
 export async function updatePostConfig(updates) {

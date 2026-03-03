@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { CheckCircle, Save, ArrowLeft } from 'lucide-react';
 
 const DRILL_LABELS = {
@@ -9,20 +8,14 @@ const DRILL_LABELS = {
   'estimation': 'Estimation'
 };
 
-export default function PostSessionResults({ session, onSaved, onBack }) {
+export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
   const { drillResults, sessionScore, state, saveSession } = session;
-  const [tags, setTags] = useState({});
 
   const scoreColor = sessionScore >= 80 ? 'text-port-success' :
     sessionScore >= 50 ? 'text-port-warning' : 'text-port-error';
 
   async function handleSave() {
-    // Filter out empty tags
-    const cleanTags = {};
-    for (const [k, v] of Object.entries(tags)) {
-      if (v.trim()) cleanTags[k] = v.trim();
-    }
-    await saveSession(cleanTags);
+    await saveSession(tags);
     onSaved();
   }
 

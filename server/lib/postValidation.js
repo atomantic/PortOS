@@ -4,8 +4,6 @@ import { z } from 'zod';
 // POST (Power On Self Test) VALIDATION SCHEMAS
 // =============================================================================
 
-const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-
 // Tags for session conditions (sleep, caffeine, stress, etc.)
 export const postTagsSchema = z.record(z.string().max(200));
 

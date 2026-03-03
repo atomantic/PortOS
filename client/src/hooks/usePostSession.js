@@ -34,9 +34,13 @@ export function usePostSession() {
     setDrillResults([]);
     setSavedSession(null);
 
-    // Generate first drill
     const first = drillConfigs[0];
-    const drill = await generatePostDrill(first.type, first.config);
+    const drill = await generatePostDrill(first.type, first.config).catch(err => {
+      toast.error(`Failed to generate drill: ${err.message}`);
+      setState(STATES.IDLE);
+      return null;
+    });
+    if (!drill) return;
     setCurrentDrill({ ...drill, timeLimitSec: first.timeLimitSec });
     setCurrentQuestionIndex(0);
     setAnswers([]);
@@ -79,7 +83,7 @@ export function usePostSession() {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
       questionStartRef.current = Date.now();
     }
-  }, [state, currentDrill, currentQuestionIndex, answers]);
+  }, [state, currentDrill, currentQuestionIndex, answers, finishDrill]);
 
   const skipQuestion = useCallback(() => {
     submitAnswer(null);
@@ -128,7 +132,12 @@ export function usePostSession() {
     setState(STATES.LOADING);
 
     const next = drills[nextIndex];
-    const drill = await generatePostDrill(next.type, next.config);
+    const drill = await generatePostDrill(next.type, next.config).catch(err => {
+      toast.error(`Failed to generate drill: ${err.message}`);
+      setState(STATES.IDLE);
+      return null;
+    });
+    if (!drill) return;
     setCurrentDrill({ ...drill, timeLimitSec: next.timeLimitSec });
     setCurrentQuestionIndex(0);
     setAnswers([]);
@@ -161,7 +170,12 @@ export function usePostSession() {
       modules: ['mental-math'],
       tasks: drillResults,
       tags
+    }).catch(err => {
+      toast.error(`Failed to save session: ${err.message}`);
+      setState(STATES.COMPLETE);
+      return null;
     });
+    if (!session) return null;
     setSavedSession(session);
     toast.success(`POST complete — score: ${session.score}`);
     setState(STATES.SAVED);

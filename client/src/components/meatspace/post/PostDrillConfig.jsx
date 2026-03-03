@@ -74,7 +74,11 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     setSaving(true);
     const updated = await updatePostConfig({
       mentalMath: { drillTypes }
+    }).catch(() => {
+      setSaving(false);
+      return null;
     });
+    if (!updated) return;
     toast.success('POST config saved');
     setSaving(false);
     onSaved(updated);

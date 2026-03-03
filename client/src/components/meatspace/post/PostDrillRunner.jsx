@@ -24,24 +24,31 @@ export default function PostDrillRunner({ session }) {
   const [timeLeft, setTimeLeft] = useState(0);
   const inputRef = useRef(null);
   const timerRef = useRef(null);
+  const timeExpiredRef = useRef(timeExpired);
 
   const timeLimitMs = (currentDrill?.timeLimitSec || 120) * 1000;
   const totalQuestions = currentDrill?.questions?.length || 0;
+
+  // Keep ref current to avoid stale closure in timer
+  useEffect(() => {
+    timeExpiredRef.current = timeExpired;
+  }, [timeExpired]);
 
   // Timer
   useEffect(() => {
     if (state !== 'drilling' || !currentDrill) return;
 
     const startTime = Date.now();
-    setTimeLeft(timeLimitMs);
+    const limit = (currentDrill.timeLimitSec || 120) * 1000;
+    setTimeLeft(limit);
 
     timerRef.current = setInterval(() => {
       const elapsed = Date.now() - startTime;
-      const remaining = Math.max(0, timeLimitMs - elapsed);
+      const remaining = Math.max(0, limit - elapsed);
       setTimeLeft(remaining);
       if (remaining <= 0) {
         clearInterval(timerRef.current);
-        timeExpired();
+        timeExpiredRef.current();
       }
     }, 100);
 

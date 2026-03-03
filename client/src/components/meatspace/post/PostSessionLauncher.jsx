@@ -38,7 +38,12 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
       },
       timeLimitSec: cfg.timeLimitSec || 120
     }));
-    onStart(drillConfigs);
+    // Filter out empty tag values
+    const cleanTags = {};
+    for (const [k, v] of Object.entries(tags)) {
+      if (v.trim()) cleanTags[k] = v.trim();
+    }
+    onStart(drillConfigs, cleanTags);
   }
 
   return (
