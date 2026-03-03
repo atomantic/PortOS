@@ -67,6 +67,7 @@ export const memorySearchSchema = z.object({
   categories: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
   status: memoryStatusEnum.optional().default('active'),
+  appId: z.string().max(100).optional(),
   minRelevance: z.number().min(0).max(1).optional().default(0.7),
   limit: z.number().int().min(1).max(100).optional().default(20),
   offset: z.number().int().min(0).optional().default(0)
@@ -78,6 +79,7 @@ export const memoryListSchema = z.object({
   categories: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
   status: memoryStatusEnum.optional().default('active'),
+  appId: z.string().max(100).optional(),
   limit: z.number().int().min(1).max(100).optional().default(50),
   offset: z.number().int().min(0).optional().default(0),
   sortBy: z.enum(['createdAt', 'updatedAt', 'importance', 'accessCount']).optional().default('createdAt'),

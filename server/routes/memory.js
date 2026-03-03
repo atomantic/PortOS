@@ -30,6 +30,7 @@ router.get('/', asyncHandler(async (req, res) => {
     categories: req.query.categories ? req.query.categories.split(',') : undefined,
     tags: req.query.tags ? req.query.tags.split(',') : undefined,
     status: req.query.status || 'active',
+    appId: req.query.appId || undefined,
     limit: parseInt(req.query.limit, 10) || 50,
     offset: parseInt(req.query.offset, 10) || 0,
     sortBy: req.query.sortBy || 'createdAt',
@@ -115,7 +116,7 @@ router.get('/embeddings/status', asyncHandler(async (req, res) => {
 
 // POST /api/memory/search - Semantic search
 router.post('/search', asyncHandler(async (req, res) => {
-  const { query, types, categories, tags, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
+  const { query, types, categories, tags, appId, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
 
   // Generate query embedding
   const queryEmbedding = await embeddings.generateQueryEmbedding(query, { types, categories });
@@ -128,6 +129,7 @@ router.post('/search', asyncHandler(async (req, res) => {
     types,
     categories,
     tags,
+    appId,
     minRelevance,
     limit,
     offset

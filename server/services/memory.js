@@ -241,7 +241,9 @@ export async function getMemories(options = {}) {
   }
 
   // Filter by app
-  if (options.appId) {
+  if (options.appId === '__not_brain') {
+    memories = memories.filter(m => m.sourceAppId !== 'brain');
+  } else if (options.appId) {
     memories = memories.filter(m => m.sourceAppId === options.appId);
   }
 
@@ -512,7 +514,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
       if (options.types && options.types.length > 0 && !options.types.includes(meta.type)) return null;
       if (options.categories && options.categories.length > 0 && !options.categories.includes(meta.category)) return null;
       if (options.tags && options.tags.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return null;
-      if (options.appId && meta.sourceAppId !== options.appId) return null;
+      if (options.appId === '__not_brain' && meta.sourceAppId === 'brain') return null;
+      if (options.appId && options.appId !== '__not_brain' && meta.sourceAppId !== options.appId) return null;
 
       return { ...meta, similarity: r.similarity };
     })
@@ -655,7 +658,9 @@ export async function getTimeline(options = {}) {
   }
 
   // Filter by app
-  if (options.appId) {
+  if (options.appId === '__not_brain') {
+    memories = memories.filter(m => m.sourceAppId !== 'brain');
+  } else if (options.appId) {
     memories = memories.filter(m => m.sourceAppId === options.appId);
   }
 

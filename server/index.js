@@ -65,6 +65,7 @@ import * as agentActionExecutor from './services/agentActionExecutor.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
+import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -243,6 +244,8 @@ agentActionExecutor.init();
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
+// Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
+initBrainMemoryBridge();
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
 

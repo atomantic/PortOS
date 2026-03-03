@@ -174,7 +174,9 @@ export async function getMemories(options = {}) {
   }
 
   // Filter by app
-  if (options.appId) {
+  if (options.appId === '__not_brain') {
+    conditions.push(`(source_app_id IS NULL OR source_app_id != 'brain')`);
+  } else if (options.appId) {
     conditions.push(`source_app_id = $${paramIdx++}`);
     params.push(options.appId);
   }
@@ -411,7 +413,9 @@ export async function searchMemories(queryEmbedding, options = {}) {
     conditions.push(`tags && $${paramIdx++}`);
     params.push(options.tags);
   }
-  if (options.appId) {
+  if (options.appId === '__not_brain') {
+    conditions.push(`(source_app_id IS NULL OR source_app_id != 'brain')`);
+  } else if (options.appId) {
     conditions.push(`source_app_id = $${paramIdx++}`);
     params.push(options.appId);
   }
@@ -463,7 +467,9 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     filterConditions.push(`tags && $${paramIdx++}`);
     filterParams.push(options.tags);
   }
-  if (options.appId) {
+  if (options.appId === '__not_brain') {
+    filterConditions.push(`(source_app_id IS NULL OR source_app_id != 'brain')`);
+  } else if (options.appId) {
     filterConditions.push(`source_app_id = $${paramIdx++}`);
     filterParams.push(options.appId);
   }
@@ -586,7 +592,9 @@ export async function getTimeline(options = {}) {
     conditions.push(`type = ANY($${paramIdx++})`);
     params.push(options.types);
   }
-  if (options.appId) {
+  if (options.appId === '__not_brain') {
+    conditions.push(`(source_app_id IS NULL OR source_app_id != 'brain')`);
+  } else if (options.appId) {
     conditions.push(`source_app_id = $${paramIdx++}`);
     params.push(options.appId);
   }
