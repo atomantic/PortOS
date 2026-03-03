@@ -16,7 +16,15 @@ Write-Host ""
 Write-Host "Updating dependencies..." -ForegroundColor Yellow
 
 Write-Host "  Installing root dependencies..."
-npm install --install-links
+# Clean stale workspace dirs that block npm symlink creation (Windows EISDIR fix)
+@("portos-server", "portos-client") | ForEach-Object {
+    $wsPath = "node_modules\$_"
+    if ((Test-Path $wsPath) -and -not ((Get-Item $wsPath).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Remove-Item $wsPath -Recurse -Force
+        Write-Host "    Cleaned stale $wsPath"
+    }
+}
+npm install
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "  Installing client dependencies..."
