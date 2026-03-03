@@ -159,7 +159,7 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId }) {
 
     try {
       // Fetch available transitions and find matching one
-      const transitions = await api.getTicketTransitions(instanceId, ticket.key);
+      const transitions = await api.getTicketTransitions(instanceId, ticket.key, { silent: true });
       const match = transitions.find(t => t.toCategory === targetCategory);
 
       if (!match) {
@@ -169,7 +169,7 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId }) {
         return;
       }
 
-      await api.transitionTicket(instanceId, ticket.key, match.id);
+      await api.transitionTicket(instanceId, ticket.key, match.id, { silent: true });
       // Update the status name too
       setTickets(prev => prev.map(t =>
         t.key === ticket.key ? { ...t, status: match.to, statusCategory: targetCategory } : t
@@ -183,12 +183,18 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId }) {
     }
   }, [tickets, instanceId]);
 
+  const handleDragCancel = useCallback(() => {
+    setActiveTicket(null);
+    setOverColumn(null);
+  }, []);
+
   return (
     <DndContext
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {COLUMNS.map(category => (
