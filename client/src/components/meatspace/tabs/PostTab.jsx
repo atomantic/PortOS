@@ -20,11 +20,11 @@ export default function PostTab() {
 
   async function loadData() {
     const [cfg, sessions] = await Promise.all([
-      getPostConfig(),
-      getPostSessions()
+      getPostConfig().catch(() => null),
+      getPostSessions().catch(() => [])
     ]);
     setConfig(cfg);
-    setRecentSessions(sessions);
+    setRecentSessions(sessions || []);
   }
 
   async function handleStart(drillConfigs, tags) {

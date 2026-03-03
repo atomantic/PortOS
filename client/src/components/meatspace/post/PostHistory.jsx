@@ -33,8 +33,8 @@ export default function PostHistory({ onBack }) {
       ? new Date(Date.now() - range * 86400000).toISOString().split('T')[0]
       : undefined;
     const [s, st] = await Promise.all([
-      getPostSessions(from),
-      getPostStats(range)
+      getPostSessions(from).catch(() => []),
+      getPostStats(range).catch(() => null)
     ]);
     setSessions((s || []).slice().reverse());
     setStats(st);

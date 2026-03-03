@@ -37,10 +37,13 @@ export const postSessionSubmitSchema = z.object({
 });
 
 // Drill type configuration
+const DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'];
+
 const drillTypeConfigSchema = z.object({
   enabled: z.boolean().optional(),
   steps: z.number().int().min(1).max(50).optional(),
   subtrahend: z.number().int().min(1).max(100).optional(),
+  startValue: z.number().int().min(1).optional(),
   startRange: z.array(z.number()).length(2).optional(),
   timeLimitSec: z.number().int().min(10).max(600).optional(),
   count: z.number().int().min(1).max(50).optional(),
@@ -54,7 +57,7 @@ const drillTypeConfigSchema = z.object({
 export const postConfigUpdateSchema = z.object({
   mentalMath: z.object({
     enabled: z.boolean().optional(),
-    drillTypes: z.record(drillTypeConfigSchema).optional()
+    drillTypes: z.record(z.enum(DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
   sessionModules: z.array(z.string()).optional(),
   scoring: z.object({
