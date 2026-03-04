@@ -372,47 +372,45 @@ export default function Shell() {
   return (
     <div className="h-full flex flex-col p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-white">Shell</h1>
-          <div className={`flex items-center gap-2 px-2 py-1 rounded text-sm ${
-            connected ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
-          }`}>
-            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
-            {connected ? 'Connected' : 'Disconnected'}
-          </div>
-          {sessions.length > 0 && (
-            <span className="text-xs text-gray-500 font-mono">{sessions.length}/5 sessions</span>
-          )}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <h1 className="text-xl font-semibold text-white">Shell</h1>
+        <div className={`flex items-center gap-2 px-2 py-1 rounded text-sm ${
+          connected ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+        }`}>
+          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
+          {connected ? 'Connected' : 'Disconnected'}
         </div>
-        <div className="flex items-center gap-2">
+        {sessions.length > 0 && (
+          <span className="text-xs text-gray-500 font-mono">{sessions.length}/5</span>
+        )}
+        <div className="flex items-center gap-2 ml-auto">
           {connected && (
             <button
               onClick={() => { stopSession(); setTimeout(startSession, 100); }}
-              className="flex items-center gap-2 px-3 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
               title="Restart session (kill + new)"
             >
               <RefreshCw size={16} />
-              Restart
+              <span className="hidden sm:inline">Restart</span>
             </button>
           )}
           {connected && (
             <button
               onClick={stopSession}
-              className="flex items-center gap-2 px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm transition-colors min-h-[40px]"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm transition-colors min-h-[40px]"
               title="Kill current session"
             >
               <PowerOff size={16} />
-              Stop
+              <span className="hidden sm:inline">Stop</span>
             </button>
           )}
           <button
             onClick={startSession}
-            className="flex items-center gap-2 px-3 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm transition-colors min-h-[40px]"
+            className="flex items-center gap-1.5 px-2.5 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm transition-colors min-h-[40px]"
             title="Start new session"
           >
             <Power size={16} />
-            New
+            <span className="hidden sm:inline">New</span>
           </button>
         </div>
       </div>
