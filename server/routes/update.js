@@ -49,6 +49,12 @@ router.post('/execute', asyncHandler(async (req, res) => {
   }
 
   const tag = status.latestRelease.tag;
+
+  // Validate tag is a well-formed semver release (e.g. "v1.27.0") to prevent option injection
+  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+    throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
+  }
+
   const io = req.app.get('io');
 
   // Start update in background, stream progress via socket
