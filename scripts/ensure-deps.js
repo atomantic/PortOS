@@ -42,12 +42,19 @@ for (const { dir, label } of WORKSPACES) {
   }
 }
 
-// Verify critical binary exists even if node_modules dirs were present
-const vitePath = join(ROOT, 'client', 'node_modules', 'vite', 'bin', 'vite.js');
-if (!existsSync(vitePath)) {
-  console.log('📦 Vite not found — reinstalling client deps...');
-  if (!install(join(ROOT, 'client'), 'client')) process.exit(1);
-  needed = true;
+// Verify critical packages exist even if node_modules dirs were present
+const criticalPackages = [
+  { dir: join(ROOT, 'client'), label: 'client', pkg: 'vite/bin/vite.js' },
+  { dir: join(ROOT, 'server'), label: 'server', pkg: 'express/package.json' },
+  { dir: join(ROOT, 'server'), label: 'server', pkg: 'pg/package.json' },
+];
+
+for (const { dir, label, pkg } of criticalPackages) {
+  if (!existsSync(join(dir, 'node_modules', pkg))) {
+    console.log(`📦 Missing ${pkg.split('/')[0]} in ${label} — reinstalling deps...`);
+    if (!install(dir, label)) process.exit(1);
+    needed = true;
+  }
 }
 
 if (needed) console.log('✅ Dependencies verified');
