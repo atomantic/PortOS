@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, KeyboardSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { GripVertical } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
@@ -117,8 +117,7 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId, onTic
   useEffect(() => { setTickets(initialTickets); }, [initialTickets]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor)
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
   const columns = {};
@@ -174,12 +173,14 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId, onTic
       }
 
       await api.transitionTicket(instanceId, ticket.key, match.id, { silent: true });
-      // Update the status name too
-      const updated = tickets.map(t =>
-        t.key === ticket.key ? { ...t, status: match.to, statusCategory: targetCategory } : t
-      );
-      setTickets(updated);
-      onTicketsChange?.(updated);
+      // Update the status name too, based on latest state
+      setTickets(prev => {
+        const updated = prev.map(t =>
+          t.key === ticket.key ? { ...t, status: match.to, statusCategory: targetCategory } : t
+        );
+        onTicketsChange?.(updated);
+        return updated;
+      });
       toast.success(`${ticket.key} moved to ${match.to}`);
     } catch (err) {
       setTickets(previousTickets);
