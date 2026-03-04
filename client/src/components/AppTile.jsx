@@ -1,4 +1,5 @@
 import { useState, memo } from 'react';
+import { Link } from 'react-router-dom';
 import StatusBadge from './StatusBadge';
 import AppIcon from './AppIcon';
 import * as api from '../services/api';
@@ -56,7 +57,11 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <h3 id={`app-title-${app.id}`} className={`text-sm font-semibold truncate ${app.archived ? 'text-gray-500' : 'text-white'}`}>{app.name}</h3>
+              <h3 id={`app-title-${app.id}`} className={`text-sm font-semibold truncate ${app.archived ? 'text-gray-500' : 'text-white'}`}>
+                <Link to={`/apps/${app.id}`} className="hover:text-port-accent transition-colors">
+                  {app.name}
+                </Link>
+              </h3>
               {app.archived && (
                 <span className="px-1 py-0.5 bg-gray-600/30 text-gray-500 text-[10px] rounded shrink-0">Arc</span>
               )}
