@@ -51,8 +51,8 @@ router.post('/execute', asyncHandler(async (req, res) => {
 
   const tag = status.latestRelease.tag;
 
-  // Validate tag is a well-formed semver release (e.g. "v1.27.0") to prevent option injection
-  if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
+  // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
+  if (!/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(tag)) {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
   }
 

@@ -21,6 +21,7 @@ const defaultState = () => ({
   latestRelease: null,
   ignoredVersions: [],
   updateInProgress: false,
+  updateStartedAt: null,
   lastUpdateResult: null
 });
 

@@ -55,11 +55,11 @@ export async function executeUpdate(tag, emit) {
     // Pipe stdout/stderr for progress tracking, with EPIPE guards
     // in case the parent process exits before the detached child finishes writing
     if (child.stdout) {
-      child.stdout.on('error', () => {}); // Swallow EPIPE if parent exits
+      child.stdout.on('error', (err) => { if (err.code !== 'EPIPE') console.error(`⚠️ stdout stream error: ${err.message}`); });
       child.stdout.on('data', makeLineHandler());
     }
     if (child.stderr) {
-      child.stderr.on('error', () => {}); // Swallow EPIPE if parent exits
+      child.stderr.on('error', (err) => { if (err.code !== 'EPIPE') console.error(`⚠️ stderr stream error: ${err.message}`); });
       child.stderr.on('data', makeLineHandler());
     }
 

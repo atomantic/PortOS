@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X, Settings } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import AlcoholChart from '../AlcoholChart';
@@ -173,12 +174,23 @@ export default function AlcoholTab() {
 
   // === Custom drink button management ===
 
+  const validateDrinkButton = (form) => {
+    const parsedOz = parseFloat(form.oz);
+    const parsedAbv = parseFloat(form.abv);
+    if (!form.name) return 'Name is required';
+    if (isNaN(parsedOz) || parsedOz < 0.1 || parsedOz > 1000) return 'Oz must be between 0.1 and 1000';
+    if (isNaN(parsedAbv) || parsedAbv < 0 || parsedAbv > 100) return 'ABV must be between 0 and 100';
+    return null;
+  };
+
   const handleAddButton = async (e) => {
     e.preventDefault();
+    const error = validateDrinkButton(buttonForm);
+    if (error) { toast.error(error); return; }
     const parsedOz = parseFloat(buttonForm.oz);
     const parsedAbv = parseFloat(buttonForm.abv);
-    if (!buttonForm.name || !parsedOz || isNaN(parsedAbv)) return;
-    await api.addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    const result = await api.addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    if (!result) { toast.error('Failed to add drink button'); return; }
     setButtonForm({ name: '', oz: '', abv: '' });
     fetchDrinkButtons();
   };
@@ -191,10 +203,12 @@ export default function AlcoholTab() {
 
   const saveEditButton = async () => {
     if (editingButtonIdx === null) return;
+    const error = validateDrinkButton(buttonForm);
+    if (error) { toast.error(error); return; }
     const parsedOz = parseFloat(buttonForm.oz);
     const parsedAbv = parseFloat(buttonForm.abv);
-    if (!buttonForm.name || !parsedOz || isNaN(parsedAbv)) return;
-    await api.updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    const result = await api.updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    if (!result) { toast.error('Failed to update drink button'); return; }
     setEditingButtonIdx(null);
     setButtonForm({ name: '', oz: '', abv: '' });
     fetchDrinkButtons();

@@ -102,8 +102,7 @@ export default function UpdateTab() {
 
     pollRef.current = setInterval(async () => {
       attempts++;
-      const ok = await fetch('/api/system/health')
-        .then(r => r.json())
+      const ok = await api.checkHealth()
         .catch(() => null);
 
       if (ok?.version === targetVersionRef.current) {
