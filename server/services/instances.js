@@ -86,13 +86,20 @@ export async function getPeers() {
   return data.peers;
 }
 
+function validName(name, fallback) {
+  if (!name || typeof name !== 'string') return fallback;
+  const lower = name.trim().toLowerCase();
+  if (['undefined', 'nan', 'null', ''].includes(lower)) return fallback;
+  return name.trim();
+}
+
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name }) {
   const peer = await withData(async (data) => {
     const entry = {
       id: crypto.randomUUID(),
       address,
       port,
-      name: name || address,
+      name: validName(name, address),
       instanceId: null,
       addedAt: new Date().toISOString(),
       lastSeen: null,
@@ -128,7 +135,7 @@ export async function updatePeer(id, updates) {
   return withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
-    if (updates.name !== undefined) peer.name = updates.name;
+    if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     instanceEvents.emit('peers:updated', data.peers);
     return peer;
@@ -138,24 +145,26 @@ export async function updatePeer(id, updates) {
 // --- Probing ---
 
 export async function probePeer(peer) {
-  const url = `http://${peer.address}:${peer.port}/api/health/system`;
+  const baseUrl = `http://${peer.address}:${peer.port}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   const previousStatus = peer.status;
-  let status, lastHealth, lastSeen, remoteInstanceId, remoteApps;
+  let status, lastHealth, lastSeen, remoteInstanceId, remoteVersion, remoteApps;
   try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
+    // Fetch health details and apps in parallel
+    const [healthRes, appsRes] = await Promise.all([
+      fetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }),
+      fetch(`${baseUrl}/api/apps`, { signal: controller.signal }).catch(() => null)
+    ]);
+    if (!healthRes.ok) throw new Error(`HTTP ${healthRes.status}`);
+    const json = await healthRes.json();
     status = 'online';
     lastHealth = json;
     lastSeen = new Date().toISOString();
     remoteInstanceId = json.instanceId ?? null;
+    remoteVersion = json.version ?? null;
 
-    // Fetch apps from the peer (piggybacks on probe cycle)
-    const appsUrl = `http://${peer.address}:${peer.port}/api/apps`;
-    const appsRes = await fetch(appsUrl, { signal: controller.signal }).catch(() => null);
     if (appsRes?.ok) {
       const appsJson = await appsRes.json().catch(() => null);
       const appsList = Array.isArray(appsJson) ? appsJson : appsJson?.apps;
@@ -180,6 +189,12 @@ export async function probePeer(peer) {
     entry.lastHealth = lastHealth;
     entry.lastApps = remoteApps ?? entry.lastApps ?? null;
     if (remoteInstanceId) entry.instanceId = remoteInstanceId;
+    if (status === 'online') entry.version = remoteVersion;
+    // Auto-update name from hostname if current name is just an IP address
+    const remoteHostname = validName(lastHealth?.hostname, null);
+    if (remoteHostname && /^\d+\.\d+\.\d+\.\d+$/.test(entry.name)) {
+      entry.name = remoteHostname;
+    }
     return entry;
   });
 
@@ -248,7 +263,8 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       existing.status = 'online';
       existing.instanceId = instanceId;
       existing.port = port;
-      if (name) existing.name = name;
+      const sanitized = validName(name, null);
+      if (sanitized) existing.name = sanitized;
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
@@ -262,7 +278,7 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       id: crypto.randomUUID(),
       address,
       port,
-      name: name || address,
+      name: validName(name, address),
       instanceId,
       addedAt: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
