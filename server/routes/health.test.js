@@ -14,4 +14,14 @@ describe('System Health Routes', () => {
     expect(response.body.status).toBe('ok');
     expect(response.body.version).toBeDefined();
   });
+
+  it('should return health details with version', async () => {
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('version');
+    expect(response.body).toHaveProperty('system');
+    expect(response.body).toHaveProperty('apps');
+    expect(response.body).toHaveProperty('overallHealth');
+  });
 });

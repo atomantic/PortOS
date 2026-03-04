@@ -135,7 +135,7 @@ export async function updatePeer(id, updates) {
   return withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
-    if (updates.name !== undefined) peer.name = updates.name;
+    if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     instanceEvents.emit('peers:updated', data.peers);
     return peer;
@@ -191,7 +191,7 @@ export async function probePeer(peer) {
     if (remoteInstanceId) entry.instanceId = remoteInstanceId;
     if (remoteVersion) entry.version = remoteVersion;
     // Auto-update name from hostname if current name is just an IP address
-    const remoteHostname = lastHealth?.hostname;
+    const remoteHostname = validName(lastHealth?.hostname, null);
     if (remoteHostname && /^\d+\.\d+\.\d+\.\d+$/.test(entry.name)) {
       entry.name = remoteHostname;
     }
