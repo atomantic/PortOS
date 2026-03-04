@@ -25,7 +25,7 @@
     "setup:db": "node scripts/setup-db.js",
     "setup:browser": "node scripts/setup-browser.js",
     "setup:ghostty": "node scripts/setup-ghostty.js",
-    "update": "node -e \"const{spawnSync:s}=require('child_process');const w=process.platform==='win32';const r=s(w?'powershell':'bash',w?['-File','update.ps1']:['update.sh'],{stdio:'inherit'});process.exit(r.status??1)\"",
+    "update": "node -e \"const{spawnSync:s}=require('child_process');const w=process.platform==='win32';const r=s(w?'powershell':'bash',w?['-NoProfile','-ExecutionPolicy','Bypass','-File','update.ps1']:['update.sh'],{stdio:'inherit'});process.exit(r.status??1)\"",
     "test": "npm test --prefix server"
   },
   "devDependencies": {

@@ -21,8 +21,9 @@ function install(dir, label) {
   try {
     execFileSync(NPM, ['install'], { cwd: dir, stdio: 'inherit', windowsHide: true });
     return true;
-  } catch {
-    console.log(`⚠️  npm install failed for ${label} — cleaning node_modules and retrying...`);
+  } catch (err) {
+    console.error(`⚠️  npm install failed for ${label}: ${err.message ?? err}`);
+    console.log(`⚠️  Cleaning node_modules and retrying...`);
     try {
       rmSync(join(dir, 'node_modules'), { recursive: true, force: true });
     } catch (cleanupErr) {
@@ -32,8 +33,8 @@ function install(dir, label) {
     try {
       execFileSync(NPM, ['install'], { cwd: dir, stdio: 'inherit', windowsHide: true });
       return true;
-    } catch {
-      console.error(`❌ npm install failed for ${label} after retry`);
+    } catch (retryErr) {
+      console.error(`❌ npm install failed for ${label} after retry: ${retryErr.message ?? retryErr}`);
       return false;
     }
   }
