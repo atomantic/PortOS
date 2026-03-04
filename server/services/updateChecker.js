@@ -1,9 +1,9 @@
-import { spawn } from 'child_process';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { execGh } from './github.js';
 
 const UPDATE_FILE = join(PATHS.data, 'update.json');
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -24,24 +24,6 @@ const defaultState = () => ({
   lastUpdateResult: null
 });
 
-function execGh(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('gh', args, { shell: false, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `gh exited with code ${code}`));
-      } else {
-        resolve(stdout.trim());
-      }
-    });
-    child.on('error', (err) => reject(err));
-  });
-}
-
 /**
  * Read the current version from the root package.json.
  * Re-reads on each call so it picks up changes after updates.
@@ -56,7 +38,7 @@ export async function getCurrentVersion() {
  * Compare two semver strings. Returns:
  *  -1 if a < b, 0 if equal, 1 if a > b
  */
-function compareSemver(a, b) {
+export function compareSemver(a, b) {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) {

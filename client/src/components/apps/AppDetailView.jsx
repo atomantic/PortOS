@@ -119,6 +119,14 @@ export default function AppDetailView() {
       case 'processes':
         return <ProcessesTab pm2ProcessNames={app.pm2ProcessNames} />;
       case 'update':
+        if (app.id !== api.PORTOS_APP_ID) {
+          return (
+            <div className="p-6 text-center">
+              <p className="text-lg text-gray-400 mb-4">Update is not available for this app</p>
+              <Link to={`/apps/${appId}/overview`} className="text-port-accent hover:underline">Back to Overview</Link>
+            </div>
+          );
+        }
         return <UpdateTab />;
       default:
         return <OverviewTab app={app} onRefresh={fetchApp} />;

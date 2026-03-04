@@ -16,7 +16,7 @@ cd "$ROOT_DIR"
 # Log helper
 log() {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >> "$LOG_FILE"
-  echo "$*"
+  echo "$*" || true
 }
 
 # Step output helper

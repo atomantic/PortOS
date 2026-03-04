@@ -2,7 +2,7 @@
 import { readdir, readFile, writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -31,7 +31,7 @@ async function run() {
     if (applied.includes(file)) continue;
 
     console.log(`🔄 Running migration: ${file}`);
-    const migration = await import(join(migrationsDir, file));
+    const migration = await import(pathToFileURL(join(migrationsDir, file)).href);
     await migration.up({ rootDir, migrationsDir });
     applied.push(file);
     await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');

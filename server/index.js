@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
+import { readFile, unlink } from 'fs/promises';
 
 import appleHealthRoutes from './routes/appleHealth.js';
 import systemHealthRoutes from './routes/systemHealth.js';
@@ -252,7 +253,6 @@ initBrainMemoryBridge();
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
 // Check for update completion marker from a previous update cycle
-import { readFile, unlink } from 'fs/promises';
 const updateMarkerPath = join(__dirname, '..', 'data', 'update-complete.json');
 readFile(updateMarkerPath, 'utf-8').then(raw => {
   const marker = JSON.parse(raw);
