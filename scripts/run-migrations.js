@@ -12,7 +12,7 @@ async function run() {
   // Ensure migrations directory exists
   await mkdir(migrationsDir, { recursive: true });
 
-  // Load applied migrations list (default to [] on read/parse failure)
+  // Load applied migrations list (default to [] on missing/unreadable file, throw on corrupted JSON)
   let applied = [];
   const raw = await readFile(appliedFile, 'utf-8').catch(err => {
     if (err.code !== 'ENOENT') {
