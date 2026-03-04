@@ -47,6 +47,14 @@ export const drinkUpdateSchema = z.object({
   count: z.number().int().min(1).max(100).optional()
 });
 
+export const customDrinkSchema = z.object({
+  name: z.string().min(1).max(200),
+  oz: z.number().min(0.1).max(1000),
+  abv: z.number().min(0).max(100)
+});
+
+export const customDrinkUpdateSchema = customDrinkSchema.partial();
+
 // =============================================================================
 // BLOOD TESTS
 // =============================================================================

@@ -6,6 +6,8 @@ import {
   lifestyleUpdateSchema,
   drinkLogSchema,
   drinkUpdateSchema,
+  customDrinkSchema,
+  customDrinkUpdateSchema,
   bloodTestSchema,
   bodyEntrySchema,
   epigeneticTestSchema,
@@ -147,6 +149,56 @@ router.delete('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
   const removed = await alcoholService.removeDrink(date, parseInt(index, 10));
   if (!removed) {
     throw new ServerError('Drink entry not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(removed);
+}));
+
+// =============================================================================
+// CUSTOM DRINK BUTTONS
+// =============================================================================
+
+/**
+ * GET /api/meatspace/alcohol/custom-drinks
+ * List custom drink quick-add buttons
+ */
+router.get('/alcohol/custom-drinks', asyncHandler(async (req, res) => {
+  const drinks = await alcoholService.getCustomDrinks();
+  res.json(drinks);
+}));
+
+/**
+ * POST /api/meatspace/alcohol/custom-drinks
+ * Add a custom drink button
+ */
+router.post('/alcohol/custom-drinks', asyncHandler(async (req, res) => {
+  const data = validateRequest(customDrinkSchema, req.body);
+  const drink = await alcoholService.addCustomDrink(data);
+  res.status(201).json(drink);
+}));
+
+/**
+ * PUT /api/meatspace/alcohol/custom-drinks/:index
+ * Update a custom drink button
+ */
+router.put('/alcohol/custom-drinks/:index', asyncHandler(async (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  const data = validateRequest(customDrinkUpdateSchema, req.body);
+  const drink = await alcoholService.updateCustomDrink(index, data);
+  if (!drink) {
+    throw new ServerError('Custom drink not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(drink);
+}));
+
+/**
+ * DELETE /api/meatspace/alcohol/custom-drinks/:index
+ * Remove a custom drink button
+ */
+router.delete('/alcohol/custom-drinks/:index', asyncHandler(async (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  const removed = await alcoholService.removeCustomDrink(index);
+  if (!removed) {
+    throw new ServerError('Custom drink not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json(removed);
 }));

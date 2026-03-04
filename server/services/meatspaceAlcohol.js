@@ -12,6 +12,15 @@ import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 const MEATSPACE_DIR = PATHS.meatspace;
 const DAILY_LOG_FILE = join(MEATSPACE_DIR, 'daily-log.json');
 const CONFIG_FILE = join(MEATSPACE_DIR, 'config.json');
+const CUSTOM_DRINKS_FILE = join(MEATSPACE_DIR, 'custom-drinks.json');
+
+const DEFAULT_DRINK_BUTTONS = [
+  { name: 'Modelo Especial (12oz)', oz: 12, abv: 4.4 },
+  { name: 'Nitro Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
+  { name: 'Old Fashioned (2oz)', oz: 2, abv: 40 },
+  { name: 'Guinness 0 (14.9oz)', oz: 14.9, abv: 0.4 },
+  { name: 'N/A Beer (12oz)', oz: 12, abv: 0.4 }
+];
 
 // Cache for rolling averages (invalidated on writes)
 let averageCache = null;
@@ -251,4 +260,67 @@ export async function removeDrink(date, index) {
 
   await saveDailyLog(log);
   return removed;
+}
+
+// === Custom Drink Buttons ===
+
+async function loadCustomDrinks() {
+  const data = await readJSONFile(CUSTOM_DRINKS_FILE, null);
+  if (!data) {
+    // Seed with defaults on first access
+    const seeded = { drinks: DEFAULT_DRINK_BUTTONS };
+    await saveCustomDrinks(seeded);
+    return seeded;
+  }
+  return data;
+}
+
+async function saveCustomDrinks(data) {
+  await ensureDir(MEATSPACE_DIR);
+  await writeFile(CUSTOM_DRINKS_FILE, JSON.stringify(data, null, 2));
+}
+
+export async function getCustomDrinks() {
+  const data = await loadCustomDrinks();
+  return data.drinks || [];
+}
+
+export async function addCustomDrink({ name, oz, abv }) {
+  const data = await loadCustomDrinks();
+  const drink = { name, oz, abv };
+  data.drinks.push(drink);
+  await saveCustomDrinks(data);
+  console.log(`🍺 Added custom drink button: ${name} ${oz}oz @ ${abv}%`);
+  return drink;
+}
+
+export async function updateCustomDrink(index, updates) {
+  const data = await loadCustomDrinks();
+  if (index < 0 || index >= data.drinks.length) return null;
+  const drink = data.drinks[index];
+  if (updates.name !== undefined) drink.name = updates.name;
+  if (updates.oz !== undefined) drink.oz = updates.oz;
+  if (updates.abv !== undefined) drink.abv = updates.abv;
+  await saveCustomDrinks(data);
+  console.log(`📝 Updated custom drink button [${index}]: ${drink.name}`);
+  return drink;
+}
+
+export async function removeCustomDrink(index) {
+  const data = await loadCustomDrinks();
+  if (index < 0 || index >= data.drinks.length) return null;
+  const removed = data.drinks.splice(index, 1)[0];
+  await saveCustomDrinks(data);
+  console.log(`🗑️ Removed custom drink button: ${removed.name}`);
+  return removed;
+}
+
+export async function reorderCustomDrinks(fromIndex, toIndex) {
+  const data = await loadCustomDrinks();
+  if (fromIndex < 0 || fromIndex >= data.drinks.length) return null;
+  if (toIndex < 0 || toIndex >= data.drinks.length) return null;
+  const [moved] = data.drinks.splice(fromIndex, 1);
+  data.drinks.splice(toIndex, 0, moved);
+  await saveCustomDrinks(data);
+  return data.drinks;
 }

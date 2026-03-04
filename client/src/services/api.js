@@ -1405,6 +1405,18 @@ export const updateAlcoholDrink = (date, index, data) => request(`/meatspace/alc
 export const removeAlcoholDrink = (date, index) => request(`/meatspace/alcohol/log/${date}/${index}`, {
   method: 'DELETE'
 });
+export const getCustomDrinks = () => request('/meatspace/alcohol/custom-drinks');
+export const addCustomDrink = (data) => request('/meatspace/alcohol/custom-drinks', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateCustomDrink = (index, data) => request(`/meatspace/alcohol/custom-drinks/${index}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const removeCustomDrink = (index) => request(`/meatspace/alcohol/custom-drinks/${index}`, {
+  method: 'DELETE'
+});
 export const getBloodTests = () => request('/meatspace/blood');
 export const addBloodTest = (data) => request('/meatspace/blood', {
   method: 'POST',
