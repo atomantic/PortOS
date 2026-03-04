@@ -277,9 +277,9 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
 
   // Recompute expected from the prompt server-side — never trust client-provided expected
   const recomputed = questions.map(q => {
-    const expected = computeExpectedFromPrompt(q.prompt) ?? q.expected;
+    const expected = computeExpectedFromPrompt(q.prompt);
     let correct;
-    if (q.answered == null) {
+    if (expected == null || q.answered == null) {
       correct = false;
     } else if (type === 'estimation') {
       const tolerance = ((config.tolerancePct ?? 10) / 100);
