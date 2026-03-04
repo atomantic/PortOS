@@ -152,7 +152,7 @@ export default function AppDetailView() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             {/* Start/Stop/Restart */}
             <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
               {app.overallStatus === 'online' ? (
@@ -160,7 +160,7 @@ export default function AppDetailView() {
                   <button
                     onClick={handleStop}
                     disabled={actionLoading}
-                    className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                    className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   >
                     <Square size={14} />
                     <span className="text-xs">Stop</span>
@@ -168,7 +168,7 @@ export default function AppDetailView() {
                   <button
                     onClick={handleRestart}
                     disabled={actionLoading}
-                    className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
+                    className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
                   >
                     <RotateCcw size={14} className={actionLoading === 'restart' ? 'animate-spin' : ''} />
                     <span className="text-xs">Restart</span>
@@ -178,7 +178,7 @@ export default function AppDetailView() {
                 <button
                   onClick={handleStart}
                   disabled={actionLoading}
-                  className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="px-2 py-1 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   <Play size={14} />
                   <span className="text-xs">{actionLoading === 'start' ? 'Starting...' : 'Start'}</span>
@@ -189,7 +189,7 @@ export default function AppDetailView() {
             {app.uiPort && app.overallStatus === 'online' && (
               <button
                 onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
-                className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
               >
                 <ExternalLink size={14} />
                 <span className="text-xs">Launch</span>
@@ -198,17 +198,17 @@ export default function AppDetailView() {
             {app.devUiPort && app.overallStatus === 'online' && (
               <button
                 onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
-                className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
               >
                 <ExternalLink size={14} />
-                <span className="text-xs">Launch Dev</span>
+                <span className="text-xs">Dev UI</span>
               </button>
             )}
             {app.buildCommand && (
               <button
                 onClick={handleBuild}
                 disabled={buildLoading}
-                className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1 disabled:opacity-50"
+                className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1 disabled:opacity-50"
                 aria-label={`Build production UI: ${app.buildCommand}`}
               >
                 <Hammer size={14} className={buildLoading ? 'animate-bounce' : ''} />

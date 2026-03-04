@@ -299,7 +299,7 @@ export default function Apps() {
                         aria-label={`Launch ${app.name} Dev UI`}
                       >
                         <ExternalLink size={14} aria-hidden="true" />
-                        <span className="text-xs">Launch Dev</span>
+                        <span className="text-xs">Dev UI</span>
                       </button>
                     )}
 
