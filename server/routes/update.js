@@ -27,7 +27,7 @@ router.post('/check', asyncHandler(async (req, res) => {
 // POST /api/update/ignore — adds version to ignored list
 router.post('/ignore', asyncHandler(async (req, res) => {
   const { version } = validateRequest(ignoreSchema, req.body);
-  await updateChecker.ignoreVersion(version);
+  await updateChecker.ignoreVersion(version.replace(/^v/, ''));
   const status = await updateChecker.getUpdateStatus();
   res.json(status);
 }));
