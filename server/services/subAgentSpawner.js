@@ -2342,19 +2342,21 @@ function buildCliSpawnConfig(provider, model) {
   }
 
   // Default: Claude Code CLI
+  // Use provider's configured command (respects user's Claude setup, e.g. Bedrock)
   const args = [
     '--dangerously-skip-permissions', // Unrestricted mode
     '--print',                          // Print output and exit
     '--output-format', 'stream-json',   // Stream JSON events for live output
     '--verbose',                        // Required for stream-json
     '--include-partial-messages',       // Include incremental text deltas
+    ...(provider?.args || []),          // User-configured provider args
   ];
   if (model) {
     args.push('--model', model);
   }
 
   return {
-    command: process.env.CLAUDE_PATH || 'claude',
+    command: provider?.command || process.env.CLAUDE_PATH || 'claude',
     args,
     stdinMode: 'prompt',
     streamFormat: 'stream-json'
