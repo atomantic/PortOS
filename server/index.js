@@ -255,11 +255,40 @@ startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init fai
 // Check for update completion marker from a previous update cycle
 const updateMarkerPath = join(__dirname, '..', 'data', 'update-complete.json');
 readFile(updateMarkerPath, 'utf-8').then(raw => {
-  const marker = JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  return { marker: parsed, parseError: null };
+}, err => {
+  // ENOENT = no marker file = no recent update, nothing to do
+  if (err?.code === 'ENOENT') return null;
+  // Unexpected read error — log and remove the problematic marker
+  console.error(`❌ Failed to read update marker: ${err?.message ?? err}`);
+  return { marker: null, parseError: err };
+}).then(result => {
+  if (!result) return; // No marker file
+  if (!result.marker) {
+    // Read failed with unexpected error — remove corrupted marker to avoid reprocessing
+    return unlink(updateMarkerPath).catch(unlinkErr => {
+      if (unlinkErr?.code !== 'ENOENT') console.error(`❌ Failed to remove problematic update marker: ${unlinkErr.message}`);
+    });
+  }
+  const marker = result.marker;
   console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
   return recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
-    .then(() => unlink(updateMarkerPath));
-}).catch(() => {}); // No marker file = no recent update
+    .then(() => unlink(updateMarkerPath))
+    .catch(recordErr => {
+      console.error(`❌ Failed to record update result: ${recordErr.message}`);
+      // Still remove marker to avoid reprocessing on next startup
+      return unlink(updateMarkerPath).catch(unlinkErr => {
+        if (unlinkErr?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker after record failure: ${unlinkErr.message}`);
+      });
+    });
+}).catch(err => {
+  // JSON.parse failure — corrupted marker file
+  console.error(`❌ Corrupted update marker (invalid JSON): ${err?.message ?? err}`);
+  unlink(updateMarkerPath).catch(unlinkErr => {
+    if (unlinkErr?.code !== 'ENOENT') console.error(`❌ Failed to remove corrupted update marker: ${unlinkErr.message}`);
+  });
+});
 
 // Start periodic update checker (checks GitHub releases every 30 min)
 startUpdateScheduler();
