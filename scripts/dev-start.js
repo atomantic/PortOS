@@ -22,6 +22,12 @@ function pm2(...args) {
   });
 }
 
+// Ensure dependencies are installed (handles missing node_modules, ENOTEMPTY retries)
+execFileSync(process.execPath, [join(__dirname, 'ensure-deps.js')], {
+  stdio: 'inherit',
+  windowsHide: true
+});
+
 // Ensure PostgreSQL is running (gracefully skips if Docker unavailable)
 execFileSync(process.execPath, [join(__dirname, 'setup-db.js')], {
   stdio: 'inherit',
