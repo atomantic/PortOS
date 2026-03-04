@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
+import { readFile, unlink } from 'fs/promises';
 
 import appleHealthRoutes from './routes/appleHealth.js';
 import systemHealthRoutes from './routes/systemHealth.js';
@@ -51,6 +52,7 @@ import instancesRoutes from './routes/instances.js';
 import meatspaceRoutes from './routes/meatspace.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
+import updateRoutes from './routes/update.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSocket } from './services/socket.js';
 import { initScriptRunner } from './services/scriptRunner.js';
@@ -63,6 +65,7 @@ import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
+import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
@@ -232,6 +235,7 @@ app.use('/api/instances', instancesRoutes);
 app.use('/api/meatspace', meatspaceRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/update', updateRoutes);
 
 // Initialize script runner
 initScriptRunner().catch(err => console.error(`❌ Script runner init failed: ${err.message}`));
@@ -248,6 +252,52 @@ startBrainScheduler();
 initBrainMemoryBridge();
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Check for update completion marker from a previous update cycle
+const updateMarkerPath = join(__dirname, '..', 'data', 'update-complete.json');
+const removeMarker = () => unlink(updateMarkerPath).catch(e => {
+  if (e?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${e.message}`);
+});
+
+(async () => {
+  let raw;
+  try { raw = await readFile(updateMarkerPath, 'utf-8'); }
+  catch (err) {
+    if (err?.code === 'ENOENT') return; // No marker = no recent update
+    console.error(`❌ Failed to read update marker: ${err?.message ?? err}`);
+    return removeMarker();
+  }
+
+  let marker;
+  try { marker = JSON.parse(raw); }
+  catch (err) {
+    console.error(`❌ Corrupted update marker (invalid JSON): ${err?.message ?? err}`);
+    return removeMarker();
+  }
+
+  if (!marker.version || !marker.completedAt) {
+    console.error(`❌ Update marker missing required fields (version: ${marker.version}, completedAt: ${marker.completedAt})`);
+    return removeMarker();
+  }
+
+  const runningVersion = await getCurrentVersion();
+  if (marker.version !== runningVersion) {
+    console.error(`❌ Update marker version (${marker.version}) doesn't match running version (${runningVersion}) — recording as failed`);
+    await recordUpdateResult({ version: marker.version, success: false, completedAt: marker.completedAt, log: `Version mismatch: expected ${marker.version}, running ${runningVersion}` })
+      .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+    return removeMarker();
+  }
+
+  console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
+  await recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
+    .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+  return removeMarker();
+})().catch(err => console.error(`❌ Update marker processing failed: ${err.message}`));
+
+// Clear stale updateInProgress if the server was killed mid-update
+clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recovery failed: ${err.message}`));
+
+// Start periodic update checker (checks GitHub releases every 30 min)
+startUpdateScheduler();
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');

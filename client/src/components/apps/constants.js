@@ -6,4 +6,5 @@ export const APP_DETAIL_TABS = [
   { id: 'gsd', label: 'GSD' },
   { id: 'processes', label: 'Processes' },
   { id: 'tasks', label: 'Tasks' },
+  { id: 'update', label: 'Update' },
 ];

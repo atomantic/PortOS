@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X } from 'lucide-react';
+import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X, Settings } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import AlcoholChart from '../AlcoholChart';
 import AlcoholHrvCorrelation from '../AlcoholHrvCorrelation';
 import StandardDrinkCalculator from '../StandardDrinkCalculator';
 
-const COMMON_DRINKS = [
+const DEFAULT_DRINKS = [
+  { name: 'Modelo Especial (12oz)', oz: 12, abv: 4.4 },
   { name: 'Nitro Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
   { name: 'Old Fashioned (2oz)', oz: 2, abv: 40 },
   { name: 'Guinness 0 (14.9oz)', oz: 14.9, abv: 0.4 },
@@ -46,6 +48,12 @@ export default function AlcoholTab() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [visibleDays, setVisibleDays] = useState(DAYS_PER_PAGE);
 
+  // Custom drink buttons
+  const [drinkButtons, setDrinkButtons] = useState(DEFAULT_DRINKS);
+  const [managingButtons, setManagingButtons] = useState(false);
+  const [editingButtonIdx, setEditingButtonIdx] = useState(null);
+  const [buttonForm, setButtonForm] = useState({ name: '', oz: '', abv: '' });
+
   // Form state
   const [name, setName] = useState('');
   const [oz, setOz] = useState('');
@@ -61,6 +69,15 @@ export default function AlcoholTab() {
   const [chartView, setChartView] = useState('30d');
   const [correlationData, setCorrelationData] = useState(null);
 
+  const fetchDrinkButtons = useCallback(async () => {
+    const buttons = await api.getCustomDrinks().catch(() => null);
+    if (Array.isArray(buttons)) {
+      setDrinkButtons(buttons);
+    } else {
+      setDrinkButtons(DEFAULT_DRINKS);
+    }
+  }, []);
+
   const fetchData = useCallback(async () => {
     const [summaryData, entries] = await Promise.all([
       api.getAlcoholSummary().catch(() => null),
@@ -70,6 +87,10 @@ export default function AlcoholTab() {
     setAllEntries(entries);
     setLoading(false);
   }, []);
+
+  useEffect(() => {
+    fetchDrinkButtons();
+  }, [fetchDrinkButtons]);
 
   useEffect(() => {
     fetchData();
@@ -149,6 +170,58 @@ export default function AlcoholTab() {
     }).catch(() => null);
     setEditingKey(null);
     setRefreshKey(k => k + 1);
+  };
+
+  // === Custom drink button management ===
+
+  const validateDrinkButton = (form) => {
+    const parsedOz = parseFloat(form.oz);
+    const parsedAbv = parseFloat(form.abv);
+    if (!form.name) return 'Name is required';
+    if (isNaN(parsedOz) || parsedOz < 0.1 || parsedOz > 1000) return 'Oz must be between 0.1 and 1000';
+    if (isNaN(parsedAbv) || parsedAbv < 0 || parsedAbv > 100) return 'ABV must be between 0 and 100';
+    return null;
+  };
+
+  const handleAddButton = async (e) => {
+    e.preventDefault();
+    const error = validateDrinkButton(buttonForm);
+    if (error) { toast.error(error); return; }
+    const parsedOz = parseFloat(buttonForm.oz);
+    const parsedAbv = parseFloat(buttonForm.abv);
+    const result = await api.addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    if (!result) { toast.error('Failed to add drink button'); return; }
+    setButtonForm({ name: '', oz: '', abv: '' });
+    fetchDrinkButtons();
+  };
+
+  const startEditButton = (idx) => {
+    const btn = drinkButtons[idx];
+    setEditingButtonIdx(idx);
+    setButtonForm({ name: btn.name, oz: String(btn.oz), abv: String(btn.abv) });
+  };
+
+  const saveEditButton = async () => {
+    if (editingButtonIdx === null) return;
+    const error = validateDrinkButton(buttonForm);
+    if (error) { toast.error(error); return; }
+    const parsedOz = parseFloat(buttonForm.oz);
+    const parsedAbv = parseFloat(buttonForm.abv);
+    const result = await api.updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    if (!result) { toast.error('Failed to update drink button'); return; }
+    setEditingButtonIdx(null);
+    setButtonForm({ name: '', oz: '', abv: '' });
+    fetchDrinkButtons();
+  };
+
+  const cancelEditButton = () => {
+    setEditingButtonIdx(null);
+    setButtonForm({ name: '', oz: '', abv: '' });
+  };
+
+  const handleRemoveButton = async (idx) => {
+    await api.removeCustomDrink(idx).catch(() => null);
+    fetchDrinkButtons();
   };
 
   if (loading) {
@@ -232,22 +305,132 @@ export default function AlcoholTab() {
 
       {/* Log a Drink */}
       <div className="bg-port-card border border-port-border rounded-xl p-6">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Log a Drink</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log a Drink</h3>
+          <button
+            onClick={() => setManagingButtons(v => !v)}
+            className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-colors ${
+              managingButtons ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'
+            }`}
+            title="Manage quick-add buttons"
+          >
+            <Settings size={14} />
+            {managingButtons ? 'Done' : 'Manage'}
+          </button>
+        </div>
 
         {/* Quick-add buttons */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          {COMMON_DRINKS.map(drink => (
-            <button
-              key={drink.name}
-              onClick={() => handleQuickAdd(drink)}
-              disabled={logging}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs bg-port-border/50 text-gray-300 rounded-lg hover:bg-port-accent/10 hover:text-port-accent transition-colors disabled:opacity-50"
-            >
-              <Plus size={12} />
-              {drink.name}
-            </button>
-          ))}
-        </div>
+        {!managingButtons && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {drinkButtons.map((drink, idx) => (
+              <button
+                key={`${drink.name}-${idx}`}
+                onClick={() => handleQuickAdd(drink)}
+                disabled={logging}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs bg-port-border/50 text-gray-300 rounded-lg hover:bg-port-accent/10 hover:text-port-accent transition-colors disabled:opacity-50"
+              >
+                <Plus size={12} />
+                {drink.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Manage quick-add buttons */}
+        {managingButtons && (
+          <div className="mb-4 space-y-2">
+            {drinkButtons.map((drink, idx) => (
+              <div key={`manage-${idx}`} className="flex items-center gap-2">
+                {editingButtonIdx === idx ? (
+                  <>
+                    <input
+                      type="text"
+                      value={buttonForm.name}
+                      onChange={e => setButtonForm(f => ({ ...f, name: e.target.value }))}
+                      placeholder="Name"
+                      className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white"
+                    />
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      value={buttonForm.oz}
+                      onChange={e => setButtonForm(f => ({ ...f, oz: e.target.value }))}
+                      placeholder="Oz"
+                      className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right"
+                    />
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="100"
+                      value={buttonForm.abv}
+                      onChange={e => setButtonForm(f => ({ ...f, abv: e.target.value }))}
+                      placeholder="ABV%"
+                      className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right"
+                    />
+                    <button onClick={saveEditButton} className="p-1.5 text-port-success hover:text-port-success/80" title="Save">
+                      <Check size={14} />
+                    </button>
+                    <button onClick={cancelEditButton} className="p-1.5 text-gray-500 hover:text-gray-300" title="Cancel">
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-xs text-gray-300">{drink.name}</span>
+                    <span className="text-xs text-gray-500">{drink.oz}oz</span>
+                    <span className="text-xs text-gray-500">{drink.abv}%</span>
+                    <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent" title="Edit">
+                      <Pencil size={12} />
+                    </button>
+                    <button onClick={() => handleRemoveButton(idx)} className="p-1.5 text-gray-600 hover:text-port-error" title="Remove">
+                      <Trash2 size={12} />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+            {editingButtonIdx === null && (
+              <form onSubmit={handleAddButton} className="flex items-center gap-2 pt-2 border-t border-port-border/50">
+                <input
+                  type="text"
+                  value={buttonForm.name}
+                  onChange={e => setButtonForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="New button name"
+                  className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white placeholder-gray-600"
+                />
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={buttonForm.oz}
+                  onChange={e => setButtonForm(f => ({ ...f, oz: e.target.value }))}
+                  placeholder="Oz"
+                  className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right placeholder-gray-600"
+                />
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  value={buttonForm.abv}
+                  onChange={e => setButtonForm(f => ({ ...f, abv: e.target.value }))}
+                  placeholder="ABV%"
+                  className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right placeholder-gray-600"
+                />
+                <button
+                  type="submit"
+                  disabled={!buttonForm.name || !buttonForm.oz || buttonForm.abv === '' || isNaN(parseFloat(buttonForm.abv))}
+                  className="flex items-center gap-1 px-2 py-1.5 text-xs bg-port-accent text-white rounded-lg hover:bg-port-accent/80 disabled:opacity-50"
+                >
+                  <Plus size={12} />
+                  Add
+                </button>
+              </form>
+            )}
+          </div>
+        )}
 
         {/* Custom entry form */}
         <form onSubmit={handleCustomAdd} className="flex flex-wrap items-end gap-3">

@@ -91,6 +91,16 @@ export const uploadAppleHealthXml = (file) => {
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);
 
+// Update
+export const getUpdateStatus = () => request('/update/status');
+export const checkForUpdate = () => request('/update/check', { method: 'POST' });
+export const ignoreUpdateVersion = (version) => request('/update/ignore', {
+  method: 'POST',
+  body: JSON.stringify({ version })
+});
+export const clearIgnoredVersions = () => request('/update/ignore', { method: 'DELETE' });
+export const executePortosUpdate = () => request('/update/execute', { method: 'POST' });
+
 // Apps
 export const getApps = () => request('/apps');
 export const getApp = (id) => request(`/apps/${id}`);
@@ -1393,6 +1403,18 @@ export const updateAlcoholDrink = (date, index, data) => request(`/meatspace/alc
   body: JSON.stringify(data)
 });
 export const removeAlcoholDrink = (date, index) => request(`/meatspace/alcohol/log/${date}/${index}`, {
+  method: 'DELETE'
+});
+export const getCustomDrinks = () => request('/meatspace/alcohol/custom-drinks');
+export const addCustomDrink = (data) => request('/meatspace/alcohol/custom-drinks', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateCustomDrink = (index, data) => request(`/meatspace/alcohol/custom-drinks/${index}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const removeCustomDrink = (index) => request(`/meatspace/alcohol/custom-drinks/${index}`, {
   method: 'DELETE'
 });
 export const getBloodTests = () => request('/meatspace/blood');

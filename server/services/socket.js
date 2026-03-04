@@ -9,6 +9,7 @@ import { notificationEvents } from './notifications.js';
 import { providerStatusEvents } from './providerStatus.js';
 import { agentPersonalityEvents } from './agentPersonalities.js';
 import { platformAccountEvents } from './platformAccounts.js';
+import { updateEvents } from './updateChecker.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
 import { brainEvents } from './brainStorage.js';
@@ -455,6 +456,9 @@ export function initSocket(io) {
 
   // Set up peer agent event forwarding
   setupPeerAgentEventForwarding();
+
+  // Set up update event forwarding
+  setupUpdateEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -643,4 +647,21 @@ function setupPeerAgentEventForwarding() {
   instanceEvents.on('peer:agent:updated', (data) => broadcastToInstances('instances:peer:agent:updated', data));
   instanceEvents.on('peer:agent:output', (data) => broadcastToInstances('instances:peer:agent:output', data));
   instanceEvents.on('peer:agent:completed', (data) => broadcastToInstances('instances:peer:agent:completed', data));
+}
+
+// Set up update event forwarding (idempotent — safe if called more than once)
+let updateForwardingSetup = false;
+function setupUpdateEventForwarding() {
+  if (updateForwardingSetup) return;
+  updateForwardingSetup = true;
+  updateEvents.on('update:available', (data) => {
+    if (ioInstance) {
+      ioInstance.emit('portos:update:available', data);
+    }
+  });
+  updateEvents.on('update:checked', (data) => {
+    if (ioInstance) {
+      ioInstance.emit('portos:update:checked', data);
+    }
+  });
 }

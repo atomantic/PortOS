@@ -5,16 +5,20 @@ import * as apps from '../services/apps.js';
 import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instances.js';
 import { checkHealth } from '../lib/db.js';
+import { getCurrentVersion } from '../services/updateChecker.js';
 
 const router = Router();
 
 router.get('/health', async (req, res) => {
-  const self = await getSelf().catch(() => null);
+  const [self, version] = await Promise.all([
+    getSelf().catch(() => null),
+    getCurrentVersion()
+  ]);
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '0.1.0',
+    version,
     hostname: os.hostname(),
     instanceId: self?.instanceId ?? null
   });

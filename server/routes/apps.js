@@ -17,6 +17,9 @@ import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
 const router = Router();
 
+/** Read and parse a JSON file, returning null on any failure (missing file, bad JSON, etc.) */
+const safeReadJson = (path) => readFile(path, 'utf-8').then(JSON.parse).catch(() => null);
+
 /**
  * Middleware to load app by :id param and attach to req.loadedApp
  * Throws 404 if not found, eliminating repeated null checks across routes
@@ -147,7 +150,14 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     if (devUiProc) devUiPort = devUiProc.ports.devUi;
   }
 
-  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses });
+  // Read version from app's package.json if available
+  let appVersion = null;
+  if (app.repoPath) {
+    const pkg = await safeReadJson(join(app.repoPath, 'package.json'));
+    appVersion = pkg?.version || null;
+  }
+
+  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses, appVersion });
 }));
 
 // POST /api/apps - Create new app

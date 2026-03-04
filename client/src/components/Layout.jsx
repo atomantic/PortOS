@@ -63,6 +63,7 @@ import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
+import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
 import CmdKSearch from './CmdKSearch';
@@ -191,6 +192,9 @@ export default function Layout() {
 
   // Subscribe to agent completion feedback toasts
   useAgentFeedbackToast();
+
+  // Check for PortOS updates and show toast when available
+  useUpdateChecker();
 
   // Notifications for user task alerts
   const {

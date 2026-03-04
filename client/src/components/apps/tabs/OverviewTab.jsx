@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download } from 'lucide-react';
+import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import KanbanBoard from '../../KanbanBoard';
@@ -75,6 +75,17 @@ export default function OverviewTab({ app, onRefresh }) {
             <code className="text-sm text-gray-300 font-mono">{app.editorCommand || 'code .'}</code>
           </div>
         </div>
+        {app.appVersion && (
+          <div>
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Version</div>
+            <div className="flex items-center gap-2">
+              <Tag size={16} className="text-port-accent shrink-0" />
+              <span className="px-2 py-0.5 bg-port-accent/10 text-port-accent text-sm font-mono rounded">
+                v{app.appVersion}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Start Commands */}

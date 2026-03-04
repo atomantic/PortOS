@@ -46,5 +46,13 @@ if (!existsSync(dataDir)) {
   };
 
   ensureSubdirs(sampleDir, dataDir);
+
   console.log('✅ Data directory already exists, ensured subdirectories');
+}
+
+// Ensure migrations directory exists (not in data.sample, needed for both fresh and existing installs)
+const migrationsDir = join(dataDir, 'migrations');
+if (!existsSync(migrationsDir)) {
+  console.log('📁 Creating missing directory: migrations');
+  mkdirSync(migrationsDir, { recursive: true });
 }

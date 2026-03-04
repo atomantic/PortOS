@@ -39,7 +39,7 @@ async function save(data) {
 /**
  * Execute a gh CLI command safely using spawn
  */
-function execGh(args) {
+export function execGh(args) {
   return new Promise((resolve, reject) => {
     const child = spawn('gh', args, { shell: false, windowsHide: true });
     let stdout = '';
