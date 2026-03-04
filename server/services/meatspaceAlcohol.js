@@ -268,7 +268,7 @@ async function loadCustomDrinks() {
   const data = await readJSONFile(CUSTOM_DRINKS_FILE, null);
   if (!data) {
     // Seed with defaults on first access
-    const seeded = { drinks: DEFAULT_DRINK_BUTTONS };
+    const seeded = { drinks: DEFAULT_DRINK_BUTTONS.map(d => ({ ...d })) };
     await saveCustomDrinks(seeded);
     return seeded;
   }

@@ -41,15 +41,22 @@ export async function getCurrentVersion() {
  *  -1 if a < b, 0 if equal, 1 if a > b
  */
 export function compareSemver(a, b) {
-  // Strip pre-release/build metadata (e.g. "1.2.3-rc.1+build" → "1.2.3")
-  const pa = a.replace(/[-+].*$/, '').split('.').map(Number);
-  const pb = b.replace(/[-+].*$/, '').split('.').map(Number);
+  const extractParts = (v) => {
+    const [core, pre] = v.split('+')[0].split('-', 2);
+    return { nums: core.split('.').map(Number), pre: pre || null };
+  };
+  const pa = extractParts(a);
+  const pb = extractParts(b);
   for (let i = 0; i < 3; i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
+    const na = pa.nums[i] || 0;
+    const nb = pb.nums[i] || 0;
     if (na < nb) return -1;
     if (na > nb) return 1;
   }
+  // Equal core versions: no pre-release > pre-release (1.0.0 > 1.0.0-rc.1)
+  if (!pa.pre && pb.pre) return 1;
+  if (pa.pre && !pb.pre) return -1;
+  if (pa.pre && pb.pre) return pa.pre < pb.pre ? -1 : pa.pre > pb.pre ? 1 : 0;
   return 0;
 }
 
