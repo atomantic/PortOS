@@ -281,10 +281,11 @@ readFile(updateMarkerPath, 'utf-8').then(raw => {
   }
   console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
   return recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
-    .then(() => unlink(updateMarkerPath))
+    .then(() => unlink(updateMarkerPath).catch(unlinkErr => {
+      if (unlinkErr?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${unlinkErr.message}`);
+    }))
     .catch(recordErr => {
       console.error(`❌ Failed to record update result: ${recordErr.message}`);
-      // Still remove marker to avoid reprocessing on next startup
       return unlink(updateMarkerPath).catch(unlinkErr => {
         if (unlinkErr?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker after record failure: ${unlinkErr.message}`);
       });

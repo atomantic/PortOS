@@ -129,7 +129,7 @@ export default function UpdateTab() {
   const handleCheck = async () => {
     setChecking(true);
     const result = await api.checkForUpdate().catch(() => null);
-    if (result) setStatus(prev => ({ ...prev, ...result }));
+    if (result) setStatus(prev => ({ ...(prev ?? {}), ...result }));
     setChecking(false);
   };
 
