@@ -153,26 +153,31 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId, onTic
       return;
     }
 
-    // Optimistic update
+    // Optimistic update — notify parent immediately so cache stays in sync
     const previousTickets = [...tickets];
-    setTickets(prev => prev.map(t =>
-      t.key === ticket.key ? { ...t, statusCategory: targetCategory } : t
-    ));
+    setTickets(prev => {
+      const optimistic = prev.map(t =>
+        t.key === ticket.key ? { ...t, statusCategory: targetCategory } : t
+      );
+      onTicketsChange?.(optimistic);
+      return optimistic;
+    });
     setTransitioning(ticket.key);
 
     try {
       // Fetch available transitions and find matching one
-      const transitions = await api.getTicketTransitions(instanceId, ticket.key, { silent: true });
+      const transitions = await api.getJiraTicketTransitions(instanceId, ticket.key, { silent: true });
       const match = transitions.find(t => t.toCategory === targetCategory);
 
       if (!match) {
-        // Rollback
+        // Rollback — sync parent cache
         setTickets(previousTickets);
+        onTicketsChange?.(previousTickets);
         toast.error(`No transition available to "${targetCategory}" for ${ticket.key}`);
         return;
       }
 
-      await api.transitionTicket(instanceId, ticket.key, match.id, { silent: true });
+      await api.transitionJiraTicket(instanceId, ticket.key, match.id, { silent: true });
       // Update the status name too, based on latest state
       setTickets(prev => {
         const updated = prev.map(t =>
@@ -184,11 +189,12 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId, onTic
       toast.success(`${ticket.key} moved to ${match.to}`);
     } catch (err) {
       setTickets(previousTickets);
+      onTicketsChange?.(previousTickets);
       toast.error(`Failed to transition ${ticket.key}: ${err.message}`);
     } finally {
       setTransitioning(null);
     }
-  }, [tickets, instanceId]);
+  }, [tickets, instanceId, onTicketsChange]);
 
   const handleDragCancel = useCallback(() => {
     setActiveTicket(null);
