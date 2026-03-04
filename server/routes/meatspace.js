@@ -181,8 +181,8 @@ router.post('/alcohol/custom-drinks', asyncHandler(async (req, res) => {
  * Update a custom drink button
  */
 router.put('/alcohol/custom-drinks/:index', asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index, 10);
-  if (!Number.isInteger(index)) {
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) {
     throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
   }
   const data = validateRequest(customDrinkUpdateSchema, req.body);
@@ -198,8 +198,8 @@ router.put('/alcohol/custom-drinks/:index', asyncHandler(async (req, res) => {
  * Remove a custom drink button
  */
 router.delete('/alcohol/custom-drinks/:index', asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index, 10);
-  if (!Number.isInteger(index)) {
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) {
     throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
   }
   const removed = await alcoholService.removeCustomDrink(index);

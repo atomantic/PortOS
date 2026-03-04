@@ -45,10 +45,6 @@ router.post('/execute', asyncHandler(async (req, res) => {
   if (!status.latestRelease?.tag) {
     throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
   }
-  if (status.updateInProgress) {
-    throw new ServerError('Update already in progress', { status: 409, code: 'UPDATE_IN_PROGRESS' });
-  }
-
   const tag = status.latestRelease.tag;
 
   // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
@@ -61,10 +57,11 @@ router.post('/execute', asyncHandler(async (req, res) => {
     throw new ServerError('Auto-update is not supported on Windows', { status: 400, code: 'UNSUPPORTED_PLATFORM' });
   }
 
-  // Lock out duplicate requests synchronously BEFORE spawning the update,
-  // preventing the race where a second request slips in before executeUpdate's
-  // first await persists the flag
-  await updateChecker.setUpdateInProgress(true);
+  // Atomic check-and-set: rejects if already in progress, preventing concurrent updates
+  const acquired = await updateChecker.setUpdateInProgress(true);
+  if (!acquired) {
+    throw new ServerError('Update already in progress', { status: 409, code: 'UPDATE_IN_PROGRESS' });
+  }
 
   const io = req.app.get('io');
 

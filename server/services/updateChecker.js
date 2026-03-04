@@ -205,13 +205,17 @@ export async function clearIgnored() {
 
 /**
  * Mark update as in progress or completed in state file.
+ * When setting to true, atomically rejects if already in progress (returns false).
+ * Returns true if the flag was set successfully.
  */
 export async function setUpdateInProgress(inProgress) {
   return withLock(async () => {
     const state = await loadState();
+    if (inProgress && state.updateInProgress) return false;
     state.updateInProgress = inProgress;
     state.updateStartedAt = inProgress ? new Date().toISOString() : null;
     await saveState(state);
+    return true;
   });
 }
 
