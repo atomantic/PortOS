@@ -12,8 +12,16 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PM2 = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 const ECO = 'ecosystem.config.cjs';
+
+// Ensure dependencies are installed BEFORE resolving pm2 path
+// (pm2 lives in node_modules — require.resolve fails if deps are missing)
+execFileSync(process.execPath, [join(__dirname, 'ensure-deps.js')], {
+  stdio: 'inherit',
+  windowsHide: true
+});
+
+const PM2 = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
 
 function pm2(...args) {
   execFileSync(process.execPath, [PM2, ...args], {

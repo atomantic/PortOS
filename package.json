@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "1.27.1",
+  "version": "1.27.5",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -10,7 +10,7 @@
     "dev": "node scripts/dev-start.js",
     "dev:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "build": "npm run build --prefix client",
-    "start": "npm run build && node scripts/setup-db.js && (node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || echo pm2 delete skipped) && node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs && node ./node_modules/pm2/bin/pm2 save",
+    "start": "node scripts/ensure-deps.js && npm run build && node scripts/setup-db.js && (node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || echo pm2 delete skipped) && node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs && node ./node_modules/pm2/bin/pm2 save",
     "pm2:start": "node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs",
     "pm2:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "pm2:restart": "node ./node_modules/pm2/bin/pm2 restart ecosystem.config.cjs",
@@ -25,7 +25,7 @@
     "setup:db": "node scripts/setup-db.js",
     "setup:browser": "node scripts/setup-browser.js",
     "setup:ghostty": "node scripts/setup-ghostty.js",
-    "update": "npm install && npm install --prefix client && npm install --prefix server && npm run setup && npm run setup:ghostty",
+    "update": "node -e \"const{spawnSync:s}=require('child_process');const w=process.platform==='win32';const r=s(w?'powershell':'bash',w?['-File','update.ps1']:['update.sh'],{stdio:'inherit'});process.exit(r.status??1)\"",
     "test": "npm test --prefix server"
   },
   "devDependencies": {
