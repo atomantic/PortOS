@@ -24,12 +24,11 @@ if ($majorVersion -lt 18) {
 Write-Host "Found Node.js v$nodeVersion" -ForegroundColor Green
 
 # Install dependencies
-# Note: Using --install-links to copy instead of symlink (required for exFAT filesystems)
 Write-Host ""
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
 
 Write-Host "  Installing root dependencies..."
-npm install --install-links
+npm install
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "  Installing client dependencies..."
