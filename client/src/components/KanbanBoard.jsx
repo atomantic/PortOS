@@ -177,15 +177,12 @@ export default function KanbanBoard({ tickets: initialTickets, instanceId, onTic
       }
 
       await api.transitionJiraTicket(instanceId, ticket.key, match.id, { silent: true });
-      // Update the status name too, based on latest state
-      let updated;
-      setTickets(prev => {
-        updated = prev.map(t =>
-          t.key === ticket.key ? { ...t, status: match.to, statusCategory: targetCategory } : t
-        );
-        return updated;
-      });
-      onTicketsChange?.(updated);
+      // Update the status name too, derived from the optimistic snapshot
+      const nextTickets = optimistic.map(t =>
+        t.key === ticket.key ? { ...t, status: match.to, statusCategory: targetCategory } : t
+      );
+      setTickets(nextTickets);
+      onTicketsChange?.(nextTickets);
       toast.success(`${ticket.key} moved to ${match.to}`);
     } catch (err) {
       setTickets(previousTickets);
