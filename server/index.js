@@ -272,6 +272,13 @@ readFile(updateMarkerPath, 'utf-8').then(raw => {
     });
   }
   const marker = result.marker;
+  // Validate marker has expected fields before recording as success
+  if (!marker.version || !marker.completedAt) {
+    console.error(`❌ Update marker missing required fields (version: ${marker.version}, completedAt: ${marker.completedAt})`);
+    return unlink(updateMarkerPath).catch(unlinkErr => {
+      if (unlinkErr?.code !== 'ENOENT') console.error(`❌ Failed to remove invalid update marker: ${unlinkErr.message}`);
+    });
+  }
   console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
   return recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
     .then(() => unlink(updateMarkerPath))
