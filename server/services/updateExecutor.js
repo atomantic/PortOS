@@ -63,9 +63,9 @@ export async function executeUpdate(tag, emit) {
       child.stderr.on('data', makeLineHandler());
     }
 
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       const success = code === 0;
-      recordUpdateResult({
+      await recordUpdateResult({
         version: tag.replace(/^v/, ''),
         success,
         completedAt: new Date().toISOString(),
@@ -82,8 +82,8 @@ export async function executeUpdate(tag, emit) {
       );
     });
 
-    child.on('error', (err) => {
-      recordUpdateResult({
+    child.on('error', async (err) => {
+      await recordUpdateResult({
         version: tag.replace(/^v/, ''),
         success: false,
         completedAt: new Date().toISOString(),

@@ -263,7 +263,7 @@ readFile(updateMarkerPath, 'utf-8').then(raw => {
   // Unexpected read error — log and remove the problematic marker
   console.error(`❌ Failed to read update marker: ${err?.message ?? err}`);
   return { marker: null, parseError: err };
-}).then(result => {
+}).then(async result => {
   if (!result) return; // No marker file
   if (!result.marker) {
     // Read failed with unexpected error — remove corrupted marker to avoid reprocessing
