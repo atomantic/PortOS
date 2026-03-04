@@ -13,6 +13,7 @@ import GenomeTab from '../components/meatspace/tabs/GenomeTab';
 import HealthTab from '../components/meatspace/tabs/HealthTab';
 import ImportTab from '../components/meatspace/tabs/ImportTab';
 import LifestyleTab from '../components/meatspace/tabs/LifestyleTab';
+import PostTab from '../components/meatspace/tabs/PostTab';
 
 export default function MeatSpace() {
   const { tab } = useParams();
@@ -45,6 +46,8 @@ export default function MeatSpace() {
         return <ImportTab />;
       case 'lifestyle':
         return <LifestyleTab />;
+      case 'post':
+        return <PostTab />;
       default:
         return <OverviewTab />;
     }

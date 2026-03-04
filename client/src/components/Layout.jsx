@@ -55,7 +55,8 @@ import {
   Github,
   Link2,
   Database,
-  Shield
+  Shield,
+  Zap
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import Logo from './Logo';
@@ -163,7 +164,8 @@ const navItems = [
       { to: '/meatspace/health', label: 'Health', icon: Heart },
       { to: '/meatspace/import', label: 'Import', icon: Upload },
       { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
-      { to: '/meatspace/overview', label: 'Overview', icon: Activity }
+      { to: '/meatspace/overview', label: 'Overview', icon: Activity },
+      { to: '/meatspace/post', label: 'POST', icon: Zap }
     ]
   },
   { to: '/security', label: 'Security', icon: Camera, single: true },

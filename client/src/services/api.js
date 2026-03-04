@@ -1422,6 +1422,30 @@ export const updateEyeExam = (index, data) => request(`/meatspace/eyes/${index}`
 export const removeEyeExam = (index) => request(`/meatspace/eyes/${index}`, {
   method: 'DELETE'
 });
+
+// MeatSpace - POST (Power On Self Test)
+export const getPostConfig = () => request('/meatspace/post/config');
+export const updatePostConfig = (data) => request('/meatspace/post/config', {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const getPostSessions = (from, to) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  return request(`/meatspace/post/sessions?${params}`);
+};
+export const getPostSession = (id) => request(`/meatspace/post/sessions/${id}`);
+export const submitPostSession = (data) => request('/meatspace/post/sessions', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
+export const generatePostDrill = (type, config = {}) => request('/meatspace/post/drill', {
+  method: 'POST',
+  body: JSON.stringify({ type, config })
+});
+
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);

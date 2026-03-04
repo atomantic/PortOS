@@ -80,6 +80,7 @@ pm2 logs
 ### In Progress
 
 - [ ] **M44 P6**: MeatSpace - Genome/Epigenetic Migration cleanup (genome routes moved, but route comments still reference `/api/digital-twin/genome/` and IdentityTab still renders a Genome card with broken link to `/digital-twin/genome`)
+- [ ] **M53 P1**: POST (Power On Self Test) - Foundation + Mental Math (daily cognitive self-test with 5 drill types, scoring, history, config). Phase 1 complete: server service/routes/tests, client UI with drill runner, results, history charts, config editor
 
 ### Planned
 
@@ -119,6 +120,7 @@ Check via `existsSync()` against `app.repoPath + '/.planning/...'` (same pattern
 - [ ] **M48 P1-P4**: Google Calendar Integration - OAuth2, two-way event sync, chronotype-aware smart scheduling, CoS autonomous rescheduling, calendar UI with week/month views
 - [ ] **M49 P1-P4**: Life Goals & Todo Planning - Enhanced goal model with todos and milestones, calendar time-blocking, AI-powered periodic check-ins, mortality-aware progress dashboard
 - [ ] **M50 P1-P4**: Email Management - Gmail + Outlook integration, AI categorization and priority extraction, Digital Twin voice drafting, review-before-send outbox, Brain knowledge capture
+- [ ] **M52**: Update Detection - Poll GitHub releases for new version tags, compare against local `package.json` version, surface update availability in dashboard and settings
 
 ---
 
@@ -302,6 +304,32 @@ M49 P1 (Enhanced Goals + Todos) — independent, no deps
 
 *Touches: new server/services/email.js, server/services/emailProvider.js, server/services/emailClassifier.js, server/services/emailDrafter.js, server/routes/email.js, client/src/pages/Email.jsx, client/src/components/email/tabs/, Layout.jsx, brain.js, autonomousJobs.js, portos-ai-toolkit (Digital Twin context for drafting)*
 
+### M52: Update Detection
+
+Check for new PortOS releases on GitHub and notify the user when an update is available.
+
+**Version Check**
+- Scheduled service polls `GET https://api.github.com/repos/atomantic/PortOS/releases/latest` (or tags endpoint) on a configurable interval (default: daily)
+- Compare remote latest tag against local version from `package.json`
+- Semver comparison — only flag when remote is newer (ignore pre-release tags unless opted in)
+- Cache last-checked timestamp and latest remote version in `data/settings.json` or `data/update-check.json`
+
+**UI Notifications**
+- Dashboard widget: subtle banner when update available showing current vs. latest version
+- Settings page: "Check for Updates" button with last-checked timestamp, auto-check toggle, and interval config
+- Sidebar badge or indicator on Settings nav item when update is pending
+
+**Update Action**
+- Display release notes summary (fetched from GitHub release body)
+- "View Release" link opens GitHub release page
+- Optional: show one-liner shell command to pull the update (`git pull && npm run install:all && pm2 restart ecosystem.config.cjs`)
+
+**Routes:** `GET /api/system/update-check` (returns current version, latest version, update available boolean, release notes), `POST /api/system/update-check` (trigger manual check)
+
+**Nav:** No new nav item — surfaces in Dashboard widget and Settings page
+
+*Touches: new server/services/updateCheck.js, server/routes/system.js, Dashboard.jsx (update banner widget), Settings page (update check section), data/update-check.json*
+
 ### Tier 1: Identity Integration (aligns with M42 direction)
 
 - **Chronotype-Aware Scheduling** — Chronotype derivation exists (M42 P1) but isn't applied to task scheduling yet. Use peak-focus windows from genome sleep markers to schedule deep-work tasks during peak hours, routine tasks during low-energy. Display energy curve on Schedule tab. *Touches: taskSchedule.js, genome.js, CoS Schedule tab*
@@ -387,3 +415,4 @@ All 10 audit items (S1–S10) from the 2025-02-19 security audit have been resol
 6. **M48 P1**: Google Calendar — OAuth2 foundation + calendar read
 7. **M49 P1**: Life Goals — Enhanced goal model with todos and progress tracking
 8. **M48 P2**: Google Calendar — Event CRUD and two-way sync
+9. **M52**: Update Detection — GitHub release polling and update notification

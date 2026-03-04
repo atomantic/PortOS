@@ -12,9 +12,15 @@ import {
   eyeExamSchema,
   eyeExamUpdateSchema,
 } from '../lib/meatspaceValidation.js';
+import {
+  postSessionSubmitSchema,
+  postConfigUpdateSchema,
+  postDrillRequestSchema,
+} from '../lib/postValidation.js';
 import * as meatspaceService from '../services/meatspace.js';
 import * as alcoholService from '../services/meatspaceAlcohol.js';
 import * as healthService from '../services/meatspaceHealth.js';
+import * as postService from '../services/meatspacePost.js';
 
 const router = Router();
 
@@ -252,5 +258,84 @@ router.delete('/eyes/:index', asyncHandler(async (req, res) => {
   res.json(removed);
 }));
 
+
+// =============================================================================
+// POST (Power On Self Test)
+// =============================================================================
+
+/**
+ * GET /api/meatspace/post/config
+ * Drill configuration and weights
+ */
+router.get('/post/config', asyncHandler(async (req, res) => {
+  const config = await postService.getPostConfig();
+  res.json(config);
+}));
+
+/**
+ * PUT /api/meatspace/post/config
+ * Update drill configuration
+ */
+router.put('/post/config', asyncHandler(async (req, res) => {
+  const data = validateRequest(postConfigUpdateSchema, req.body);
+  const config = await postService.updatePostConfig(data);
+  res.json(config);
+}));
+
+/**
+ * GET /api/meatspace/post/sessions
+ * Session history with optional date range
+ */
+router.get('/post/sessions', asyncHandler(async (req, res) => {
+  const sessions = await postService.getPostSessions(req.query.from, req.query.to);
+  res.json(sessions);
+}));
+
+/**
+ * GET /api/meatspace/post/sessions/:id
+ * Single session by ID
+ */
+router.get('/post/sessions/:id', asyncHandler(async (req, res) => {
+  const session = await postService.getPostSession(req.params.id);
+  if (!session) {
+    throw new ServerError('Session not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(session);
+}));
+
+/**
+ * POST /api/meatspace/post/sessions
+ * Submit a completed session
+ */
+router.post('/post/sessions', asyncHandler(async (req, res) => {
+  const data = validateRequest(postSessionSubmitSchema, req.body);
+  const session = await postService.submitPostSession(data);
+  res.status(201).json(session);
+}));
+
+/**
+ * GET /api/meatspace/post/stats
+ * Rolling averages and trends
+ */
+router.get('/post/stats', asyncHandler(async (req, res) => {
+  const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
+  const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
+  const stats = await postService.getPostStats(days);
+  res.json(stats);
+}));
+
+/**
+ * POST /api/meatspace/post/drill
+ * Generate a drill with questions and expected answers for client-side feedback.
+ * Server-side scoring recomputes expected answers from the prompt when possible.
+ */
+router.post('/post/drill', asyncHandler(async (req, res) => {
+  const data = validateRequest(postDrillRequestSchema, req.body);
+  const drill = postService.generateDrill(data.type, data.config);
+  if (!drill) {
+    throw new ServerError('Unknown drill type', { status: 400, code: 'INVALID_DRILL_TYPE' });
+  }
+  res.json(drill);
+}));
 
 export default router;

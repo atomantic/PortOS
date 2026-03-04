@@ -9,7 +9,8 @@ import {
   Activity,
   Scale,
   Stethoscope,
-  Upload
+  Upload,
+  Zap
 } from 'lucide-react';
 
 export const TABS = [
@@ -22,7 +23,8 @@ export const TABS = [
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'health', label: 'Health', icon: Stethoscope },
   { id: 'import', label: 'Import', icon: Upload },
-  { id: 'lifestyle', label: 'Lifestyle', icon: ClipboardList }
+  { id: 'lifestyle', label: 'Lifestyle', icon: ClipboardList },
+  { id: 'post', label: 'POST', icon: Zap }
 ];
 
 // Lifestyle adjustment table for death clock
