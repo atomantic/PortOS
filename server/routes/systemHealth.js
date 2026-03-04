@@ -32,12 +32,13 @@ router.get('/health/details', async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, allApps, cosStatus, self, dbHealth] = await Promise.all([
+  const [pm2Processes, allApps, cosStatus, self, dbHealth, version] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAllApps({ includeArchived: false }).catch(() => []),
     cos.getStatus().catch(() => null),
     getSelf().catch(() => null),
-    checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' }))
+    checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
+    getCurrentVersion().catch(() => null)
   ]);
 
   // System metrics
@@ -139,6 +140,7 @@ router.get('/health/details', async (req, res) => {
     timestamp: new Date().toISOString(),
     hostname: os.hostname(),
     instanceId: self?.instanceId ?? null,
+    version,
     overallHealth,
     warnings,
     system: {

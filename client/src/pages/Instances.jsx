@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
   Wifi, WifiOff, CircleDot,
-  Cpu, HardDrive, Activity, Bot, MonitorSmartphone,
+  Cpu, HardDrive, Activity, Bot, MonitorSmartphone, Tag,
   ArrowUpRight, ArrowDownLeft, ArrowLeftRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -46,10 +46,16 @@ function timeAgo(iso) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function HealthSummary({ health }) {
+function HealthSummary({ health, version }) {
   if (!health) return <span className="text-gray-500 text-xs">No data</span>;
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+      {version && (
+        <div className="flex items-center gap-1.5 text-gray-400 col-span-2">
+          <Tag size={12} />
+          <span>v{version}</span>
+        </div>
+      )}
       <div className="flex items-center gap-1.5 text-gray-400">
         <HardDrive size={12} />
         <span>Mem {health.system?.memory?.usagePercent ?? '?'}%</span>
@@ -347,7 +353,7 @@ function PeerCard({ peer, onRefresh }) {
         )}
       </div>
 
-      <HealthSummary health={peer.lastHealth} />
+      <HealthSummary health={peer.lastHealth} version={peer.version} />
 
       <div className="mt-2 text-xs text-gray-600">
         Last seen: {timeAgo(peer.lastSeen)}
