@@ -8,10 +8,10 @@ import { z } from 'zod';
 export const postTagsSchema = z.record(z.string().max(200));
 
 // Individual question result
-// correct is optional — the server recomputes it via scoreDrill
+// expected and correct are optional — the server recomputes both via scoreDrill
 const questionResultSchema = z.object({
   prompt: z.string(),
-  expected: z.number(),
+  expected: z.number().optional(),
   answered: z.number().nullable(),
   correct: z.boolean().optional(),
   responseMs: z.number().min(0)

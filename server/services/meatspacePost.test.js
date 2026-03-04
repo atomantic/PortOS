@@ -6,6 +6,7 @@ import {
   generatePowers,
   generateEstimation,
   scoreDrill,
+  computeExpectedFromPrompt,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -201,6 +202,34 @@ describe('generateEstimation', () => {
 });
 
 // =============================================================================
+// computeExpectedFromPrompt TESTS
+// =============================================================================
+
+describe('computeExpectedFromPrompt', () => {
+  it('parses addition', () => {
+    expect(computeExpectedFromPrompt('500 + 300')).toBe(800);
+  });
+
+  it('parses subtraction', () => {
+    expect(computeExpectedFromPrompt('100 - 7')).toBe(93);
+  });
+
+  it('parses multiplication', () => {
+    expect(computeExpectedFromPrompt('15 x 23')).toBe(345);
+  });
+
+  it('parses powers', () => {
+    expect(computeExpectedFromPrompt('2^8')).toBe(256);
+  });
+
+  it('returns null for unparseable prompts', () => {
+    expect(computeExpectedFromPrompt('hello')).toBeNull();
+    expect(computeExpectedFromPrompt(null)).toBeNull();
+    expect(computeExpectedFromPrompt(undefined)).toBeNull();
+  });
+});
+
+// =============================================================================
 // SCORING TESTS
 // =============================================================================
 
@@ -271,6 +300,16 @@ describe('scoreDrill', () => {
     const { questions: recomputed } = scoreDrill('multiplication', questions, 60000);
     expect(recomputed[0].correct).toBe(true);   // client said false, server recomputes true
     expect(recomputed[1].correct).toBe(false);   // client said true, server recomputes false
+  });
+
+  it('recomputes expected from prompt, ignoring tampered client values', () => {
+    const questions = [
+      { prompt: '5 x 3', expected: 999, answered: 999, responseMs: 1000 }
+    ];
+    const { questions: recomputed } = scoreDrill('multiplication', questions, 60000);
+    // Server derives expected=15 from "5 x 3", overriding the client's 999
+    expect(recomputed[0].expected).toBe(15);
+    expect(recomputed[0].correct).toBe(false); // 999 !== 15
   });
 
   it('estimation drill uses tolerancePct from config', () => {

@@ -38,8 +38,9 @@ async function ensureMeatspaceDir() {
 // =============================================================================
 
 export async function getPostConfig() {
-  const config = await readJSONFile(CONFIG_FILE, DEFAULT_CONFIG);
-  return deepMerge(DEFAULT_CONFIG, config);
+  const baseDefaults = structuredClone(DEFAULT_CONFIG);
+  const config = await readJSONFile(CONFIG_FILE, baseDefaults);
+  return deepMerge(baseDefaults, config);
 }
 
 export async function updatePostConfig(updates) {
@@ -249,21 +250,37 @@ export function generateDrill(type, config = {}) {
 // SCORING (pure functions)
 // =============================================================================
 
+export function computeExpectedFromPrompt(prompt) {
+  const match = prompt?.match(/^(-?\d+)\s*([+\-x^])\s*(-?\d+)$/);
+  if (!match) return null;
+  const [, aStr, op, bStr] = match;
+  const a = parseInt(aStr, 10);
+  const b = parseInt(bStr, 10);
+  switch (op) {
+    case '+': return a + b;
+    case '-': return a - b;
+    case 'x': return a * b;
+    case '^': return Math.pow(a, b);
+    default: return null;
+  }
+}
+
 export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   if (!questions?.length) return { score: 0, questions };
 
-  // Recompute correctness server-side rather than trusting client flags
+  // Recompute expected from the prompt server-side — never trust client-provided expected
   const recomputed = questions.map(q => {
+    const expected = computeExpectedFromPrompt(q.prompt) ?? q.expected;
     let correct;
     if (q.answered == null) {
       correct = false;
     } else if (type === 'estimation') {
       const tolerance = ((config.tolerancePct ?? 10) / 100);
-      correct = Math.abs(q.answered - q.expected) <= Math.abs(q.expected * tolerance);
+      correct = Math.abs(q.answered - expected) <= Math.abs(expected * tolerance);
     } else {
-      correct = q.answered === q.expected;
+      correct = q.answered === expected;
     }
-    return { ...q, correct };
+    return { ...q, expected, correct };
   });
 
   const answered = recomputed.filter(q => q.answered != null);
