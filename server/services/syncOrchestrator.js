@@ -62,6 +62,23 @@ async function fetchPeer(peer, path) {
   }
 }
 
+// --- Status ---
+
+/**
+ * Get sync status: local sequences + per-peer cursors
+ */
+export async function getSyncStatus() {
+  const [brainSeq, memorySeq, cursors] = await Promise.all([
+    Promise.resolve(brainSyncLog.getCurrentSeq()),
+    memorySync.getMaxSequence(),
+    loadCursors()
+  ]);
+  return {
+    local: { brainSeq, memorySeq },
+    cursors
+  };
+}
+
 // --- Sync logic ---
 
 /**

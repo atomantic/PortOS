@@ -160,12 +160,13 @@ export async function probePeer(peer) {
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   const previousStatus = peer.status;
-  let status, lastHealth, lastSeen, remoteInstanceId, remoteVersion, remoteApps;
+  let status, lastHealth, lastSeen, remoteInstanceId, remoteVersion, remoteApps, remoteSyncSeqs;
   try {
-    // Fetch health details and apps in parallel
-    const [healthRes, appsRes] = await Promise.all([
+    // Fetch health details, apps, and sync status in parallel
+    const [healthRes, appsRes, syncRes] = await Promise.all([
       fetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }),
-      fetch(`${baseUrl}/api/apps`, { signal: controller.signal }).catch(() => null)
+      fetch(`${baseUrl}/api/apps`, { signal: controller.signal }).catch(() => null),
+      fetch(`${baseUrl}/api/instances/sync-status`, { signal: controller.signal }).catch(() => null)
     ]);
     if (!healthRes.ok) throw new Error(`HTTP ${healthRes.status}`);
     const json = await healthRes.json();
@@ -183,6 +184,9 @@ export async function probePeer(peer) {
         overallStatus: a.overallStatus, uiPort: a.uiPort, apiPort: a.apiPort, type: a.type
       })) ?? null;
     }
+    if (syncRes?.ok) {
+      remoteSyncSeqs = await syncRes.json().catch(() => null);
+    }
   } catch {
     status = 'offline';
     lastHealth = peer.lastHealth; // preserve last known
@@ -198,6 +202,7 @@ export async function probePeer(peer) {
     entry.lastSeen = lastSeen;
     entry.lastHealth = lastHealth;
     entry.lastApps = remoteApps ?? entry.lastApps ?? null;
+    entry.remoteSyncSeqs = remoteSyncSeqs ?? entry.remoteSyncSeqs ?? null;
     if (remoteInstanceId) entry.instanceId = remoteInstanceId;
     if (status === 'online') entry.version = remoteVersion;
     // Auto-update name from hostname if current name is just an IP address

@@ -3,7 +3,8 @@ import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
   Wifi, WifiOff, CircleDot,
   Cpu, HardDrive, Activity, Bot, MonitorSmartphone, Tag,
-  ArrowUpRight, ArrowDownLeft, ArrowLeftRight
+  ArrowUpRight, ArrowDownLeft, ArrowLeftRight,
+  Database, Brain, CheckCircle2, AlertCircle, Clock
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import socket from '../services/socket';
@@ -82,7 +83,7 @@ function HealthSummary({ health, version }) {
   );
 }
 
-function SelfCard({ self, onUpdate }) {
+function SelfCard({ self, onUpdate, syncStatus }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
 
@@ -136,6 +137,16 @@ function SelfCard({ self, onUpdate }) {
           )}
         </div>
         <p className="text-xs text-gray-500 font-mono">{self.instanceId}</p>
+        {syncStatus?.local && (
+          <div className="mt-2 pt-2 border-t border-port-border/50 flex items-center gap-4 text-xs text-gray-400">
+            <span className="flex items-center gap-1.5">
+              <Brain size={12} /> Brain seq: {syncStatus.local.brainSeq}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Database size={12} /> Memory seq: {syncStatus.local.memorySeq}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -232,7 +243,78 @@ function DirectionBadge({ directions = [] }) {
   return null;
 }
 
-function PeerCard({ peer, onRefresh }) {
+function SyncStatusBadge({ label, icon: Icon, localSeq, peerSeq, cursorSeq }) {
+  // cursorSeq = how far we've pulled from them (our cursor for their data)
+  // localSeq = our local max seq for this data type
+  // peerSeq = their max seq for this data type (from their sync-status endpoint)
+
+  // "Inbound" = are we caught up with them? (our cursor vs their max)
+  const inboundSynced = peerSeq != null && cursorSeq != null && String(cursorSeq) === String(peerSeq);
+  const inboundBehind = peerSeq != null && cursorSeq != null && String(cursorSeq) !== String(peerSeq);
+
+  if (peerSeq == null && cursorSeq == null) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <Icon size={12} className="text-gray-500" />
+      <span className="text-gray-500">{label}:</span>
+      {peerSeq != null && (
+        <span className="flex items-center gap-0.5" title={`Our cursor: ${cursorSeq ?? 0} / Their max: ${peerSeq}`}>
+          {inboundSynced ? (
+            <CheckCircle2 size={11} className="text-port-success" />
+          ) : inboundBehind ? (
+            <AlertCircle size={11} className="text-port-warning" />
+          ) : (
+            <Clock size={11} className="text-gray-500" />
+          )}
+          <span className={inboundSynced ? 'text-port-success' : inboundBehind ? 'text-port-warning' : 'text-gray-400'}>
+            {cursorSeq ?? 0}/{peerSeq}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SyncStatusSection({ peer, syncStatus }) {
+  if (!syncStatus || !peer.instanceId) return null;
+
+  const cursor = syncStatus.cursors?.[peer.instanceId];
+  const remoteSyncSeqs = peer.remoteSyncSeqs;
+
+  // No sync data available at all
+  if (!cursor && !remoteSyncSeqs) return null;
+
+  return (
+    <div className="mt-2 pt-2 border-t border-port-border/50">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <Database size={12} className="text-gray-500" />
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Sync Status</span>
+        {cursor?.lastSyncAt && (
+          <span className="text-[10px] text-gray-600 ml-auto">{timeAgo(cursor.lastSyncAt)}</span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+        <SyncStatusBadge
+          label="Brain"
+          icon={Brain}
+          localSeq={syncStatus.local?.brainSeq}
+          peerSeq={remoteSyncSeqs?.brainSeq}
+          cursorSeq={cursor?.brainSeq}
+        />
+        <SyncStatusBadge
+          label="Memory"
+          icon={Database}
+          localSeq={syncStatus.local?.memorySeq}
+          peerSeq={remoteSyncSeqs?.memorySeq}
+          cursorSeq={cursor?.memorySeq}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PeerCard({ peer, onRefresh, syncStatus }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
@@ -359,6 +441,8 @@ function PeerCard({ peer, onRefresh }) {
         Last seen: {timeAgo(peer.lastSeen)}
       </div>
 
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} />
+
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} />
       {peer.status === 'online' && (
         <PeerAgentsSection peerId={peer.id} peerName={peer.name} />
@@ -370,6 +454,7 @@ function PeerCard({ peer, onRefresh }) {
 export default function Instances() {
   const [self, setSelf] = useState(null);
   const [peers, setPeers] = useState([]);
+  const [syncStatus, setSyncStatus] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
@@ -377,6 +462,7 @@ export default function Instances() {
     if (data) {
       setSelf(data.self);
       setPeers(data.peers);
+      setSyncStatus(data.syncStatus ?? null);
     }
     setLoading(false);
   }, []);
@@ -412,7 +498,7 @@ export default function Instances() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SelfCard self={self} onUpdate={fetchData} />
+        <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} />
         <AddPeerForm onAdd={fetchData} />
       </div>
 
@@ -423,7 +509,7 @@ export default function Instances() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (
-              <PeerCard key={peer.id} peer={peer} onRefresh={fetchData} />
+              <PeerCard key={peer.id} peer={peer} onRefresh={fetchData} syncStatus={syncStatus} />
             ))}
           </div>
         </div>

@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as instances from '../services/instances.js';
+import { getSyncStatus } from '../services/syncOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 
@@ -38,9 +39,18 @@ const querySchema = z.object({
 
 // GET /api/instances — list self + all peers
 router.get('/', asyncHandler(async (req, res) => {
-  const self = await instances.getSelf();
-  const peers = await instances.getPeers();
-  res.json({ self, peers });
+  const [self, peers, syncStatus] = await Promise.all([
+    instances.getSelf(),
+    instances.getPeers(),
+    getSyncStatus()
+  ]);
+  res.json({ self, peers, syncStatus });
+}));
+
+// GET /api/instances/sync-status — local sync sequences (used by peers during probe)
+router.get('/sync-status', asyncHandler(async (req, res) => {
+  const status = await getSyncStatus();
+  res.json({ brainSeq: status.local.brainSeq, memorySeq: status.local.memorySeq });
 }));
 
 // GET /api/instances/self — get this instance's identity
