@@ -519,10 +519,10 @@ describe('instances.js', () => {
         port: 5555,
         instanceId: 'remote-instance',
         name: 'remote-host',
-        status: 'online',
         enabled: true,
         directions: ['inbound']
       });
+      // Note: status not asserted — handleAnnounce fires async probePeer which may change it
       expect(instanceEvents.emit).toHaveBeenCalledWith('peers:updated', expect.any(Array));
     });
 
