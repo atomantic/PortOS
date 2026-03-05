@@ -29,7 +29,7 @@ export async function applyRemoteChanges(changes) {
     }
 
     if (op === 'delete') {
-      const result = await brainStorage.applyRemoteRecord(type, id, null, 'delete');
+      const result = await brainStorage.applyRemoteRecord(type, id, record, 'delete');
       if (result.applied) deleted++;
       else skipped++;
     } else if (op === 'create' || op === 'update') {

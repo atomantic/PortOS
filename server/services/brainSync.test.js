@@ -33,14 +33,15 @@ describe('brainSync', () => {
     expect(result.updated).toBe(1);
   });
 
-  it('applies delete via applyRemoteRecord and counts correctly', async () => {
+  it('applies delete via applyRemoteRecord with timestamp for LWW', async () => {
     applyRemoteRecord.mockResolvedValue({ applied: true });
+    const deleteRecord = { updatedAt: '2026-01-01T00:00:00.000Z' };
 
     const result = await applyRemoteChanges([
-      { op: 'delete', type: 'projects', id: 'proj-1', record: null }
+      { op: 'delete', type: 'projects', id: 'proj-1', record: deleteRecord }
     ]);
 
-    expect(applyRemoteRecord).toHaveBeenCalledWith('projects', 'proj-1', null, 'delete');
+    expect(applyRemoteRecord).toHaveBeenCalledWith('projects', 'proj-1', deleteRecord, 'delete');
     expect(result.deleted).toBe(1);
   });
 
@@ -91,7 +92,7 @@ describe('brainSync', () => {
 
     const result = await applyRemoteChanges([
       { op: 'create', type: 'people', id: 'p1', record: { name: 'A' } },
-      { op: 'delete', type: 'projects', id: 'pr1', record: null },
+      { op: 'delete', type: 'projects', id: 'pr1', record: { updatedAt: '2026-01-01T00:00:00.000Z' } },
       { op: 'update', type: 'ideas', id: 'i1', record: { title: 'B', updatedAt: '2020-01-01T00:00:00.000Z' } },
       { op: 'create', type: 'digests', id: 'd1', record: { text: 'C' } },
       { op: 'create', type: 'bogus', id: 'x1', record: { foo: 1 } }
