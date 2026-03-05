@@ -219,7 +219,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, sourceWorkspa
   await execGit(['fetch', 'origin'], worktreePath).catch(() => {});
   const result = await execGit(['merge', `origin/${baseBranch}`, '--no-edit'], worktreePath)
     .then(() => ({ merged: true }))
-    .catch(err => {
+    .catch(async (err) => {
       // Abort failed merge
       await execGit(['merge', '--abort'], worktreePath).catch(() => {});
       return { merged: false, reason: err.message };

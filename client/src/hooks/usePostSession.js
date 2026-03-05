@@ -100,7 +100,8 @@ export function usePostSession() {
   const submitAnswer = useCallback((value) => {
     if (state !== STATES.DRILLING || !currentDrill) return;
 
-    const q = currentDrill.questions[currentQuestionIndex];
+    const q = currentDrill.questions?.[currentQuestionIndex];
+    if (!q) return;
     const responseMs = Date.now() - questionStartRef.current;
     const numValue = value === null ? null : Number(value);
 
@@ -125,7 +126,7 @@ export function usePostSession() {
     setAnswers(newAnswers);
 
     // Check if drill is complete
-    if (currentQuestionIndex + 1 >= currentDrill.questions.length) {
+    if (currentQuestionIndex + 1 >= (currentDrill.questions?.length ?? 0)) {
       finishDrillRef.current(newAnswers);
     } else {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
@@ -162,7 +163,7 @@ export function usePostSession() {
     if (state !== STATES.DRILLING || !currentDrill) return;
 
     // Mark remaining questions as unanswered
-    const remaining = currentDrill.questions.slice(currentQuestionIndex).map(q => ({
+    const remaining = (currentDrill.questions || []).slice(currentQuestionIndex).map(q => ({
       prompt: q.prompt,
       expected: q.expected,
       answered: null,

@@ -43,6 +43,7 @@ async function callAI(prompt, providerId, model) {
       if (selectedModel) args.push('--model', selectedModel);
       args.push(prompt);
       let output = '';
+      let settled = false;
 
       const child = spawn(provider.command, args, {
         env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
@@ -50,15 +51,27 @@ async function callAI(prompt, providerId, model) {
         windowsHide: true
       });
 
-      child.stdout.on('data', d => { output += d.toString(); });
-      child.stderr.on('data', d => { output += d.toString(); });
-      child.on('close', code => code === 0 ? resolve(output) : reject(new Error(`CLI exited with code ${code}`)));
-      child.on('error', reject);
-
-      setTimeout(() => {
+      const timeoutHandle = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         child.kill();
         reject(new Error('POST AI request timed out'));
       }, provider.timeout || 120000);
+
+      child.stdout.on('data', d => { output += d.toString(); });
+      child.stderr.on('data', d => { output += d.toString(); });
+      child.on('close', code => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutHandle);
+        code === 0 ? resolve(output) : reject(new Error(`CLI exited with code ${code}`));
+      });
+      child.on('error', err => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutHandle);
+        reject(err);
+      });
     });
   }
 

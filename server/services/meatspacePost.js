@@ -99,7 +99,10 @@ export async function submitPostSession(sessionData) {
   const rescoredTasks = rawTasks.map(t => {
     const { score: _score, correct: _correct, ...rest } = t || {};
 
-    // LLM drills: score was already computed server-side via /post/score-llm
+    // LLM drills: score was computed server-side via /post/score-llm and
+    // passed back by the client. Re-scoring here would add latency + cost.
+    // This is a single-user internal tool so client score trust is acceptable.
+    // The llmEvaluation field (if present) contains the full server-generated scoring breakdown.
     if (LLM_DRILL_TYPES.includes(rest.type)) {
       return { ...rest, score: t.score || 0 };
     }
@@ -323,9 +326,10 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
 }
 
 function computeSessionScore(tasks) {
-  if (!tasks?.length) return 0;
-  const totalScore = tasks.reduce((sum, t) => sum + t.score, 0);
-  return Math.round(totalScore / tasks.length);
+  const valid = (tasks || []).filter(t => typeof t.score === 'number' && !Number.isNaN(t.score));
+  if (!valid.length) return 0;
+  const totalScore = valid.reduce((sum, t) => sum + t.score, 0);
+  return Math.round(totalScore / valid.length);
 }
 
 // =============================================================================

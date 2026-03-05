@@ -19,6 +19,8 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   const timerRef = useRef(null);
   const questionStartRef = useRef(Date.now());
   const drillStartRef = useRef(Date.now());
+  const responsesRef = useRef([]);
+  const questionIndexRef = useRef(0);
 
   const timeLimitMs = (timeLimitSec || 120) * 1000;
   const drillType = drill?.type;
@@ -50,6 +52,10 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     return () => clearInterval(timerRef.current);
   }, [drill]);
 
+  // Keep refs in sync with state for use in interval callbacks
+  useEffect(() => { responsesRef.current = responses; }, [responses]);
+  useEffect(() => { questionIndexRef.current = questionIndex; }, [questionIndex]);
+
   useEffect(() => {
     setInputValue('');
     setItems([]);
@@ -57,12 +63,14 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   }, [questionIndex, phase]);
 
   function handleTimeExpired() {
-    // Submit whatever we have so far
-    const remaining = prompts.slice(questionIndex).map(() => ({
+    // Submit whatever we have so far (use refs to avoid stale closures in interval callback)
+    const currentResponses = responsesRef.current;
+    const currentIndex = questionIndexRef.current;
+    const remaining = prompts.slice(currentIndex).map(() => ({
       response: '',
       responseMs: 0
     }));
-    const finalResponses = [...responses, ...remaining];
+    const finalResponses = [...currentResponses, ...remaining];
     finishDrill(finalResponses);
   }
 
@@ -131,7 +139,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     e?.preventDefault();
     const val = inputValue.trim();
     if (!val) return;
-    if (!items.includes(val.toLowerCase())) {
+    if (!items.some(item => item.toLowerCase() === val.toLowerCase())) {
       setItems(prev => [...prev, val]);
     }
     setInputValue('');

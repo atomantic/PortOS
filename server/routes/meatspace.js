@@ -136,7 +136,11 @@ router.post('/alcohol/log', asyncHandler(async (req, res) => {
 router.put('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
   const { date, index } = req.params;
   const data = validateRequest(drinkUpdateSchema, req.body);
-  const result = await alcoholService.updateDrink(date, parseInt(index, 10), data);
+  const parsedIndex = parseInt(index, 10);
+  if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
+  const result = await alcoholService.updateDrink(date, parsedIndex, data);
   if (!result) {
     throw new ServerError('Drink entry not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -149,7 +153,11 @@ router.put('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
  */
 router.delete('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
   const { date, index } = req.params;
-  const removed = await alcoholService.removeDrink(date, parseInt(index, 10));
+  const parsedIndex = parseInt(index, 10);
+  if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
+  const removed = await alcoholService.removeDrink(date, parsedIndex);
   if (!removed) {
     throw new ServerError('Drink entry not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -298,6 +306,9 @@ router.post('/eyes', asyncHandler(async (req, res) => {
  */
 router.put('/eyes/:index', asyncHandler(async (req, res) => {
   const index = parseInt(req.params.index, 10);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
   const data = validateRequest(eyeExamUpdateSchema, req.body);
   const exam = await healthService.updateEyeExam(index, data);
   if (!exam) {
@@ -312,6 +323,9 @@ router.put('/eyes/:index', asyncHandler(async (req, res) => {
  */
 router.delete('/eyes/:index', asyncHandler(async (req, res) => {
   const index = parseInt(req.params.index, 10);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
   const removed = await healthService.removeEyeExam(index);
   if (!removed) {
     throw new ServerError('Eye exam not found', { status: 404, code: 'NOT_FOUND' });

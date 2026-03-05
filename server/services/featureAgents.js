@@ -6,7 +6,7 @@
  * git worktree/branch and runs on a schedule.
  */
 
-import { writeFile, readFile, rename, mkdir, readdir, rm } from 'fs/promises';
+import { writeFile, readFile, rename, readdir, rm } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
@@ -74,7 +74,8 @@ export async function createFeatureAgent(input) {
     const id = `fa-${uuidv4().slice(0, 8)}`;
     const now = new Date().toISOString();
 
-    const branchName = `feature-agent/${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+    const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || id;
+    const branchName = `feature-agent/${slug}`;
     const agent = {
       id,
       ...input,
@@ -268,9 +269,19 @@ export async function triggerFeatureAgent(id) {
   const agent = await getFeatureAgent(id);
   if (!agent) return null;
 
-  // Activate if in draft/paused
+  // Activate if in draft/paused, then reset lastRunAt/backoff so it's picked up immediately
   if (agent.status === 'draft' || agent.status === 'paused') {
-    return await activateFeatureAgent(id);
+    await activateFeatureAgent(id);
+    return withLock(async () => {
+      const data = await readData();
+      const idx = data.agents.findIndex(a => a.id === id);
+      if (idx === -1) return null;
+      data.agents[idx].backoff = null;
+      data.agents[idx].lastRunAt = null;
+      data.agents[idx].updatedAt = new Date().toISOString();
+      await writeData(data);
+      return data.agents[idx];
+    });
   }
 
   // For active agents, reset backoff and lastRunAt so getDueFeatureAgents picks it up immediately
@@ -501,15 +512,32 @@ Learnings: [anything discovered for next run]
 }
 
 /**
- * Mark a feature agent as having a running CoS agent
+ * Mark a feature agent as having a pending task (prevents duplicate spawns).
+ * The pendingTaskId is used temporarily until the real CoS agent spawns,
+ * at which point currentAgentId is set via the agent:spawned listener below.
  */
-export async function setCurrentAgent(id, agentId) {
+export async function setCurrentAgent(id, taskId) {
   return withLock(async () => {
     const data = await readData();
     const idx = data.agents.findIndex(a => a.id === id);
     if (idx === -1) return;
-    data.agents[idx].currentAgentId = agentId;
+    data.agents[idx].currentAgentId = taskId;
     data.agents[idx].updatedAt = new Date().toISOString();
     await writeData(data);
   });
 }
+
+// Listen for agent:spawned events to update currentAgentId from the
+// temporary task ID to the real CoS agent ID (needed for output streaming).
+cosEvents.on('agent:spawned', async (agentData) => {
+  if (!agentData?.taskId) return;
+  // Check if this task belongs to a feature agent
+  const taskId = agentData.taskId;
+  const data = await readData().catch(() => null);
+  if (!data) return;
+  const fa = data.agents.find(a => a.currentAgentId === taskId);
+  if (!fa) return;
+  await setCurrentAgent(fa.id, agentData.id).catch(err => {
+    console.log(`⚠️ Failed to update feature agent currentAgentId: ${err.message}`);
+  });
+});
