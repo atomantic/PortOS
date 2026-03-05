@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock dependencies before importing the module
 vi.mock('fs/promises', () => ({
@@ -32,8 +32,7 @@ vi.mock('../lib/ports.js', () => ({
   DEFAULT_PEER_PORT: 5555
 }));
 
-// Mock global fetch
-vi.stubGlobal('fetch', vi.fn());
+// fetch is stubbed per-test in beforeEach and restored in afterEach
 
 import { readJSONFile } from '../lib/fileUtils.js';
 import { instanceEvents } from './instanceEvents.js';
@@ -59,12 +58,14 @@ describe('instances.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn());
     readJSONFile.mockResolvedValue({ self: null, peers: [] });
   });
 
   afterEach(() => {
     stopPolling();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   // --- Self Identity ---
