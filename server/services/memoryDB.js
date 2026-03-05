@@ -12,18 +12,7 @@ import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib
 import { cosEvents } from './cos.js';
 import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
-import { getSelf } from './instances.js';
-
-let cachedInstanceId = null;
-
-async function getInstanceId() {
-  if (!cachedInstanceId) {
-    const id = (await getSelf())?.instanceId;
-    if (id) cachedInstanceId = id;
-    return id ?? 'unknown';
-  }
-  return cachedInstanceId;
-}
+import { getInstanceId } from './instances.js';
 
 /**
  * Convert a database row to the memory object format matching the file-based API

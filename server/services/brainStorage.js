@@ -15,20 +15,10 @@ import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
 import { readJSONFile, safeJSONParse } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { getSelf } from './instances.js';
+import { getInstanceId } from './instances.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
 const withRemoteLock = createMutex();
-let cachedInstanceId = null;
-
-async function getInstanceId() {
-  if (!cachedInstanceId) {
-    const id = (await getSelf())?.instanceId;
-    if (id) cachedInstanceId = id;
-    return id ?? 'unknown';
-  }
-  return cachedInstanceId;
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

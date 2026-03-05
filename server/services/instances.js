@@ -70,6 +70,16 @@ export async function getSelf() {
   return data.self;
 }
 
+let cachedInstanceId = null;
+export async function getInstanceId() {
+  if (!cachedInstanceId) {
+    const id = (await getSelf())?.instanceId;
+    if (id) cachedInstanceId = id;
+    return id ?? 'unknown';
+  }
+  return cachedInstanceId;
+}
+
 export async function updateSelf(name) {
   return withData(async (data) => {
     if (!data.self) return null;
