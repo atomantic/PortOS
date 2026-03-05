@@ -611,18 +611,20 @@ export async function applyRemoteRecord(type, id, record, op) {
  * Apply a remote JSONL record (digests/reviews) — dedup by ID
  */
 export async function applyRemoteJsonl(type, record) {
-  const records = await loadJsonlStore(type);
-  if (records.some(r => r.id === record.id)) {
-    return { applied: false, reason: 'duplicate' };
-  }
+  return withRemoteLock(async () => {
+    const records = await loadJsonlStore(type);
+    if (records.some(r => r.id === record.id)) {
+      return { applied: false, reason: 'duplicate' };
+    }
 
-  await ensureBrainDir();
-  const line = JSON.stringify(record) + '\n';
-  await appendFile(FILES[type], line);
-  caches[type].data = null;
-  caches[type].timestamp = 0;
+    await ensureBrainDir();
+    const line = JSON.stringify(record) + '\n';
+    await appendFile(FILES[type], line);
+    caches[type].data = null;
+    caches[type].timestamp = 0;
 
-  return { applied: true };
+    return { applied: true };
+  });
 }
 
 /**
