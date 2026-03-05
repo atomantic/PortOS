@@ -9,7 +9,7 @@
  *   // All functions are the same regardless of backend
  */
 
-import { checkHealth } from '../lib/db.js';
+import { checkHealth, ensureSchema } from '../lib/db.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 
 export { DEFAULT_MEMORY_CONFIG };
@@ -34,6 +34,7 @@ async function getBackend() {
   }
 
   if (envBackend === 'postgres') {
+    await ensureSchema();
     backend = await import('./memoryDB.js');
     backendName = 'postgres';
     console.log('🧠 Memory backend: PostgreSQL + pgvector');
@@ -43,6 +44,7 @@ async function getBackend() {
   // Auto-detect: try PostgreSQL first, fall back to file
   const health = await checkHealth();
   if (health.connected && health.hasSchema) {
+    await ensureSchema();
     backend = await import('./memoryDB.js');
     backendName = 'postgres';
     console.log('🧠 Memory backend: PostgreSQL + pgvector (auto-detected)');

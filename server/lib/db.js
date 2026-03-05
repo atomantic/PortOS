@@ -86,6 +86,24 @@ export async function checkHealth() {
 }
 
 /**
+ * Apply idempotent schema upgrades to an existing database.
+ * Each statement uses IF NOT EXISTS so it's safe to run on every startup.
+ * Add new ALTER TABLE statements here when the schema evolves.
+ */
+export async function ensureSchema() {
+  const upgrades = [
+    `ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL`,
+    `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
+    `CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_instance_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence)`,
+  ];
+  for (const sql of upgrades) {
+    await pool.query(sql);
+  }
+  console.log('🗄️ Database schema upgrades applied');
+}
+
+/**
  * Gracefully shut down the pool.
  */
 export async function close() {
