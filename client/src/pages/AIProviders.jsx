@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -46,7 +46,7 @@ export default function AIProviders() {
       socket.off(`run:${activeRun}:data`, handleData);
       socket.off(`run:${activeRun}:complete`, handleComplete);
     };
-  }, [activeRun]);
+  }, [activeRun, loadRuns]);
 
   const loadData = async () => {
     setLoading(true);
@@ -62,10 +62,10 @@ export default function AIProviders() {
     setLoading(false);
   };
 
-  const loadRuns = async () => {
+  const loadRuns = useCallback(async () => {
     const runsData = await api.getRuns(20).catch(() => ({ runs: [] }));
     setRuns(runsData.runs || []);
-  };
+  }, []);
 
   const handleSetActive = async (id) => {
     if (!id) return;

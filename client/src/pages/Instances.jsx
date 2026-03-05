@@ -471,13 +471,14 @@ export default function Instances() {
     fetchData();
 
     socket.emit('instances:subscribe');
-    socket.on('instances:peers:updated', (updatedPeers) => {
+    const handlePeersUpdated = (updatedPeers) => {
       setPeers(updatedPeers);
-    });
+    };
+    socket.on('instances:peers:updated', handlePeersUpdated);
 
     return () => {
       socket.emit('instances:unsubscribe');
-      socket.off('instances:peers:updated');
+      socket.off('instances:peers:updated', handlePeersUpdated);
     };
   }, [fetchData]);
 

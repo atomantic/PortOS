@@ -162,20 +162,22 @@ export default function ChiefOfStaff() {
       socket.on('connect', subscribe);
     }
 
-    socket.on('cos:status', (data) => {
+    const handleCosStatus = (data) => {
       setStatus(prev => ({ ...prev, running: data.running }));
       if (!data.running) {
         setAgentState('sleeping');
         setStatusMessage("Stopped - daemon not running");
         setActiveAgentMeta(null);
       }
-    });
+    };
+    socket.on('cos:status', handleCosStatus);
 
-    socket.on('cos:tasks:user:changed', (data) => {
+    const handleTasksUserChanged = (data) => {
       setTasks(prev => ({ ...prev, user: data }));
-    });
+    };
+    socket.on('cos:tasks:user:changed', handleTasksUserChanged);
 
-    socket.on('cos:agent:spawned', (data) => {
+    const handleAgentSpawned = (data) => {
       setAgentState('coding');
       // Show actual task description if available
       const taskDesc = data?.metadata?.taskDescription;
@@ -190,16 +192,18 @@ export default function ChiefOfStaff() {
         setLiveOutputs(prev => ({ ...prev, [data.agentId || data.id]: [] }));
       }
       fetchData();
-    });
+    };
+    socket.on('cos:agent:spawned', handleAgentSpawned);
 
-    socket.on('cos:agent:updated', (updatedAgent) => {
+    const handleAgentUpdated = (updatedAgent) => {
       // Update the specific agent in the agents list without fetching all data
       setAgents(prev => prev.map(agent =>
         agent.id === updatedAgent.id ? updatedAgent : agent
       ));
-    });
+    };
+    socket.on('cos:agent:updated', handleAgentUpdated);
 
-    socket.on('cos:agent:output', (data) => {
+    const handleAgentOutput = (data) => {
       if (data?.agentId && data?.line) {
         setLiveOutputs(prev => {
           const existing = prev[data.agentId] || [];
@@ -207,9 +211,10 @@ export default function ChiefOfStaff() {
           return { ...prev, [data.agentId]: updated.length > 500 ? updated.slice(-500) : updated };
         });
       }
-    });
+    };
+    socket.on('cos:agent:output', handleAgentOutput);
 
-    socket.on('cos:agent:completed', (data) => {
+    const handleAgentCompleted = (data) => {
       setAgentState('reviewing');
       const success = data?.result?.success;
       setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
@@ -225,9 +230,10 @@ export default function ChiefOfStaff() {
         });
       }
       fetchData();
-    });
+    };
+    socket.on('cos:agent:completed', handleAgentCompleted);
 
-    socket.on('cos:health:check', (data) => {
+    const handleHealthCheck = (data) => {
       setHealth({ lastCheck: data.metrics?.timestamp, issues: data.issues });
       if (data.issues?.length > 0) {
         setAgentState('investigating');
@@ -235,10 +241,11 @@ export default function ChiefOfStaff() {
         setSpeaking(true);
         setTimeout(() => setSpeaking(false), 2000);
       }
-    });
+    };
+    socket.on('cos:health:check', handleHealthCheck);
 
     // Listen for detailed log events
-    socket.on('cos:log', (data) => {
+    const handleCosLog = (data) => {
       setEventLogs(prev => {
         const newLogs = [...prev, data].slice(-20); // Keep last 20 logs
         return newLogs;
@@ -251,25 +258,27 @@ export default function ChiefOfStaff() {
           setTimeout(() => setSpeaking(false), 1500);
         }
       }
-    });
+    };
+    socket.on('cos:log', handleCosLog);
 
     // Listen for apps changes (start/stop/restart)
-    socket.on('apps:changed', () => {
+    const handleAppsChanged = () => {
       fetchData();
-    });
+    };
+    socket.on('apps:changed', handleAppsChanged);
 
     return () => {
       socket.emit('cos:unsubscribe');
       socket.off('connect', subscribe);
-      socket.off('cos:status');
-      socket.off('cos:tasks:user:changed');
-      socket.off('cos:agent:spawned');
-      socket.off('cos:agent:updated');
-      socket.off('cos:agent:output');
-      socket.off('cos:agent:completed');
-      socket.off('cos:health:check');
-      socket.off('cos:log');
-      socket.off('apps:changed');
+      socket.off('cos:status', handleCosStatus);
+      socket.off('cos:tasks:user:changed', handleTasksUserChanged);
+      socket.off('cos:agent:spawned', handleAgentSpawned);
+      socket.off('cos:agent:updated', handleAgentUpdated);
+      socket.off('cos:agent:output', handleAgentOutput);
+      socket.off('cos:agent:completed', handleAgentCompleted);
+      socket.off('cos:health:check', handleHealthCheck);
+      socket.off('cos:log', handleCosLog);
+      socket.off('apps:changed', handleAppsChanged);
     };
   }, [socket, fetchData]);
 
