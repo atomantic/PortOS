@@ -84,8 +84,7 @@ vi.mock('child_process', () => ({
 }));
 
 import * as storage from './brainStorage.js';
-import { brainEvents } from './brainStorage.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getProviderById } from './providers.js';
 import {
   captureThought,
   resolveReview,

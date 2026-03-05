@@ -70,9 +70,8 @@ vi.mock('./memoryConfig.js', () => ({
   decrementAgentPendingApproval: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { writeFile, mkdir, rm } from 'fs/promises';
+import { writeFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
 import { readJSONFile } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
@@ -105,10 +104,6 @@ import {
   invalidateCaches,
   flushBM25Index
 } from './memory.js';
-
-// Default index/embeddings returned by readJSONFile
-const defaultIndex = { version: 1, lastUpdated: '2025-01-01T00:00:00.000Z', count: 0, memories: [] };
-const defaultEmbeddings = { model: null, dimension: 0, vectors: {} };
 
 describe('memory service', () => {
   beforeEach(() => {
@@ -192,15 +187,16 @@ describe('memory service', () => {
       expect(result.embedding).toEqual([0.1, 0.2, 0.3]);
       expect(result.embeddingModel).toBe('test-embedding-model');
       // Should save embeddings file
-      expect(writeFile).toHaveBeenCalledTimes(3); // memory file + index + embeddings
+      const embeddingsCall = writeFile.mock.calls.find(c => c[0].includes('embeddings.json'));
+      expect(embeddingsCall).toBeDefined();
     });
 
     it('should not save embeddings file when no embedding provided', async () => {
       const data = { type: 'fact', content: 'no embedding' };
       await createMemory(data);
 
-      // memory file + index only (2 calls)
-      expect(writeFile).toHaveBeenCalledTimes(2);
+      const embeddingsCall = writeFile.mock.calls.find(c => c[0].includes('embeddings.json'));
+      expect(embeddingsCall).toBeUndefined();
     });
 
     it('should add entry to index and update count', async () => {
