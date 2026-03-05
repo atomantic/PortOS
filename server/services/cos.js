@@ -873,8 +873,16 @@ export async function evaluateTasks() {
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
   // Count running agents and available slots (global + per-project)
-  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const runningAgentEntries = Object.values(state.agents).filter(a => a.status === 'running');
+  const runningAgents = runningAgentEntries.length;
   const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  // Track jobIds with running agents to prevent duplicate job spawns
+  const inFlightJobIds = new Set(
+    runningAgentEntries
+      .map(a => a.metadata?.jobId)
+      .filter(Boolean)
+  );
   const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
   const agentsByProject = countRunningAgentsByProject(state.agents);
 
@@ -1066,6 +1074,12 @@ export async function evaluateTasks() {
     });
 
     for (const job of dueJobs) {
+      // Skip jobs that already have a running agent (prevents duplicate spawns)
+      if (inFlightJobIds.has(job.id)) {
+        emitLog('debug', `Skipping job ${job.name} - agent already running`, { jobId: job.id });
+        continue;
+      }
+
       // Script jobs execute directly without spawning an AI agent
       if (isScriptJob(job)) {
         await executeScriptJob(job).catch(err => {
@@ -1080,6 +1094,8 @@ export async function evaluateTasks() {
       if (!canSpawnTask(task)) continue;
       tasksToSpawn.push(task);
       trackSpawn(task);
+      // Track this job as in-flight so it's not spawned again within this evaluation
+      inFlightJobIds.add(job.id);
       emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
         jobId: job.id,
         category: job.category
@@ -3631,6 +3647,16 @@ async function executeScheduledJob(jobId) {
     });
     emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
   } else {
+    // Check if an agent is already running for this job (prevents duplicate spawns)
+    const agentAlreadyRunning = Object.values(state.agents).some(
+      a => a.status === 'running' && a.metadata?.jobId === jobId
+    );
+    if (agentAlreadyRunning) {
+      emitLog('debug', `Job ${job.name} skipped - agent already running`, { jobId });
+      await registerSingleJobSchedule(jobId);
+      return;
+    }
+
     // Check capacity before spawning an agent
     const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
     if (runningAgents >= state.config.maxConcurrentAgents) {
