@@ -27,8 +27,8 @@ if (!existsSync(dataDir)) {
 
   console.log('✅ Data directory created');
 } else {
-  // Ensure all subdirectories exist without overwriting existing files
-  const ensureSubdirs = (srcDir, destDir) => {
+  // Ensure all subdirectories and files exist without overwriting existing files
+  const ensureSampleContent = (srcDir, destDir) => {
     const items = readdirSync(srcDir);
     for (const item of items) {
       const srcPath = join(srcDir, item);
@@ -40,14 +40,17 @@ if (!existsSync(dataDir)) {
           console.log(`📁 Creating missing directory: ${item}`);
           mkdirSync(destPath, { recursive: true });
         }
-        ensureSubdirs(srcPath, destPath);
+        ensureSampleContent(srcPath, destPath);
+      } else if (!existsSync(destPath)) {
+        console.log(`📄 Creating missing file: ${destPath.replace(dataDir + '/', '')}`);
+        cpSync(srcPath, destPath);
       }
     }
   };
 
-  ensureSubdirs(sampleDir, dataDir);
+  ensureSampleContent(sampleDir, dataDir);
 
-  console.log('✅ Data directory already exists, ensured subdirectories');
+  console.log('✅ Data directory already exists, ensured subdirectories and files');
 }
 
 // Ensure migrations directory exists (not in data.sample, needed for both fresh and existing installs)
