@@ -160,7 +160,7 @@ export async function dumpPostgres(outputPath) {
   const pgUser = process.env.PGUSER || 'portos';
 
   if (!process.env.PGPASSWORD) {
-    console.warn('⚠️ PGPASSWORD not set for pg_dump, using default password');
+    console.warn('⚠️ PGPASSWORD not set for pg_dump — using default');
   }
 
   return new Promise((resolve) => {

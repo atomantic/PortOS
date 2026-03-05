@@ -1048,7 +1048,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       priority: 'high',
       icon: 'XCircle',
       title: `${blockedCount} blocked task${blockedCount > 1 ? 's' : ''}`,
-      description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80),
+      description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80) || 'Task is blocked',
       action: { label: 'Unblock', route: '/cos/tasks' },
       count: blockedCount
     });
@@ -1063,7 +1063,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       priority: criticalIssues.length > 0 ? 'critical' : 'medium',
       icon: 'AlertTriangle',
       title: `${healthIssues.length} system health issue${healthIssues.length > 1 ? 's' : ''}`,
-      description: healthIssues[0]?.message,
+      description: healthIssues[0]?.message || 'System health issue detected',
       action: { label: 'Check Health', route: '/cos/health' },
       count: healthIssues.length
     });
@@ -1105,7 +1105,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       priority: 'info',
       icon: 'ListTodo',
       title: `${pendingUserTasks.length} pending task${pendingUserTasks.length > 1 ? 's' : ''}`,
-      description: pendingUserTasks[0]?.description?.substring(0, 80),
+      description: pendingUserTasks[0]?.description?.substring(0, 80) || 'Pending tasks available',
       action: { label: 'View Tasks', route: '/cos/tasks' },
       count: pendingUserTasks.length
     });
