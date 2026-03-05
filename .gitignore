@@ -37,6 +37,9 @@ Thumbs.db
 # Playwright
 .playwright-mcp
 
+# Claude worktrees
+.claude/worktrees/
+
 # Browser service node_modules (code is committed)
 browser/node_modules/
 

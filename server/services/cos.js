@@ -1087,6 +1087,25 @@ export async function evaluateTasks() {
     }
   }
 
+  // Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks)
+  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks) {
+    const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('./featureAgents.js');
+    const dueAgents = await getDueFeatureAgents().catch(err => {
+      emitLog('debug', `Feature agents check failed: ${err.message}`);
+      return [];
+    });
+    for (const fa of dueAgents) {
+      if (tasksToSpawn.length >= availableSlots) break;
+      const task = generateTaskFromFeatureAgent(fa);
+      if (!canSpawnTask(task)) continue;
+      tasksToSpawn.push(task);
+      trackSpawn(task);
+      // Mark agent as having a pending task to prevent duplicate spawns
+      await setCurrentAgent(fa.id, task.id).catch(() => {});
+      emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
+    }
+  }
+
   // Priority 4: Only generate direct idle task if:
   // 1. Nothing to spawn
   // 2. No pending user tasks (even on cooldown)

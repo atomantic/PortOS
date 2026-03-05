@@ -18,11 +18,14 @@ import {
   postSessionSubmitSchema,
   postConfigUpdateSchema,
   postDrillRequestSchema,
+  postLlmScoreRequestSchema,
+  LLM_DRILL_TYPES,
 } from '../lib/postValidation.js';
 import * as meatspaceService from '../services/meatspace.js';
 import * as alcoholService from '../services/meatspaceAlcohol.js';
 import * as healthService from '../services/meatspaceHealth.js';
 import * as postService from '../services/meatspacePost.js';
+import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
 
 const router = Router();
 
@@ -133,7 +136,11 @@ router.post('/alcohol/log', asyncHandler(async (req, res) => {
 router.put('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
   const { date, index } = req.params;
   const data = validateRequest(drinkUpdateSchema, req.body);
-  const result = await alcoholService.updateDrink(date, parseInt(index, 10), data);
+  const parsedIndex = parseInt(index, 10);
+  if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
+  const result = await alcoholService.updateDrink(date, parsedIndex, data);
   if (!result) {
     throw new ServerError('Drink entry not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -146,7 +153,11 @@ router.put('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
  */
 router.delete('/alcohol/log/:date/:index', asyncHandler(async (req, res) => {
   const { date, index } = req.params;
-  const removed = await alcoholService.removeDrink(date, parseInt(index, 10));
+  const parsedIndex = parseInt(index, 10);
+  if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
+  const removed = await alcoholService.removeDrink(date, parsedIndex);
   if (!removed) {
     throw new ServerError('Drink entry not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -295,6 +306,9 @@ router.post('/eyes', asyncHandler(async (req, res) => {
  */
 router.put('/eyes/:index', asyncHandler(async (req, res) => {
   const index = parseInt(req.params.index, 10);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
   const data = validateRequest(eyeExamUpdateSchema, req.body);
   const exam = await healthService.updateEyeExam(index, data);
   if (!exam) {
@@ -309,6 +323,9 @@ router.put('/eyes/:index', asyncHandler(async (req, res) => {
  */
 router.delete('/eyes/:index', asyncHandler(async (req, res) => {
   const index = parseInt(req.params.index, 10);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
   const removed = await healthService.removeEyeExam(index);
   if (!removed) {
     throw new ServerError('Eye exam not found', { status: 404, code: 'NOT_FOUND' });
@@ -384,16 +401,38 @@ router.get('/post/stats', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/meatspace/post/drill
- * Generate a drill with questions and expected answers for client-side feedback.
- * Server-side scoring recomputes expected answers from the prompt when possible.
+ * Generate a drill with questions and expected answers.
+ * Supports both math drills (sync) and LLM drills (async, requires AI provider).
  */
 router.post('/post/drill', asyncHandler(async (req, res) => {
   const data = validateRequest(postDrillRequestSchema, req.body);
+
+  if (LLM_DRILL_TYPES.includes(data.type)) {
+    const drill = await generateLlmDrill(data.type, data.config, data.providerId, data.model);
+    if (!drill) {
+      throw new ServerError('Failed to generate LLM drill', { status: 500, code: 'LLM_DRILL_FAILED' });
+    }
+    return res.json(drill);
+  }
+
   const drill = postService.generateDrill(data.type, data.config);
   if (!drill) {
     throw new ServerError('Unknown drill type', { status: 400, code: 'INVALID_DRILL_TYPE' });
   }
   res.json(drill);
+}));
+
+/**
+ * POST /api/meatspace/post/score-llm
+ * Score an LLM drill's responses using AI evaluation.
+ */
+router.post('/post/score-llm', asyncHandler(async (req, res) => {
+  const data = validateRequest(postLlmScoreRequestSchema, req.body);
+  const result = await scoreLlmDrill(
+    data.type, data.drillData, data.responses,
+    data.timeLimitMs, data.providerId, data.model
+  );
+  res.json(result);
 }));
 
 export default router;

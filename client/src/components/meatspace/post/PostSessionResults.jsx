@@ -1,15 +1,23 @@
-import { CheckCircle, Save, ArrowLeft } from 'lucide-react';
+import { useState } from 'react';
+import { CheckCircle, Save, ArrowLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import { LLM_DRILL_TYPES } from './constants';
 
 const DRILL_LABELS = {
   'doubling-chain': 'Doubling Chain',
   'serial-subtraction': 'Serial Subtraction',
   'multiplication': 'Multiplication',
   'powers': 'Powers',
-  'estimation': 'Estimation'
+  'estimation': 'Estimation',
+  'word-association': 'Word Association',
+  'story-recall': 'Story Recall',
+  'verbal-fluency': 'Verbal Fluency',
+  'wit-comeback': 'Wit & Comeback',
+  'pun-wordplay': 'Pun & Wordplay'
 };
 
 export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
   const { drillResults, sessionScore, state, saveSession } = session;
+  const [expandedDrill, setExpandedDrill] = useState(null);
 
   const scoreColor = sessionScore >= 80 ? 'text-port-success' :
     sessionScore >= 50 ? 'text-port-warning' : 'text-port-error';
@@ -37,28 +45,68 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
         <h3 className="text-sm font-medium text-gray-400 mb-3">Drill Breakdown</h3>
         <div className="space-y-3">
           {drillResults.map((result, i) => {
-            const correct = result.questions.filter(q => q.correct).length;
-            const total = result.questions.length;
-            const accuracyPct = total > 0 ? Math.round((correct / total) * 100) : 0;
-            const answered = result.questions.filter(q => q.answered !== null);
-            const avgMs = answered.length > 0
-              ? Math.round(answered.reduce((s, q) => s + q.responseMs, 0) / answered.length)
-              : 0;
+            const isLlm = LLM_DRILL_TYPES.includes(result.type);
+            const isExpanded = expandedDrill === i;
 
-            const drillScoreColor = result.score >= 80 ? 'text-port-success' :
-              result.score >= 50 ? 'text-port-warning' : 'text-port-error';
+            let subtitle;
+            if (isLlm) {
+              const summary = result.evaluation?.summary;
+              subtitle = summary || `${result.responses?.length || 0} responses`;
+            } else {
+              const correct = (result.questions || []).filter(q => q.correct).length;
+              const total = (result.questions || []).length;
+              const accuracyPct = total > 0 ? Math.round((correct / total) * 100) : 0;
+              const answered = (result.questions || []).filter(q => q.answered !== null);
+              const avgMs = answered.length > 0
+                ? Math.round(answered.reduce((s, q) => s + q.responseMs, 0) / answered.length)
+                : 0;
+              subtitle = `${accuracyPct}% accuracy · ${(avgMs / 1000).toFixed(1)}s avg`;
+            }
+
+            const drillScoreColor = (result.score || 0) >= 80 ? 'text-port-success' :
+              (result.score || 0) >= 50 ? 'text-port-warning' : 'text-port-error';
 
             return (
-              <div key={i} className="flex items-center justify-between">
-                <div>
-                  <span className="text-white text-sm">{DRILL_LABELS[result.type] || result.type}</span>
-                  <span className="text-gray-500 text-xs ml-2">
-                    {accuracyPct}% accuracy · {(avgMs / 1000).toFixed(1)}s avg
-                  </span>
-                </div>
-                <span className={`font-mono font-medium ${drillScoreColor}`}>
-                  {result.score}
-                </span>
+              <div key={i}>
+                <button
+                  onClick={() => setExpandedDrill(isExpanded ? null : i)}
+                  className="w-full flex items-center justify-between hover:bg-port-bg/50 rounded px-1 py-1 transition-colors"
+                >
+                  <div className="text-left">
+                    <span className="text-white text-sm">{DRILL_LABELS[result.type] || result.type}</span>
+                    <span className="text-gray-500 text-xs ml-2">{subtitle}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`font-mono font-medium ${drillScoreColor}`}>
+                      {result.score || 0}
+                    </span>
+                    {isLlm && (isExpanded ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />)}
+                  </div>
+                </button>
+
+                {/* LLM Feedback Expansion */}
+                {isLlm && isExpanded && result.evaluation && (
+                  <div className="mt-2 ml-2 space-y-2">
+                    {(result.responses || []).map((r, ri) => {
+                      const score = r.llmScore ?? result.evaluation?.scores?.[ri]?.score;
+                      const feedback = r.llmFeedback || result.evaluation?.scores?.[ri]?.feedback;
+                      const sc = (score || 0) >= 80 ? 'text-port-success' : (score || 0) >= 50 ? 'text-port-warning' : 'text-port-error';
+                      return (
+                        <div key={ri} className="bg-port-bg border border-port-border rounded p-3 text-sm">
+                          <div className="flex justify-between mb-1">
+                            <span className="text-gray-400 text-xs">Response {ri + 1}</span>
+                            {score != null && <span className={`font-mono text-xs ${sc}`}>{score}</span>}
+                          </div>
+                          <p className="text-white text-xs mb-1">{r.response || r.items?.join(', ') || r.answers?.join(', ') || '—'}</p>
+                          {feedback && <p className="text-gray-500 text-xs italic">{feedback}</p>}
+                        </div>
+                      );
+                    })}
+                    {result.evaluation?.summary && (
+                      <p className="text-gray-400 text-xs italic px-1">{result.evaluation.summary}</p>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

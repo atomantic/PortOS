@@ -1,16 +1,27 @@
-import { useState } from 'react';
-import { Zap, History, Settings, Play } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Zap, History, Settings, Play, Brain } from 'lucide-react';
+import { getProviders } from '../../../services/api';
 
 const DRILL_LABELS = {
   'doubling-chain': 'Doubling Chain',
   'serial-subtraction': 'Serial Subtraction',
   'multiplication': 'Multiplication',
   'powers': 'Powers',
-  'estimation': 'Estimation'
+  'estimation': 'Estimation',
+  'word-association': 'Word Association',
+  'story-recall': 'Story Recall',
+  'verbal-fluency': 'Verbal Fluency',
+  'wit-comeback': 'Wit & Comeback',
+  'pun-wordplay': 'Pun & Wordplay'
 };
 
 export default function PostSessionLauncher({ config, recentSessions, onStart, onViewHistory, onViewConfig }) {
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
+  const [providers, setProviders] = useState([]);
+
+  useEffect(() => {
+    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && pr.type === 'api'))).catch(() => {});
+  }, []);
 
   if (!config) {
     return <div className="text-gray-500">Loading configuration...</div>;
@@ -20,11 +31,18 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
   const todaySession = recentSessions?.find(s => s.date === today);
   const lastThree = (recentSessions || []).slice(-3).reverse();
 
-  const enabledDrills = Object.entries(config.mentalMath?.drillTypes || {})
+  const enabledMathDrills = Object.entries(config.mentalMath?.drillTypes || {})
     .filter(([, cfg]) => cfg.enabled);
 
+  const enabledLlmDrills = config.llmDrills?.enabled !== false
+    ? Object.entries(config.llmDrills?.drillTypes || {}).filter(([, cfg]) => cfg.enabled !== false)
+    : [];
+
+  const llmProviderId = config.llmDrills?.providerId || null;
+  const llmModel = config.llmDrills?.model || null;
+
   function handleStart() {
-    const drillConfigs = enabledDrills.map(([type, cfg]) => ({
+    const mathConfigs = enabledMathDrills.map(([type, cfg]) => ({
       type,
       config: {
         steps: cfg.steps,
@@ -38,13 +56,24 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
       },
       timeLimitSec: cfg.timeLimitSec || 120
     }));
-    // Filter out empty tag values
+
+    const llmConfigs = enabledLlmDrills.map(([type, cfg]) => ({
+      type,
+      config: { count: cfg.count || 5 },
+      timeLimitSec: cfg.timeLimitSec || 120,
+      providerId: cfg.providerId || llmProviderId,
+      model: cfg.model || llmModel
+    }));
+
+    const drillConfigs = [...mathConfigs, ...llmConfigs];
     const cleanTags = {};
     for (const [k, v] of Object.entries(tags)) {
       if (v.trim()) cleanTags[k] = v.trim();
     }
     onStart(drillConfigs, cleanTags);
   }
+
+  const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -86,24 +115,55 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
         </div>
       </div>
 
-      {/* Enabled Drills */}
-      <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <h3 className="text-sm font-medium text-gray-400 mb-3">Enabled Drills</h3>
-        <div className="space-y-2">
-          {enabledDrills.map(([type, cfg]) => (
-            <div key={type} className="flex items-center justify-between text-sm">
-              <span className="text-white">{DRILL_LABELS[type] || type}</span>
-              <span className="text-gray-500">
-                {cfg.steps ? `${cfg.steps} steps` : cfg.count ? `${cfg.count} questions` : ''}
-                {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
-              </span>
-            </div>
-          ))}
-          {enabledDrills.length === 0 && (
-            <p className="text-gray-500 text-sm">No drills enabled. Configure drills to get started.</p>
-          )}
+      {/* Mental Math Drills */}
+      {enabledMathDrills.length > 0 && (
+        <div className="bg-port-card border border-port-border rounded-lg p-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Mental Math</h3>
+          <div className="space-y-2">
+            {enabledMathDrills.map(([type, cfg]) => (
+              <div key={type} className="flex items-center justify-between text-sm">
+                <span className="text-white">{DRILL_LABELS[type] || type}</span>
+                <span className="text-gray-500">
+                  {cfg.steps ? `${cfg.steps} steps` : cfg.count ? `${cfg.count} questions` : ''}
+                  {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* LLM Drills */}
+      {enabledLlmDrills.length > 0 && (
+        <div className="bg-port-card border border-port-border rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Brain size={14} className="text-purple-400" />
+            <h3 className="text-sm font-medium text-gray-400">Wit & Memory</h3>
+            {(llmProviderId || providers.length > 0) && (
+              <span className="text-xs text-gray-600 ml-auto">
+                {llmProviderId || 'system default'}
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {enabledLlmDrills.map(([type, cfg]) => (
+              <div key={type} className="flex items-center justify-between text-sm">
+                <span className="text-white">{DRILL_LABELS[type] || type}</span>
+                <span className="text-gray-500">
+                  {cfg.count ? `${cfg.count} prompts` : ''}
+                  {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!hasAnyDrills && (
+        <div className="bg-port-card border border-port-border rounded-lg p-4">
+          <p className="text-gray-500 text-sm">No drills enabled. Configure drills to get started.</p>
+        </div>
+      )}
 
       {/* Condition Tags */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
@@ -127,7 +187,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
       {/* Start Button */}
       <button
         onClick={handleStart}
-        disabled={enabledDrills.length === 0}
+        disabled={!hasAnyDrills}
         className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
       >
         <Play size={18} />

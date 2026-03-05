@@ -3,9 +3,11 @@ import { getPostConfig, getPostSessions } from '../../../services/api';
 import { usePostSession } from '../../../hooks/usePostSession';
 import PostSessionLauncher from '../post/PostSessionLauncher';
 import PostDrillRunner from '../post/PostDrillRunner';
+import PostLlmDrillRunner from '../post/PostLlmDrillRunner';
 import PostSessionResults from '../post/PostSessionResults';
 import PostHistory from '../post/PostHistory';
 import PostDrillConfig from '../post/PostDrillConfig';
+import { LLM_DRILL_TYPES } from '../post/constants';
 
 export default function PostTab() {
   const [view, setView] = useState('launcher');
@@ -76,8 +78,21 @@ export default function PostTab() {
     }
   }, [session.state, session.nextDrill]);
 
+  const isLlmDrill = session.currentDrill && LLM_DRILL_TYPES.includes(session.currentDrill.type);
+
   switch (view) {
     case 'running':
+      if (isLlmDrill) {
+        return (
+          <PostLlmDrillRunner
+            drill={session.currentDrill}
+            timeLimitSec={session.currentDrill.timeLimitSec}
+            drillIndex={session.currentDrillIndex}
+            drillCount={session.drillCount}
+            onComplete={session.completeLlmDrill}
+          />
+        );
+      }
       return (
         <PostDrillRunner
           session={session}

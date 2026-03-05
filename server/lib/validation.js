@@ -446,6 +446,52 @@ export const restoreRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+// =============================================================================
+// FEATURE AGENT SCHEMAS
+// =============================================================================
+
+export const featureAgentStatusSchema = z.enum(['draft', 'active', 'paused', 'completed', 'error']);
+export const featureAgentScheduleModeSchema = z.enum(['continuous', 'interval']);
+export const featureAgentAutonomySchema = z.enum(['standby', 'assistant', 'manager', 'yolo']);
+export const featureAgentPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+
+export const featureAgentSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().min(1).max(2000),
+  persona: z.string().max(5000).optional().default(''),
+  appId: z.string().min(1),
+  schedule: z.object({
+    mode: featureAgentScheduleModeSchema.default('continuous'),
+    intervalMs: z.number().int().min(30000).optional(),
+    pauseBetweenRunsMs: z.number().int().min(0).default(60000)
+  }).default({}),
+  goals: z.array(z.string()).default([]),
+  constraints: z.array(z.string()).default([]),
+  providerId: z.string().optional().nullable(),
+  model: z.string().optional().nullable(),
+  autonomyLevel: featureAgentAutonomySchema.default('assistant'),
+  priority: featureAgentPrioritySchema.default('MEDIUM')
+});
+
+// Update schema: all fields optional, no defaults (prevents overwriting existing values)
+export const featureAgentUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().min(1).max(2000).optional(),
+  persona: z.string().max(5000).optional(),
+  appId: z.string().min(1).optional(),
+  schedule: z.object({
+    mode: featureAgentScheduleModeSchema.optional(),
+    intervalMs: z.number().int().min(30000).optional(),
+    pauseBetweenRunsMs: z.number().int().min(0).optional()
+  }).optional(),
+  goals: z.array(z.string()).optional(),
+  constraints: z.array(z.string()).optional(),
+  providerId: z.string().optional().nullable(),
+  model: z.string().optional().nullable(),
+  autonomyLevel: featureAgentAutonomySchema.optional(),
+  priority: featureAgentPrioritySchema.optional()
+});
+
 /**
  * Validate data against a schema
  * Returns { success: true, data } or { success: false, errors }

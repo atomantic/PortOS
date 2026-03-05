@@ -1378,6 +1378,26 @@ export const addGoalMilestone = (goalId, data) => request(`/digital-twin/identit
 export const completeGoalMilestone = (goalId, milestoneId) =>
   request(`/digital-twin/identity/goals/${goalId}/milestones/${milestoneId}/complete`, { method: 'PUT' });
 
+// Feature Agents
+export const getFeatureAgents = () => request('/feature-agents');
+export const getFeatureAgent = (id) => request(`/feature-agents/${id}`);
+export const createFeatureAgent = (data) => request('/feature-agents', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateFeatureAgent = (id, data) => request(`/feature-agents/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteFeatureAgent = (id) => request(`/feature-agents/${id}`, { method: 'DELETE' });
+export const startFeatureAgent = (id) => request(`/feature-agents/${id}/start`, { method: 'POST' });
+export const pauseFeatureAgent = (id) => request(`/feature-agents/${id}/pause`, { method: 'POST' });
+export const resumeFeatureAgent = (id) => request(`/feature-agents/${id}/resume`, { method: 'POST' });
+export const triggerFeatureAgent = (id) => request(`/feature-agents/${id}/trigger`, { method: 'POST' });
+export const stopFeatureAgent = (id) => request(`/feature-agents/${id}/stop`, { method: 'POST' });
+export const getFeatureAgentRuns = (id, limit) => request(`/feature-agents/${id}/runs${limit ? `?limit=${limit}` : ''}`);
+export const getFeatureAgentOutput = (id) => request(`/feature-agents/${id}/output`);
+
 // MeatSpace - Health Tracker
 export const getMeatspaceOverview = () => request('/meatspace');
 export const getMeatspaceConfig = () => request('/meatspace/config');
@@ -1467,10 +1487,15 @@ export const submitPostSession = (data) => request('/meatspace/post/sessions', {
   body: JSON.stringify(data)
 });
 export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
-export const generatePostDrill = (type, config = {}) => request('/meatspace/post/drill', {
+export const generatePostDrill = (type, config = {}, providerId, model) => request('/meatspace/post/drill', {
   method: 'POST',
-  body: JSON.stringify({ type, config })
+  body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) })
 });
+export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, providerId, model) =>
+  request('/meatspace/post/score-llm', {
+    method: 'POST',
+    body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) })
+  });
 
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');

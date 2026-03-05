@@ -56,6 +56,7 @@ import {
   Link2,
   Database,
   Shield,
+  Wand2,
   Zap
 } from 'lucide-react';
 /* global __APP_VERSION__ */
@@ -150,6 +151,7 @@ const navItems = [
       { to: '/digital-twin/test', label: 'Test', icon: CheckCircle }
     ]
   },
+  { to: '/feature-agents', label: 'Feature Agents', icon: Wand2, single: true },
   { to: '/insights/overview', label: 'Insights', icon: Lightbulb, single: true },
   { to: '/instances', label: 'Instances', icon: Network, single: true },
   {
@@ -599,6 +601,7 @@ export default function Layout() {
           const isFullWidth = location.pathname.startsWith('/cos') ||
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
+            location.pathname.startsWith('/feature-agents') ||
             location.pathname.startsWith('/insights') ||
             location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/agents') ||

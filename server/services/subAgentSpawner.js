@@ -25,7 +25,7 @@ import { getMemorySection } from './memoryRetriever.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { suggestModelTier } from './taskLearning.js';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, updateExecution, completeExecution, errorExecution, getExecution, getStats as getToolStats } from './toolStateMachine.js';
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
@@ -1467,6 +1467,34 @@ export async function spawnAgentForTask(task) {
   const isManagedApp = !!task.metadata?.app;
   const explicitWorktree = task.metadata?.useWorktree === 'true' || task.metadata?.useWorktree === true;
 
+  // Feature agent tasks: use persistent worktree instead of creating a new one
+  if (task.metadata?.featureAgentRun && task.metadata?.featureAgentId) {
+    const { getFeatureAgent } = await import('./featureAgents.js');
+    const fa = await getFeatureAgent(task.metadata.featureAgentId).catch(() => null);
+    if (fa) {
+      const faWorktreePath = join(PATHS.cos, 'feature-agents', fa.id, 'worktree');
+      if (existsSync(faWorktreePath)) {
+        workspacePath = faWorktreePath;
+        worktreeInfo = {
+          worktreePath: faWorktreePath,
+          branchName: fa.git.branchName,
+          baseBranch: fa.git.baseBranch || 'main',
+          isPersistentWorktree: true
+        };
+        // Merge base branch into feature worktree before starting
+        const { mergeBaseIntoFeatureWorktree } = await import('./worktreeManager.js');
+        if (fa.git.autoMergeBase) {
+          await mergeBaseIntoFeatureWorktree(fa.id, fa.git.baseBranch).catch(err => {
+            emitLog('warn', `🌳 Feature agent base merge failed: ${err.message}`, { featureAgentId: fa.id });
+          });
+        }
+        emitLog('info', `🌳 Feature agent ${fa.name} using persistent worktree: ${fa.git.branchName}`, {
+          featureAgentId: fa.id, worktreePath: faWorktreePath
+        });
+      }
+    }
+  }
+
   if (explicitWorktree && !jiraBranchName) {
     // User explicitly requested worktree via task creation UI
     const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
@@ -1563,6 +1591,7 @@ export async function spawnAgentForTask(task) {
     sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
     worktreeBranch: worktreeInfo?.branchName || null,
     isWorktree: !!worktreeInfo,
+    isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,
     taskDescription: task.description,
     taskType: task.taskType,
     priority: task.priority,
@@ -1907,6 +1936,8 @@ async function cleanupAgentWorktree(agentId, success) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return;
+  // Skip cleanup for persistent feature agent worktrees (they survive across runs)
+  if (agentState?.metadata?.isPersistentWorktree) return;
 
   const { sourceWorkspace, worktreeBranch } = agentState.metadata;
   if (!sourceWorkspace || !worktreeBranch) return;

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { join } from 'path';
 
 /**
  * Tests for the worktree manager service.
@@ -107,6 +108,33 @@ detached
   it('should handle empty output', () => {
     const result = parseWorktreeList('');
     expect(result).toHaveLength(0);
+  });
+});
+
+describe('Persistent Worktree Path Construction', () => {
+  function buildPersistentWorktreePath(worktreesDir, featureAgentId) {
+    return join(worktreesDir, '..', 'feature-agents', featureAgentId, 'worktree');
+  }
+
+  it('should place worktree under feature-agents directory', () => {
+    const path = buildPersistentWorktreePath('/data/cos/worktrees', 'fa-abc12345');
+    expect(path).toContain('feature-agents');
+    expect(path).toContain('fa-abc12345');
+    expect(path.endsWith('worktree')).toBe(true);
+  });
+
+  it('should be separate from regular worktrees directory', () => {
+    const regularPath = '/data/cos/worktrees/agent-12345678';
+    const persistentPath = buildPersistentWorktreePath('/data/cos/worktrees', 'fa-abc12345');
+    const normalized = persistentPath.replace(/\\/g, '/');
+    expect(normalized).not.toContain('/worktrees/fa-');
+    expect(regularPath).not.toContain('feature-agents');
+  });
+
+  it('should use feature agent ID as parent directory', () => {
+    const result = buildPersistentWorktreePath('/data/cos/worktrees', 'fa-12345678');
+    const normalized = result.replace(/\\/g, '/');
+    expect(normalized).toContain('/fa-12345678/');
   });
 });
 

@@ -2,13 +2,19 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
+import { LLM_DRILL_TYPES } from './constants';
 
 const DRILL_LABELS = {
   'doubling-chain': 'Doubling Chain',
   'serial-subtraction': 'Serial Subtraction',
   'multiplication': 'Multiplication',
   'powers': 'Powers',
-  'estimation': 'Estimation'
+  'estimation': 'Estimation',
+  'word-association': 'Word Association',
+  'story-recall': 'Story Recall',
+  'verbal-fluency': 'Verbal Fluency',
+  'wit-comeback': 'Wit & Comeback',
+  'pun-wordplay': 'Pun & Wordplay'
 };
 
 const RANGES = [
@@ -151,8 +157,10 @@ export default function PostHistory({ onBack }) {
 
               if (expanded) {
                 for (const [i, task] of (s.tasks || []).entries()) {
-                  const correct = task.questions?.filter(q => q.correct).length || 0;
-                  const total = task.questions?.length || 0;
+                  const isLlm = LLM_DRILL_TYPES.includes(task.type);
+                  const detail = isLlm
+                    ? `${task.responses?.length || 0} responses`
+                    : `${task.questions?.filter(q => q.correct).length || 0}/${task.questions?.length || 0} correct`;
                   rows.push(
                     <tr key={`${s.id}-${i}`} className="bg-port-bg/30">
                       <td></td>
@@ -160,7 +168,7 @@ export default function PostHistory({ onBack }) {
                         {DRILL_LABELS[task.type] || task.type}
                       </td>
                       <td className="px-4 py-1.5 text-gray-500 text-xs">
-                        {correct}/{total} correct
+                        {detail}
                       </td>
                       <td className="px-4 py-1.5 text-right text-gray-400 text-xs font-mono">
                         {task.score}

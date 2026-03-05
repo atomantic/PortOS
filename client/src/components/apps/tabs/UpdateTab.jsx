@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Download, XCircle, Check, Loader, AlertTriangle, Trash2, ExternalLink, Tag } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
+import MarkdownOutput from '../../cos/MarkdownOutput';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 
@@ -155,13 +156,15 @@ export default function UpdateTab() {
   };
 
   const handleIgnore = async (version) => {
-    await api.ignoreUpdateVersion(version).catch(() => null);
+    const result = await api.ignoreUpdateVersion(version).catch(() => null);
+    if (!result) return;
     fetchStatus();
     toast.success(`v${version} ignored`);
   };
 
   const handleClearIgnored = async () => {
-    await api.clearIgnoredVersions().catch(() => null);
+    const result = await api.clearIgnoredVersions().catch(() => null);
+    if (!result) return;
     fetchStatus();
     toast.success('Ignored versions cleared');
   };
@@ -178,14 +181,24 @@ export default function UpdateTab() {
   const hasUpdate = status?.updateAvailable;
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      {/* Current Version */}
-      <div>
-        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Current Version</div>
-        <div className="flex items-center gap-2">
-          <Tag size={16} className="text-port-accent shrink-0" />
-          <span className="text-lg font-mono text-white">v{status?.currentVersion || '?'}</span>
+    <div className="space-y-6">
+      {/* Current Version + Check Button */}
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Current Version</div>
+          <div className="flex items-center gap-2">
+            <Tag size={16} className="text-port-accent shrink-0" />
+            <span className="text-lg font-mono text-white">v{status?.currentVersion || '?'}</span>
+          </div>
         </div>
+        <button
+          onClick={handleCheck}
+          disabled={checking || updating}
+          className="px-4 py-2 bg-port-border text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 disabled:opacity-50"
+        >
+          <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+          {checking ? 'Checking...' : 'Check for Updates'}
+        </button>
       </div>
 
       {/* Available Update */}
@@ -217,18 +230,18 @@ export default function UpdateTab() {
           )}
           {release.body && (
             <div className="mt-3 p-3 bg-port-bg rounded border border-port-border">
-              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Release Notes</div>
-              <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono leading-relaxed max-h-64 overflow-y-auto">
-                {release.body}
-              </pre>
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Release Notes</div>
+              <div className="max-h-[32rem] overflow-y-auto">
+                <MarkdownOutput content={release.body} />
+              </div>
             </div>
           )}
         </div>
       )}
 
       {/* Update Actions */}
-      <div className="flex flex-wrap gap-2">
-        {hasUpdate && (
+      {hasUpdate && (
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={handleUpdate}
             disabled={updating || polling}
@@ -237,26 +250,18 @@ export default function UpdateTab() {
             <Download size={14} className={updating ? 'animate-bounce' : ''} />
             {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
           </button>
-        )}
-        <button
-          onClick={handleCheck}
-          disabled={checking || updating}
-          className="px-4 py-2 bg-port-border text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
-          {checking ? 'Checking...' : 'Check for Updates'}
-        </button>
-        {hasUpdate && release && (
-          <button
-            onClick={() => handleIgnore(release.version)}
-            disabled={updating}
-            className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-          >
-            <XCircle size={14} />
-            Ignore v{release.version}
-          </button>
-        )}
-      </div>
+          {release && (
+            <button
+              onClick={() => handleIgnore(release.version)}
+              disabled={updating}
+              className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+            >
+              <XCircle size={14} />
+              Ignore v{release.version}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Last Check */}
       {status?.lastCheck && (

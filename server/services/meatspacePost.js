@@ -9,6 +9,7 @@ import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { LLM_DRILL_TYPES } from '../lib/postValidation.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -25,8 +26,20 @@ const DEFAULT_CONFIG = {
       'estimation': { enabled: true, count: 5, tolerancePct: 10, timeLimitSec: 120 }
     }
   },
+  llmDrills: {
+    enabled: true,
+    providerId: null,
+    model: null,
+    drillTypes: {
+      'word-association': { enabled: true, count: 5, timeLimitSec: 120 },
+      'story-recall': { enabled: true, count: 3, timeLimitSec: 180 },
+      'verbal-fluency': { enabled: true, count: 3, timeLimitSec: 60 },
+      'wit-comeback': { enabled: true, count: 5, timeLimitSec: 120 },
+      'pun-wordplay': { enabled: true, count: 5, timeLimitSec: 120 }
+    }
+  },
   sessionModules: ['mental-math'],
-  scoring: { weights: { 'mental-math': 1.0 } }
+  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0 } }
 };
 
 async function ensureMeatspaceDir() {
@@ -81,11 +94,20 @@ export async function submitPostSession(sessionData) {
   const data = await loadSessions();
   const now = new Date().toISOString();
 
-  // Strip client-provided score/correct and recompute server-side
+  // Strip client-provided score/correct and recompute server-side (math drills only)
   const rawTasks = Array.isArray(sessionData.tasks) ? sessionData.tasks : [];
   const rescoredTasks = rawTasks.map(t => {
     const { score: _score, correct: _correct, ...rest } = t || {};
-    // Strip correct from individual questions too
+
+    // LLM drills: score was computed server-side via /post/score-llm and
+    // passed back by the client. Re-scoring here would add latency + cost.
+    // This is a single-user internal tool so client score trust is acceptable.
+    // The evaluation field and per-response llmScore/llmFeedback contain the server-generated breakdown.
+    if (LLM_DRILL_TYPES.includes(rest.type)) {
+      return { ...rest, score: t.score || 0 };
+    }
+
+    // Math drills: strip correct from individual questions and rescore
     const sanitizedQuestions = (rest.questions || []).map(q => {
       const { correct: _qCorrect, ...qRest } = q;
       return qRest;
@@ -304,9 +326,10 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
 }
 
 function computeSessionScore(tasks) {
-  if (!tasks?.length) return 0;
-  const totalScore = tasks.reduce((sum, t) => sum + t.score, 0);
-  return Math.round(totalScore / tasks.length);
+  const valid = (tasks || []).filter(t => typeof t.score === 'number' && !Number.isNaN(t.score));
+  if (!valid.length) return 0;
+  const totalScore = valid.reduce((sum, t) => sum + t.score, 0);
+  return Math.round(totalScore / valid.length);
 }
 
 // =============================================================================

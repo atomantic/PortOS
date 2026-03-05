@@ -5,6 +5,8 @@ import {
   appUpdateSchema,
   providerSchema,
   runSchema,
+  featureAgentSchema,
+  featureAgentUpdateSchema,
   validate
 } from './validation.js';
 
@@ -318,6 +320,70 @@ describe('validation.js', () => {
     it('should reject timeout below 1000', () => {
       const run = { type: 'ai', workspaceId: 'test', timeout: 100 };
       const result = runSchema.safeParse(run);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('featureAgentSchema', () => {
+    const validAgent = {
+      name: 'UI Polish Agent',
+      description: 'Iterates on UI improvements',
+      appId: 'app-001'
+    };
+
+    it('should validate a minimal feature agent', () => {
+      const result = featureAgentSchema.safeParse(validAgent);
+      expect(result.success).toBe(true);
+      expect(result.data.status).toBeUndefined(); // status is not in create schema
+      expect(result.data.priority).toBe('MEDIUM'); // default
+    });
+
+    it('should require name', () => {
+      const result = featureAgentSchema.safeParse({ ...validAgent, name: '' });
+      expect(result.success).toBe(false);
+    });
+
+    it('should require description', () => {
+      const result = featureAgentSchema.safeParse({ ...validAgent, description: '' });
+      expect(result.success).toBe(false);
+    });
+
+    it('should require appId', () => {
+      const result = featureAgentSchema.safeParse({ ...validAgent, appId: '' });
+      expect(result.success).toBe(false);
+    });
+
+    it('should apply defaults for nested objects', () => {
+      const result = featureAgentSchema.safeParse(validAgent);
+      expect(result.success).toBe(true);
+      expect(result.data.schedule.mode).toBe('continuous');
+      expect(result.data.autonomyLevel).toBe('assistant');
+    });
+
+    it('should validate priority enum', () => {
+      const result = featureAgentSchema.safeParse({ ...validAgent, priority: 'INVALID' });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('featureAgentUpdateSchema (deepPartial)', () => {
+    it('should allow partial top-level fields', () => {
+      const result = featureAgentUpdateSchema.safeParse({ name: 'New Name' });
+      expect(result.success).toBe(true);
+    });
+
+    it('should allow partial nested schedule fields', () => {
+      const result = featureAgentUpdateSchema.safeParse({ schedule: { mode: 'interval' } });
+      expect(result.success).toBe(true);
+    });
+
+    it('should allow empty update', () => {
+      const result = featureAgentUpdateSchema.safeParse({});
+      expect(result.success).toBe(true);
+    });
+
+    it('should still validate field values when provided', () => {
+      const result = featureAgentUpdateSchema.safeParse({ name: '' });
       expect(result.success).toBe(false);
     });
   });
