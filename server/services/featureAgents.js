@@ -11,7 +11,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, emitLog } from './cosEvents.js';
+import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getAppById } from './apps.js';

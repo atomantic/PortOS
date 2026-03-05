@@ -221,7 +221,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, sourceWorkspa
     .then(() => ({ merged: true }))
     .catch(err => {
       // Abort failed merge
-      execGit(['merge', '--abort'], worktreePath).catch(() => {});
+      await execGit(['merge', '--abort'], worktreePath).catch(() => {});
       return { merged: false, reason: err.message };
     });
 

@@ -474,7 +474,6 @@ export const featureAgentSchema = z.object({
   }),
   schedule: z.object({
     mode: featureAgentScheduleModeSchema.default('continuous'),
-    cronExpression: z.string().optional(),
     intervalMs: z.number().int().min(30000).optional(),
     pauseBetweenRunsMs: z.number().int().min(0).default(60000)
   }).default({}),

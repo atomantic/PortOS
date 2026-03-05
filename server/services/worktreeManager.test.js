@@ -112,8 +112,7 @@ detached
 
 describe('Persistent Worktree Path Construction', () => {
   function buildPersistentWorktreePath(worktreesDir, featureAgentId) {
-    const path = require('path');
-    return path.join(worktreesDir, '..', 'feature-agents', featureAgentId, 'worktree');
+    return `${worktreesDir}/../feature-agents/${featureAgentId}/worktree`;
   }
 
   it('should place worktree under feature-agents directory', () => {
