@@ -1,0 +1,9 @@
+{
+  "name": "portos-autofixer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
