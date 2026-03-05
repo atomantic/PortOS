@@ -328,15 +328,13 @@ describe('validation.js', () => {
     const validAgent = {
       name: 'UI Polish Agent',
       description: 'Iterates on UI improvements',
-      appId: 'app-001',
-      git: { branchName: 'feature/ui-polish' }
+      appId: 'app-001'
     };
 
     it('should validate a minimal feature agent', () => {
       const result = featureAgentSchema.safeParse(validAgent);
       expect(result.success).toBe(true);
       expect(result.data.status).toBeUndefined(); // status is not in create schema
-      expect(result.data.git.baseBranch).toBe('main'); // default
       expect(result.data.priority).toBe('MEDIUM'); // default
     });
 
@@ -355,15 +353,9 @@ describe('validation.js', () => {
       expect(result.success).toBe(false);
     });
 
-    it('should require git.branchName', () => {
-      const result = featureAgentSchema.safeParse({ ...validAgent, git: { branchName: '' } });
-      expect(result.success).toBe(false);
-    });
-
     it('should apply defaults for nested objects', () => {
       const result = featureAgentSchema.safeParse(validAgent);
       expect(result.success).toBe(true);
-      expect(result.data.featureScope).toEqual({ directories: [], filePatterns: [], excludePatterns: [] });
       expect(result.data.schedule.mode).toBe('continuous');
       expect(result.data.autonomyLevel).toBe('assistant');
     });
@@ -377,11 +369,6 @@ describe('validation.js', () => {
   describe('featureAgentUpdateSchema (deepPartial)', () => {
     it('should allow partial top-level fields', () => {
       const result = featureAgentUpdateSchema.safeParse({ name: 'New Name' });
-      expect(result.success).toBe(true);
-    });
-
-    it('should allow partial nested git fields', () => {
-      const result = featureAgentUpdateSchema.safeParse({ git: { baseBranch: 'develop' } });
       expect(result.success).toBe(true);
     });
 

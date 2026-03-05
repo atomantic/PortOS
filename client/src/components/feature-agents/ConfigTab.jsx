@@ -37,10 +37,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
     description: '',
     persona: '',
     appId: '',
-    featureScope: { directories: [], filePatterns: [], excludePatterns: [] },
-    git: { branchName: '', baseBranch: 'main', autoMergeBase: true, autoPR: true, prTemplate: '' },
     schedule: { mode: 'continuous',  intervalMs: 3600000, pauseBetweenRunsMs: 60000 },
-    playwright: { testUrls: [], baseUrl: '', startCommand: '', viewport: { width: 1280, height: 720 } },
     goals: [],
     constraints: [],
     providerId: '',
@@ -57,10 +54,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
         description: agent.description || '',
         persona: agent.persona || '',
         appId: agent.appId || '',
-        featureScope: agent.featureScope || { directories: [], filePatterns: [], excludePatterns: [] },
-        git: agent.git || { branchName: '', baseBranch: 'main', autoMergeBase: true, autoPR: true, prTemplate: '' },
         schedule: agent.schedule || { mode: 'continuous',  intervalMs: 3600000, pauseBetweenRunsMs: 60000 },
-        playwright: agent.playwright || { testUrls: [], baseUrl: '', startCommand: '', viewport: { width: 1280, height: 720 } },
         goals: agent.goals || [],
         constraints: agent.constraints || [],
         providerId: agent.providerId || '',
@@ -158,43 +152,6 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
         </div>
       </div>
 
-      {/* Feature Scope */}
-      <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Feature Scope</h3>
-        <ArrayInput label="Directories" value={form.featureScope.directories} onChange={v => set('featureScope', { ...form.featureScope, directories: v })} placeholder="src/audio&#10;lib/generators" />
-        <ArrayInput label="File Patterns (globs)" value={form.featureScope.filePatterns} onChange={v => set('featureScope', { ...form.featureScope, filePatterns: v })} placeholder="**/*.ts&#10;**/*.test.js" />
-        <ArrayInput label="Exclude Patterns" value={form.featureScope.excludePatterns} onChange={v => set('featureScope', { ...form.featureScope, excludePatterns: v })} placeholder="node_modules/**&#10;dist/**" />
-      </div>
-
-      {/* Git */}
-      <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Git</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Branch Name</label>
-            <input value={form.git.branchName} onChange={e => set('git', { ...form.git, branchName: e.target.value })} className={inputCls} placeholder="feature-agent/audio-generator" required />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Base Branch</label>
-            <input value={form.git.baseBranch} onChange={e => set('git', { ...form.git, baseBranch: e.target.value })} className={inputCls} placeholder="main" />
-          </div>
-        </div>
-        <div className="flex items-center gap-6">
-          <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={form.git.autoMergeBase} onChange={e => set('git', { ...form.git, autoMergeBase: e.target.checked })} className="rounded" />
-            Auto-merge base before runs
-          </label>
-          <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={form.git.autoPR} onChange={e => set('git', { ...form.git, autoPR: e.target.checked })} className="rounded" />
-            Auto-create PR when ready
-          </label>
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">PR Template (optional)</label>
-          <textarea value={form.git.prTemplate} onChange={e => set('git', { ...form.git, prTemplate: e.target.value })} className={`${inputCls} resize-y`} rows={3} placeholder="## Changes&#10;- ..." />
-        </div>
-      </div>
-
       {/* Schedule */}
       <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Schedule</h3>
@@ -218,32 +175,6 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
               <input type="number" value={Math.round((form.schedule.pauseBetweenRunsMs || 60000) / 1000)} onChange={e => set('schedule', { ...form.schedule, pauseBetweenRunsMs: parseInt(e.target.value) * 1000 })} className={inputCls} min={0} />
             </div>
           )}
-        </div>
-      </div>
-
-      {/* Playwright */}
-      <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Playwright Testing</h3>
-        <ArrayInput label="Test URLs" value={form.playwright.testUrls} onChange={v => set('playwright', { ...form.playwright, testUrls: v })} placeholder="http://localhost:3000&#10;http://localhost:3000/settings" />
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Base URL</label>
-            <input value={form.playwright.baseUrl} onChange={e => set('playwright', { ...form.playwright, baseUrl: e.target.value })} className={inputCls} placeholder="http://localhost:3000" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Start Command</label>
-            <input value={form.playwright.startCommand} onChange={e => set('playwright', { ...form.playwright, startCommand: e.target.value })} className={inputCls} placeholder="npm run dev" />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Viewport Width</label>
-            <input type="number" value={form.playwright.viewport?.width || 1280} onChange={e => set('playwright', { ...form.playwright, viewport: { ...form.playwright.viewport, width: parseInt(e.target.value) } })} className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Viewport Height</label>
-            <input type="number" value={form.playwright.viewport?.height || 720} onChange={e => set('playwright', { ...form.playwright, viewport: { ...form.playwright.viewport, height: parseInt(e.target.value) } })} className={inputCls} />
-          </div>
         </div>
       </div>
 

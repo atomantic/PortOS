@@ -19,31 +19,12 @@ export default function GitTab({ agent }) {
             <span className="text-gray-500">Base Branch</span>
             <span className="text-white font-mono">{git.baseBranch || 'main'}</span>
           </div>
-          <div className="flex items-center justify-between py-2 border-b border-port-border">
-            <span className="text-gray-500">Auto Merge Base</span>
-            <span className={git.autoMergeBase !== false ? 'text-port-success' : 'text-gray-500'}>
-              {git.autoMergeBase !== false ? 'Enabled' : 'Disabled'}
-            </span>
-          </div>
-          <div className="flex items-center justify-between py-2 border-b border-port-border">
-            <span className="text-gray-500">Auto PR</span>
-            <span className={git.autoPR !== false ? 'text-port-success' : 'text-gray-500'}>
-              {git.autoPR !== false ? 'Enabled' : 'Disabled'}
-            </span>
-          </div>
           <div className="flex items-center justify-between py-2">
             <span className="text-gray-500">Worktree Path</span>
             <span className="text-gray-400 font-mono text-xs">data/cos/feature-agents/{agent.id}/worktree</span>
           </div>
         </div>
       </div>
-
-      {git.prTemplate && (
-        <div className="bg-port-card border border-port-border rounded-xl p-5">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">PR Template</h3>
-          <pre className="text-xs text-gray-400 bg-port-bg rounded p-3 overflow-auto whitespace-pre-wrap">{git.prTemplate}</pre>
-        </div>
-      )}
     </div>
   );
 }

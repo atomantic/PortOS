@@ -74,9 +74,11 @@ export async function createFeatureAgent(input) {
     const id = `fa-${uuidv4().slice(0, 8)}`;
     const now = new Date().toISOString();
 
+    const branchName = `feature-agent/${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
     const agent = {
       id,
       ...input,
+      git: { branchName, baseBranch: 'main', autoMergeBase: true, autoPR: true },
       status: 'draft',
       lastRunAt: null,
       runCount: 0,
@@ -457,11 +459,6 @@ ${agent.persona ? `## Persona\n${agent.persona}\n` : ''}
 - **Feature**: ${agent.description}
 - **App**: ${app?.name || agent.appId} (${app?.repoPath || 'unknown path'})
 
-## Feature Scope
-- **Directories**: ${agent.featureScope?.directories?.join(', ') || 'all'}
-- **File patterns**: ${agent.featureScope?.filePatterns?.join(', ') || 'all'}
-- **Exclude**: ${agent.featureScope?.excludePatterns?.join(', ') || 'none'}
-
 ## Goals
 ${agent.goals?.length ? agent.goals.map(g => `- ${g}`).join('\n') : '- No specific goals defined'}
 
@@ -474,17 +471,13 @@ ${agent.constraints?.length ? agent.constraints.map(c => `- ${c}`).join('\n') : 
 - **Worktree**: \`${worktreeDir}\`
 - **Auto PR**: ${agent.git.autoPR ? 'yes' : 'no'}
 
-**Important**: You are working in a persistent worktree on branch \`${agent.git.branchName}\`. Commit your changes to this branch. ${agent.git.autoPR ? 'When you have completed meaningful work, create or update a PR using \`gh pr create\` or \`gh pr edit\`.' : ''}
+**Important**: You are working in a persistent worktree on branch \`${agent.git.branchName}\`. Commit your changes to this branch. When you have completed meaningful work, create or update a PR using \`gh pr create\` or \`gh pr edit\`.
 
 ## Previous Runs
 ${runSummaries}
 
-${agent.playwright?.testUrls?.length ? `## Playwright Validation
-Test your changes by visiting these URLs:
-${agent.playwright.testUrls.map(u => `- ${u}`).join('\n')}
-${agent.playwright.baseUrl ? `Base URL: ${agent.playwright.baseUrl}` : ''}
-${agent.playwright.viewport ? `Viewport: ${agent.playwright.viewport.width}x${agent.playwright.viewport.height}` : ''}
-` : ''}
+## Testing
+Use the Playwright MCP to visually verify your changes in the browser. Navigate to the app, interact with the UI, and validate that your changes work correctly.
 
 ${skillTemplate ? `## Skill Guidelines\n${skillTemplate}\n` : ''}
 

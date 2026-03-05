@@ -101,57 +101,20 @@ export default function OverviewTab({ agent, onStart, onPause, onResume, onStop,
         )}
       </div>
 
-      {/* Feature Scope + Git */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-port-card border border-port-border rounded-xl p-5">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Feature Scope</h3>
-          <div className="space-y-2 text-sm">
-            {agent.featureScope?.directories?.length > 0 && (
-              <div>
-                <span className="text-gray-500">Directories: </span>
-                <span className="text-gray-300">{agent.featureScope.directories.join(', ')}</span>
-              </div>
-            )}
-            {agent.featureScope?.filePatterns?.length > 0 && (
-              <div>
-                <span className="text-gray-500">Patterns: </span>
-                <span className="text-gray-300">{agent.featureScope.filePatterns.join(', ')}</span>
-              </div>
-            )}
-            {agent.featureScope?.excludePatterns?.length > 0 && (
-              <div>
-                <span className="text-gray-500">Exclude: </span>
-                <span className="text-gray-300">{agent.featureScope.excludePatterns.join(', ')}</span>
-              </div>
-            )}
-            {!agent.featureScope?.directories?.length && !agent.featureScope?.filePatterns?.length && (
-              <p className="text-gray-600">No scope restrictions (full repo)</p>
-            )}
-          </div>
+      {/* Git */}
+      <div className="bg-port-card border border-port-border rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <GitBranch size={16} className="text-port-accent" />
+          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Git</h3>
         </div>
-
-        <div className="bg-port-card border border-port-border rounded-xl p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <GitBranch size={16} className="text-port-accent" />
-            <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Git</h3>
+        <div className="space-y-2 text-sm">
+          <div>
+            <span className="text-gray-500">Branch: </span>
+            <span className="text-gray-300 font-mono">{agent.git?.branchName}</span>
           </div>
-          <div className="space-y-2 text-sm">
-            <div>
-              <span className="text-gray-500">Branch: </span>
-              <span className="text-gray-300 font-mono">{agent.git?.branchName}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Base: </span>
-              <span className="text-gray-300 font-mono">{agent.git?.baseBranch || 'main'}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Auto merge base: </span>
-              <span className="text-gray-300">{agent.git?.autoMergeBase !== false ? 'yes' : 'no'}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Auto PR: </span>
-              <span className="text-gray-300">{agent.git?.autoPR !== false ? 'yes' : 'no'}</span>
-            </div>
+          <div>
+            <span className="text-gray-500">Base: </span>
+            <span className="text-gray-300 font-mono">{agent.git?.baseBranch || 'main'}</span>
           </div>
         </div>
       </div>

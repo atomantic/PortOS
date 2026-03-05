@@ -73,12 +73,6 @@ export default function RunsTab({ agent }) {
                   <p className="text-xs text-gray-400 mt-1">{run.learnings}</p>
                 </div>
               )}
-              {run.playwrightResults && (
-                <div>
-                  <span className="text-xs text-gray-500">Playwright results:</span>
-                  <p className="text-xs text-gray-400 mt-1">{JSON.stringify(run.playwrightResults)}</p>
-                </div>
-              )}
             </div>
           )}
         </div>
