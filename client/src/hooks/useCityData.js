@@ -64,28 +64,33 @@ export const useCityData = () => {
     socket.on('apps:changed', handleAppsChanged);
 
     // CoS agent events
-    socket.on('cos:agent:spawned', (data) => {
+    const handleAgentSpawned = (data) => {
       setCosAgents(prev => [...prev, data]);
       fetchAll();
-    });
+    };
+    socket.on('cos:agent:spawned', handleAgentSpawned);
 
-    socket.on('cos:agent:updated', (updatedAgent) => {
+    const handleAgentUpdated = (updatedAgent) => {
       setCosAgents(prev => prev.map(a => a.agentId === updatedAgent.agentId ? updatedAgent : a));
-    });
+    };
+    socket.on('cos:agent:updated', handleAgentUpdated);
 
-    socket.on('cos:agent:completed', () => {
+    const handleAgentCompleted = () => {
       fetchAll();
-    });
+    };
+    socket.on('cos:agent:completed', handleAgentCompleted);
 
     // CoS log events
-    socket.on('cos:log', (data) => {
+    const handleCosLog = (data) => {
       setEventLogs(prev => [...prev, { ...data, timestamp: data.timestamp || Date.now() }].slice(-50));
-    });
+    };
+    socket.on('cos:log', handleCosLog);
 
     // CoS status
-    socket.on('cos:status', (data) => {
+    const handleCosStatus = (data) => {
       setCosStatus(prev => ({ ...prev, running: data.running }));
-    });
+    };
+    socket.on('cos:status', handleCosStatus);
 
     // Poll running agents (no socket events for system agents)
     pollRef.current = setInterval(async () => {
@@ -97,11 +102,11 @@ export const useCityData = () => {
       socket.emit('cos:unsubscribe');
       socket.off('connect', subscribe);
       socket.off('apps:changed', handleAppsChanged);
-      socket.off('cos:agent:spawned');
-      socket.off('cos:agent:updated');
-      socket.off('cos:agent:completed');
-      socket.off('cos:log');
-      socket.off('cos:status');
+      socket.off('cos:agent:spawned', handleAgentSpawned);
+      socket.off('cos:agent:updated', handleAgentUpdated);
+      socket.off('cos:agent:completed', handleAgentCompleted);
+      socket.off('cos:log', handleCosLog);
+      socket.off('cos:status', handleCosStatus);
       clearInterval(pollRef.current);
     };
   }, [fetchAll, fetchApps]);

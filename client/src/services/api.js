@@ -742,6 +742,7 @@ export const listCosWeeklyDigests = () => request('/cos/digest/list');
 export const getCosWeekProgress = () => request('/cos/digest/progress');
 export const getCosDigestText = async () => {
   const response = await fetch('/api/cos/digest/text');
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.text();
 };
 export const generateCosDigest = (weekId = null) => request('/cos/digest/generate', {
