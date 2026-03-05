@@ -1228,6 +1228,7 @@ Should mention core values.
       buildPrompt.mockResolvedValue(null); // Force fallback prompt
 
       // Mock fetch for callProviderAI
+      const originalFetch = global.fetch;
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -1244,7 +1245,7 @@ Should mention core values.
       expect(result.source).toBe('goodreads');
       expect(result.itemCount).toBe(2);
 
-      delete global.fetch;
+      global.fetch = originalFetch;
     });
   });
 
