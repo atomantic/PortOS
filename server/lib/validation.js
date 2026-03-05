@@ -446,6 +446,57 @@ export const restoreRequestSchema = z.object({
   dryRun: z.boolean().optional().default(true)
 });
 
+// =============================================================================
+// FEATURE AGENT SCHEMAS
+// =============================================================================
+
+export const featureAgentStatusSchema = z.enum(['draft', 'active', 'paused', 'completed', 'error']);
+export const featureAgentScheduleModeSchema = z.enum(['continuous', 'cron', 'interval']);
+export const featureAgentAutonomySchema = z.enum(['standby', 'assistant', 'manager', 'yolo']);
+export const featureAgentPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+
+export const featureAgentSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().min(1).max(2000),
+  persona: z.string().max(5000).optional().default(''),
+  appId: z.string().min(1),
+  featureScope: z.object({
+    directories: z.array(z.string()).default([]),
+    filePatterns: z.array(z.string()).default([]),
+    excludePatterns: z.array(z.string()).default([])
+  }).default({}),
+  git: z.object({
+    branchName: z.string().min(1),
+    baseBranch: z.string().default('main'),
+    autoMergeBase: z.boolean().default(true),
+    autoPR: z.boolean().default(true),
+    prTemplate: z.string().max(5000).optional().default('')
+  }),
+  schedule: z.object({
+    mode: featureAgentScheduleModeSchema.default('continuous'),
+    cronExpression: z.string().optional(),
+    intervalMs: z.number().int().min(30000).optional(),
+    pauseBetweenRunsMs: z.number().int().min(0).default(60000)
+  }).default({}),
+  playwright: z.object({
+    testUrls: z.array(z.string()).default([]),
+    baseUrl: z.string().optional(),
+    startCommand: z.string().optional(),
+    viewport: z.object({
+      width: z.number().int().min(320).max(3840).default(1280),
+      height: z.number().int().min(240).max(2160).default(720)
+    }).default({})
+  }).default({}),
+  goals: z.array(z.string()).default([]),
+  constraints: z.array(z.string()).default([]),
+  providerId: z.string().optional().nullable(),
+  model: z.string().optional().nullable(),
+  autonomyLevel: featureAgentAutonomySchema.default('assistant'),
+  priority: featureAgentPrioritySchema.default('MEDIUM')
+});
+
+export const featureAgentUpdateSchema = featureAgentSchema.partial();
+
 /**
  * Validate data against a schema
  * Returns { success: true, data } or { success: false, errors }

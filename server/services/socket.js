@@ -538,6 +538,11 @@ function setupCosEventForwarding() {
   cosEvents.on('evaluation', (data) => broadcastToCos('cos:evaluation', data));
   cosEvents.on('task:ready', (data) => broadcastToCos('cos:task:ready', data));
 
+  // Feature agent events
+  cosEvents.on('feature-agent:status', (data) => broadcastToCos('cos:feature-agent:status', data));
+  cosEvents.on('feature-agent:output', (data) => broadcastToCos('cos:feature-agent:output', data));
+  cosEvents.on('feature-agent:run-complete', (data) => broadcastToCos('cos:feature-agent:run-complete', data));
+
   // Watcher events
   cosEvents.on('watcher:started', (data) => broadcastToCos('cos:watcher:started', data));
   cosEvents.on('watcher:stopped', (data) => broadcastToCos('cos:watcher:stopped', data));

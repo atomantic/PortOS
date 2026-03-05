@@ -159,6 +159,77 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
 }
 
 /**
+ * Create a persistent worktree for a feature agent.
+ * Unlike regular worktrees, these persist across runs.
+ */
+export async function createPersistentWorktree(featureAgentId, sourceWorkspace, branchName, baseBranch = 'main') {
+  const FA_WORKTREES = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
+
+  await mkdir(join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId), { recursive: true });
+
+  await execGit(['fetch', 'origin'], sourceWorkspace).catch(err => {
+    console.log(`⚠️ Persistent worktree fetch failed: ${err.message}`);
+  });
+
+  const baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
+    .then(() => `origin/${baseBranch}`)
+    .catch(() => baseBranch);
+
+  // Check if branch already exists
+  const branchExists = (await execGit(['branch', '--list', branchName], sourceWorkspace)).trim();
+
+  if (branchExists) {
+    // Branch exists - create worktree from existing branch
+    await execGit(['worktree', 'add', FA_WORKTREES, branchName], sourceWorkspace);
+  } else {
+    // New branch - create from base
+    await execGit(['worktree', 'add', '-b', branchName, FA_WORKTREES, baseRef], sourceWorkspace);
+  }
+
+  console.log(`🌳 Created persistent worktree for feature agent ${featureAgentId} at ${FA_WORKTREES} (branch: ${branchName})`);
+  return { worktreePath: FA_WORKTREES, branchName, baseBranch };
+}
+
+/**
+ * Remove a persistent feature agent worktree
+ */
+export async function removePersistentWorktree(featureAgentId, sourceWorkspace, branchName) {
+  const worktreePath = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
+
+  if (!existsSync(worktreePath)) return { removed: false };
+
+  await execGit(['worktree', 'remove', worktreePath, '--force'], sourceWorkspace).catch(async () => {
+    await rm(worktreePath, { recursive: true, force: true });
+    await execGit(['worktree', 'prune'], sourceWorkspace).catch(() => {});
+  });
+
+  console.log(`🌳 Removed persistent worktree for feature agent ${featureAgentId}`);
+  return { removed: true };
+}
+
+/**
+ * Merge base branch into a persistent feature agent worktree before a run
+ */
+export async function mergeBaseIntoFeatureWorktree(featureAgentId, sourceWorkspace, branchName, baseBranch = 'main') {
+  const worktreePath = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
+  if (!existsSync(worktreePath)) return { merged: false, reason: 'worktree-missing' };
+
+  await execGit(['fetch', 'origin'], worktreePath).catch(() => {});
+  const result = await execGit(['merge', `origin/${baseBranch}`, '--no-edit'], worktreePath)
+    .then(() => ({ merged: true }))
+    .catch(err => {
+      // Abort failed merge
+      execGit(['merge', '--abort'], worktreePath).catch(() => {});
+      return { merged: false, reason: err.message };
+    });
+
+  if (result.merged) {
+    console.log(`🌳 Merged origin/${baseBranch} into feature agent ${featureAgentId}`);
+  }
+  return result;
+}
+
+/**
  * List all active worktrees for the repository
  */
 export async function listWorktrees(sourceWorkspace) {
