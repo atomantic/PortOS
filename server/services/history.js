@@ -12,10 +12,6 @@ let historyCache = null;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 2000; // 2 second cache TTL
 
-async function ensureDataDir() {
-  await ensureDir(DATA_DIR);
-}
-
 async function loadHistory() {
   // Return cached data if still valid
   const now = Date.now();
@@ -23,7 +19,7 @@ async function loadHistory() {
     return historyCache;
   }
 
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
 
   historyCache = await readJSONFile(HISTORY_FILE, { entries: [] });
   cacheTimestamp = now;
@@ -31,7 +27,7 @@ async function loadHistory() {
 }
 
 async function saveHistory(data) {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   // Trim to max entries
   if (data.entries.length > MAX_ENTRIES) {
     data.entries = data.entries.slice(-MAX_ENTRIES);

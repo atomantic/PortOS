@@ -9,19 +9,12 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
-import { safeJSONParse } from '../lib/fileUtils.js'
+import { safeJSONParse, ensureDir } from '../lib/fileUtils.js'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'missions')
 
 // In-memory cache
 let missionsCache = null
-
-/**
- * Ensure data directory exists
- */
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true })
-}
 
 /**
  * Load all missions
@@ -30,7 +23,7 @@ async function ensureDataDir() {
 async function loadMissions() {
   if (missionsCache) return missionsCache
 
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
 
   const files = await fs.readdir(DATA_DIR).catch(() => [])
   const missions = []
@@ -55,7 +48,7 @@ async function loadMissions() {
  * @param {Object} mission - Mission object
  */
 async function saveMission(mission) {
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
   const filePath = path.join(DATA_DIR, `${mission.id}.json`)
   await fs.writeFile(filePath, JSON.stringify(mission, null, 2))
 

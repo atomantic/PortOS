@@ -17,6 +17,7 @@ import {
   deserializeIndex,
   getIndexStats
 } from '../lib/bm25.js'
+import { ensureDir } from '../lib/fileUtils.js'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'memory')
 const INDEX_FILE = path.join(DATA_DIR, 'bm25-index.json')
@@ -26,20 +27,13 @@ let indexCache = null
 let isDirty = false
 
 /**
- * Ensure the data directory exists
- */
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true })
-}
-
-/**
  * Load the BM25 index from disk
  * @returns {Promise<Object>} - The BM25 index
  */
 async function loadIndex() {
   if (indexCache) return indexCache
 
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
 
   const exists = await fs.access(INDEX_FILE).then(() => true).catch(() => false)
 
@@ -81,7 +75,7 @@ async function loadIndex() {
 async function saveIndex() {
   if (!indexCache || !isDirty) return
 
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
   const serialized = serializeIndex(indexCache)
   await fs.writeFile(INDEX_FILE, JSON.stringify(serialized, null, 2))
   isDirty = false
@@ -95,7 +89,7 @@ async function saveIndex() {
  * @returns {Promise<Object>} - Index statistics
  */
 async function rebuildIndex(memories) {
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
 
   // Convert memories to documents for indexing
   const documents = memories.map(m => ({

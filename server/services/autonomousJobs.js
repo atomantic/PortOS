@@ -284,18 +284,11 @@ Phase 3 — Report:
 ]
 
 /**
- * Ensure data directory exists
- */
-async function ensureDataDir() {
-  await ensureDir(DATA_DIR)
-}
-
-/**
  * Load jobs from disk
  * @returns {Promise<Object>} Jobs data
  */
 async function loadJobs() {
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
 
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
@@ -356,7 +349,7 @@ function mergeWithDefaults(loaded) {
  * Save jobs to disk
  */
 async function saveJobs(data) {
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
   data.lastUpdated = new Date().toISOString()
   const tmp = JOBS_FILE + '.tmp'
   await writeFile(tmp, JSON.stringify(data, null, 2))

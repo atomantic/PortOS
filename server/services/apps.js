@@ -60,13 +60,6 @@ let cacheTimestamp = 0;
 const CACHE_TTL_MS = 2000; // Cache for 2 seconds to reduce file reads during rapid polling
 
 /**
- * Ensure data directory exists
- */
-async function ensureDataDir() {
-  await ensureDir(DATA_DIR);
-}
-
-/**
  * Load apps registry from disk (with caching).
  * Ensures the PortOS baseline app always exists.
  */
@@ -78,7 +71,7 @@ async function loadApps() {
     return appsCache;
   }
 
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
 
   const data = await readJSONFile(APPS_FILE, { apps: {} });
 
@@ -125,7 +118,7 @@ async function loadApps() {
  * Save apps registry to disk (and invalidate cache)
  */
 async function saveApps(data) {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
   // Update cache with saved data
   appsCache = data;

@@ -166,27 +166,23 @@ const DEFAULT_DATA = {
   usedPrompts: []
 };
 
-async function ensureDataDir() {
-  await ensureDir(DATA_DIR);
-}
-
 async function loadStories() {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   return readJSONFile(STORIES_FILE, DEFAULT_DATA);
 }
 
 async function saveStories(data) {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   await writeFile(STORIES_FILE, JSON.stringify(data, null, 2));
 }
 
 async function loadConfig() {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   return readJSONFile(CONFIG_FILE, DEFAULT_CONFIG);
 }
 
 async function saveConfig(config) {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 

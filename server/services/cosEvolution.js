@@ -15,7 +15,7 @@ import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
 import * as lmStudioManager from './lmStudioManager.js'
-import { safeJSONParse } from '../lib/fileUtils.js'
+import { safeJSONParse, ensureDir } from '../lib/fileUtils.js'
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'cos')
 const EVOLUTION_FILE = path.join(DATA_DIR, 'evolution.json')
@@ -46,20 +46,13 @@ const DEFAULT_STATE = {
 let evolutionState = null
 
 /**
- * Ensure data directory exists
- */
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true })
-}
-
-/**
  * Load evolution state
  * @returns {Promise<Object>} - Evolution state
  */
 async function loadState() {
   if (evolutionState) return evolutionState
 
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
 
   const exists = await fs.access(EVOLUTION_FILE).then(() => true).catch(() => false)
   if (exists) {
@@ -76,7 +69,7 @@ async function loadState() {
  * Save evolution state
  */
 async function saveState() {
-  await ensureDataDir()
+  await ensureDir(DATA_DIR)
   await fs.writeFile(EVOLUTION_FILE, JSON.stringify(evolutionState, null, 2))
 }
 

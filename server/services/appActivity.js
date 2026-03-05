@@ -21,17 +21,10 @@ const DEFAULT_ACTIVITY = {
 };
 
 /**
- * Ensure the data directory exists
- */
-async function ensureDataDir() {
-  await ensureDir(DATA_DIR);
-}
-
-/**
  * Load app activity data
  */
 export async function loadAppActivity() {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
 
   const loaded = await readJSONFile(ACTIVITY_FILE, null);
   return loaded ? { ...DEFAULT_ACTIVITY, ...loaded } : { ...DEFAULT_ACTIVITY };
@@ -41,7 +34,7 @@ export async function loadAppActivity() {
  * Save app activity data
  */
 export async function saveAppActivity(activity) {
-  await ensureDataDir();
+  await ensureDir(DATA_DIR);
   await writeFile(ACTIVITY_FILE, JSON.stringify(activity, null, 2));
 }
 
