@@ -621,8 +621,8 @@ export async function getRemoteBranches(dir) {
       const [fullRef, date, author] = line.split('|');
       // Strip "origin/" prefix
       const name = fullRef.replace(/^origin\//, '');
-      // Skip HEAD pointer
-      if (name === 'HEAD' || fullRef.includes('HEAD')) return null;
+      // Skip HEAD pointer and refs without a branch name (bare remote name)
+      if (name === 'HEAD' || fullRef.includes('HEAD') || !fullRef.includes('/')) return null;
       return {
         name,
         fullRef,
