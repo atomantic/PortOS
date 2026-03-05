@@ -38,6 +38,7 @@ module.exports = {
         PORT: PORTS.API,
         HOST: '0.0.0.0',
         PGPORT: PORTS.POSTGRES,
+        PGPASSWORD: process.env.PGPASSWORD || 'portos',
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
       watch: ['server'],

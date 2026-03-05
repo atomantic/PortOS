@@ -16,7 +16,7 @@ services:
     environment:
       POSTGRES_DB: portos
       POSTGRES_USER: portos
-      POSTGRES_PASSWORD: portos
+      POSTGRES_PASSWORD: ${PGPASSWORD:-portos}
     volumes:
       - portos-pgdata:/var/lib/postgresql/data
       - ./server/scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
