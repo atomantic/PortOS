@@ -14,7 +14,7 @@ function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       cwd,
-      shell: false,
+      shell: process.platform === 'win32',
       maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
       windowsHide: true
     });
