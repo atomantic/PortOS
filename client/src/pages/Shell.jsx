@@ -398,7 +398,7 @@ export default function Shell() {
         <div className="flex items-center gap-2 ml-auto">
           {connected && (
             <button
-              onClick={() => { stopSession(); setTimeout(startSession, 100); }}
+              onClick={() => { stopSession(); setTimeout(startSession, 1000); }}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
               title="Restart session (kill + new)"
             >
@@ -499,7 +499,7 @@ export default function Shell() {
                   <button
                     key={name}
                     onClick={() => {
-                      sendCommand(`cd ${path}`);
+                      sendCommand(`cd "${path}"`);
                       setFolderDropdownOpen(false);
                     }}
                     className="w-full text-left px-3 py-2 text-xs font-mono text-gray-300 hover:bg-port-border hover:text-white transition-colors"
