@@ -201,7 +201,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
 
     // Click into conversation to get full body + thread
     if (account.type === 'outlook') {
-      const detail = await fetchOutlookConversationDetail(page, i);
+      const detail = await fetchOutlookConversationDetail(page, msg.subject, msg.from);
       if (detail && detail.length > 0) {
         detailsFetched++;
         // Thread key groups all messages in this conversation
@@ -290,16 +290,33 @@ export async function syncPlaywright(account, cache, io, options = {}) {
  *       > h3[aria-label^="Cc:"]        (cc)
  * Returns an array of { from, fromEmail, to, cc, date, body } for each message in the thread.
  */
-async function fetchOutlookConversationDetail(page, rowIndex) {
-  // Click the row to open the conversation
+async function fetchOutlookConversationDetail(page, subject, sender) {
+  // Find and click the row by matching subject text (not index, since Outlook virtualizes the list)
+  const safeSubject = JSON.stringify(subject || '');
+  const safeSender = JSON.stringify(sender || '');
   const clickResult = await evaluateOnPage(page, `
     (async function() {
       const listbox = document.querySelector("[role='listbox']");
       if (!listbox) return false;
       const rows = listbox.querySelectorAll('[role="option"]');
-      const row = rows[${rowIndex}];
-      if (!row) return false;
-      row.click();
+      const targetSubject = ${safeSubject}.toLowerCase();
+      const targetSender = ${safeSender}.toLowerCase();
+      let matched = null;
+      for (const row of rows) {
+        const label = (row.getAttribute('aria-label') || '').toLowerCase();
+        const text = (row.innerText || '').toLowerCase();
+        // Match by subject (primary) and sender (secondary)
+        if (targetSubject && (label.includes(targetSubject) || text.includes(targetSubject))) {
+          if (!targetSender || label.includes(targetSender) || text.includes(targetSender)) {
+            matched = row;
+            break;
+          }
+          // Subject matched but sender didn't — keep as fallback
+          if (!matched) matched = row;
+        }
+      }
+      if (!matched) return false;
+      matched.click();
       // Wait for reading pane to load
       await new Promise(r => setTimeout(r, 2000));
       return true;
