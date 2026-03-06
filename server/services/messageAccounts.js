@@ -9,7 +9,8 @@ async function loadAccounts() {
   await ensureDir(PATHS.messages);
   const content = await readFile(ACCOUNTS_FILE, 'utf-8').catch(() => null);
   if (!content) return {};
-  return safeJSONParse(content, {}, { context: 'messageAccounts' });
+  const parsed = safeJSONParse(content, {}, { context: 'messageAccounts' });
+  return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
 }
 
 async function saveAccounts(accounts) {

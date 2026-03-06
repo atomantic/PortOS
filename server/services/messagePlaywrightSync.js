@@ -93,7 +93,8 @@ async function evaluateOnPage(page, expression) {
 export async function getSelectors() {
   const content = await readFile(SELECTORS_FILE, 'utf-8').catch(() => null);
   if (!content) return {};
-  return safeJSONParse(content, {}, { context: 'messageSelectors' });
+  const parsed = safeJSONParse(content, {}, { context: 'messageSelectors' });
+  return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
 }
 
 export async function updateSelectors(provider, selectors) {

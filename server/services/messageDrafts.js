@@ -9,7 +9,8 @@ async function loadDrafts() {
   await ensureDir(PATHS.messages);
   const content = await readFile(DRAFTS_FILE, 'utf-8').catch(() => null);
   if (!content) return [];
-  return safeJSONParse(content, [], { context: 'messageDrafts' });
+  const parsed = safeJSONParse(content, [], { context: 'messageDrafts' });
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 async function saveDrafts(drafts) {

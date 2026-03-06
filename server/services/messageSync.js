@@ -24,7 +24,9 @@ async function loadCache(accountId) {
   const filePath = join(CACHE_DIR, `${accountId}.json`);
   const content = await readFile(filePath, 'utf-8').catch(() => null);
   if (!content) return { syncCursor: null, messages: [] };
-  return safeJSONParse(content, { syncCursor: null, messages: [] }, { context: `messageCache:${accountId}` });
+  const parsed = safeJSONParse(content, { syncCursor: null, messages: [] }, { context: `messageCache:${accountId}` });
+  if (!parsed || !Array.isArray(parsed.messages)) return { syncCursor: null, messages: [] };
+  return parsed;
 }
 
 async function saveCache(accountId, cache) {
