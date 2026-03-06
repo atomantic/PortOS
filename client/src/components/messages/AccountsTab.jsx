@@ -15,8 +15,9 @@ export default function AccountsTab({ accounts, onRefresh }) {
   const handleCreate = async () => {
     if (!form.name) return toast.error('Name is required');
     setSaving(true);
-    await api.createMessageAccount(form);
+    const result = await api.createMessageAccount(form).catch(() => null);
     setSaving(false);
+    if (!result) return toast.error('Failed to create account');
     setShowForm(false);
     setForm({ name: '', type: 'gmail', email: '' });
     toast.success('Account created');
@@ -25,14 +26,16 @@ export default function AccountsTab({ accounts, onRefresh }) {
 
   const handleDelete = async (id) => {
     setDeleting(id);
-    await api.deleteMessageAccount(id);
+    const result = await api.deleteMessageAccount(id).catch(() => null);
     setDeleting(null);
+    if (result === null) return toast.error('Failed to delete account');
     toast.success('Account deleted');
     onRefresh();
   };
 
   const handleToggle = async (account) => {
-    await api.updateMessageAccount(account.id, { enabled: !account.enabled });
+    const result = await api.updateMessageAccount(account.id, { enabled: !account.enabled }).catch(() => null);
+    if (!result) return toast.error('Failed to update account');
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     onRefresh();
   };

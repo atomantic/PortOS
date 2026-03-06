@@ -109,11 +109,16 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 // === Inbox Routes ===
 router.get('/inbox', asyncHandler(async (req, res) => {
   const { accountId, search, limit, offset } = req.query;
+  let parsedLimit = limit !== undefined ? parseInt(limit, 10) : 50;
+  if (Number.isNaN(parsedLimit) || parsedLimit <= 0) parsedLimit = 50;
+  if (parsedLimit > 100) parsedLimit = 100;
+  let parsedOffset = offset !== undefined ? parseInt(offset, 10) : 0;
+  if (Number.isNaN(parsedOffset) || parsedOffset < 0) parsedOffset = 0;
   const result = await messageSync.getMessages({
     accountId,
     search,
-    limit: limit ? parseInt(limit, 10) : 50,
-    offset: offset ? parseInt(offset, 10) : 0
+    limit: parsedLimit,
+    offset: parsedOffset
   });
   res.json(result);
 }));
@@ -140,6 +145,8 @@ router.post('/drafts', asyncHandler(async (req, res) => {
 
 router.post('/drafts/generate', asyncHandler(async (req, res) => {
   const data = generateDraftSchema.parse(req.body);
+  const account = await messageAccounts.getAccount(data.accountId);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
   // AI draft generation - stub for now
   // TODO: Use portos-ai-toolkit for provider selection and model tiers
   const draft = await messageDrafts.createDraft({
@@ -149,7 +156,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     subject: '',
     body: `[AI-generated reply placeholder]\n\nContext: ${data.context}\nInstructions: ${data.instructions}`,
     generatedBy: 'ai',
-    sendVia: 'mcp' // Will be determined by account type
+    sendVia: account.provider || (account.type === 'gmail' ? 'mcp' : 'playwright')
   });
   req.app.get('io')?.emit('messages:draft:created', { draftId: draft.id });
   res.status(201).json(draft);

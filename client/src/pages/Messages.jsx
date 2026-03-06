@@ -18,7 +18,8 @@ const TABS = [
 export default function Messages() {
   const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = tab || 'inbox';
+  const VALID_TABS = TABS.map(t => t.id);
+  const activeTab = VALID_TABS.includes(tab) ? tab : 'inbox';
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
 

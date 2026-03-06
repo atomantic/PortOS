@@ -24,7 +24,7 @@ export async function getMessages(options = {}) {
   // If specific account, just load that cache
   if (accountId) {
     const cache = await loadCache(accountId);
-    let messages = cache.messages;
+    let messages = cache.messages.map(m => ({ ...m, accountId: m.accountId || accountId }));
     if (search) {
       const q = search.toLowerCase();
       messages = messages.filter(m =>
@@ -47,8 +47,9 @@ export async function getMessages(options = {}) {
   let allMessages = [];
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
-    const cache = await loadCache(file.replace('.json', ''));
-    allMessages.push(...cache.messages);
+    const fileAccountId = file.replace('.json', '');
+    const cache = await loadCache(fileAccountId);
+    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || fileAccountId })));
   }
   if (search) {
     const q = search.toLowerCase();
@@ -81,34 +82,45 @@ export async function syncAccount(accountId, io) {
   const cache = await loadCache(accountId);
   let newMessages = [];
 
-  // Provider-specific sync
-  if (account.type === 'gmail') {
-    const { syncGmail } = await import('./messageGmailSync.js');
-    newMessages = await syncGmail(account, cache, io);
-  } else if (account.type === 'outlook' || account.type === 'teams') {
-    const { syncPlaywright } = await import('./messagePlaywrightSync.js');
-    newMessages = await syncPlaywright(account, cache, io);
-  }
+  let uniqueNew;
+  const providerSync = async () => {
+    if (account.type === 'gmail') {
+      const { syncGmail } = await import('./messageGmailSync.js');
+      newMessages = await syncGmail(account, cache, io);
+    } else if (account.type === 'outlook' || account.type === 'teams') {
+      const { syncPlaywright } = await import('./messagePlaywrightSync.js');
+      newMessages = await syncPlaywright(account, cache, io);
+    }
 
-  // Deduplicate by externalId
-  const existingIds = new Set(cache.messages.map(m => m.externalId));
-  const uniqueNew = newMessages.filter(m => !existingIds.has(m.externalId));
-  cache.messages.push(...uniqueNew);
+    // Deduplicate by externalId (skip dedup for messages without externalId)
+    const existingIds = new Set(cache.messages.map(m => m.externalId).filter(Boolean));
+    uniqueNew = newMessages.filter(m => !m.externalId || !existingIds.has(m.externalId));
+    cache.messages.push(...uniqueNew);
 
-  // Trim to maxMessages
-  if (account.syncConfig?.maxMessages && cache.messages.length > account.syncConfig.maxMessages) {
-    cache.messages.sort((a, b) => new Date(b.date) - new Date(a.date));
-    cache.messages = cache.messages.slice(0, account.syncConfig.maxMessages);
-  }
+    // Trim to maxMessages
+    if (account.syncConfig?.maxMessages && cache.messages.length > account.syncConfig.maxMessages) {
+      cache.messages.sort((a, b) => new Date(b.date) - new Date(a.date));
+      cache.messages = cache.messages.slice(0, account.syncConfig.maxMessages);
+    }
 
-  await saveCache(accountId, cache);
-  await updateSyncStatus(accountId, 'success');
+    await saveCache(accountId, cache);
+    await updateSyncStatus(accountId, 'success');
 
-  io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length });
-  io?.emit('messages:changed', {});
-  console.log(`📧 Sync complete for ${account.name}: ${uniqueNew.length} new messages`);
+    io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length });
+    io?.emit('messages:changed', {});
+    console.log(`📧 Sync complete for ${account.name}: ${uniqueNew.length} new messages`);
 
-  return { newMessages: uniqueNew.length, total: cache.messages.length };
+    return { newMessages: uniqueNew.length, total: cache.messages.length };
+  };
+
+  const result = await providerSync().catch(async (error) => {
+    console.error(`📧 Sync failed for ${account.name} (${account.type}): ${error.message}`);
+    await updateSyncStatus(accountId, 'error').catch(() => {});
+    io?.emit('messages:sync:failed', { accountId, error: error.message });
+    throw error;
+  });
+
+  return result;
 }
 
 export async function getSyncStatus(accountId) {
