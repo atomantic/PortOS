@@ -1,5 +1,5 @@
 import { getSettings } from './settings.js';
-import { getProviderById } from './providers.js';
+import { getProviderById, getAllProviders } from './providers.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.
 
@@ -46,16 +46,23 @@ async function resolveProviderConfig(actionType) {
   const settings = await getSettings();
   const msgConfig = settings?.messages || {};
   const actionConfig = msgConfig[actionType] || {};
-  const providerId = actionConfig.providerId || msgConfig.providerId;
-  const model = actionConfig.model || msgConfig.model;
+  let providerId = actionConfig.providerId || msgConfig.providerId;
+  let model = actionConfig.model || msgConfig.model;
 
-  if (!providerId) throw new Error(`No AI provider configured for Messages ${actionType} — set one in Messages > Config`);
+  // Fall back to the first enabled API provider if none is explicitly configured
+  if (!providerId) {
+    const all = await getAllProviders();
+    const fallback = all.find(p => p.enabled && p.type === 'api');
+    if (!fallback) throw new Error(`No AI provider configured for Messages ${actionType} — set one in Messages > Config`);
+    providerId = fallback.id;
+    model = model || fallback.defaultModel || '';
+  }
 
   const provider = await getProviderById(providerId);
   if (!provider) throw new Error(`AI provider "${providerId}" not found`);
   if (provider.type !== 'api') throw new Error(`Messages ${actionType} requires an API provider (not CLI)`);
 
-  return { provider, model, msgConfig };
+  return { provider, model: model || provider.defaultModel || '', msgConfig };
 }
 
 async function callProviderApi(provider, model, prompt) {
