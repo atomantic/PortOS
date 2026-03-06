@@ -551,6 +551,76 @@ Summary: 18 new findings across 16 files. 2 shared utilities to extract.
 
 ---
 
+## Better Audit - 2026-03-05 (Pass 3)
+
+Summary: 22 new actionable findings across 16 files. 1 shared utility to extract (fetchWithTimeout).
+
+### Foundation — Shared Utilities
+1. **fetchWithTimeout** — `fetchWithTimeout(url, options, timeoutMs)` wraps fetch with AbortController timeout. Replaces 8+ duplicate patterns in cosRunnerClient.js, memoryClassifier.js, visionTest.js, lmStudioManager.js, etc. Create as `server/lib/fetchWithTimeout.js`.
+
+### File Ownership Map
+
+| File | Primary Category | Reason |
+|------|-----------------|--------|
+| `server/services/cosRunnerClient.js` | Bugs & Perf | CRITICAL: 12 fetch calls missing timeouts + socket config |
+| `server/services/memory.js` | Bugs & Perf | HIGH: data race in getMemory + MEDIUM: sorting type safety |
+| `server/services/agentActionExecutor.js` | Bugs & Perf | HIGH: unsafe array fallback |
+| `server/services/cos.js` | Bugs & Perf | MEDIUM: migration error + lazy-load race |
+| `server/services/memorySync.js` | Code Quality | HIGH: unsafe rows[0] access |
+| `server/lib/db.js` | Code Quality | HIGH: unsafe rows[0] destructuring |
+| `server/services/lmStudioManager.js` | Code Quality | MEDIUM: hardcoded localhost |
+| `server/services/memoryClassifier.js` | Code Quality | MEDIUM: hardcoded localhost |
+| `client/src/pages/Browser.jsx` | Code Quality | MEDIUM: empty catch |
+| `client/src/pages/Shell.jsx` | Code Quality | MEDIUM: empty catch |
+| `client/src/components/cos/TaskAddForm.jsx` | Code Quality | MEDIUM: empty catch |
+| `client/src/hooks/useAgentFeedbackToast.jsx` | Code Quality | MEDIUM: empty catch |
+| `client/src/components/meatspace/HealthCategorySection.jsx` | Code Quality | MEDIUM: empty catch |
+| `client/src/pages/DevTools.jsx` | Code Quality | MEDIUM: stale closure |
+| `server/services/contextUpgrader.js` | Code Quality | MEDIUM: unused 350-line module (DELETE) |
+| `server/lib/fetchWithTimeout.js` | Foundation | NEW: shared utility |
+
+### Bugs, Performance & Error Handling
+- [ ] **[CRITICAL]** `server/services/cosRunnerClient.js:91-313` - 12 fetch calls missing AbortController/timeout (only spawnAgentViaRunner and executeCliRunViaRunner have timeouts). Fix: Use fetchWithTimeout for all calls. Complexity: Simple
+- [ ] **[HIGH]** `server/services/cosRunnerClient.js:19-26` - Socket.IO with `reconnectionAttempts: Infinity` and no error handler. Fix: Cap at 10, add error handler. Complexity: Simple
+- [ ] **[HIGH]** `server/services/memory.js:203-214` - Data race: loadMemory() called outside withMemoryLock, then accessCount incremented inside lock. Fix: Move loadMemory inside lock. Complexity: Simple
+- [ ] **[HIGH]** `server/services/agentActionExecutor.js:137` - Unsafe fallback: `commentsResponse.comments || commentsResponse || []` may yield non-array. Fix: Use Array.isArray check. Complexity: Simple
+- [ ] **[MEDIUM]** `server/services/cos.js:211-221` - Migration rename fallback: copy failure silently swallowed. Fix: Add error propagation in fallback path. Complexity: Simple
+- [ ] **[MEDIUM]** `server/services/memory.js:220-265` - Sort comparison not type-safe for dates (ISO strings compared as numbers via `|| 0`). Fix: Add type-aware comparison. Complexity: Medium
+- [ ] **[MEDIUM]** `server/services/cos.js:83-101` - Agent index lazy-load race: concurrent calls both trigger migration. Fix: Use promise-based singleton pattern. Complexity: Medium
+
+### Code Quality & Style
+- [ ] **[HIGH]** `server/services/memorySync.js:156` - `result.rows[0].max_seq` without checking rows length. Fix: Add bounds check. Complexity: Simple
+- [ ] **[HIGH]** `server/lib/db.js:85` - Destructuring `result.rows[0]` without row existence check. Fix: Add bounds check. Complexity: Simple
+- [ ] **[MEDIUM]** `server/services/lmStudioManager.js:12` - Hardcoded `http://localhost:1234`. Fix: Use `process.env.LM_STUDIO_URL` with fallback. Complexity: Simple
+- [ ] **[MEDIUM]** `server/services/memoryClassifier.js:24` - Hardcoded `http://localhost:1234/v1/chat/completions`. Fix: Use env var with fallback. Complexity: Simple
+- [ ] **[MEDIUM]** `client/src/pages/Browser.jsx:87`, `client/src/pages/Shell.jsx:81`, `client/src/components/cos/TaskAddForm.jsx:106`, `client/src/hooks/useAgentFeedbackToast.jsx:43`, `client/src/components/meatspace/HealthCategorySection.jsx:48` - Empty `.catch(() => {})` swallowing errors. Fix: Replace with `console.warn`. Complexity: Simple
+- [ ] **[MEDIUM]** `client/src/pages/DevTools.jsx:21-40` - Stale closure risk: `loadData` depends on `filter` but not wrapped in useCallback. Fix: Wrap in useCallback with [filter] dep. Complexity: Simple
+- [ ] **[MEDIUM]** `server/services/contextUpgrader.js` - Unused 350-line module with 0 imports. Fix: DELETE file. Complexity: Simple
+
+### Architecture & SOLID (tracked, not auto-remediated)
+- [ ] **[CRITICAL]** `server/services/cos.js` (3837 lines) - God file with 40+ exports. evaluateTasks() is 346 lines with 5-level nesting. (Complexity: Very Complex)
+- [ ] **[CRITICAL]** `server/services/subAgentSpawner.js` (3284 lines) - 10 imports from cos.js, spawnDirectly/spawnViaRunner have 11/10 parameters. (Complexity: Very Complex)
+- [ ] **[HIGH]** `client/src/services/api.js` (1627 lines) - Monolithic API client mixing 20+ domains. (Complexity: Medium)
+- [ ] **[HIGH]** `server/services/digital-twin.js` (2823 lines) - Mixed CRUD, LLM testing, enrichment, export. (Complexity: Complex)
+- [ ] **[HIGH]** `server/routes/cos.js` (1253 lines) - Business logic mixed with HTTP handlers. (Complexity: Medium)
+- [ ] **[HIGH]** `client/src/pages/ChiefOfStaff.jsx` (864 lines) - 24 useState hooks. (Complexity: Medium)
+
+### DRY & YAGNI (tracked for future passes)
+- [ ] **[HIGH]** Duplicate DATA_DIR/path constants in 8+ files — should import from PATHS in fileUtils.js
+- [ ] **[MEDIUM]** 39 instances of `mkdir({recursive:true})` vs centralized `ensureDir()`
+- [ ] **[MEDIUM]** JSON read/write pattern variations (203 occurrences)
+
+### Test Coverage (tracked, not auto-remediated)
+- [ ] **[CRITICAL]** `server/services/cos.js` - No tests for 3837-line core service (45 test cases needed)
+- [ ] **[CRITICAL]** `server/services/cosRunnerClient.js` - No tests for 16 fetch functions (32 test cases needed)
+- [ ] **[CRITICAL]** `server/services/agentActionExecutor.js` - No tests for 661-line service (24 test cases needed)
+- [ ] **[CRITICAL]** `server/services/memorySync.js` - No tests for sync service (18 test cases needed)
+- [ ] **[HIGH]** `server/services/autoFixer.js` - No tests for 301-line service
+- [ ] **[HIGH]** `server/services/subAgentSpawner.test.js` - Tests use copy-pasted logic instead of importing real functions
+- [ ] **[HIGH]** `server/services/digital-twin.test.js` - runTests(), validateCompleteness(), getGapRecommendations() untested
+
+---
+
 ## Next Actions
 
 1. **M44 P6**: Finish genome/epigenetic migration cleanup — update route comments, remove Genome card from IdentityTab or redirect to `/meatspace/genome`
