@@ -7,6 +7,11 @@ const CACHE_DIR = join(PATHS.messages, 'cache');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const syncLocks = new Map();
 
+function safeDate(d) {
+  const t = new Date(d).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
 function filterBySearch(messages, search) {
   if (!search) return messages;
   const q = search.toLowerCase();
@@ -43,7 +48,7 @@ export async function getMessages(options = {}) {
     let messages = cache.messages.map(m => ({ ...m, accountId: m.accountId || accountId }));
     messages = filterBySearch(messages, search);
     return {
-      messages: messages.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(offset, offset + limit),
+      messages: messages.sort((a, b) => safeDate(b.date) - safeDate(a.date)).slice(offset, offset + limit),
       total: messages.length
     };
   }
@@ -61,7 +66,7 @@ export async function getMessages(options = {}) {
     allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || fileAccountId })));
   }
   allMessages = filterBySearch(allMessages, search);
-  allMessages.sort((a, b) => new Date(b.date) - new Date(a.date));
+  allMessages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
   return {
     messages: allMessages.slice(offset, offset + limit),
     total: allMessages.length
@@ -116,7 +121,7 @@ export async function syncAccount(accountId, io) {
 
     // Trim to maxMessages
     if (account.syncConfig?.maxMessages && cache.messages.length > account.syncConfig.maxMessages) {
-      cache.messages.sort((a, b) => new Date(b.date) - new Date(a.date));
+      cache.messages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
       cache.messages = cache.messages.slice(0, account.syncConfig.maxMessages);
     }
 

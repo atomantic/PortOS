@@ -32,19 +32,17 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   const handleCreateDraft = async () => {
     if (!account) return toast.error('No account available');
-    const draftData = {
-      accountId: account.id,
-      replyToMessageId: message.id,
-      threadId: message.threadId,
-      to: [message.from?.email].filter(Boolean),
-      subject: `Re: ${message.subject || ''}`,
-      body: replyBody,
-      generatedBy: generatedDraftId ? 'ai' : 'manual',
-      sendVia: account.provider
-    };
+    const to = [message.from?.email].filter(Boolean);
+    const subject = `Re: ${message.subject || ''}`;
     const result = generatedDraftId
-      ? await api.updateMessageDraft(generatedDraftId, draftData).catch(() => null)
-      : await api.createMessageDraft(draftData).catch(() => null);
+      ? await api.updateMessageDraft(generatedDraftId, { to, subject, body: replyBody }).catch(() => null)
+      : await api.createMessageDraft({
+          accountId: account.id,
+          replyToMessageId: message.id,
+          threadId: message.threadId,
+          to, subject, body: replyBody,
+          generatedBy: 'manual'
+        }).catch(() => null);
     if (!result) return;
     toast.success('Draft saved');
     setShowReply(false);

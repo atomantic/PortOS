@@ -247,7 +247,8 @@ export async function testSelectors(provider) {
     results[name] = { selector, matches: count ?? 0 };
   }
 
-  const allMatch = Object.values(results).every(r => r.matches > 0);
-  console.log(`📧 Selector test for ${provider}: ${allMatch ? 'all matched' : 'some missing'}`);
-  return { provider, results, status: allMatch ? 'ok' : 'partial' };
+  const entries = Object.values(results);
+  const status = entries.length === 0 ? 'no-selectors' : entries.every(r => r.matches > 0) ? 'ok' : 'partial';
+  console.log(`📧 Selector test for ${provider}: ${status}`);
+  return { provider, results, status };
 }
