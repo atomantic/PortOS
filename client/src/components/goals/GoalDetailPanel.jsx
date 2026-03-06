@@ -23,6 +23,9 @@ const HORIZON_OPTIONS = [
   { value: 'lifetime', label: 'Lifetime' }
 ];
 
+const MAX_TAGS = 20;
+const MAX_TAG_LENGTH = 50;
+
 export { CATEGORY_CONFIG, HORIZON_OPTIONS };
 
 export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) {
@@ -86,8 +89,8 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
   };
 
   const addTag = () => {
-    const tag = tagInput.trim();
-    if (tag && !form.tags.includes(tag)) {
+    const tag = tagInput.trim().slice(0, MAX_TAG_LENGTH);
+    if (tag && form.tags.length < MAX_TAGS && !form.tags.includes(tag)) {
       setForm({ ...form, tags: [...form.tags, tag] });
     }
     setTagInput('');
@@ -207,7 +210,11 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
                 placeholder="Add tag..."
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
               />
-              <button onClick={addTag} className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent">
+              <button
+                onClick={addTag}
+                disabled={form.tags.length >= MAX_TAGS}
+                className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
+              >
                 Add
               </button>
             </div>

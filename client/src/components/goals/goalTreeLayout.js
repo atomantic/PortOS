@@ -56,12 +56,13 @@ export function layoutGoalNodes(flatGoals) {
       let x, y, z;
 
       if (parent && radius > 0) {
-        // Offset from parent position with some spread
+        // Offset relative to parent position with a local radius
+        const localRadius = RING_RADIUS;
         const parentAngle = Math.atan2(parent.z, parent.x);
         const spread = Math.PI / (count + 2);
         const childAngle = parentAngle + (i - count / 2) * spread;
-        x = Math.cos(childAngle) * radius;
-        z = Math.sin(childAngle) * radius;
+        x = parent.x + Math.cos(childAngle) * localRadius;
+        z = parent.z + Math.sin(childAngle) * localRadius;
         y = parent.y + (rng() - 0.5) * Y_SPREAD;
       } else if (radius === 0) {
         // Center ring - small spread
@@ -108,25 +109,27 @@ export function layoutGoalNodes(flatGoals) {
       tagMap[tag].push(goal.id);
     }
   }
-  const seenPairs = new Set();
+  // Star topology: connect each goal to the first goal in the tag group (hub)
+  const seenTagEdges = new Set();
   for (const ids of Object.values(tagMap)) {
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        const key = [ids[i], ids[j]].sort().join(':');
-        if (seenPairs.has(key)) continue;
-        seenPairs.add(key);
-        // Don't add tag edge if parent-child edge already exists
-        const a = goalMap.get(ids[i]), b = goalMap.get(ids[j]);
-        if (a?.parentId === ids[j] || b?.parentId === ids[i]) continue;
-        if (positioned.has(ids[i]) && positioned.has(ids[j])) {
-          edges.push({
-            source: ids[i],
-            target: ids[j],
-            type: 'tag',
-            sourceNode: positioned.get(ids[i]),
-            targetNode: positioned.get(ids[j])
-          });
-        }
+    if (ids.length < 2) continue;
+    const hub = ids[0];
+    for (let i = 1; i < ids.length; i++) {
+      const spoke = ids[i];
+      const key = [hub, spoke].sort().join(':');
+      if (seenTagEdges.has(key)) continue;
+      seenTagEdges.add(key);
+      // Don't add tag edge if parent-child edge already exists
+      const a = goalMap.get(hub), b = goalMap.get(spoke);
+      if (a?.parentId === spoke || b?.parentId === hub) continue;
+      if (positioned.has(hub) && positioned.has(spoke)) {
+        edges.push({
+          source: hub,
+          target: spoke,
+          type: 'tag',
+          sourceNode: positioned.get(hub),
+          targetNode: positioned.get(spoke)
+        });
       }
     }
   }

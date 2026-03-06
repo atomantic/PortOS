@@ -803,15 +803,16 @@ export async function getGoalsTree() {
   const goals = await getGoals();
   const longevity = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
 
-  // Enrich goals with urgency
-  for (const goal of goals.goals) {
+  // Enrich goals with urgency (shallow copies to avoid mutating persisted objects)
+  const enriched = goals.goals.map(goal => {
     if (goal.status === 'active' && longevity.timeHorizons) {
-      goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+      return { ...goal, urgency: computeGoalUrgency(goal, longevity.timeHorizons) };
     }
-  }
+    return { ...goal };
+  });
 
   // Build hierarchical tree
-  const goalMap = new Map(goals.goals.map(g => [g.id, { ...g, children: [] }]));
+  const goalMap = new Map(enriched.map(g => [g.id, { ...g, children: [] }]));
   const roots = [];
   for (const node of goalMap.values()) {
     if (node.parentId && goalMap.has(node.parentId)) {
@@ -823,7 +824,7 @@ export async function getGoalsTree() {
 
   // Build tag index (deduplicated per tag)
   const tagIndex = {};
-  for (const goal of goals.goals) {
+  for (const goal of enriched) {
     for (const tag of new Set(goal.tags || [])) {
       if (!tagIndex[tag]) tagIndex[tag] = [];
       tagIndex[tag].push(goal.id);
@@ -832,7 +833,7 @@ export async function getGoalsTree() {
 
   return {
     roots,
-    flat: goals.goals,
+    flat: enriched,
     tagIndex,
     birthDate: goals.birthDate,
     lifeExpectancy: longevity.lifeExpectancy || goals.lifeExpectancy,

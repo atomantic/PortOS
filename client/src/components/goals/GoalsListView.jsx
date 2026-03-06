@@ -252,7 +252,6 @@ export default function GoalsListView({ data, onRefresh }) {
                 onToggle={toggleExpand}
                 onSelect={handleSelect}
                 selectedId={selectedGoal?.id}
-                allGoals={data?.flat}
                 onAddChild={handleAddChild}
               />
             ))

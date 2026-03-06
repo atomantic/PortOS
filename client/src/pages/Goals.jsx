@@ -27,6 +27,12 @@ export default function Goals() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  useEffect(() => {
+    if (rawTab && !VALID_TABS.has(rawTab)) {
+      navigate('/goals/tree', { replace: true });
+    }
+  }, [rawTab, navigate]);
+
   const handleTabChange = (tabId) => {
     navigate(`/goals/${tabId}`, { replace: true });
   };
