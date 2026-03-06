@@ -12,25 +12,37 @@ import { safeJSONParse } from '../lib/fileUtils.js';
  */
 function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
+    const maxBuffer = options.maxBuffer || 10 * 1024 * 1024;
     const child = spawn('git', args, {
       cwd,
       shell: process.platform === 'win32',
-      maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
       windowsHide: true
     });
 
     let stdout = '';
     let stderr = '';
+    let killed = false;
 
     child.stdout.on('data', (data) => {
       stdout += data.toString();
+      if (stdout.length + stderr.length > maxBuffer && !killed) {
+        killed = true;
+        child.kill();
+        reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
+      }
     });
 
     child.stderr.on('data', (data) => {
       stderr += data.toString();
+      if (stdout.length + stderr.length > maxBuffer && !killed) {
+        killed = true;
+        child.kill();
+        reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
+      }
     });
 
     child.on('close', (code) => {
+      if (killed) return;
       if (code !== 0 && !options.ignoreExitCode) {
         reject(new Error(stderr || `git exited with code ${code}`));
       } else {

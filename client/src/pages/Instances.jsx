@@ -258,7 +258,7 @@ function SyncStatusBadge({ label, icon: Icon, localSeq, peerSeq, cursorSeq }) {
     <div className="flex items-center gap-1.5 text-xs">
       <Icon size={12} className="text-gray-500" />
       <span className="text-gray-500">{label}:</span>
-      {peerSeq != null && (
+      {peerSeq != null ? (
         <span className="flex items-center gap-0.5" title={`Our cursor: ${cursorSeq ?? 0} / Their max: ${peerSeq}`}>
           {inboundSynced ? (
             <CheckCircle2 size={11} className="text-port-success" />
@@ -270,6 +270,11 @@ function SyncStatusBadge({ label, icon: Icon, localSeq, peerSeq, cursorSeq }) {
           <span className={inboundSynced ? 'text-port-success' : inboundBehind ? 'text-port-warning' : 'text-gray-400'}>
             {cursorSeq ?? 0}/{peerSeq}
           </span>
+        </span>
+      ) : (
+        <span className="flex items-center gap-0.5" title="Waiting for peer sync status">
+          <Clock size={11} className="text-gray-500" />
+          <span className="text-gray-500">{cursorSeq ?? 0}/?</span>
         </span>
       )}
     </div>

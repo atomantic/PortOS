@@ -582,8 +582,12 @@ export async function applyRemoteRecord(type, id, record, op) {
 
     if (op === 'delete') {
       if (!data.records[id]) return { applied: false, reason: 'not_found' };
+      // Require updatedAt on delete operations for last-writer-wins conflict resolution
+      if (!record?.updatedAt) {
+        return { applied: false, reason: 'missing_timestamp' };
+      }
       // LWW: only delete if local record isn't newer than the remote delete (>= for consistency with update path)
-      if (record?.updatedAt && data.records[id].updatedAt >= record.updatedAt) {
+      if (data.records[id].updatedAt >= record.updatedAt) {
         return { applied: false, reason: 'local_newer' };
       }
       delete data.records[id];
