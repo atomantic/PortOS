@@ -2664,7 +2664,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 - **Priority**: ${task.priority}
 - **Description**: ${task.description}
 ${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
-${task.metadata?.app ? `- **Target App**: ${task.metadata.app}` : ''}
+${task.metadata?.app ? `- **Target App**: ${task.metadata.app}\n- **Target App Directory**: ${workspaceDir}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}
 ${jiraSection}
@@ -2692,7 +2692,7 @@ ${task.metadata?.app ? `- **When done, create a pull request to the repo's defau
 - If the working tree is dirty with changes unrelated to your task, run \`git stash\` to set them aside before starting.
 
 ## Working Directory
-You are working in the project directory. Use the available tools to explore, modify, and test code.
+${task.metadata?.app ? `You are working in the target app directory: \`${workspaceDir}\`. All code changes, research, plans, and docs for this task belong in this directory — NOT in the PortOS repo.` : 'You are working in the project directory.'} Use the available tools to explore, modify, and test code.
 
 Begin working on the task now.`;
 }
