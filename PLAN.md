@@ -277,6 +277,7 @@ Always review before send — AI-generated drafts go to an outbox queue. The use
 - [x] **P1: Email Read & Sync** — Outlook CDP browser scraping with `[role='listbox'] [role='option']` selectors, Gmail MCP integration, account CRUD, Sync Unread / Full Sync modes with scrolling for virtualized lists, message caching with dedup
 - [x] **P2: AI Triage & Inbox Actions** — AI evaluation endpoint (`POST /messages/evaluate`) classifies messages as reply/archive/delete/review with priority, inbox shows action badges + priority dots + pin/flag indicators, 1-click "Draft" button generates AI reply and navigates to Drafts
 - [x] **P3: AI Reply Generation** — Real AI reply using configured provider/model and customizable prompt templates (reply + forward), `{{variable}}` substitution, settings persisted in `settings.json`
+- [x] **P3.5: Full Body & Thread Capture** — Outlook sync clicks into each conversation to extract full email body (not just 300-char preview). Conversation threads linked by `threadId`. `GET /messages/thread/:accountId/:threadId` endpoint. MessageDetail shows full conversation chain with "Preview only" indicator for uncaptured messages. Dedup preserves full body upgrades on re-sync.
 - [x] **P4: Config Page** — Unified Config tab with AI Provider & Model selector, prompt template editor, and email account management
 
 **Remaining TODO:**
@@ -290,7 +291,7 @@ Always review before send — AI-generated drafts go to an outbox queue. The use
 
 **Data:** `data/messages/accounts.json`, `data/messages/cache/{accountId}.json`, `data/messages/selectors.json`, `settings.json` (messages key for AI config + templates)
 
-**Routes:** `GET /api/messages/inbox`, `GET /api/messages/:accountId/:messageId`, `POST /api/messages/sync/:accountId`, `POST /api/messages/evaluate`, `POST /api/messages/drafts/generate`, CRUD for accounts/drafts/selectors
+**Routes:** `GET /api/messages/inbox`, `GET /api/messages/:accountId/:messageId`, `GET /api/messages/thread/:accountId/:threadId`, `POST /api/messages/sync/:accountId`, `POST /api/messages/evaluate`, `POST /api/messages/drafts/generate`, CRUD for accounts/drafts/selectors
 
 **Nav:** Collapsible "Messages" sidebar section with Drafts, Inbox, Sync, Config sub-pages
 
