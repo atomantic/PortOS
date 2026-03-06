@@ -201,17 +201,17 @@ export async function createMemory(data, embedding = null) {
  * Get a memory by ID
  */
 export async function getMemory(id) {
-  const memory = await loadMemory(id);
-  if (!memory) return null;
+  return withMemoryLock(async () => {
+    const memory = await loadMemory(id);
+    if (!memory) return null;
 
-  // Update access stats
-  await withMemoryLock(async () => {
+    // Update access stats
     memory.accessCount += 1;
     memory.lastAccessed = new Date().toISOString();
     await saveMemory(memory);
-  });
 
-  return memory;
+    return memory;
+  });
 }
 
 /**
@@ -251,9 +251,11 @@ export async function getMemories(options = {}) {
   const sortBy = options.sortBy || 'createdAt';
   const sortOrder = options.sortOrder || 'desc';
   memories.sort((a, b) => {
-    const aVal = a[sortBy] || 0;
-    const bVal = b[sortBy] || 0;
-    return sortOrder === 'desc' ? (bVal > aVal ? 1 : -1) : (aVal > bVal ? 1 : -1);
+    const aRaw = a[sortBy];
+    const bRaw = b[sortBy];
+    const aVal = typeof aRaw === 'string' ? aRaw : (aRaw ?? 0);
+    const bVal = typeof bRaw === 'string' ? bRaw : (bRaw ?? 0);
+    return sortOrder === 'desc' ? (bVal > aVal ? 1 : bVal < aVal ? -1 : 0) : (aVal > bVal ? 1 : aVal < bVal ? -1 : 0);
   });
 
   // Paginate

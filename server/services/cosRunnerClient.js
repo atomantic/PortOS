@@ -6,6 +6,7 @@
  */
 
 import { io } from 'socket.io-client';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
 
@@ -21,7 +22,7 @@ export function initCosRunnerConnection() {
 
   socket = io(COS_RUNNER_URL, {
     reconnection: true,
-    reconnectionAttempts: Infinity,
+    reconnectionAttempts: 10,
     reconnectionDelay: 1000
   });
 
@@ -36,6 +37,10 @@ export function initCosRunnerConnection() {
     console.log('🔌 Disconnected from CoS Runner');
     const handler = eventHandlers.get('connection:lost');
     if (handler) handler();
+  });
+
+  socket.on('connect_error', (err) => {
+    console.error(`🔌 CoS Runner connection error: ${err.message}`);
   });
 
   // Forward events to registered handlers
@@ -88,7 +93,7 @@ export function onCosRunnerEvent(event, handler) {
  * Check if CoS Runner is available
  */
 export async function isRunnerAvailable() {
-  const response = await fetch(`${COS_RUNNER_URL}/health`).catch(() => null);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/health`, {}, 10000).catch(() => null);
   if (!response || !response.ok) return false;
   return true;
 }
@@ -97,7 +102,7 @@ export async function isRunnerAvailable() {
  * Get runner health status
  */
 export async function getRunnerHealth() {
-  const response = await fetch(`${COS_RUNNER_URL}/health`).catch(() => null);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/health`, {}, 10000).catch(() => null);
   if (!response || !response.ok) {
     return { available: false, error: 'Runner not available' };
   }
@@ -156,7 +161,7 @@ export async function spawnAgentViaRunner(options) {
  * Get list of active agents from runner
  */
 export async function getActiveAgentsFromRunner() {
-  const response = await fetch(`${COS_RUNNER_URL}/agents`);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents`, {}, 10000);
   if (!response.ok) {
     throw new Error('Failed to get agents');
   }
@@ -167,9 +172,9 @@ export async function getActiveAgentsFromRunner() {
  * Terminate an agent via the runner (graceful SIGTERM with SIGKILL fallback)
  */
 export async function terminateAgentViaRunner(agentId) {
-  const response = await fetch(`${COS_RUNNER_URL}/terminate/${agentId}`, {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/terminate/${agentId}`, {
     method: 'POST'
-  });
+  }, 30000);
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to terminate agent');
@@ -181,9 +186,9 @@ export async function terminateAgentViaRunner(agentId) {
  * Force kill an agent via the runner (immediate SIGKILL)
  */
 export async function killAgentViaRunner(agentId) {
-  const response = await fetch(`${COS_RUNNER_URL}/kill/${agentId}`, {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/kill/${agentId}`, {
     method: 'POST'
-  });
+  }, 30000);
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to kill agent');
@@ -195,7 +200,7 @@ export async function killAgentViaRunner(agentId) {
  * Get process stats for an agent
  */
 export async function getAgentStatsFromRunner(agentId) {
-  const response = await fetch(`${COS_RUNNER_URL}/agents/${agentId}/stats`);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents/${agentId}/stats`, {}, 10000);
   if (!response.ok) {
     return null;
   }
@@ -206,9 +211,9 @@ export async function getAgentStatsFromRunner(agentId) {
  * Terminate all agents via the runner
  */
 export async function terminateAllAgentsViaRunner() {
-  const response = await fetch(`${COS_RUNNER_URL}/terminate-all`, {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/terminate-all`, {
     method: 'POST'
-  });
+  }, 30000);
   if (!response.ok) {
     throw new Error('Failed to terminate agents');
   }
@@ -219,7 +224,7 @@ export async function terminateAllAgentsViaRunner() {
  * Get agent output from runner
  */
 export async function getAgentOutputFromRunner(agentId) {
-  const response = await fetch(`${COS_RUNNER_URL}/agents/${agentId}/output`);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents/${agentId}/output`, {}, 10000);
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to get agent output');
@@ -275,7 +280,7 @@ export async function executeCliRunViaRunner(options) {
  * Get list of active runs from runner
  */
 export async function getActiveRunsFromRunner() {
-  const response = await fetch(`${COS_RUNNER_URL}/runs`);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs`, {}, 10000);
   if (!response.ok) {
     throw new Error('Failed to get runs');
   }
@@ -286,7 +291,7 @@ export async function getActiveRunsFromRunner() {
  * Check if a run is active in the runner
  */
 export async function isRunActiveInRunner(runId) {
-  const response = await fetch(`${COS_RUNNER_URL}/runs/${runId}/active`);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs/${runId}/active`, {}, 10000);
   if (!response.ok) {
     return false;
   }
@@ -298,7 +303,7 @@ export async function isRunActiveInRunner(runId) {
  * Get run output from runner
  */
 export async function getRunOutputFromRunner(runId) {
-  const response = await fetch(`${COS_RUNNER_URL}/runs/${runId}/output`);
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs/${runId}/output`, {}, 10000);
   if (!response.ok) {
     return null;
   }
@@ -310,9 +315,9 @@ export async function getRunOutputFromRunner(runId) {
  * Stop a run via the runner
  */
 export async function stopRunViaRunner(runId) {
-  const response = await fetch(`${COS_RUNNER_URL}/runs/${runId}/stop`, {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs/${runId}/stop`, {
     method: 'POST'
-  });
+  }, 30000);
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to stop run');

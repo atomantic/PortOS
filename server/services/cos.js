@@ -77,27 +77,33 @@ let initialStartup = false;
 // Lightweight index mapping agentId → YYYY-MM-DD date bucket (~50KB vs 16MB full cache)
 // Lazy-loaded from data/cos/agents/index.json on first access
 let agentIndex = null;
+let agentIndexPromise = null;
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
 
-// Load agent index from disk (lazy init)
+// Load agent index from disk (lazy init, singleton promise prevents concurrent migrations)
 async function loadAgentIndex() {
   if (agentIndex) return agentIndex;
+  if (agentIndexPromise) return agentIndexPromise;
 
-  if (!existsSync(AGENTS_DIR)) {
-    await mkdir(AGENTS_DIR, { recursive: true });
-  }
+  agentIndexPromise = (async () => {
+    if (!existsSync(AGENTS_DIR)) {
+      await mkdir(AGENTS_DIR, { recursive: true });
+    }
 
-  if (existsSync(INDEX_FILE)) {
-    const content = await readFile(INDEX_FILE, 'utf-8').catch(() => '{}');
-    const parsed = safeJSONParse(content, {});
-    agentIndex = new Map(Object.entries(parsed));
-    console.log(`📂 Loaded agent index: ${agentIndex.size} entries`);
-  } else {
-    // No index yet — run migration from flat dirs to date buckets
-    agentIndex = await migrateAgentsToDateBuckets();
-  }
+    if (existsSync(INDEX_FILE)) {
+      const content = await readFile(INDEX_FILE, 'utf-8').catch(() => '{}');
+      const parsed = safeJSONParse(content, {});
+      agentIndex = new Map(Object.entries(parsed));
+      console.log(`📂 Loaded agent index: ${agentIndex.size} entries`);
+    } else {
+      // No index yet — run migration from flat dirs to date buckets
+      agentIndex = await migrateAgentsToDateBuckets();
+    }
 
-  return agentIndex;
+    return agentIndex;
+  })();
+
+  return agentIndexPromise;
 }
 
 // Persist agent index to disk (atomic write via temp file + rename)
@@ -208,16 +214,21 @@ async function migrateAgentsToDateBuckets() {
       continue;
     }
 
-    await rename(agentDir, targetDir).catch(async (err) => {
+    await rename(agentDir, targetDir).catch(async (renameErr) => {
       // rename can fail across filesystems — fall back to copy+delete
-      console.log(`⚠️ Rename failed for ${agentId}, using copy: ${err.message}`);
-      await mkdir(targetDir, { recursive: true });
-      const files = await readdir(agentDir);
-      for (const file of files) {
-        const content = await readFile(join(agentDir, file));
-        await writeFile(join(targetDir, file), content);
+      console.log(`⚠️ Rename failed for ${agentId}, using copy: ${renameErr.message}`);
+      try {
+        await mkdir(targetDir, { recursive: true });
+        const files = await readdir(agentDir);
+        for (const file of files) {
+          const content = await readFile(join(agentDir, file));
+          await writeFile(join(targetDir, file), content);
+        }
+        await rm(agentDir, { recursive: true });
+      } catch (copyErr) {
+        console.error(`❌ Copy fallback failed for ${agentId}: ${copyErr.message}`);
+        throw copyErr;
       }
-      await rm(agentDir, { recursive: true });
     });
 
     index.set(agentId, dateStr);
