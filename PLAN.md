@@ -266,44 +266,32 @@ Extends the existing goal system in `server/services/identity.js` and `data/digi
 
 *Touches: server/services/identity.js (extend), new server/services/goalEvaluator.js, server/routes/identity.js (extend), client/src/pages/Goals.jsx, client/src/components/goals/tabs/, Layout.jsx, autonomousJobs.js*
 
-### M50: Email Management
+### M50: Messages (Email Management)
 
-Multi-provider email integration — Gmail via Google OAuth (shared with M48) + Outlook via Microsoft Graph API (separate OAuth2 flow). Provider abstraction layer so both behave identically from the service layer up.
+Multi-provider email integration — Gmail via MCP, Outlook/Teams via CDP browser automation (Playwright). Unified Messages page with Inbox, Drafts, Sync, and Config sub-pages.
 
 Always review before send — AI-generated drafts go to an outbox queue. The user reviews, edits, and approves each response before it's sent. No auto-send.
 
-**Phases:**
+**Completed:**
 
-- **P1: Email Read & Provider Auth** — Gmail API integration using shared Google OAuth (`gmail.modify` scope), Microsoft Graph API with separate OAuth2 for Outlook, provider abstraction layer (`emailProvider.js`), email listing with pagination, thread view, basic email inbox UI
-- **P2: AI Categorization & Priority Extraction** — LLM-powered classification (action required, informational, promotional, social, receipts), configurable rules for known senders (skip AI for obvious categories like GitHub notifications), todo extraction from email content (linkable to M49 goal todos), priority scoring, Brain system integration for knowledge capture from action/info emails
-- **P3: Response Drafting with Digital Twin** — Draft responses using Digital Twin voice/style (reads COMMUNICATION.md, PERSONALITY.md, VALUES.md + recent thread context), outbox queue with pending/approved/sent states, draft review/editing UI, all drafts require manual approval before sending
-- **P4: CoS Automation & Rules** — Automated classification on new emails via CoS job `job-email-triage`, rule-based pre-filtering, email-to-task pipeline (email todos → M49 goal todos), priority email notifications via existing notification system
+- [x] **P1: Email Read & Sync** — Outlook CDP browser scraping with `[role='listbox'] [role='option']` selectors, Gmail MCP integration, account CRUD, Sync Unread / Full Sync modes with scrolling for virtualized lists, message caching with dedup
+- [x] **P2: AI Triage & Inbox Actions** — AI evaluation endpoint (`POST /messages/evaluate`) classifies messages as reply/archive/delete/review with priority, inbox shows action badges + priority dots + pin/flag indicators, 1-click "Draft" button generates AI reply and navigates to Drafts
+- [x] **P3: AI Reply Generation** — Real AI reply using configured provider/model and customizable prompt templates (reply + forward), `{{variable}}` substitution, settings persisted in `settings.json`
+- [x] **P4: Config Page** — Unified Config tab with AI Provider & Model selector, prompt template editor, and email account management
 
-**Data:** `data/email/config.json` (sync settings, categories, rules, brain capture config), `data/email/cache/YYYY-MM-DD.jsonl` (date-bucketed email cache, bodies fetched on demand), `data/email/outbox.json` (draft queue with status tracking), `data/outlook/auth.json` (Microsoft OAuth tokens)
+**Remaining TODO:**
 
-**Routes:** `GET /api/email/messages`, `GET /api/email/threads/:threadId`, `POST /api/email/sync`, `POST /api/email/classify/:id`, `POST /api/email/draft/:id`, `GET/PUT/POST/DELETE /api/email/outbox/:id`, `POST /api/email/outbox/:id/approve`
+- [ ] **P5: Per-action model selection** — Separate provider/model configs for triage vs reply generation (different cost/capability tiers). Expand `settings.messages` to `{ triage: { providerId, model }, reply: { providerId, model } }`. Update ConfigTab with two `ProviderModelSelector` sections.
+- [ ] **P6: Prompt injection hardening** — XML-fence untrusted email content in AI prompts to prevent injection. Add content sanitization layer. Support CLI providers (claude, codex) safely by sandboxing email body content — never pass raw email text as bare prompt content.
+- [ ] **P7: Digital Twin voice drafting** — Draft responses using Digital Twin voice/style (reads COMMUNICATION.md, PERSONALITY.md, VALUES.md + recent thread context)
+- [ ] **P8: CoS Automation & Rules** — Automated classification on new emails via CoS job, rule-based pre-filtering, email-to-task pipeline, priority email notifications
+- [ ] **Cleanup** — Delete unused `client/src/components/messages/AccountsTab.jsx` (replaced by ConfigTab)
 
-**Nav:** Top-level sidebar item "Email" (alphabetically between Digital Twin and Goals)
+**Data:** `data/messages/accounts.json`, `data/messages/cache/{accountId}.json`, `data/messages/selectors.json`, `settings.json` (messages key for AI config + templates)
 
-**Dependency Graph:**
+**Routes:** `GET /api/messages/inbox`, `GET /api/messages/:accountId/:messageId`, `POST /api/messages/sync/:accountId`, `POST /api/messages/evaluate`, `POST /api/messages/drafts/generate`, CRUD for accounts/drafts/selectors
 
-```
-M48 P1 (Google OAuth + Calendar Read)
-  ├── M48 P2 (Calendar Write + Sync)
-  │     ├── M49 P2 (Calendar Time-Blocking)
-  │     └── M48 P3 (Smart Scheduling + CoS)
-  │           └── M48 P4 (Calendar UI Polish)
-  └── M50 P1 (Gmail + Outlook Read — reuses Google OAuth)
-        └── M50 P2 (AI Classification)
-              └── M50 P3 (Response Drafting)
-                    └── M50 P4 (CoS Automation)
-
-M49 P1 (Enhanced Goals + Todos) — independent, no deps
-  ├── M49 P2 (Calendar Integration — needs M48 P2)
-  └── M49 P3 (Check-ins) → M49 P4 (Dashboard)
-```
-
-*Touches: new server/services/email.js, server/services/emailProvider.js, server/services/emailClassifier.js, server/services/emailDrafter.js, server/routes/email.js, client/src/pages/Email.jsx, client/src/components/email/tabs/, Layout.jsx, brain.js, autonomousJobs.js, portos-ai-toolkit (Digital Twin context for drafting)*
+**Nav:** Collapsible "Messages" sidebar section with Drafts, Inbox, Sync, Config sub-pages
 
 ### M52: Update Detection
 
