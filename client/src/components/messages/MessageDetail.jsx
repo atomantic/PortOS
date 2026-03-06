@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Reply, Sparkles, Send, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Reply, Sparkles, Send, MessageSquare, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../services/api';
 
@@ -10,6 +10,8 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const [generatedDraftId, setGeneratedDraftId] = useState(null);
   const [threadMessages, setThreadMessages] = useState([]);
   const [threadLoading, setThreadLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [displayedMessage, setDisplayedMessage] = useState(message);
 
   const account = accounts.find(a => a.id === message.accountId) || accounts[0];
 
@@ -22,6 +24,16 @@ export default function MessageDetail({ message, accounts, onBack }) {
       .catch(() => setThreadMessages([]))
       .finally(() => setThreadLoading(false));
   }, [message.threadId, message.accountId]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    const result = await api.refreshMessage(message.accountId, message.id).catch(() => null);
+    setRefreshing(false);
+    if (!result) return;
+    setDisplayedMessage(prev => ({ ...prev, ...result }));
+    if (result.threadMessages) setThreadMessages(result.threadMessages);
+    toast.success('Message refreshed');
+  };
 
   const handleGenerateReply = async () => {
     if (!account) return toast.error('No account available');
@@ -64,7 +76,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   // Show thread or single message
   const hasThread = threadMessages.length > 1;
-  const displayMessages = hasThread ? threadMessages : [message];
+  const displayMessages = hasThread ? threadMessages : [displayedMessage];
 
   return (
     <div className="space-y-4">
@@ -76,7 +88,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
       </button>
 
       <div className="p-4 bg-port-card rounded-lg border border-port-border">
-        <h2 className="text-lg font-medium text-white">{message.subject || '(no subject)'}</h2>
+        <h2 className="text-lg font-medium text-white">{displayedMessage.subject || '(no subject)'}</h2>
         {hasThread && (
           <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
             <MessageSquare size={12} />
@@ -132,6 +144,14 @@ export default function MessageDetail({ message, accounts, onBack }) {
         >
           <Sparkles size={16} className={generating ? 'animate-pulse' : ''} />
           {generating ? 'Generating...' : 'AI Reply'}
+        </button>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-2 px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+          {refreshing ? 'Fetching...' : 'Refresh'}
         </button>
       </div>
 

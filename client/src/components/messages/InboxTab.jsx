@@ -28,6 +28,7 @@ export default function InboxTab({ accounts }) {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [evaluating, setEvaluating] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [fetchingFull, setFetchingFull] = useState(false);
   const debounceRef = useRef(null);
   const navigate = useNavigate();
 
@@ -167,6 +168,24 @@ export default function InboxTab({ accounts }) {
         >
           Full Sync
         </button>
+        {selectedAccount && (
+          <button
+            onClick={async () => {
+              setFetchingFull(true);
+              const result = await api.fetchFullContent(selectedAccount).catch(() => null);
+              setFetchingFull(false);
+              if (!result) return;
+              toast.success(`Fetched full content for ${result.count || 0} messages`);
+              fetchMessages();
+            }}
+            disabled={fetchingFull}
+            className="flex items-center gap-1 px-3 py-2 bg-port-warning/10 text-port-warning rounded-lg text-sm hover:bg-port-warning/20 transition-colors disabled:opacity-50"
+            title="Fetch full body content for messages with preview-only text"
+          >
+            <RefreshCw size={14} className={fetchingFull ? 'animate-spin' : ''} />
+            {fetchingFull ? 'Fetching...' : 'Fetch Full Content'}
+          </button>
+        )}
       </div>
 
       <div className="text-sm text-gray-500">{total} messages</div>

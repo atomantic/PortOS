@@ -39,6 +39,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [form, setForm] = useState({ name: '', type: 'gmail', email: '' });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const [clearingCache, setClearingCache] = useState(null);
+  const [confirmClear, setConfirmClear] = useState(null);
 
   // AI config
   const [config, setConfig] = useState(null);
@@ -125,6 +127,19 @@ export default function ConfigTab({ accounts, setAccounts }) {
     if (!result) return toast.error('Failed to update account');
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
+  };
+
+  const handleClearCache = async (accountId) => {
+    if (confirmClear !== accountId) {
+      setConfirmClear(accountId);
+      return;
+    }
+    setConfirmClear(null);
+    setClearingCache(accountId);
+    const result = await api.clearMessageCache(accountId).catch(() => null);
+    setClearingCache(null);
+    if (!result) return;
+    toast.success('Cache cleared');
   };
 
   const renderProviderSection = (label, description, hook) => (
@@ -318,6 +333,19 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     }`}
                   >
                     {account.enabled ? 'Enabled' : 'Disabled'}
+                  </button>
+                  <button
+                    onClick={() => handleClearCache(account.id)}
+                    disabled={clearingCache === account.id}
+                    className={`px-2 py-1 rounded text-xs transition-colors ${
+                      confirmClear === account.id
+                        ? 'bg-port-error/20 text-port-error'
+                        : 'bg-port-warning/10 text-port-warning hover:bg-port-warning/20'
+                    } disabled:opacity-50`}
+                    onBlur={() => setConfirmClear(null)}
+                    title="Clear cached messages for this account"
+                  >
+                    {clearingCache === account.id ? 'Clearing...' : confirmClear === account.id ? 'Are you sure?' : 'Clear Cache'}
                   </button>
                   <button
                     onClick={() => handleDelete(account.id)}

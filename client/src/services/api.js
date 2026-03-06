@@ -1646,6 +1646,12 @@ export const getMessageSelectors = () => request('/messages/selectors');
 export const updateMessageSelectors = (provider, selectors) => request(`/messages/selectors/${provider}`, { method: 'PUT', body: JSON.stringify({ selectors }) });
 export const testMessageSelectors = (provider) => request(`/messages/selectors/${provider}/test`, { method: 'POST' });
 export const launchMessageBrowser = (accountId) => request(`/messages/launch/${accountId}`, { method: 'POST' });
+export const refreshMessage = (accountId, messageId) =>
+  request(`/messages/${accountId}/${messageId}/refresh`, { method: 'POST' });
+export const fetchFullContent = (accountId) =>
+  request(`/messages/fetch-full/${accountId}`, { method: 'POST' });
+export const clearMessageCache = (accountId) =>
+  request(`/messages/accounts/${accountId}/cache/clear`, { method: 'POST' });
 
 // Default export for simplified imports
 export default {
