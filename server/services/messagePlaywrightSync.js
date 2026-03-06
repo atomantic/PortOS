@@ -298,9 +298,17 @@ async function fetchOutlookConversationDetail(page, subject, sender) {
       if (!matched) return { found: false, hasListbox: true };
       matched.scrollIntoView({ block: 'center' });
       await new Promise(r => setTimeout(r, 200));
+      var urlBefore = location.href;
       matched.click();
-      // Wait for reading pane to load
-      await new Promise(r => setTimeout(r, 2000));
+      // Wait for navigation or reading pane content to change
+      for (var w = 0; w < 20; w++) {
+        await new Promise(r => setTimeout(r, 300));
+        if (location.href !== urlBefore) break;
+        var rp = document.querySelector('main[aria-label="Reading Pane"]');
+        if (rp && rp.querySelector('[role="document"]')) break;
+      }
+      // Extra settle time for DOM to finish rendering
+      await new Promise(r => setTimeout(r, 1000));
       return true;
     })()
   `);
@@ -315,12 +323,8 @@ async function fetchOutlookConversationDetail(page, subject, sender) {
   }
 
   // Extract all messages from the reading pane or full-page conversation view.
-  // Outlook has two layouts:
-  //   Split view:    main[aria-label="Reading Pane"] > [aria-label="Email message"]
-  //   Full-page:     [data-app-section="ConversationContainer"] > [aria-label="Email message"]
-  // In both layouts, the email containers use the same [aria-label="Email message"] structure,
-  // but header elements differ: h3 in split view, div/span in full-page view.
-  // We use tag-agnostic [aria-label^="From:"] selectors to handle both.
+  // Verify the loaded content matches the expected subject to prevent mismatch
+  // from stale DOM content during full-page navigation.
   const threadMessages = await evaluateOnPage(page, `
     (function() {
       const readingPane = document.querySelector('main[aria-label="Reading Pane"]');
@@ -396,6 +400,13 @@ async function fetchOutlookConversationDetail(page, subject, sender) {
           const body = doc.innerText?.trim() || '';
           if (body) results.push({ from: '', fromEmail: '', to: [], cc: [], date: '', body });
         }
+      }
+
+      // Verify content matches expected subject to prevent stale-DOM mismatches
+      const expectedSubject = ${safeSubject}.toLowerCase();
+      if (expectedSubject && results.length > 0) {
+        const pageText = (root.innerText || '').toLowerCase();
+        if (!pageText.includes(expectedSubject)) return [];
       }
 
       return results;
