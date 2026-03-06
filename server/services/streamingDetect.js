@@ -275,8 +275,23 @@ export function parseEcosystemConfig(content) {
     // Check if this process uses vite (need to check vite.config in cwd)
     const usesVite = /\bvite\b/i.test(appBlock);
 
-    processes.push({ name: processName, port, ports, cwd, usesVite });
+    processes.push({ name: processName, port, ports, cwd, usesVite, isViteProcess: usesVite });
     lastIndex = endPos;
+  }
+
+  // Post-process: when an app has both an API process and Vite dev processes,
+  // relabel Vite ports from 'ui' to 'devUi' since the prod UI is served by the API.
+  const hasApiProcess = processes.some(p => p.ports?.api);
+  if (hasApiProcess) {
+    for (const proc of processes) {
+      if (proc.isViteProcess && proc.ports?.ui && !proc.ports?.devUi) {
+        proc.ports.devUi = proc.ports.ui;
+        delete proc.ports.ui;
+        // Update primary port reference
+        const portValues = Object.values(proc.ports);
+        proc.port = portValues.length > 0 ? portValues[0] : null;
+      }
+    }
   }
 
   return { processes, pm2Home };
@@ -321,6 +336,7 @@ export async function parseEcosystemFromPath(dirPath) {
         // Clean up internal properties before returning
         delete proc.cwd;
         delete proc.usesVite;
+        delete proc.isViteProcess;
       }
 
       return { processes, pm2Home };
@@ -341,6 +357,7 @@ export async function streamDetection(socket, dirPath) {
     name: '',
     description: '',
     uiPort: null,
+    devUiPort: null,
     apiPort: null,
     startCommands: [],
     pm2ProcessNames: [],
@@ -471,15 +488,29 @@ export async function streamDetection(socket, dirPath) {
             // Clean up internal properties
             delete proc.cwd;
             delete proc.usesVite;
+            delete proc.isViteProcess;
           }
 
           result.processes = parsedProcesses;
           result.pm2ProcessNames = parsedProcesses.map(p => p.name);
 
-          // Set apiPort from first process with a port (usually the main server)
-          const processWithPort = parsedProcesses.find(p => p.port);
-          if (processWithPort && !result.apiPort) {
-            result.apiPort = processWithPort.port;
+          // Derive ports from parsed processes
+          const apiProc = parsedProcesses.find(p => p.ports?.api);
+          if (apiProc && !result.apiPort) {
+            result.apiPort = apiProc.ports.api;
+          }
+          const uiProc = parsedProcesses.find(p => p.ports?.ui);
+          if (uiProc && !result.uiPort) {
+            result.uiPort = uiProc.ports.ui;
+          }
+          const devUiProc = parsedProcesses.find(p => p.ports?.devUi);
+          if (devUiProc && !result.devUiPort) {
+            result.devUiPort = devUiProc.ports.devUi;
+          }
+          // When app has API + Vite dev but no dedicated UI port,
+          // the prod UI is served by the API server
+          if (!result.uiPort && result.apiPort && result.devUiPort) {
+            result.uiPort = result.apiPort;
           }
         }
 
@@ -497,6 +528,7 @@ export async function streamDetection(socket, dirPath) {
   emit('config', 'done', {
     message: configFiles.length ? `Found: ${configFiles.join(', ')}` : 'No config files found',
     uiPort: result.uiPort,
+    devUiPort: result.devUiPort,
     apiPort: result.apiPort,
     pm2ProcessNames: result.pm2ProcessNames.length > 0 ? result.pm2ProcessNames : undefined,
     processes: result.processes.length > 0 ? result.processes : undefined,

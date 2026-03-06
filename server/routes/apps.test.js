@@ -310,6 +310,28 @@ describe('Apps Routes', () => {
       expect(response.body[0].devUiPort).toBe(5554);
     });
 
+    it('should derive uiPort from apiPort when app has devUi but no ui process', async () => {
+      const mockApps = [{
+        id: 'app-001',
+        name: 'Test App',
+        pm2ProcessNames: ['test-api', 'test-ui'],
+        repoPath: '/tmp/test',
+        processes: [
+          { name: 'test-api', ports: { api: 5551 } },
+          { name: 'test-ui', ports: { devUi: 5550 } }
+        ]
+      }];
+      appsService.getAllApps.mockResolvedValue(mockApps);
+      pm2Service.listProcesses.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/apps');
+
+      expect(response.status).toBe(200);
+      expect(response.body[0].uiPort).toBe(5551);
+      expect(response.body[0].devUiPort).toBe(5550);
+      expect(response.body[0].apiPort).toBe(5551);
+    });
+
     it('should use explicit devUiPort over derived value', async () => {
       const mockApps = [{
         id: 'app-001',

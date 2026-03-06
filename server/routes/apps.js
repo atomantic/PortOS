@@ -97,6 +97,11 @@ router.get('/', asyncHandler(async (req, res) => {
       const devUiProc = processes.find(p => p.ports?.devUi);
       if (devUiProc) devUiPort = devUiProc.ports.devUi;
     }
+    // When app has API + Vite dev processes but no dedicated UI port,
+    // the prod UI is served by the API server
+    if (!uiPort && apiPort && devUiPort) {
+      uiPort = apiPort;
+    }
 
     return {
       ...app,
@@ -148,6 +153,11 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
   if (!devUiPort && processes.length) {
     const devUiProc = processes.find(p => p.ports?.devUi);
     if (devUiProc) devUiPort = devUiProc.ports.devUi;
+  }
+  // When app has API + Vite dev processes but no dedicated UI port,
+  // the prod UI is served by the API server
+  if (!uiPort && apiPort && devUiPort) {
+    uiPort = apiPort;
   }
 
   // Read version from app's package.json if available

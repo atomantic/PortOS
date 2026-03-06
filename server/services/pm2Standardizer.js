@@ -121,6 +121,7 @@ ${context.viteConfigs.map(f => `#### ${f.name}\n\`\`\`javascript\n${f.content}\n
 5. **Vite processes**: Use \`npx vite --host --port XXXX\` in args, disable watch (Vite has HMR)
 6. **Set cwd** for each process pointing to its directory
 7. **Include NODE_ENV** in all env blocks
+8. **UI vs Dev UI ports**: When the API server serves the production build of the frontend (Express static files), the production UI port equals the API port. The Vite dev server port is a separate "dev UI" port only used during development. Label Vite dev ports as WEB/DEV_UI in the PORTS object, not as UI.
 
 ## Output Format
 
@@ -497,7 +498,14 @@ export function getStandardTemplate() {
   return `// PM2 Ecosystem Configuration Template
 // All ports should be defined here, not in .env or vite.config
 
+// Port definitions as single source of truth
+const PORTS = {
+  API: 3001,       // Express API server (also serves prod UI build)
+  WEB: 3000        // Vite dev server (development only)
+};
+
 module.exports = {
+  PORTS,
   apps: [
     {
       name: 'myapp-server',
@@ -508,18 +516,18 @@ module.exports = {
       ignore_watch: ['node_modules', 'data', '*.log'],
       env: {
         NODE_ENV: 'development',
-        PORT: 3001
+        PORT: PORTS.API
       }
     },
     {
       name: 'myapp-client',
       cwd: './client',
       script: 'npx',
-      args: 'vite --host --port 3000',
+      args: 'vite --host --port ' + PORTS.WEB,
       watch: false,
       env: {
         NODE_ENV: 'development',
-        PORT: 3000
+        VITE_PORT: PORTS.WEB
       }
     }
   ]
