@@ -196,14 +196,26 @@ export async function syncAccount(accountId, io, options = {}) {
 export async function refreshMessage(accountId, messageId) {
   const cache = await loadCache(accountId);
   const message = cache.messages.find(m => m.id === messageId);
-  if (!message) return null;
+  if (!message) {
+    console.log(`📧 Refresh: message ${messageId} not found in cache`);
+    return null;
+  }
 
   const account = await getAccount(accountId);
-  if (!account) return null;
+  if (!account) {
+    console.log(`📧 Refresh: account ${accountId} not found`);
+    return null;
+  }
 
+  console.log(`📧 Refreshing "${message.subject}" via ${account.type}`);
   const { refreshMessageDetail } = await import('./messagePlaywrightSync.js');
   const detail = await refreshMessageDetail(account, message);
-  if (!detail || detail.length === 0) return null;
+  // Structured error from refreshMessageDetail
+  if (detail && detail.error) return detail;
+  if (!detail || !Array.isArray(detail) || detail.length === 0) {
+    console.log(`📧 Refresh: no detail returned`);
+    return { error: 'extraction-failed', message: 'Could not extract message content — the message may not be visible in the Outlook inbox' };
+  }
 
   const { default: crypto } = await import('crypto');
   const { v4: uuidv4 } = await import('uuid');

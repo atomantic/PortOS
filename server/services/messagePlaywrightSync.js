@@ -323,6 +323,7 @@ async function fetchOutlookConversationDetail(page, subject, sender) {
     })()
   `);
 
+  console.log(`📧 Detail click result: ${JSON.stringify(clickResult)}`);
   if (!clickResult) return null;
 
   // Extract all messages from the reading pane using Outlook's semantic structure
@@ -532,16 +533,30 @@ function buildExtractionScript(type, sels, mode = 'unread') {
  */
 export async function refreshMessageDetail(account, message) {
   if (account.type !== 'outlook') return null;
-  const page = await findOrOpenPage(OUTLOOK_URL).catch(() => null);
+
+  // Find existing Outlook tab — don't open a new one (it would need to load/auth)
+  const pages = await getPages().catch(() => []);
+  const page = pages.find(p => p.url?.includes('outlook.office.com/mail'));
   if (!page) {
-    console.log(`📧 No CDP browser available for refresh`);
-    return null;
+    console.log(`📧 Refresh: no Outlook tab open — launch Outlook first`);
+    return { error: 'no-browser', message: 'No Outlook tab open. Open Outlook in the browser first.' };
+  }
+  if (!page.webSocketDebuggerUrl) {
+    console.log(`📧 Refresh: Outlook tab found but no WebSocket URL`);
+    return { error: 'no-ws', message: 'Cannot connect to Outlook tab' };
   }
   if (isAuthPage(page)) {
-    console.log(`📧 Auth required for ${account.type} — login page detected`);
-    return null;
+    console.log(`📧 Refresh: auth page detected — login required`);
+    return { error: 'auth-required', message: 'Login required — sign into Outlook first' };
   }
+
+  console.log(`📧 Refresh: clicking into "${message.subject}"`);
   const detail = await fetchOutlookConversationDetail(page, message.subject, message.from?.name);
+  if (!detail) {
+    console.log(`📧 Refresh: click/extraction failed for "${message.subject}"`);
+  } else {
+    console.log(`📧 Refresh: extracted ${detail.length} thread messages`);
+  }
   return detail;
 }
 

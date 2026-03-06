@@ -27,12 +27,20 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    const result = await api.refreshMessage(message.accountId, message.id).catch(() => null);
+    const result = await api.refreshMessage(message.accountId, message.id).catch(err => {
+      toast.error(err?.message || 'Failed to refresh message');
+      return null;
+    });
     setRefreshing(false);
     if (!result) return;
-    setDisplayedMessage(prev => ({ ...prev, ...result }));
-    if (result.threadMessages) setThreadMessages(result.threadMessages);
-    toast.success('Message refreshed');
+    if (result.error) return toast.error(result.error);
+    // Result is the updated messages array
+    if (Array.isArray(result)) {
+      const updated = result.find(m => m.id === message.id) || result[0];
+      if (updated) setDisplayedMessage(prev => ({ ...prev, ...updated }));
+      if (result.length > 1) setThreadMessages(result);
+    }
+    toast.success('Message content refreshed');
   };
 
   const handleGenerateReply = async () => {

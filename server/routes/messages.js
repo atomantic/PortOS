@@ -327,10 +327,13 @@ router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
   const { accountId, messageId } = parsed.data;
   const message = await messageSync.getMessage(accountId, messageId);
   if (!message) return res.status(404).json({ error: 'Message not found' });
-  const updated = await messageSync.refreshMessage(accountId, messageId);
-  if (!updated) return res.status(502).json({ error: 'Failed to refresh message detail' });
+  const result = await messageSync.refreshMessage(accountId, messageId);
+  if (result?.error) {
+    const status = result.error === 'no-browser' || result.error === 'auth-required' ? 503 : 502;
+    return res.status(status).json({ error: result.message || result.error });
+  }
   req.app.get('io')?.emit('messages:changed', {});
-  res.json(updated);
+  res.json(result);
 }));
 
 // === Fetch full content for preview-only messages ===
