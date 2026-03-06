@@ -87,7 +87,7 @@ async function evaluateOnPage(page, expression) {
       }
     });
 
-    ws.on('error', () => { clearTimeout(timer); resolve(null); });
+    ws.on('error', () => { clearTimeout(timer); ws.close(); resolve(null); });
   });
 }
 
@@ -179,7 +179,7 @@ function buildExtractionScript(type, sels) {
     const listSel = sels.messageRow || "[role='listitem']";
     return `
       (function() {
-        const rows = document.querySelectorAll('${listSel.replace(/'/g, "\\'")}');
+        const rows = document.querySelectorAll(${JSON.stringify(listSel)});
         return Array.from(rows).slice(0, 50).map(row => {
           const text = row.innerText || '';
           const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
@@ -198,7 +198,7 @@ function buildExtractionScript(type, sels) {
     const msgSel = sels.messageItem || "[role='listitem']";
     return `
       (function() {
-        const items = document.querySelectorAll('${msgSel.replace(/'/g, "\\'")}');
+        const items = document.querySelectorAll(${JSON.stringify(msgSel)});
         return Array.from(items).slice(0, 50).map(item => {
           const text = item.innerText || '';
           const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
@@ -239,7 +239,7 @@ export async function testSelectors(provider) {
 
   for (const [name, selector] of Object.entries(sels)) {
     const count = await evaluateOnPage(page,
-      `document.querySelectorAll('${selector.replace(/'/g, "\\'")}').length`
+      `document.querySelectorAll(${JSON.stringify(selector)}).length`
     );
     results[name] = { selector, matches: count ?? 0 };
   }

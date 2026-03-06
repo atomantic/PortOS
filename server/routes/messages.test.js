@@ -111,7 +111,7 @@ describe('Messages Routes', () => {
         .post('/api/messages/accounts')
         .send({ type: 'gmail' });
 
-      expect(response.status).toBe(500); // Zod throws, no error middleware in test
+      expect(response.status).toBe(400);
     });
 
     it('should return 400 for invalid type', async () => {
@@ -119,7 +119,7 @@ describe('Messages Routes', () => {
         .post('/api/messages/accounts')
         .send({ name: 'Test', type: 'yahoo' });
 
-      expect(response.status).toBe(500); // Zod throws, no error middleware in test
+      expect(response.status).toBe(400);
     });
   });
 
@@ -352,8 +352,8 @@ describe('Messages Routes', () => {
         .post('/api/messages/drafts')
         .send({ accountId: INVALID_UUID });
 
-      // Zod validation failure for uuid
-      expect(response.status).toBe(500);
+      // validateRequest returns 400 for invalid input
+      expect(response.status).toBe(400);
     });
   });
 

@@ -53,6 +53,7 @@ export async function getMessages(options = {}) {
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     const fileAccountId = file.replace('.json', '');
+    if (!UUID_RE.test(fileAccountId)) continue;
     const cache = await loadCache(fileAccountId);
     allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || fileAccountId })));
   }

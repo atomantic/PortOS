@@ -1,6 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -71,7 +72,7 @@ router.get('/accounts', asyncHandler(async (req, res) => {
 }));
 
 router.post('/accounts', asyncHandler(async (req, res) => {
-  const data = createAccountSchema.parse(req.body);
+  const data = validateRequest(createAccountSchema, req.body);
   const account = await messageAccounts.createAccount(data);
   req.app.get('io')?.emit('messages:changed', {});
   res.status(201).json(account);
@@ -81,7 +82,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
   if (!z.string().uuid().safeParse(req.params.id).success) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
-  const updates = updateAccountSchema.parse(req.body);
+  const updates = validateRequest(updateAccountSchema, req.body);
   const account = await messageAccounts.updateAccount(req.params.id, updates);
   if (!account) return res.status(404).json({ error: 'Account not found' });
   req.app.get('io')?.emit('messages:changed', {});
@@ -149,7 +150,7 @@ router.get('/drafts', asyncHandler(async (req, res) => {
 }));
 
 router.post('/drafts', asyncHandler(async (req, res) => {
-  const data = createDraftSchema.parse(req.body);
+  const data = validateRequest(createDraftSchema, req.body);
   const account = await messageAccounts.getAccount(data.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
   if (!data.sendVia) {
@@ -161,7 +162,7 @@ router.post('/drafts', asyncHandler(async (req, res) => {
 }));
 
 router.post('/drafts/generate', asyncHandler(async (req, res) => {
-  const data = generateDraftSchema.parse(req.body);
+  const data = validateRequest(generateDraftSchema, req.body);
   const account = await messageAccounts.getAccount(data.accountId);
   if (!account) return res.status(404).json({ error: 'Account not found' });
   // AI draft generation - stub for now
@@ -183,7 +184,7 @@ router.put('/drafts/:id', asyncHandler(async (req, res) => {
   if (!z.string().uuid().safeParse(req.params.id).success) {
     return res.status(400).json({ error: 'Invalid draft ID format' });
   }
-  const updates = updateDraftSchema.parse(req.body);
+  const updates = validateRequest(updateDraftSchema, req.body);
   const draft = await messageDrafts.updateDraft(req.params.id, updates);
   if (!draft) return res.status(404).json({ error: 'Draft not found' });
   res.json(draft);
@@ -259,7 +260,7 @@ router.put('/selectors/:provider', asyncHandler(async (req, res) => {
   if (!ALLOWED_PROVIDERS.includes(req.params.provider)) {
     return res.status(400).json({ error: 'Invalid provider' });
   }
-  const { selectors } = updateSelectorsSchema.parse(req.body);
+  const { selectors } = validateRequest(updateSelectorsSchema, req.body);
   const updated = await updateSelectors(req.params.provider, selectors);
   res.json(updated);
 }));
