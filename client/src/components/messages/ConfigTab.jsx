@@ -44,36 +44,45 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [config, setConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
-  const {
-    providers,
-    selectedProviderId,
-    selectedModel,
-    availableModels,
-    setSelectedProviderId,
-    setSelectedModel,
-    loading: providersLoading
-  } = useProviderModels();
+
+  // Separate provider/model selectors for triage and reply
+  const triage = useProviderModels();
+  const reply = useProviderModels();
 
   const loadConfig = useCallback(async () => {
     const settings = await api.getSettings().catch(() => ({}));
     const msgConfig = settings?.messages || {};
+    const triageConfig = msgConfig.triage || {};
+    const replyConfig = msgConfig.reply || {};
     setConfig({
       replyTemplate: msgConfig.replyTemplate || DEFAULT_REPLY_TEMPLATE,
       forwardTemplate: msgConfig.forwardTemplate || DEFAULT_FORWARD_TEMPLATE
     });
-    // Restore saved provider/model selection
-    if (msgConfig.providerId) setSelectedProviderId(msgConfig.providerId);
-    if (msgConfig.model) setSelectedModel(msgConfig.model);
+    // Restore saved provider/model - per-action configs with legacy fallback
+    const triageProviderId = triageConfig.providerId || msgConfig.providerId;
+    const triageModel = triageConfig.model || msgConfig.model;
+    const replyProviderId = replyConfig.providerId || msgConfig.providerId;
+    const replyModel = replyConfig.model || msgConfig.model;
+    if (triageProviderId) triage.setSelectedProviderId(triageProviderId);
+    if (triageModel) triage.setSelectedModel(triageModel);
+    if (replyProviderId) reply.setSelectedProviderId(replyProviderId);
+    if (replyModel) reply.setSelectedModel(replyModel);
     setConfigLoading(false);
-  }, [setSelectedProviderId, setSelectedModel]);
+  }, [triage.setSelectedProviderId, triage.setSelectedModel, reply.setSelectedProviderId, reply.setSelectedModel]);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
   const handleSaveConfig = async () => {
     const patch = {
       messages: {
-        providerId: selectedProviderId,
-        model: selectedModel,
+        triage: {
+          providerId: triage.selectedProviderId,
+          model: triage.selectedModel
+        },
+        reply: {
+          providerId: reply.selectedProviderId,
+          model: reply.selectedModel
+        },
         replyTemplate: config.replyTemplate,
         forwardTemplate: config.forwardTemplate
       }
@@ -118,28 +127,45 @@ export default function ConfigTab({ accounts, setAccounts }) {
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
   };
 
+  const renderProviderSection = (label, description, hook) => (
+    <div className="p-4 bg-port-card rounded-lg border border-port-border">
+      <h3 className="text-sm font-medium text-white mb-1">{label}</h3>
+      <p className="text-xs text-gray-500 mb-3">{description}</p>
+      {hook.loading ? (
+        <RefreshCw size={16} className="text-port-accent animate-spin" />
+      ) : hook.providers.length === 0 ? (
+        <p className="text-sm text-gray-500">No AI providers configured. Add one in AI Providers.</p>
+      ) : (
+        <ProviderModelSelector
+          providers={hook.providers}
+          selectedProviderId={hook.selectedProviderId}
+          selectedModel={hook.selectedModel}
+          availableModels={hook.availableModels}
+          onProviderChange={(id) => { hook.setSelectedProviderId(id); setConfigDirty(true); }}
+          onModelChange={(m) => { hook.setSelectedModel(m); setConfigDirty(true); }}
+        />
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-8">
       {/* AI Provider & Model */}
       <section>
         <h2 className="text-lg font-semibold text-white mb-3">AI Provider & Model</h2>
         <p className="text-sm text-gray-500 mb-3">
-          Select the AI provider and model used to generate email reply drafts.
+          Configure separate AI providers for email triage (classification) and reply generation.
         </p>
-        <div className="p-4 bg-port-card rounded-lg border border-port-border">
-          {providersLoading ? (
-            <RefreshCw size={16} className="text-port-accent animate-spin" />
-          ) : providers.length === 0 ? (
-            <p className="text-sm text-gray-500">No AI providers configured. Add one in AI Providers.</p>
-          ) : (
-            <ProviderModelSelector
-              providers={providers}
-              selectedProviderId={selectedProviderId}
-              selectedModel={selectedModel}
-              availableModels={availableModels}
-              onProviderChange={(id) => { setSelectedProviderId(id); setConfigDirty(true); }}
-              onModelChange={(m) => { setSelectedModel(m); setConfigDirty(true); }}
-            />
+        <div className="space-y-3">
+          {renderProviderSection(
+            'Triage',
+            'Classifies emails as reply/archive/delete/review with priority. A fast, cheap model works well here.',
+            triage
+          )}
+          {renderProviderSection(
+            'Reply Generation',
+            'Generates draft email replies. A more capable model produces better responses.',
+            reply
           )}
         </div>
       </section>

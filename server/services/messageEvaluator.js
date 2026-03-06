@@ -12,19 +12,50 @@ Actions:
 Respond with ONLY a JSON array, one object per email:
 [{ "id": "MSG_ID", "action": "reply|archive|delete|review", "reason": "brief reason", "priority": "high|medium|low" }]
 
-Emails:
+<emails>
 `;
+
+const EVAL_PROMPT_SUFFIX = `</emails>`;
+
+/**
+ * Sanitize untrusted email content by escaping XML-like tags to prevent prompt injection.
+ */
+function sanitize(text) {
+  if (!text) return '';
+  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 function buildEvalPayload(messages) {
   return messages.map(m => ({
     id: m.id,
-    from: m.from?.name || m.from?.email || 'Unknown',
-    subject: m.subject || '(no subject)',
-    preview: (m.bodyText || '').slice(0, 300),
+    from: sanitize(m.from?.name || m.from?.email || 'Unknown'),
+    subject: sanitize(m.subject || '(no subject)'),
+    preview: sanitize((m.bodyText || '').slice(0, 300)),
     isUnread: m.isUnread ?? !m.isRead,
     isFlagged: m.isFlagged ?? false,
     hasMeetingInvite: m.hasMeetingInvite ?? false
   }));
+}
+
+/**
+ * Resolve provider config for a given action type (triage or reply).
+ * Supports per-action config: settings.messages.triage / settings.messages.reply
+ * Falls back to legacy flat config: settings.messages.providerId / settings.messages.model
+ */
+async function resolveProviderConfig(actionType) {
+  const settings = await getSettings();
+  const msgConfig = settings?.messages || {};
+  const actionConfig = msgConfig[actionType] || {};
+  const providerId = actionConfig.providerId || msgConfig.providerId;
+  const model = actionConfig.model || msgConfig.model;
+
+  if (!providerId) throw new Error(`No AI provider configured for Messages ${actionType} — set one in Messages > Config`);
+
+  const provider = await getProviderById(providerId);
+  if (!provider) throw new Error(`AI provider "${providerId}" not found`);
+  if (provider.type !== 'api') throw new Error(`Messages ${actionType} requires an API provider (not CLI)`);
+
+  return { provider, model, msgConfig };
 }
 
 async function callProviderApi(provider, model, prompt) {
@@ -98,19 +129,10 @@ function parseEvalResponse(text, messageIds) {
 export async function evaluateMessages(messages) {
   if (!messages.length) return { evaluations: {} };
 
-  const settings = await getSettings();
-  const msgConfig = settings?.messages || {};
-  const providerId = msgConfig.providerId;
-  const model = msgConfig.model;
-
-  if (!providerId) throw new Error('No AI provider configured for Messages — set one in Messages > Config');
-
-  const provider = await getProviderById(providerId);
-  if (!provider) throw new Error(`AI provider "${providerId}" not found`);
-  if (provider.type !== 'api') throw new Error('Message evaluation requires an API provider (not CLI)');
+  const { provider, model } = await resolveProviderConfig('triage');
 
   const payload = buildEvalPayload(messages);
-  const prompt = EVAL_PROMPT + JSON.stringify(payload, null, 2);
+  const prompt = EVAL_PROMPT + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
 
   console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}/${model || provider.defaultModel}`);
   const response = await callProviderApi(provider, model, prompt);
@@ -130,23 +152,15 @@ export async function evaluateMessages(messages) {
  * @returns {{ body: string }}
  */
 export async function generateReplyBody(message, instructions = '') {
-  const settings = await getSettings();
-  const msgConfig = settings?.messages || {};
-  const providerId = msgConfig.providerId;
-  const model = msgConfig.model;
-
-  if (!providerId) throw new Error('No AI provider configured for Messages — set one in Messages > Config');
-
-  const provider = await getProviderById(providerId);
-  if (!provider) throw new Error(`AI provider "${providerId}" not found`);
-  if (provider.type !== 'api') throw new Error('Reply generation requires an API provider (not CLI)');
+  const { provider, model, msgConfig } = await resolveProviderConfig('reply');
 
   // Build prompt from template
   let template = msgConfig.replyTemplate || 'Write a professional reply to this email.\n\nFrom: {{from}}\nSubject: {{subject}}\nBody:\n{{body}}';
+  // Sanitize untrusted email content to prevent prompt injection
   const vars = {
-    from: message.from?.name || message.from?.email || 'Unknown',
-    subject: message.subject || '',
-    body: message.bodyText || '',
+    from: sanitize(message.from?.name || message.from?.email || 'Unknown'),
+    subject: sanitize(message.subject || ''),
+    body: sanitize(message.bodyText || ''),
     instructions: instructions || ''
   };
   // Simple mustache-like substitution

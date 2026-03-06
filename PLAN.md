@@ -281,11 +281,12 @@ Always review before send — AI-generated drafts go to an outbox queue. The use
 
 **Remaining TODO:**
 
-- [ ] **P5: Per-action model selection** — Separate provider/model configs for triage vs reply generation (different cost/capability tiers). Expand `settings.messages` to `{ triage: { providerId, model }, reply: { providerId, model } }`. Update ConfigTab with two `ProviderModelSelector` sections.
-- [ ] **P6: Prompt injection hardening** — XML-fence untrusted email content in AI prompts to prevent injection. Add content sanitization layer. Support CLI providers (claude, codex) safely by sandboxing email body content — never pass raw email text as bare prompt content.
+- [x] **P5: Per-action model selection** — Separate provider/model configs for triage vs reply generation (different cost/capability tiers). Expand `settings.messages` to `{ triage: { providerId, model }, reply: { providerId, model } }`. Update ConfigTab with two `ProviderModelSelector` sections.
+- [x] **P6: Prompt injection hardening** — XML-fence untrusted email content in AI prompts to prevent injection. Add content sanitization layer (`sanitize()` escapes `<>`), `<emails>` XML fencing on eval prompt.
 - [ ] **P7: Digital Twin voice drafting** — Draft responses using Digital Twin voice/style (reads COMMUNICATION.md, PERSONALITY.md, VALUES.md + recent thread context)
 - [ ] **P8: CoS Automation & Rules** — Automated classification on new emails via CoS job, rule-based pre-filtering, email-to-task pipeline, priority email notifications
-- [ ] **Cleanup** — Delete unused `client/src/components/messages/AccountsTab.jsx` (replaced by ConfigTab)
+- [ ] **P9: Auto-Send with AI Review Gate** — Remove human-in-the-loop for trusted accounts. Before auto-sending, a second LLM call reviews the draft against the original email for: prompt injection artifacts, off-topic content, tone/identity drift, leaked system instructions. Configurable per-account trust level (manual → review-assisted → auto-send). See [Messages Security](./docs/features/messages-security.md) for threat model.
+- [x] **Cleanup** — Delete unused `client/src/components/messages/AccountsTab.jsx` (replaced by ConfigTab)
 
 **Data:** `data/messages/accounts.json`, `data/messages/cache/{accountId}.json`, `data/messages/selectors.json`, `settings.json` (messages key for AI config + templates)
 
@@ -383,6 +384,7 @@ Check for new PortOS releases on GitHub and notify the user when an update is av
 - [Identity System](./docs/features/identity-system.md) - Unified identity architecture (M42 spec)
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) - Autonomous JIRA triage and implementation
 - [Memory System](./docs/features/memory-system.md) - Semantic memory with LLM classification
+- [Messages Security](./docs/features/messages-security.md) - AI prompt injection threat model and defenses
 - [Prompt Manager](./docs/features/prompt-manager.md) - Customizable AI prompts
 - [Soul System](./docs/features/soul-system.md) - Digital twin identity scaffold
 
