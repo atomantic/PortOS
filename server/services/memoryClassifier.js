@@ -21,7 +21,7 @@ const MEMORY_CONFIG_FILE = join(CONFIG_DIR, 'memory-classifier-config.json');
 const DEFAULT_CONFIG = {
   enabled: true,
   provider: 'lmstudio',
-  endpoint: 'http://localhost:1234/v1/chat/completions',
+  endpoint: process.env.LM_STUDIO_URL ? `${process.env.LM_STUDIO_URL}/v1/chat/completions` : 'http://localhost:1234/v1/chat/completions',
   model: 'gptoss-20b',
   timeout: 60000,
   maxOutputLength: 10000,

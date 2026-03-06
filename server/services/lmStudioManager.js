@@ -9,7 +9,7 @@ import { cosEvents } from './cosEvents.js'
 
 // Default LM Studio configuration
 const DEFAULT_CONFIG = {
-  baseUrl: 'http://localhost:1234',
+  baseUrl: process.env.LM_STUDIO_URL || 'http://localhost:1234',
   timeout: 30000,
   defaultThinkingModel: 'gpt-oss-20b'
 }

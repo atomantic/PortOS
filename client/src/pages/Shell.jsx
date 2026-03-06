@@ -78,7 +78,7 @@ export default function Shell() {
           .map(a => ({ name: a.name, path: a.repoPath }))
           .sort((a, b) => a.name.localeCompare(b.name))
       ))
-      .catch(() => {});
+      .catch(err => console.warn('fetch app folders:', err.message));
   }, []);
 
   // Close dropdown on outside click

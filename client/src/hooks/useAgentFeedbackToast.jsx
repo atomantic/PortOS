@@ -40,7 +40,7 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
       setLoadingOutput(true);
       api.getCosAgent(agentId)
         .then(data => setOutput(data?.output || []))
-        .catch(() => {})
+        .catch(err => console.warn('fetch agent output:', err.message))
         .finally(() => setLoadingOutput(false));
     }
   }, [expanded, output.length, loadingOutput, agentId]);

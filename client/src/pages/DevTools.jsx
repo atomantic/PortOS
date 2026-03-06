@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, RotateCcw } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
@@ -18,11 +18,7 @@ export function HistoryPage() {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
 
-  useEffect(() => {
-    loadData();
-  }, [filter]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     const [historyData, statsData, actionsData] = await Promise.all([
       api.getHistory({
@@ -37,7 +33,11 @@ export function HistoryPage() {
     setStats(statsData);
     setActions(actionsData);
     setLoading(false);
-  };
+  }, [filter]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleClear = async () => {
     await api.clearHistory();
