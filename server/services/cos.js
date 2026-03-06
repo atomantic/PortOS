@@ -101,7 +101,10 @@ async function loadAgentIndex() {
     }
 
     return agentIndex;
-  })();
+  })().catch(err => {
+    agentIndexPromise = null;
+    throw err;
+  });
 
   return agentIndexPromise;
 }
