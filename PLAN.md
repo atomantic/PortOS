@@ -81,7 +81,7 @@ pm2 logs
 
 - [x] **M44 P6**: MeatSpace - Genome/Epigenetic Migration cleanup (route comments updated to `/api/meatspace/genome/`, IdentityTab genome link points to `/meatspace/genome`)
 - [x] **M53 P1**: POST (Power On Self Test) - Foundation + Mental Math (daily cognitive self-test with 5 drill types, scoring, history, config). Phase 1 complete: server service/routes/tests, client UI with drill runner, results, history charts, config editor
-- [ ] **M53 P2**: POST - LLM-Powered Wit & Memory Drills (5 AI drill types: word association, story recall, verbal fluency, wit/comeback, pun/wordplay). Per-drill provider/model config, LLM-scored responses with feedback. Server: meatspacePostLlm.js service, score-llm route. Client: PostLlmDrillRunner component, provider selector in config
+- [x] **M53 P2**: POST - LLM-Powered Wit & Memory Drills (5 AI drill types: word association, story recall, verbal fluency, wit/comeback, pun/wordplay). Per-drill provider/model config, LLM-scored responses with feedback. Server: meatspacePostLlm.js service, score-llm route. Client: PostLlmDrillRunner component, provider selector in config
 
 ### Planned
 
