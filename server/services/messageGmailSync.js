@@ -8,7 +8,7 @@ export async function syncGmail(account, cache, io) {
   io?.emit('messages:sync:progress', { accountId: account.id, current: 0, total: 0 });
   // TODO: Integrate with Gmail MCP when available
   // The MCP bridge would call gmail.users.messages.list and gmail.users.messages.get
-  return [];
+  return { messages: [], status: 'not-configured' };
 }
 
 /**
@@ -17,5 +17,5 @@ export async function syncGmail(account, cache, io) {
 export async function sendGmail(account, draft) {
   console.log(`📧 Gmail send for ${account.email} — MCP integration pending`);
   // TODO: Integrate with Gmail MCP when available
-  return { success: false, error: 'Gmail MCP not configured' };
+  return { success: false, error: 'Gmail MCP not configured', status: 501, code: 'GMAIL_MCP_NOT_CONFIGURED' };
 }

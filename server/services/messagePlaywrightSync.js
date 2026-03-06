@@ -21,6 +21,8 @@ function makeExternalId(date, sender, subject) {
   return `pw-${hash}`;
 }
 
+// TODO: Extract shared CDP helpers (getCdpConnectHost, cdpFetch, getPages, findOrOpenPage)
+// into browserService.js to avoid duplication with existing CDP logic there
 async function getCdpConnectHost() {
   const config = await loadConfig();
   const host = (config.cdpHost === '0.0.0.0' || config.cdpHost === '::') ? '127.0.0.1' : config.cdpHost;
@@ -222,7 +224,7 @@ function buildExtractionScript(type, sels) {
  */
 export async function sendPlaywright(account, draft) {
   console.log(`📧 Playwright send for ${account.email} (${account.type}) — automation pending`);
-  return { success: false, error: 'Playwright send not yet implemented' };
+  return { success: false, error: 'Playwright send not yet implemented', status: 501, code: 'NOT_IMPLEMENTED' };
 }
 
 /**
