@@ -1288,4 +1288,133 @@ describe('Integration: Goal CRUD', () => {
     expect(await completeMilestone(goal.id, 'nonexistent')).toBeNull();
     expect(await completeMilestone('nonexistent', 'fake')).toBeNull();
   });
+
+  it('should create a goal with parentId', async () => {
+    const parent = await createGoal({ title: 'Parent Goal' });
+    const child = await createGoal({ title: 'Child Goal', parentId: parent.id });
+
+    expect(child.parentId).toBe(parent.id);
+  });
+
+  it('should create a goal with tags', async () => {
+    const goal = await createGoal({ title: 'Tagged Goal', tags: ['fitness', 'health'] });
+
+    expect(goal.tags).toEqual(['fitness', 'health']);
+  });
+
+  it('should update tags on a goal', async () => {
+    const goal = await createGoal({ title: 'Tag Test' });
+    const updated = await updateGoal(goal.id, { tags: ['career', 'growth'] });
+
+    expect(updated.tags).toEqual(['career', 'growth']);
+  });
+
+  it('should reject update with invalid parentId', async () => {
+    const goal = await createGoal({ title: 'Orphan' });
+
+    await expect(updateGoal(goal.id, { parentId: 'nonexistent' }))
+      .rejects.toMatchObject({ code: 'INVALID_PARENT' });
+  });
+
+  it('should reject update that creates a cycle', async () => {
+    const a = await createGoal({ title: 'A' });
+    const b = await createGoal({ title: 'B', parentId: a.id });
+    const c = await createGoal({ title: 'C', parentId: b.id });
+
+    await expect(updateGoal(a.id, { parentId: c.id }))
+      .rejects.toMatchObject({ code: 'CYCLE_DETECTED' });
+  });
+
+  it('should reparent children when deleting a middle node', async () => {
+    const grandparent = await createGoal({ title: 'Grandparent' });
+    const parent = await createGoal({ title: 'Parent', parentId: grandparent.id });
+    const child = await createGoal({ title: 'Child', parentId: parent.id });
+
+    expect(await deleteGoal(parent.id)).toBe(true);
+
+    const goals = await getGoals();
+    const updatedChild = goals.goals.find(g => g.id === child.id);
+    expect(updatedChild.parentId).toBe(grandparent.id);
+  });
+
+  it('should promote children to root when deleting a root parent', async () => {
+    const root = await createGoal({ title: 'Root' });
+    const child = await createGoal({ title: 'Child', parentId: root.id });
+
+    expect(await deleteGoal(root.id)).toBe(true);
+
+    const goals = await getGoals();
+    const updatedChild = goals.goals.find(g => g.id === child.id);
+    expect(updatedChild.parentId).toBeNull();
+  });
+});
+
+describe('Integration: Goal Tree', () => {
+  let createGoal, getGoalsTree;
+
+  beforeEach(async () => {
+    vi.resetModules();
+
+    vi.doMock('fs/promises', () => {
+      const store = {};
+      return {
+        readFile: vi.fn(async (path) => {
+          if (store[path]) return store[path];
+          throw new Error('ENOENT');
+        }),
+        writeFile: vi.fn(async (path, data) => {
+          store[path] = data;
+        }),
+        mkdir: vi.fn(async () => {})
+      };
+    });
+
+    vi.doMock('./genome.js', () => ({
+      getGenomeSummary: vi.fn(async () => ({
+        uploaded: true, markerCount: 0, uploadedAt: '2025-01-01T00:00:00.000Z', savedMarkers: {}
+      }))
+    }));
+
+    vi.doMock('./taste-questionnaire.js', () => ({
+      getTasteProfile: vi.fn(async () => ({
+        completedCount: 0, totalSections: 5, overallPercentage: 0, lastSessionAt: null
+      }))
+    }));
+
+    const mod = await import('./identity.js');
+    createGoal = mod.createGoal;
+    getGoalsTree = mod.getGoalsTree;
+  });
+
+  it('should return correct tree structure with roots and children', async () => {
+    const parent = await createGoal({ title: 'Parent' });
+    const child = await createGoal({ title: 'Child', parentId: parent.id });
+
+    const tree = await getGoalsTree();
+
+    expect(tree.roots).toHaveLength(1);
+    expect(tree.roots[0].id).toBe(parent.id);
+    expect(tree.roots[0].children).toHaveLength(1);
+    expect(tree.roots[0].children[0].id).toBe(child.id);
+    expect(tree.flat).toHaveLength(2);
+  });
+
+  it('should build tagIndex mapping tags to goal ids', async () => {
+    const g1 = await createGoal({ title: 'G1', tags: ['fitness', 'health'] });
+    const g2 = await createGoal({ title: 'G2', tags: ['fitness'] });
+
+    const tree = await getGoalsTree();
+
+    expect(tree.tagIndex.fitness).toContain(g1.id);
+    expect(tree.tagIndex.fitness).toContain(g2.id);
+    expect(tree.tagIndex.health).toEqual([g1.id]);
+  });
+
+  it('should return empty roots for no goals', async () => {
+    const tree = await getGoalsTree();
+
+    expect(tree.roots).toHaveLength(0);
+    expect(tree.flat).toHaveLength(0);
+    expect(tree.tagIndex).toEqual({});
+  });
 });

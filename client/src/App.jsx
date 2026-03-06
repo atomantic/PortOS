@@ -52,6 +52,7 @@ const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
 const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
+const Goals = lazyWithReload(() => import('./pages/Goals'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -89,6 +90,8 @@ export default function App() {
           <Route path="brain/:tab" element={<Brain />} />
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
+          <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
+          <Route path="goals/:tab" element={<Goals />} />
           <Route path="feature-agents" element={<FeatureAgents />} />
           <Route path="feature-agents/create" element={<FeatureAgentDetail />} />
           <Route path="feature-agents/:id" element={<Navigate to="overview" replace />} />

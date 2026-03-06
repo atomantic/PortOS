@@ -71,6 +71,12 @@ router.get('/goals', asyncHandler(async (req, res) => {
   res.json(goals);
 }));
 
+// GET /api/digital-twin/identity/goals/tree — Hierarchical goals tree
+router.get('/goals/tree', asyncHandler(async (req, res) => {
+  const tree = await identityService.getGoalsTree();
+  res.json(tree);
+}));
+
 // PUT /api/digital-twin/identity/goals/birth-date — Set birth date
 router.put('/goals/birth-date', asyncHandler(async (req, res) => {
   const { birthDate } = validateRequest(birthDateInputSchema, req.body);

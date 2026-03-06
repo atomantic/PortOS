@@ -156,6 +156,7 @@ const navItems = [
     ]
   },
   { to: '/feature-agents', label: 'Feature Agents', icon: Wand2, single: true },
+  { to: '/goals/tree', label: 'Goals', icon: Target, single: true },
   { to: '/insights/overview', label: 'Insights', icon: Lightbulb, single: true },
   { to: '/instances', label: 'Instances', icon: Network, single: true },
   {
@@ -616,6 +617,7 @@ export default function Layout() {
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
             location.pathname.startsWith('/feature-agents') ||
+            location.pathname.startsWith('/goals') ||
             location.pathname.startsWith('/insights') ||
             location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/messages') ||
