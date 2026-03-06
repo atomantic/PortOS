@@ -1,5 +1,6 @@
 import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
+import { createRun, executeApiRun, executeCliRun } from './runner.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.
 
@@ -49,10 +50,10 @@ async function resolveProviderConfig(actionType) {
   let providerId = actionConfig.providerId || msgConfig.providerId;
   let model = actionConfig.model || msgConfig.model;
 
-  // Fall back to the first enabled API provider if none is explicitly configured
+  // Fall back to the first enabled provider if none is explicitly configured
   if (!providerId) {
-    const all = await getAllProviders();
-    const fallback = all.find(p => p.enabled && p.type === 'api');
+    const { providers } = await getAllProviders();
+    const fallback = providers.find(p => p.enabled);
     if (!fallback) throw new Error(`No AI provider configured for Messages ${actionType} — set one in Messages > Config`);
     providerId = fallback.id;
     model = model || fallback.defaultModel || '';
@@ -60,49 +61,32 @@ async function resolveProviderConfig(actionType) {
 
   const provider = await getProviderById(providerId);
   if (!provider) throw new Error(`AI provider "${providerId}" not found`);
-  if (provider.type !== 'api') throw new Error(`Messages ${actionType} requires an API provider (not CLI)`);
 
   return { provider, model: model || provider.defaultModel || '', msgConfig };
 }
 
-async function callProviderApi(provider, model, prompt) {
-  const endpoint = provider.endpoint?.replace(/\/$/, '');
-  if (!endpoint) throw new Error('Provider has no API endpoint');
+async function runPrompt(provider, model, prompt, source) {
+  const selectedModel = model || provider.defaultModel || provider.models?.[0];
+  const { runId } = await createRun({ providerId: provider.id, model: selectedModel, prompt, source });
 
-  const body = {
-    model: model || provider.defaultModel,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.2,
-    max_tokens: 2000
-  };
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-  // Anthropic API uses x-api-key
-  if (provider.id?.includes('claude') || provider.id?.includes('anthropic') || endpoint.includes('anthropic')) {
-    headers['x-api-key'] = provider.apiKey;
-    headers['anthropic-version'] = '2023-06-01';
-    body.messages = [{ role: 'user', content: prompt }];
-    body.max_tokens = 2000;
-    delete body.max_tokens;
-    body.max_tokens = 2000;
-  }
-
-  const response = await fetch(endpoint + '/chat/completions', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000)
+  let responseText = '';
+  await new Promise((resolve, reject) => {
+    if (provider.type === 'cli') {
+      executeCliRun(
+        runId, provider, prompt, process.cwd(),
+        (text) => { responseText += text; },
+        (result) => { result?.error || result?.success === false ? reject(new Error(result?.error || 'CLI execution failed')) : resolve(result); },
+        provider.timeout || 300000
+      );
+    } else {
+      executeApiRun(
+        runId, provider, selectedModel, prompt, process.cwd(), [],
+        (data) => { responseText += typeof data === 'string' ? data : (data?.text || ''); },
+        (result) => { result?.error ? reject(new Error(result.error)) : resolve(result); }
+      );
+    }
   });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Provider API error ${response.status}: ${text.slice(0, 200)}`);
-  }
-
-  const data = await response.json();
-  // OpenAI-compatible response format
-  return data.choices?.[0]?.message?.content || '';
+  return responseText;
 }
 
 function parseEvalResponse(text, messageIds) {
@@ -142,7 +126,7 @@ export async function evaluateMessages(messages) {
   const prompt = EVAL_PROMPT + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
 
   console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}/${model || provider.defaultModel}`);
-  const response = await callProviderApi(provider, model, prompt);
+  const response = await runPrompt(provider, model, prompt, 'messages-triage');
 
   const messageIds = new Set(messages.map(m => m.id));
   const evaluations = parseEvalResponse(response, messageIds);
@@ -180,6 +164,6 @@ export async function generateReplyBody(message, instructions = '') {
   });
 
   console.log(`📧 Generating AI reply with ${provider.name}/${model || provider.defaultModel}`);
-  const response = await callProviderApi(provider, model, template);
+  const response = await runPrompt(provider, model, template, 'messages-reply');
   return { body: response.trim() };
 }
