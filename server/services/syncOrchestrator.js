@@ -13,6 +13,7 @@ import { getPeers } from './instances.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import * as memorySync from './memorySync.js';
+import { getBackendName } from './memoryBackend.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -34,6 +35,13 @@ async function saveCursors(cursors) {
   const tmp = `${CURSORS_FILE}.tmp`;
   await writeFile(tmp, JSON.stringify(cursors, null, 2));
   await rename(tmp, CURSORS_FILE);
+}
+
+async function readCursors(fn) {
+  return withLock(async () => {
+    const cursors = await loadCursors();
+    return fn(cursors);
+  });
 }
 
 async function withCursors(fn) {
@@ -68,9 +76,10 @@ async function fetchPeer(peer, path) {
  * Get sync status: local sequences + per-peer cursors
  */
 export async function getSyncStatus() {
+  const isPostgres = getBackendName() === 'postgres';
   const [brainSeq, memorySeq, cursors] = await Promise.all([
     Promise.resolve(brainSyncLog.getCurrentSeq()),
-    memorySync.getMaxSequence(),
+    isPostgres ? memorySync.getMaxSequence() : Promise.resolve(null),
     loadCursors()
   ]);
   return {
@@ -137,9 +146,8 @@ export async function syncWithPeer(peer) {
   syncingPeers.add(peerId);
 
   // Read cursor snapshot outside lock so network I/O doesn't block other peers
-  const cursor = await withCursors(async (cursors) => {
-    if (!cursors[peerId]) cursors[peerId] = {};
-    return { ...cursors[peerId] };
+  const cursor = await readCursors((cursors) => {
+    return { ...(cursors[peerId] || {}) };
   });
 
   try {
@@ -152,11 +160,14 @@ export async function syncWithPeer(peer) {
       cursors[peerId].lastSyncAt = new Date().toISOString();
     });
 
-    const memoryResult = await syncMemoryFromPeer(peer, cursor);
+    const isPostgres = getBackendName() === 'postgres';
+    const memoryResult = isPostgres
+      ? await syncMemoryFromPeer(peer, cursor)
+      : { memorySeq: cursor.memorySeq ?? '0', totalApplied: 0 };
 
     await withCursors(async (cursors) => {
       if (!cursors[peerId]) cursors[peerId] = {};
-      cursors[peerId].memorySeq = memoryResult.memorySeq;
+      if (isPostgres) cursors[peerId].memorySeq = memoryResult.memorySeq;
       cursors[peerId].lastSyncAt = new Date().toISOString();
     });
 

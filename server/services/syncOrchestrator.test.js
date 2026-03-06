@@ -12,7 +12,11 @@ vi.mock('./brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 vi.mock('./memorySync.js', () => ({
-  applyRemoteChanges: vi.fn()
+  applyRemoteChanges: vi.fn(),
+  getMaxSequence: vi.fn().mockResolvedValue('0')
+}));
+vi.mock('./memoryBackend.js', () => ({
+  getBackendName: vi.fn(() => 'postgres')
 }));
 vi.mock('./instanceEvents.js', () => ({
   instanceEvents: { on: vi.fn(), removeListener: vi.fn() }
