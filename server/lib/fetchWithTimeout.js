@@ -19,14 +19,19 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
       // Fallback: propagate caller abort to our controller
       abortHandler = () => controller.abort();
       options.signal.addEventListener('abort', abortHandler, { once: true });
+      if (options.signal.aborted) {
+        controller.abort();
+      }
     }
   }
 
-  return fetch(url, { ...options, signal })
-    .finally(() => {
-      clearTimeout(timeoutId);
-      if (options.signal && abortHandler) {
-        options.signal.removeEventListener('abort', abortHandler);
-      }
-    });
+  try {
+    const response = await fetch(url, { ...options, signal });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+    if (options.signal && abortHandler) {
+      options.signal.removeEventListener('abort', abortHandler);
+    }
+  }
 }

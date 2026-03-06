@@ -4,6 +4,7 @@ import { fetchWithTimeout } from './fetchWithTimeout.js';
 describe('fetchWithTimeout', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('passes through successful fetch', async () => {
@@ -17,17 +18,20 @@ describe('fetchWithTimeout', () => {
 
   it('aborts after timeout', async () => {
     vi.useFakeTimers();
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((_url, opts) =>
-      new Promise((_resolve, reject) => {
-        opts.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
-      })
-    ));
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((_url, opts) =>
+        new Promise((_resolve, reject) => {
+          opts.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        })
+      ));
 
-    const promise = fetchWithTimeout('http://example.com', {}, 100);
-    vi.advanceTimersByTime(100);
+      const promise = fetchWithTimeout('http://example.com', {}, 100);
+      vi.advanceTimersByTime(100);
 
-    await expect(promise).rejects.toThrow('aborted');
-    vi.useRealTimers();
+      await expect(promise).rejects.toThrow('aborted');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clears timeout on success', async () => {
