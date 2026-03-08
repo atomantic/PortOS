@@ -775,18 +775,10 @@ export default function CalendarTab() {
     <div className="space-y-6">
       {/* Summary bar */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex flex-wrap items-center gap-6">
+        <div className="flex flex-wrap items-center gap-6 mb-3">
           <div>
             <div className="text-xs text-gray-500 uppercase tracking-wider">Age</div>
             <div className="text-2xl font-bold text-white">{Math.floor(stats.age.years)}</div>
-          </div>
-          <div>
-            <div className="text-xs text-gray-500 uppercase tracking-wider">Weeks Lived</div>
-            <div className="text-2xl font-bold text-gray-400">{stats.age.weeks.toLocaleString()}</div>
-          </div>
-          <div>
-            <div className="text-xs text-gray-500 uppercase tracking-wider">Weeks Left</div>
-            <div className="text-2xl font-bold text-port-success">{stats.remaining.weeks.toLocaleString()}</div>
           </div>
           <div className="flex-1 min-w-[200px]">
             <div className="flex justify-between text-xs text-gray-500 mb-1">
@@ -801,6 +793,28 @@ export default function CalendarTab() {
                 style={{ width: `${pctSpent}%` }}
               />
             </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          <div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Years</div>
+            <div className="text-sm font-bold text-gray-400">{Math.floor(stats.age.years)}<span className="text-gray-600 font-normal"> lived</span></div>
+            <div className="text-sm font-bold text-port-success">{Math.floor(stats.remaining.years)}<span className="text-gray-600 font-normal"> left</span></div>
+          </div>
+          <div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Months</div>
+            <div className="text-sm font-bold text-gray-400">{Math.floor(stats.age.years * 12).toLocaleString()}<span className="text-gray-600 font-normal"> lived</span></div>
+            <div className="text-sm font-bold text-port-success">{stats.remaining.months.toLocaleString()}<span className="text-gray-600 font-normal"> left</span></div>
+          </div>
+          <div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Weeks</div>
+            <div className="text-sm font-bold text-gray-400">{stats.age.weeks.toLocaleString()}<span className="text-gray-600 font-normal"> lived</span></div>
+            <div className="text-sm font-bold text-port-success">{stats.remaining.weeks.toLocaleString()}<span className="text-gray-600 font-normal"> left</span></div>
+          </div>
+          <div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Days</div>
+            <div className="text-sm font-bold text-gray-400">{stats.age.days.toLocaleString()}<span className="text-gray-600 font-normal"> lived</span></div>
+            <div className="text-sm font-bold text-port-success">{stats.remaining.days.toLocaleString()}<span className="text-gray-600 font-normal"> left</span></div>
           </div>
         </div>
       </div>
