@@ -167,6 +167,7 @@ const navItems = [
       { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
       { to: '/meatspace/blood', label: 'Blood', icon: HeartPulse },
       { to: '/meatspace/body', label: 'Body', icon: Scale },
+      { to: '/meatspace/calendar', label: 'Calendar', icon: Calendar },
       { to: '/meatspace/eyes', label: 'Eyes', icon: Eye },
       { to: '/meatspace/genome', label: 'Genome', icon: Dna },
       { to: '/meatspace/health', label: 'Health', icon: Heart },
