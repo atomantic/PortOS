@@ -82,6 +82,15 @@ pm2 logs
 - [x] **M46**: Unified Search (Cmd+K) - Global search across brain, memory, history, agents, tasks, and apps
 - [x] **GSD Tab**: Smart State Detection, One-Click Agent Spawn, Actionable Dashboard
 
+### In Progress
+
+- [ ] **M54**: MeatSpace Life Calendar — "4000 Weeks" mortality-aware time mapping
+  - [x] P1-P3: Core calendar engine, Calendar tab UI, Overview integration (life grid, time stats, activity budgets, view modes, birthday highlights, hide-spent toggle, nav link)
+  - [ ] P4: Birthdate management — Move birthDate from `digital-twin/goals.json` to `meatspace/config.json`. Add birthdate display + inline edit to AgeTab (top of page, before epigenetic section). Add `GET/PUT /api/meatspace/birth-date` endpoints. Calendar error state should link to `/meatspace/age` to set birthdate. Migrate existing birthDate on first read.
+  - [ ] P5: Additional event types — holidays, vacations, custom recurring events with color coding on the life grid
+  - [ ] P6: Mobile responsive cell size auto-detection
+  - [ ] P7: Goal Tree integration — connect activities to goals, time feasibility analysis ("Can I finish this goal with my remaining time budget?")
+
 ### Planned
 
 - [ ] **M50 P1-P4**: Email Management - Gmail + Outlook integration, AI categorization and priority extraction, Digital Twin voice drafting, review-before-send outbox, Brain knowledge capture
