@@ -82,7 +82,7 @@ const UNIT_CELL_SIZES = {
   years: { size: 18, gap: 2 },
   months: { size: 9, gap: 1 },
   weeks: { size: 7, gap: 1 },
-  days: { size: 12, gap: 2 },
+  days: { size: 16, gap: 2 },
 };
 
 const MS_PER_DAY = 86400000;
@@ -147,11 +147,11 @@ function computeMonthCalendars(birthDate, deathDate, selectedAge) {
   const death = new Date(deathDate);
   const now = new Date();
 
-  // 2-year span centered on birthday: from birthday at selectedAge to birthday at selectedAge+2
+  // 1-year span: from birthday at selectedAge to day before birthday at selectedAge+1
   const rangeStart = new Date(birth);
   rangeStart.setFullYear(birth.getFullYear() + selectedAge);
   const rangeEnd = new Date(rangeStart);
-  rangeEnd.setFullYear(rangeEnd.getFullYear() + 2);
+  rangeEnd.setFullYear(rangeEnd.getFullYear() + 1);
 
   const months = [];
   const cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
@@ -347,9 +347,9 @@ function DayGridView({ birthDate, deathDate, cellCfg, stats, showEvents }) {
         >
           &larr;
         </button>
-        <span className="text-sm text-white font-medium">Age {selectedAge}&ndash;{selectedAge + 2}</span>
+        <span className="text-sm text-white font-medium">Age {selectedAge}</span>
         <button
-          onClick={() => setSelectedAge(Math.min(totalYears - 2, selectedAge + 1))}
+          onClick={() => setSelectedAge(Math.min(totalYears - 1, selectedAge + 1))}
           className="px-2 py-0.5 text-xs text-gray-400 hover:text-white rounded bg-port-bg border border-port-border"
         >
           &rarr;
