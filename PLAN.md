@@ -81,23 +81,8 @@ pm2 logs
 - [x] **M44 P7**: MeatSpace - Apple Health Integration (live sync via Health Auto Export app + bulk XML import)
 - [x] **M46**: Unified Search (Cmd+K) - Global search across brain, memory, history, agents, tasks, and apps
 - [x] **GSD Tab**: Smart State Detection, One-Click Agent Spawn, Actionable Dashboard
-
-### In Progress
-
-- [ ] **M55**: POST Enhancement — Memory builder, imagination drills, training mode, 5-min balanced sessions. See [POST](./docs/features/post.md)
-  - [x] P1-P2: Memory Builder engine + Elements Song + UI — data model, CRUD routes, practice/mastery tracking, built-in Elements Song with lyrics and element mapping, periodic table mastery visualization, practice modes (learn/fill-blank/sequence/speed-run/element-flash)
-  - [x] P3: Imagination & Ideation drills — what-if, alternative-uses, story-prompt, invention-pitch, reframe; LLM generation + scoring; ImaginationDrillRunner UI
-  - [x] P4: Training mode — train/test toggle in session launcher, no time pressure, immediate correct/wrong feedback with hints (math), per-response LLM scoring feedback, practice log tracking in `post-training-log.json` (separate from scored history)
-  - [x] P5: 5-minute session flow — Quick 5 Min button picks one drill per enabled domain with time budgets (Math 60s, Memory 90s, Wordplay 60s, Verbal 60s, Imagination 60s), DrillTransition UI between drills with domain label/progress/auto-advance, domain-weighted session scoring, per-domain score summary in results
-  - [x] P6: Custom memory items — config UI for adding songs/poems/speeches/sequences, auto-chunking by blank lines with 4-line fallback, spaced repetition mode (weakest chunks first, graduated hints: full→partial→minimal→none), chunk mastery overview
-
-- [ ] **M54**: MeatSpace Life Calendar — "4000 Weeks" mortality-aware time mapping
-  - [x] P1-P3: Core calendar engine, Calendar tab UI, Overview integration (life grid, time stats, activity budgets, view modes, birthday highlights, hide-spent toggle, nav link)
-  - [x] P4: Birthdate management — birthDate canonical source moved to `meatspace/config.json` with auto-migration from `goals.json`. `GET/PUT /api/meatspace/birth-date` endpoints. AgeTab shows birthdate display + inline edit. Calendar error links to `/meatspace/age`. Identity setBirthDate syncs to both stores.
-  - [x] P4b: Life Calendar multi-unit views — renamed "Life in Weeks" to "Life Calendar" with Years/Months/Weeks/Days toggle. Year grid (10 cols), Month grid (12 cols/year), Week grid (existing layouts), Day grid (calendar-style per-year with navigation).
-  - [x] P5: Additional event types — holidays, vacations, milestones, health, custom events with color coding (amber/cyan/purple/red/emerald) on the life grid, collapsible events panel with CRUD, enable/disable toggle, yearly/one-time recurrence, default US holidays
-  - [x] P6: Mobile responsive cell size auto-detection
-  - [x] P7: Goal Tree integration — connect activities to goals, time feasibility analysis ("Can I finish this goal with my remaining time budget?")
+- [x] **M55**: POST Enhancement — Memory builder, imagination drills, training mode, 5-min balanced sessions. See [POST](./docs/features/post.md)
+- [x] **M54**: MeatSpace Life Calendar — "4000 Weeks" mortality-aware time mapping with responsive grid, goal-activity linking, and time feasibility analysis
 
 ### Planned
 
