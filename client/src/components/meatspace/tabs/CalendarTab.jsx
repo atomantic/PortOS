@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Calendar, Coffee, Droplets, Utensils, Dumbbell, BookOpen, Scissors,
   Cake, Plane, Plus, Trash2, Circle, Sun, Moon, TreePine, Snowflake,
-  Flower2, CloudSun, Settings2
+  Flower2, CloudSun
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -429,7 +429,6 @@ function LifeGrid({ grid, stats, birthDate, deathDate }) {
   const [cellSizeId, setCellSizeId] = useState('sm');
   const [showEvents, setShowEvents] = useState(true);
   const [hideSpent, setHideSpent] = useState(false);
-  const [showConfig, setShowConfig] = useState(false);
 
   const cellCfg = CELL_SIZES.find(c => c.id === cellSizeId) || CELL_SIZES[1];
 
@@ -442,11 +441,12 @@ function LifeGrid({ grid, stats, birthDate, deathDate }) {
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4">
+      {/* Header: title + unit toggle + controls */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <Calendar size={16} className="text-port-accent" />
         <h3 className="text-sm font-medium text-white">Life Calendar</h3>
         {/* Unit toggle */}
-        <div className="flex items-center gap-0.5 ml-2 bg-port-bg rounded-md p-0.5 border border-port-border">
+        <div className="flex items-center gap-0.5 ml-1 bg-port-bg rounded-md p-0.5 border border-port-border">
           {UNIT_MODES.map(u => (
             <button
               key={u.id}
@@ -457,61 +457,49 @@ function LifeGrid({ grid, stats, birthDate, deathDate }) {
             </button>
           ))}
         </div>
-        <span className="text-xs text-gray-500 ml-auto">
-          {unitLabel[unit]}
-        </span>
-        <button
-          onClick={() => setShowConfig(v => !v)}
-          className={`p-1 rounded transition-colors ${showConfig ? 'text-port-accent bg-port-accent/10' : 'text-gray-500 hover:text-white'}`}
-          title="Grid settings"
-        >
-          <Settings2 size={14} />
-        </button>
-      </div>
-
-      {/* Config panel */}
-      {showConfig && (
-        <div className="flex flex-wrap items-center gap-4 mb-3 p-2 bg-port-bg rounded-lg border border-port-border">
-          {unit === 'weeks' && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Layout:</span>
-              {WEEK_LAYOUTS.map(v => (
-                <button
-                  key={v.id}
-                  onClick={() => setWeekLayout(v.id)}
-                  className={`px-2 py-0.5 text-xs rounded ${weekLayout === v.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">Size:</span>
-            {CELL_SIZES.map(c => (
+        {/* Week layout (only in weeks mode) */}
+        {unit === 'weeks' && (
+          <div className="flex items-center gap-0.5 bg-port-bg rounded-md p-0.5 border border-port-border">
+            {WEEK_LAYOUTS.map(v => (
               <button
-                key={c.id}
-                onClick={() => setCellSizeId(c.id)}
-                className={`px-2 py-0.5 text-xs rounded ${cellSizeId === c.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
+                key={v.id}
+                onClick={() => setWeekLayout(v.id)}
+                className={`px-2 py-0.5 text-xs rounded ${weekLayout === v.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
               >
-                {c.label}
+                {v.label}
               </button>
             ))}
           </div>
-          {unit === 'weeks' && (
-            <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
-              <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} className="rounded border-port-border" />
-              Birthdays
-            </label>
-          )}
-          {unit !== 'days' && (
-            <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
-              <input type="checkbox" checked={hideSpent} onChange={(e) => setHideSpent(e.target.checked)} className="rounded border-port-border" />
-              Hide spent
-            </label>
-          )}
+        )}
+        {/* Cell size */}
+        <div className="flex items-center gap-0.5 bg-port-bg rounded-md p-0.5 border border-port-border">
+          {CELL_SIZES.map(c => (
+            <button
+              key={c.id}
+              onClick={() => setCellSizeId(c.id)}
+              className={`px-2 py-0.5 text-xs rounded ${cellSizeId === c.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
-      )}
+        {/* Toggles */}
+        {unit === 'weeks' && (
+          <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} className="rounded border-port-border" />
+            Birthdays
+          </label>
+        )}
+        {unit !== 'days' && (
+          <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={hideSpent} onChange={(e) => setHideSpent(e.target.checked)} className="rounded border-port-border" />
+            Hide spent
+          </label>
+        )}
+        <span className="text-xs text-gray-500 ml-auto">
+          {unitLabel[unit]}
+        </span>
+      </div>
 
       {/* Legend */}
       <div className="flex items-center gap-4 mb-3 text-xs text-gray-500 flex-wrap">
