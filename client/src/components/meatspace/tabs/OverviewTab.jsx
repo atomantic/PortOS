@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket } from 'lucide-react';
+import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar } from 'lucide-react';
 import * as api from '../../../services/api';
 import { useDeathClock } from '../../../hooks/useDeathClock';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -164,11 +164,12 @@ export default function OverviewTab() {
   const [blood, setBlood] = useState(null);
   const [epigenetic, setEpigenetic] = useState(null);
   const [eyes, setEyes] = useState(null);
+  const [calendar, setCalendar] = useState(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   const fetchData = useCallback(async () => {
-    const [overview, alc, bod, bld, epi, eye, hBody] = await Promise.all([
+    const [overview, alc, bod, bld, epi, eye, hBody, cal] = await Promise.all([
       api.getMeatspaceOverview().catch(() => null),
       api.getAlcoholSummary().catch(() => null),
       api.getBodyHistory().catch(() => null),
@@ -176,6 +177,7 @@ export default function OverviewTab() {
       api.getEpigeneticTests().catch(() => null),
       api.getEyeExams().catch(() => null),
       api.getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']).catch(() => null),
+      api.getLifeCalendar().catch(() => null),
     ]);
     setData(overview);
     setAlcohol(alc);
@@ -184,6 +186,7 @@ export default function OverviewTab() {
     setBlood(bld);
     setEpigenetic(epi);
     setEyes(eye);
+    setCalendar(cal);
     setLoading(false);
   }, []);
 
@@ -330,6 +333,19 @@ export default function OverviewTab() {
             { label: 'Exercise', value: summary?.hasLifestyleData ? 'Set' : '—' },
           ]}
         />
+        {calendar?.stats && (
+          <HealthTile
+            icon={Calendar}
+            iconColor="text-port-accent"
+            label="Life Calendar"
+            onClick={() => navigate('/meatspace/calendar')}
+            metrics={[
+              { label: 'Saturdays left', value: calendar.stats.remaining.saturdays.toLocaleString() },
+              { label: 'Weeks left', value: calendar.stats.remaining.weeks.toLocaleString() },
+              { label: 'Awake days', value: calendar.stats.remaining.awakeDays.toLocaleString() },
+            ]}
+          />
+        )}
         <HealthTile
           icon={Database}
           iconColor="text-gray-400"

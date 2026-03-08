@@ -13,6 +13,8 @@ import {
   epigeneticTestSchema,
   eyeExamSchema,
   eyeExamUpdateSchema,
+  activitySchema,
+  activityUpdateSchema,
 } from '../lib/meatspaceValidation.js';
 import {
   postSessionSubmitSchema,
@@ -26,6 +28,7 @@ import * as alcoholService from '../services/meatspaceAlcohol.js';
 import * as healthService from '../services/meatspaceHealth.js';
 import * as postService from '../services/meatspacePost.js';
 import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
+import * as calendarService from '../services/meatspaceCalendar.js';
 
 const router = Router();
 
@@ -433,6 +436,65 @@ router.post('/post/score-llm', asyncHandler(async (req, res) => {
     data.timeLimitMs, data.providerId, data.model
   );
   res.json(result);
+}));
+
+// ============================================================
+// Life Calendar
+// ============================================================
+
+/**
+ * GET /api/meatspace/calendar
+ * Full life calendar data: grid, stats, activity budgets.
+ */
+router.get('/calendar', asyncHandler(async (_req, res) => {
+  const data = await calendarService.getCalendarData();
+  res.json(data);
+}));
+
+/**
+ * GET /api/meatspace/activities
+ * List all custom activities (or defaults if none configured).
+ */
+router.get('/activities', asyncHandler(async (_req, res) => {
+  const activities = await calendarService.getActivities();
+  res.json(activities);
+}));
+
+/**
+ * POST /api/meatspace/activities
+ * Add a new activity.
+ */
+router.post('/activities', asyncHandler(async (req, res) => {
+  const data = validateRequest(activitySchema, req.body);
+  const activities = await calendarService.addActivity(data);
+  res.json(activities);
+}));
+
+/**
+ * PUT /api/meatspace/activities/:index
+ * Update an activity by index.
+ */
+router.put('/activities/:index', asyncHandler(async (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  const data = validateRequest(activityUpdateSchema, req.body);
+  const activities = await calendarService.updateActivity(index, data);
+  if (!activities) {
+    throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(activities);
+}));
+
+/**
+ * DELETE /api/meatspace/activities/:index
+ * Remove an activity by index.
+ */
+router.delete('/activities/:index', asyncHandler(async (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  const activities = await calendarService.removeActivity(index);
+  if (!activities) {
+    throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(activities);
 }));
 
 export default router;

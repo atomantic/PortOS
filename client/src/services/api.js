@@ -1508,6 +1508,17 @@ export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, provi
     body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) })
   });
 
+// Life Calendar
+export const getLifeCalendar = () => request('/meatspace/calendar');
+export const getActivities = () => request('/meatspace/activities');
+export const addActivity = (data) => request('/meatspace/activities', {
+  method: 'POST', body: JSON.stringify(data)
+});
+export const updateActivity = (index, data) => request(`/meatspace/activities/${index}`, {
+  method: 'PUT', body: JSON.stringify(data)
+});
+export const removeActivity = (index) => request(`/meatspace/activities/${index}`, { method: 'DELETE' });
+
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);

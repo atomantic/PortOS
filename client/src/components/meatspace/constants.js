@@ -1,6 +1,7 @@
 import {
   Skull,
   Beer,
+  Calendar,
   Clock,
   Dna,
   Eye,
@@ -19,6 +20,7 @@ export const TABS = [
   { id: 'alcohol', label: 'Alcohol', icon: Beer },
   { id: 'blood', label: 'Blood', icon: HeartPulse },
   { id: 'body', label: 'Body', icon: Scale },
+  { id: 'calendar', label: 'Calendar', icon: Calendar },
   { id: 'eyes', label: 'Eyes', icon: Eye },
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'health', label: 'Health', icon: Stethoscope },

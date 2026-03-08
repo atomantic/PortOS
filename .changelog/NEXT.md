@@ -1,6 +1,8 @@
 # Unreleased Changes
 
 ## Added
+- MeatSpace Life Calendar tab — "4000 Weeks" mortality-aware time grid with weeks from birth to death, remaining Saturdays/Sundays/sleep/seasons stats, and customizable activity budgets (coffees, showers, workouts, etc.)
+- Life Calendar tile on MeatSpace Overview linking to full calendar view
 
 ## Changed
 

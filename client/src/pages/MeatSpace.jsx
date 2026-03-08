@@ -8,6 +8,7 @@ import AgeTab from '../components/meatspace/tabs/AgeTab';
 import AlcoholTab from '../components/meatspace/tabs/AlcoholTab';
 import BloodTab from '../components/meatspace/tabs/BloodTab';
 import BodyTab from '../components/meatspace/tabs/BodyTab';
+import CalendarTab from '../components/meatspace/tabs/CalendarTab';
 import EyesTab from '../components/meatspace/tabs/EyesTab';
 import GenomeTab from '../components/meatspace/tabs/GenomeTab';
 import HealthTab from '../components/meatspace/tabs/HealthTab';
@@ -36,6 +37,8 @@ export default function MeatSpace() {
         return <BloodTab />;
       case 'body':
         return <BodyTab />;
+      case 'calendar':
+        return <CalendarTab />;
       case 'eyes':
         return <EyesTab />;
       case 'genome':
