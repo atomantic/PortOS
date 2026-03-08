@@ -5,6 +5,7 @@ import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getGenomeSummary } from './genome.js';
 import { getTasteProfile } from './taste-questionnaire.js';
+import { getActivities } from './meatspaceCalendar.js';
 
 const IDENTITY_DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(IDENTITY_DIR, 'identity.json');
@@ -318,18 +319,19 @@ export function computeLifeExpectancy(longevityMarkers, cardiovascularMarkers, b
   };
 }
 
+function getHorizonYears(horizon, timeHorizons) {
+  const map = { '1-year': 1, '3-year': 3, '5-year': 5, '10-year': 10, '20-year': 20, 'lifetime': timeHorizons.yearsRemaining };
+  return map[horizon] ?? 5;
+}
+
 /**
  * Compute time feasibility for a goal based on its linked activities.
- * Returns { feasible, hoursPerWeek, weeksNeeded, weeksAvailable } or null if no links.
+ * Returns { feasible, totalPerWeek, weeksAvailable, links } or null if no links.
  */
 export function computeGoalFeasibility(goal, timeHorizons, activities) {
   if (!goal.linkedActivities?.length || !timeHorizons) return null;
 
-  const horizonMap = {
-    '1-year': 1, '3-year': 3, '5-year': 5,
-    '10-year': 10, '20-year': 20, 'lifetime': timeHorizons.yearsRemaining
-  };
-  const horizonYears = horizonMap[goal.horizon] ?? 5;
+  const horizonYears = getHorizonYears(goal.horizon, timeHorizons);
   const weeksAvailable = Math.floor(Math.min(horizonYears, timeHorizons.yearsRemaining) * 52);
 
   let totalPerWeek = 0;
@@ -363,16 +365,7 @@ export function computeGoalFeasibility(goal, timeHorizons, activities) {
 export function computeGoalUrgency(goal, timeHorizons) {
   if (!timeHorizons || !goal.horizon) return null;
 
-  const horizonMap = {
-    '1-year': 1,
-    '3-year': 3,
-    '5-year': 5,
-    '10-year': 10,
-    '20-year': 20,
-    'lifetime': timeHorizons.yearsRemaining
-  };
-
-  const horizonYears = horizonMap[goal.horizon] ?? 5;
+  const horizonYears = getHorizonYears(goal.horizon, timeHorizons);
   const yearsRemaining = timeHorizons.yearsRemaining;
 
   if (horizonYears <= 0 || yearsRemaining <= 0) return 1;
@@ -805,7 +798,7 @@ export async function updateGoal(goalId, updates) {
     }
   }
 
-  const allowed = ['title', 'description', 'horizon', 'category', 'status', 'parentId', 'tags', 'linkedActivities'];
+  const allowed = ['title', 'description', 'horizon', 'category', 'status', 'parentId', 'tags'];
   for (const key of allowed) {
     if (updates[key] !== undefined) goal[key] = updates[key];
   }
@@ -850,7 +843,6 @@ export async function deleteGoal(goalId) {
 export async function getGoalsTree() {
   const goals = await getGoals();
   const longevity = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
-  const { getActivities } = await import('./meatspaceCalendar.js');
   const activities = await getActivities();
 
   // Enrich goals with urgency and feasibility (shallow copies to avoid mutating persisted objects)

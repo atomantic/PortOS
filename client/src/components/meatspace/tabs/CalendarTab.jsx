@@ -363,7 +363,6 @@ function MiniMonth({ month, cellSize, gap, showEvents }) {
     return result;
   }, [month]);
 
-  const sz = cellSize;
   const rowStyle = { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: `${gap}px` };
 
   return (
@@ -371,7 +370,7 @@ function MiniMonth({ month, cellSize, gap, showEvents }) {
       <div className="text-[10px] text-gray-400 font-medium mb-1 text-center">{month.name}</div>
       <div style={rowStyle}>
         {DAY_LABELS.map((d, i) => (
-          <span key={i} className="text-center text-gray-600" style={{ fontSize: '7px', lineHeight: `${sz}px` }}>
+          <span key={i} className="text-center text-gray-600" style={{ fontSize: '7px', lineHeight: `${cellSize}px` }}>
             {d}
           </span>
         ))}
@@ -413,7 +412,6 @@ function DayGridView({ birthDate, deathDate, cellCfg, stats, showEvents }) {
   const monthWidth = containerWidth ? Math.floor((containerWidth - (gridCols - 1) * gridGap) / gridCols) : null;
   // Fit 7 day columns + 6 gaps into monthWidth
   const responsiveDaySize = monthWidth ? Math.max(8, Math.floor((monthWidth - cellCfg.gap * 6) / 7)) : cellCfg.size;
-  const responsiveDayGap = cellCfg.gap;
 
   return (
     <div ref={containerRef}>
@@ -442,7 +440,7 @@ function DayGridView({ birthDate, deathDate, cellCfg, stats, showEvents }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gap: `${gridGap}px` }}>
         {months.map((m, i) => (
-          <MiniMonth key={i} month={m} cellSize={responsiveDaySize} gap={responsiveDayGap} showEvents={showEvents} />
+          <MiniMonth key={i} month={m} cellSize={responsiveDaySize} gap={cellCfg.gap} showEvents={showEvents} />
         ))}
       </div>
     </div>
