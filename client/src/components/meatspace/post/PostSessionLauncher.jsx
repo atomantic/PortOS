@@ -15,7 +15,12 @@ const DRILL_LABELS = {
   'pun-wordplay': 'Pun & Wordplay',
   'memory-fill-blank': 'Memory Fill Blank',
   'memory-sequence': 'Memory Sequence',
-  'memory-element-flash': 'Element Flash'
+  'memory-element-flash': 'Element Flash',
+  'what-if': 'What If?',
+  'alternative-uses': 'Alternative Uses',
+  'story-prompt': 'Story Prompt',
+  'invention-pitch': 'Invention Pitch',
+  'reframe': 'Reframe',
 };
 
 export default function PostSessionLauncher({ config, recentSessions, onStart, onViewHistory, onViewConfig, onViewMemory }) {

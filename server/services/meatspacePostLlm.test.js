@@ -50,13 +50,18 @@ beforeEach(() => {
 // =============================================================================
 
 describe('LLM_DRILL_TYPES', () => {
-  it('exports all 5 drill types', () => {
+  it('exports all 10 drill types', () => {
     expect(LLM_DRILL_TYPES).toEqual([
       'word-association',
       'story-recall',
       'verbal-fluency',
       'wit-comeback',
-      'pun-wordplay'
+      'pun-wordplay',
+      'what-if',
+      'alternative-uses',
+      'story-prompt',
+      'invention-pitch',
+      'reframe',
     ]);
   });
 });

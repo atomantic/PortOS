@@ -17,7 +17,12 @@ export const LLM_DRILL_TYPES = [
   'story-recall',
   'verbal-fluency',
   'wit-comeback',
-  'pun-wordplay'
+  'pun-wordplay',
+  'what-if',
+  'alternative-uses',
+  'story-prompt',
+  'invention-pitch',
+  'reframe',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +232,96 @@ Make challenges diverse and fun. The example should be witty but not the only va
   };
 }
 
+export async function generateWhatIf(config, providerId, model) {
+  const count = config.count || 3;
+  const prompt = `Generate ${count} creative "What If" hypothetical scenarios for imagination training.
+Each scenario should be absurd, thought-provoking, and fun to reason about.
+Mix science, society, nature, and everyday life. Be creative and specific.
+
+Return ONLY valid JSON:
+{"scenarios":[{"prompt":"What if gravity reversed for 10 minutes every Tuesday?","category":"physics"}]}`;
+
+  const response = await callAI(prompt, providerId, model);
+  const data = parseJsonFromAI(response);
+  return {
+    type: 'what-if',
+    config: { count },
+    scenarios: (data.scenarios || []).slice(0, count)
+  };
+}
+
+export async function generateAlternativeUses(config, providerId, model) {
+  const count = config.count || 3;
+  const prompt = `Generate ${count} "Alternative Uses" challenges for divergent thinking training.
+Each challenge names a common everyday object. The user must list creative, unusual uses for it.
+Pick objects that have many possible creative uses.
+
+Return ONLY valid JSON:
+{"objects":[{"object":"brick","commonUse":"building material","minExpected":8}]}`;
+
+  const response = await callAI(prompt, providerId, model);
+  const data = parseJsonFromAI(response);
+  return {
+    type: 'alternative-uses',
+    config: { count },
+    objects: (data.objects || []).slice(0, count)
+  };
+}
+
+export async function generateStoryPrompt(config, providerId, model) {
+  const count = config.count || 3;
+  const prompt = `Generate ${count} "Story Prompt" challenges for creative writing training.
+Each challenge gives exactly 3 random, unrelated words. The user must write a micro-story (2-4 sentences) connecting all three words.
+Choose words that are surprising when combined.
+
+Return ONLY valid JSON:
+{"prompts":[{"words":["lighthouse","saxophone","marmalade"]}]}`;
+
+  const response = await callAI(prompt, providerId, model);
+  const data = parseJsonFromAI(response);
+  return {
+    type: 'story-prompt',
+    config: { count },
+    prompts: (data.prompts || []).slice(0, count)
+  };
+}
+
+export async function generateInventionPitch(config, providerId, model) {
+  const count = config.count || 3;
+  const prompt = `Generate ${count} "Invention Pitch" challenges for creative problem-solving training.
+Each challenge describes a specific, relatable problem. The user must pitch an inventive solution in 2-3 sentences.
+Mix everyday annoyances, workplace challenges, and social problems.
+
+Return ONLY valid JSON:
+{"problems":[{"problem":"You always forget where you put your keys","category":"everyday","difficulty":"easy"}]}`;
+
+  const response = await callAI(prompt, providerId, model);
+  const data = parseJsonFromAI(response);
+  return {
+    type: 'invention-pitch',
+    config: { count },
+    problems: (data.problems || []).slice(0, count)
+  };
+}
+
+export async function generateReframe(config, providerId, model) {
+  const count = config.count || 3;
+  const prompt = `Generate ${count} "Reframe" challenges for positive thinking and humor training.
+Each challenge describes a frustrating or negative situation. The user must reframe it positively, humorously, or find a silver lining.
+Mix minor annoyances with bigger setbacks. Keep them relatable.
+
+Return ONLY valid JSON:
+{"situations":[{"situation":"Your flight was delayed by 4 hours","severity":"medium"}]}`;
+
+  const response = await callAI(prompt, providerId, model);
+  const data = parseJsonFromAI(response);
+  return {
+    type: 'reframe',
+    config: { count },
+    situations: (data.situations || []).slice(0, count)
+  };
+}
+
 export async function generateLlmDrill(type, config = {}, providerId, model) {
   switch (type) {
     case 'word-association':
@@ -239,6 +334,16 @@ export async function generateLlmDrill(type, config = {}, providerId, model) {
       return generateWitComeback(config, providerId, model);
     case 'pun-wordplay':
       return generatePunWordplay(config, providerId, model);
+    case 'what-if':
+      return generateWhatIf(config, providerId, model);
+    case 'alternative-uses':
+      return generateAlternativeUses(config, providerId, model);
+    case 'story-prompt':
+      return generateStoryPrompt(config, providerId, model);
+    case 'invention-pitch':
+      return generateInventionPitch(config, providerId, model);
+    case 'reframe':
+      return generateReframe(config, providerId, model);
     default:
       return null;
   }
@@ -271,6 +376,21 @@ export async function scoreLlmDrill(type, drillData, userResponses, timeLimitMs,
       break;
     case 'pun-wordplay':
       scorePrompt = buildPunWordplayScorePrompt(drillData, userResponses);
+      break;
+    case 'what-if':
+      scorePrompt = buildWhatIfScorePrompt(drillData, userResponses);
+      break;
+    case 'alternative-uses':
+      scorePrompt = buildAlternativeUsesScorePrompt(drillData, userResponses);
+      break;
+    case 'story-prompt':
+      scorePrompt = buildStoryPromptScorePrompt(drillData, userResponses);
+      break;
+    case 'invention-pitch':
+      scorePrompt = buildInventionPitchScorePrompt(drillData, userResponses);
+      break;
+    case 'reframe':
+      scorePrompt = buildReframeScorePrompt(drillData, userResponses);
       break;
     default:
       return { score: 0, evaluation: null, questions: userResponses };
@@ -373,4 +493,86 @@ ${items}
 
 Return ONLY valid JSON:
 {"overallScore":75,"scores":[{"score":90,"feedback":"Excellent double meaning"}],"summary":"Overall wordplay assessment"}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMAGINATION DRILL SCORE PROMPTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildWhatIfScorePrompt(drillData, responses) {
+  const items = responses.map((r, i) => {
+    const scenario = drillData.scenarios?.[i];
+    return `Scenario: "${scenario?.prompt}"\nUser's response: "${r.response || '(no response)'}"`;
+  }).join('\n\n');
+
+  return `Score these "What If" imagination responses on: originality (35%), depth of reasoning (35%), humor/creativity (30%).
+Rate each 0-100 and give brief feedback.
+
+${items}
+
+Return ONLY valid JSON:
+{"overallScore":75,"scores":[{"score":80,"feedback":"Creative and well-reasoned"}],"summary":"Overall imagination assessment"}`;
+}
+
+function buildAlternativeUsesScorePrompt(drillData, responses) {
+  const items = responses.map((r, i) => {
+    const obj = drillData.objects?.[i];
+    return `Object: "${obj?.object}" (common use: ${obj?.commonUse})\nUser's creative uses: ${(r.items || []).join(', ') || '(none)'}`;
+  }).join('\n\n');
+
+  return `Score these "Alternative Uses" divergent thinking responses. For each object:
+1. Count valid, unique, creative uses (exclude the obvious common use)
+2. Rate originality — unusual uses score higher than obvious ones
+3. Consider feasibility — completely impossible uses score lower
+
+${items}
+
+Return ONLY valid JSON:
+{"overallScore":75,"scores":[{"score":80,"feedback":"8 valid uses, 3 highly original","validCount":8}],"summary":"Overall divergent thinking assessment"}`;
+}
+
+function buildStoryPromptScorePrompt(drillData, responses) {
+  const items = responses.map((r, i) => {
+    const p = drillData.prompts?.[i];
+    return `Words: ${(p?.words || []).join(', ')}\nUser's micro-story: "${r.response || '(no response)'}"`;
+  }).join('\n\n');
+
+  return `Score these micro-stories on: incorporates all 3 words naturally (30%), creativity/surprise (35%), coherence/quality (35%).
+Rate each 0-100. Penalize if any of the 3 words are missing.
+
+${items}
+
+Return ONLY valid JSON:
+{"overallScore":75,"scores":[{"score":85,"feedback":"All words used naturally, clever twist"}],"summary":"Overall creative writing assessment"}`;
+}
+
+function buildInventionPitchScorePrompt(drillData, responses) {
+  const items = responses.map((r, i) => {
+    const p = drillData.problems?.[i];
+    return `Problem: "${p?.problem}"\nUser's invention pitch: "${r.response || '(no response)'}"`;
+  }).join('\n\n');
+
+  return `Score these invention pitches on: addresses the problem (30%), creativity/novelty (40%), feasibility (30%).
+Rate each 0-100. A great pitch is both creative AND somewhat plausible.
+
+${items}
+
+Return ONLY valid JSON:
+{"overallScore":75,"scores":[{"score":80,"feedback":"Novel approach, reasonably feasible"}],"summary":"Overall invention assessment"}`;
+}
+
+function buildReframeScorePrompt(drillData, responses) {
+  const items = responses.map((r, i) => {
+    const s = drillData.situations?.[i];
+    return `Negative situation: "${s?.situation}"\nUser's reframe: "${r.response || '(no response)'}"`;
+  }).join('\n\n');
+
+  return `Score these positive reframes on: genuineness (30%), humor (30%), insight/wisdom (40%).
+A great reframe finds a real silver lining, not just forced positivity.
+Rate each 0-100.
+
+${items}
+
+Return ONLY valid JSON:
+{"overallScore":75,"scores":[{"score":85,"feedback":"Genuine insight with humor"}],"summary":"Overall reframing assessment"}`;
 }
