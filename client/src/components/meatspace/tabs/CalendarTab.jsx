@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Calendar, Coffee, Droplets, Utensils, Dumbbell, BookOpen, Scissors,
   Cake, Plane, Plus, Trash2, Circle, Sun, Moon, TreePine, Snowflake,
@@ -197,7 +197,7 @@ function cellClasses(status, isCurrent, isBirthday, showEvents) {
 
 // === Year Grid ===
 
-function YearGridView({ birthDate, deathDate, cellCfg, hideSpent, showEvents }) {
+function YearGridView({ birthDate, deathDate, hideSpent, showEvents }) {
   const cells = useMemo(() => computeYearGrid(birthDate, deathDate), [birthDate, deathDate]);
   const currentAge = Math.floor((Date.now() - new Date(birthDate).getTime()) / (365.25 * MS_PER_DAY));
   const filtered = hideSpent ? cells.filter(c => c.status === 'c' || c.status === 'r') : cells;
@@ -212,22 +212,26 @@ function YearGridView({ birthDate, deathDate, cellCfg, hideSpent, showEvents }) 
   }, [filtered]);
 
   return (
-    <div className="overflow-x-auto">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: `${cellCfg.gap + 1}px` }}>
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: `36px repeat(${cols}, 1fr)`, gap: '3px' }}>
         {rows.map((row, ri) => (
-          <div key={ri} style={{ display: 'flex', alignItems: 'center', gap: `${cellCfg.gap + 1}px` }}>
-            <span className="text-right shrink-0 text-gray-500" style={{ width: '28px', fontSize: '9px' }}>
+          <Fragment key={ri}>
+            <span className="text-right text-gray-500 self-center" style={{ fontSize: '10px' }}>
               {row[0]?.index ?? ''}
             </span>
             {row.map((cell) => (
               <span
                 key={cell.index}
-                className={`shrink-0 rounded-sm ${cellClasses(cell.status, cell.index === currentAge, cell.isBirthday, showEvents)}`}
-                style={{ width: `${cellCfg.size}px`, height: `${cellCfg.size}px` }}
+                className={`rounded-sm ${cellClasses(cell.status, cell.index === currentAge, cell.isBirthday, showEvents)}`}
+                style={{ aspectRatio: '1', width: '100%' }}
                 title={cell.label}
               />
             ))}
-          </div>
+            {/* Fill empty trailing cells in last row */}
+            {row.length < cols && Array.from({ length: cols - row.length }).map((_, i) => (
+              <span key={`empty-${i}`} />
+            ))}
+          </Fragment>
         ))}
       </div>
     </div>
@@ -236,44 +240,41 @@ function YearGridView({ birthDate, deathDate, cellCfg, hideSpent, showEvents }) 
 
 // === Month Grid ===
 
-function MonthGridView({ birthDate, deathDate, cellCfg, hideSpent, showEvents }) {
+function MonthGridView({ birthDate, deathDate, hideSpent, showEvents }) {
   const cells = useMemo(() => computeMonthGrid(birthDate, deathDate), [birthDate, deathDate]);
   const currentAge = Math.floor((Date.now() - new Date(birthDate).getTime()) / (365.25 * MS_PER_DAY));
   const filtered = hideSpent ? cells.filter(c => c.status === 'c' || c.status === 'r') : cells;
+  const cols = 120; // 10 years × 12 months = 1 decade per row
 
   const rows = useMemo(() => {
     const result = [];
-    for (let i = 0; i < filtered.length; i += 12) {
-      const row = filtered.slice(i, i + 12);
-      result.push({ label: row[0]?.age, cells: row });
+    for (let i = 0; i < filtered.length; i += cols) {
+      const row = filtered.slice(i, i + cols);
+      const startAge = row[0]?.age ?? 0;
+      result.push({ label: startAge, cells: row });
     }
     return result;
   }, [filtered]);
 
-  const shouldLabel = (age) => age != null && age % 10 === 0;
-
   return (
-    <div className="overflow-x-auto">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: `${cellCfg.gap}px` }}>
-        {rows.map((row, ri) => (
-          <div key={ri} style={{ display: 'flex', alignItems: 'center', gap: `${cellCfg.gap}px` }}>
-            <span
-              className={`text-right shrink-0 ${shouldLabel(row.label) ? 'text-gray-400 font-medium' : 'text-transparent'}`}
-              style={{ width: '24px', fontSize: '9px' }}
-            >
-              {shouldLabel(row.label) ? row.label : '.'}
-            </span>
+    <div>
+      {rows.map((row, ri) => (
+        <div key={ri} className="mb-2">
+          <span className="text-gray-400 font-medium" style={{ fontSize: '9px' }}>
+            {row.label}–{row.label + 9}
+          </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px', marginTop: '1px' }}>
             {row.cells.map((cell) => (
               <span
                 key={cell.index}
-                className={`shrink-0 rounded-[1px] ${cellClasses(cell.status, cell.age === currentAge, cell.isBirthday, showEvents)}`}
-                style={{ width: `${cellCfg.size}px`, height: `${cellCfg.size}px` }}
+                className={`rounded-[1px] ${cellClasses(cell.status, cell.age === currentAge, cell.isBirthday, showEvents)}`}
+                style={{ width: '6px', height: '6px' }}
                 title={cell.label}
               />
             ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -575,10 +576,10 @@ function LifeGrid({ grid, stats, birthDate, deathDate }) {
 
       {/* Grid */}
       {unit === 'years' && (
-        <YearGridView birthDate={birthDate} deathDate={deathDate} cellCfg={cellCfg} hideSpent={hideSpent} showEvents={showEvents} />
+        <YearGridView birthDate={birthDate} deathDate={deathDate} hideSpent={hideSpent} showEvents={showEvents} />
       )}
       {unit === 'months' && (
-        <MonthGridView birthDate={birthDate} deathDate={deathDate} cellCfg={cellCfg} hideSpent={hideSpent} showEvents={showEvents} />
+        <MonthGridView birthDate={birthDate} deathDate={deathDate} hideSpent={hideSpent} showEvents={showEvents} />
       )}
       {unit === 'weeks' && (
         <WeekGridView grid={grid} stats={stats} birthDate={birthDate} cellCfg={cellCfg} weekLayout={weekLayout} hideSpent={hideSpent} showEvents={showEvents} />
@@ -590,17 +591,19 @@ function LifeGrid({ grid, stats, birthDate, deathDate }) {
   );
 }
 
-// === Stats Cards ===
+// === Stats ===
 
-function StatCard({ icon: Icon, iconColor, label, value, sub }) {
+function CompactStat({ icon: Icon, iconColor, label, value, sub }) {
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-3">
-      <div className="flex items-center gap-2 mb-1">
-        <Icon size={14} className={iconColor} />
-        <span className="text-xs text-gray-400 uppercase tracking-wider">{label}</span>
+    <div className="flex items-center gap-2 py-1.5">
+      <Icon size={14} className={`${iconColor} shrink-0`} />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-gray-400">{label}</div>
       </div>
-      <div className="text-xl font-bold text-white">{typeof value === 'number' ? value.toLocaleString() : value}</div>
-      {sub && <div className="text-xs text-gray-500 mt-0.5">{sub}</div>}
+      <div className="text-right">
+        <div className="text-sm font-bold text-white">{typeof value === 'number' ? value.toLocaleString() : value}</div>
+        {sub && <div className="text-[9px] text-gray-600">{sub}</div>}
+      </div>
     </div>
   );
 }
@@ -608,53 +611,21 @@ function StatCard({ icon: Icon, iconColor, label, value, sub }) {
 function TimeStats({ stats }) {
   const r = stats.remaining;
   return (
-    <div>
-      <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Time Remaining</h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-        <StatCard icon={Sun} iconColor="text-yellow-400" label="Saturdays" value={r.saturdays} sub={`${Math.round(r.saturdays / 52)} years of Saturdays`} />
-        <StatCard icon={Sun} iconColor="text-orange-400" label="Sundays" value={r.sundays} sub={`${Math.round(r.sundays / 52)} years of Sundays`} />
-        <StatCard icon={CloudSun} iconColor="text-blue-400" label="Weekends" value={r.weekends} sub={`${Math.round(r.weekends * 2)} weekend days`} />
-        <StatCard icon={Moon} iconColor="text-indigo-400" label="Sleep" value={`${Math.round(r.sleepHours / 24 / 365.25)}y`} sub={`${r.sleepHours.toLocaleString()} hours`} />
-        <StatCard icon={Sun} iconColor="text-green-400" label="Awake Days" value={r.awakeDays} sub={`${Math.round(r.awakeDays / 365.25)} awake years`} />
-        <StatCard icon={Calendar} iconColor="text-purple-400" label="Months" value={r.months} />
-        <StatCard icon={Calendar} iconColor="text-teal-400" label="Weeks" value={r.weeks} />
-        <StatCard icon={Calendar} iconColor="text-port-accent" label="Days" value={r.days} />
-        <StatCard icon={Snowflake} iconColor="text-cyan-400" label="Winters" value={Math.floor(r.seasons / 4)} />
-        <StatCard icon={Flower2} iconColor="text-pink-400" label="Springs" value={Math.floor(r.seasons / 4)} />
-        <StatCard icon={TreePine} iconColor="text-green-400" label="Summers" value={Math.floor(r.seasons / 4)} />
-        <StatCard icon={Cake} iconColor="text-port-warning" label="Holidays" value={r.holidays} sub="Major holidays left" />
-      </div>
-    </div>
-  );
-}
-
-// === Activity Budgets ===
-
-function ActivityBudgets({ budgets, onRemove }) {
-  return (
-    <div>
-      <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Activity Budget</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-        {budgets.map((b, i) => (
-          <div key={i} className="bg-port-card border border-port-border rounded-lg p-3 flex items-center gap-3 group">
-            <IconForName name={b.icon} size={18} className="text-port-accent shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-white">{b.name}</div>
-              <div className="text-xs text-gray-500">{b.frequency}{CADENCE_LABELS[b.cadence]}</div>
-            </div>
-            <div className="text-right">
-              <div className="text-lg font-bold text-white">{b.remaining.toLocaleString()}</div>
-              <div className="text-[10px] text-gray-500">remaining</div>
-            </div>
-            <button
-              onClick={() => onRemove(i)}
-              className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-1"
-              title="Remove activity"
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-        ))}
+    <div className="bg-port-card border border-port-border rounded-lg p-4 h-full">
+      <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Time Remaining</h3>
+      <div className="divide-y divide-port-border">
+        <CompactStat icon={Sun} iconColor="text-yellow-400" label="Saturdays" value={r.saturdays} sub={`${Math.round(r.saturdays / 52)}y`} />
+        <CompactStat icon={Sun} iconColor="text-orange-400" label="Sundays" value={r.sundays} sub={`${Math.round(r.sundays / 52)}y`} />
+        <CompactStat icon={CloudSun} iconColor="text-blue-400" label="Weekends" value={r.weekends} sub={`${Math.round(r.weekends * 2)} days`} />
+        <CompactStat icon={Moon} iconColor="text-indigo-400" label="Sleep" value={`${Math.round(r.sleepHours / 24 / 365.25)}y`} sub={`${r.sleepHours.toLocaleString()}h`} />
+        <CompactStat icon={Sun} iconColor="text-green-400" label="Awake Days" value={r.awakeDays} sub={`${Math.round(r.awakeDays / 365.25)}y`} />
+        <CompactStat icon={Calendar} iconColor="text-purple-400" label="Months" value={r.months} />
+        <CompactStat icon={Calendar} iconColor="text-teal-400" label="Weeks" value={r.weeks} />
+        <CompactStat icon={Calendar} iconColor="text-port-accent" label="Days" value={r.days} />
+        <CompactStat icon={Snowflake} iconColor="text-cyan-400" label="Winters" value={Math.floor(r.seasons / 4)} />
+        <CompactStat icon={Flower2} iconColor="text-pink-400" label="Springs" value={Math.floor(r.seasons / 4)} />
+        <CompactStat icon={TreePine} iconColor="text-green-400" label="Summers" value={Math.floor(r.seasons / 4)} />
+        <CompactStat icon={Cake} iconColor="text-port-warning" label="Holidays" value={r.holidays} />
       </div>
     </div>
   );
@@ -683,10 +654,10 @@ function AddActivityForm({ onAdd }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white bg-port-card border border-dashed border-port-border rounded-lg hover:border-port-accent/50 transition-colors"
+        className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-400 hover:text-white border border-dashed border-port-border rounded hover:border-port-accent/50 transition-colors"
       >
-        <Plus size={16} />
-        Add Activity
+        <Plus size={14} />
+        Add
       </button>
     );
   }
@@ -832,15 +803,15 @@ export default function CalendarTab() {
   const pctColor = pctSpent < 50 ? 'text-port-accent' : pctSpent < 75 ? 'text-port-warning' : 'text-port-error';
 
   return (
-    <div className="space-y-6">
-      {/* Summary bar */}
-      <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex flex-wrap items-center gap-6 mb-3">
-          <div>
-            <div className="text-xs text-gray-500 uppercase tracking-wider">Age</div>
-            <div className="text-2xl font-bold text-white">{Math.floor(stats.age.years)}</div>
+    <div className="space-y-4">
+      {/* Top summary row: age + progress + key stats */}
+      <div className="bg-port-card border border-port-border rounded-lg p-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="text-3xl font-bold text-white">{Math.floor(stats.age.years)}</div>
+            <div className="text-xs text-gray-500 leading-tight">years<br/>old</div>
           </div>
-          <div className="flex-1 min-w-[200px]">
+          <div className="flex-1 min-w-[140px] max-w-[300px]">
             <div className="flex justify-between text-xs text-gray-500 mb-1">
               <span>Life Progress</span>
               <span className={pctColor}>{pctSpent.toFixed(1)}%</span>
@@ -854,40 +825,61 @@ export default function CalendarTab() {
               />
             </div>
           </div>
-        </div>
-        <div className="grid grid-cols-4 gap-3">
-          <div>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Years</div>
-            <div className="text-sm font-bold text-gray-400">{Math.floor(stats.age.years)}<span className="text-gray-600 font-normal"> lived</span></div>
-            <div className="text-sm font-bold text-port-success">{Math.floor(stats.remaining.years)}<span className="text-gray-600 font-normal"> left</span></div>
-          </div>
-          <div>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Months</div>
-            <div className="text-sm font-bold text-gray-400">{Math.floor(stats.age.years * 12).toLocaleString()}<span className="text-gray-600 font-normal"> lived</span></div>
-            <div className="text-sm font-bold text-port-success">{stats.remaining.months.toLocaleString()}<span className="text-gray-600 font-normal"> left</span></div>
-          </div>
-          <div>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Weeks</div>
-            <div className="text-sm font-bold text-gray-400">{stats.age.weeks.toLocaleString()}<span className="text-gray-600 font-normal"> lived</span></div>
-            <div className="text-sm font-bold text-port-success">{stats.remaining.weeks.toLocaleString()}<span className="text-gray-600 font-normal"> left</span></div>
-          </div>
-          <div>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider">Days</div>
-            <div className="text-sm font-bold text-gray-400">{stats.age.days.toLocaleString()}<span className="text-gray-600 font-normal"> lived</span></div>
-            <div className="text-sm font-bold text-port-success">{stats.remaining.days.toLocaleString()}<span className="text-gray-600 font-normal"> left</span></div>
+          <div className="flex gap-6 text-sm ml-auto">
+            <div className="text-center">
+              <div className="font-bold text-port-success">{Math.floor(stats.remaining.years)}</div>
+              <div className="text-[10px] text-gray-500">years left</div>
+            </div>
+            <div className="text-center">
+              <div className="font-bold text-port-success">{stats.remaining.months.toLocaleString()}</div>
+              <div className="text-[10px] text-gray-500">months</div>
+            </div>
+            <div className="text-center">
+              <div className="font-bold text-port-success">{stats.remaining.weeks.toLocaleString()}</div>
+              <div className="text-[10px] text-gray-500">weeks</div>
+            </div>
+            <div className="text-center">
+              <div className="font-bold text-port-success">{stats.remaining.days.toLocaleString()}</div>
+              <div className="text-[10px] text-gray-500">days</div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Life Grid */}
-      <LifeGrid grid={grid} stats={stats} birthDate={birthDate} deathDate={deathDate} />
-
-      {/* Time remaining stats */}
-      <TimeStats stats={stats} />
+      {/* Dashboard grid: Life Grid (main) + Time Stats (sidebar) */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
+        <LifeGrid grid={grid} stats={stats} birthDate={birthDate} deathDate={deathDate} />
+        <TimeStats stats={stats} />
+      </div>
 
       {/* Activity budgets */}
-      <ActivityBudgets budgets={budgets} onRemove={handleRemoveActivity} />
-      <AddActivityForm onAdd={handleAddActivity} />
+      <div className="bg-port-card border border-port-border rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Activity Budget</h3>
+          <AddActivityForm onAdd={handleAddActivity} />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+          {budgets.map((b, i) => (
+            <div key={i} className="bg-port-bg border border-port-border rounded-lg p-2.5 flex items-center gap-2.5 group">
+              <IconForName name={b.icon} size={16} className="text-port-accent shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-white truncate">{b.name}</div>
+                <div className="text-[10px] text-gray-500">{b.frequency}{CADENCE_LABELS[b.cadence]}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-base font-bold text-white">{b.remaining.toLocaleString()}</div>
+              </div>
+              <button
+                onClick={() => handleRemoveActivity(i)}
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                title="Remove activity"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
