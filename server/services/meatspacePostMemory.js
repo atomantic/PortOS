@@ -74,7 +74,7 @@ const ELEMENTS_SONG = {
       K: { name: "Potassium", atomicNumber: 19 }, Ca: { name: "Calcium", atomicNumber: 20 },
       Sc: { name: "Scandium", atomicNumber: 21 }, Ti: { name: "Titanium", atomicNumber: 22 },
       V: { name: "Vanadium", atomicNumber: 23 }, Cr: { name: "Chromium", atomicNumber: 24 },
-      Mn: { name: "Manganese", atomicNumber: 25 }, Fe: { name: "Iron", atomicNumber: 26 },
+      Mn: { name: "Manganese", atomicNumber: 25 }, Hg: { name: "Mercury", atomicNumber: 80 }, Fe: { name: "Iron", atomicNumber: 26 },
       Co: { name: "Cobalt", atomicNumber: 27 }, Ni: { name: "Nickel", atomicNumber: 28 },
       Cu: { name: "Copper", atomicNumber: 29 }, Zn: { name: "Zinc", atomicNumber: 30 },
       Ga: { name: "Gallium", atomicNumber: 31 }, Ge: { name: "Germanium", atomicNumber: 32 },
