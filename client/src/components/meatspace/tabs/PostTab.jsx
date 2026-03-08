@@ -8,6 +8,7 @@ import PostSessionResults from '../post/PostSessionResults';
 import PostHistory from '../post/PostHistory';
 import PostDrillConfig from '../post/PostDrillConfig';
 import MemoryBuilder from '../post/MemoryBuilder';
+import DrillTransition from '../post/DrillTransition';
 import { LLM_DRILL_TYPES } from '../post/constants';
 
 export default function PostTab() {
@@ -76,14 +77,26 @@ export default function PostTab() {
     }
   }, [session.state, view]);
 
-  // When between drills, auto-advance
-  useEffect(() => {
-    if (session.state === 'between-drills') {
-      session.nextDrill();
-    }
-  }, [session.state, session.nextDrill]);
+  // When between drills, show transition (handled in switch/case below)
 
   const isLlmDrill = session.currentDrill && LLM_DRILL_TYPES.includes(session.currentDrill.type);
+
+  // Show transition between drills
+  if (session.state === 'between-drills' && view === 'running') {
+    const nextIndex = session.currentDrillIndex + 1;
+    const nextDrill = session.drills[nextIndex];
+    if (nextDrill) {
+      return (
+        <DrillTransition
+          nextDrillType={nextDrill.type}
+          drillIndex={nextIndex}
+          drillCount={session.drillCount}
+          completedResults={session.drillResults}
+          onContinue={session.nextDrill}
+        />
+      );
+    }
+  }
 
   switch (view) {
     case 'running':

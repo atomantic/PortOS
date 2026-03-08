@@ -1,7 +1,31 @@
 import { useState, useCallback, useRef } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from 'react-hot-toast';
-import { LLM_DRILL_TYPES } from '../components/meatspace/post/constants';
+import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN } from '../components/meatspace/post/constants';
+
+function computeSessionScoreFromResults(results) {
+  if (!results.length) return 0;
+  // Group by domain — if any drills have domain info, use weighted avg per domain
+  const byDomain = {};
+  let hasDomains = false;
+  for (const r of results) {
+    const dk = DRILL_TO_DOMAIN[r.type];
+    if (dk) {
+      hasDomains = true;
+      if (!byDomain[dk]) byDomain[dk] = [];
+      byDomain[dk].push(r.score || 0);
+    }
+  }
+  if (hasDomains && Object.keys(byDomain).length > 1) {
+    // Average within each domain, then average across domains (equal weight per domain)
+    const domainAvgs = Object.values(byDomain).map(scores =>
+      Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+    );
+    return Math.round(domainAvgs.reduce((a, b) => a + b, 0) / domainAvgs.length);
+  }
+  // Fallback: simple average
+  return Math.round(results.reduce((s, r) => s + (r.score || 0), 0) / results.length);
+}
 
 // States: idle → loading → drilling → between-drills → complete → saving → saved
 const STATES = {
@@ -90,9 +114,7 @@ export function usePostSession() {
     if (currentDrillIndex + 1 < drills.length) {
       setState(STATES.BETWEEN_DRILLS);
     } else {
-      // Session complete
-      const avgScore = Math.round(newResults.reduce((s, r) => s + r.score, 0) / newResults.length);
-      setSessionScore(avgScore);
+      setSessionScore(computeSessionScoreFromResults(newResults));
       setState(STATES.COMPLETE);
     }
   }, [currentDrill, drillResults, currentDrillIndex, drills]);
@@ -230,8 +252,7 @@ export function usePostSession() {
     if (currentDrillIndex + 1 < drills.length) {
       setState(STATES.BETWEEN_DRILLS);
     } else {
-      const avgScore = Math.round(newResults.reduce((s, r) => s + (r.score || 0), 0) / newResults.length);
-      setSessionScore(avgScore);
+      setSessionScore(computeSessionScoreFromResults(newResults));
       setState(STATES.COMPLETE);
     }
   }, [drillResults, currentDrillIndex, drills]);

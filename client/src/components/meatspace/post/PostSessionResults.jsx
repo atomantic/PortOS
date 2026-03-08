@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle, Save, ArrowLeft, ChevronDown, ChevronUp, Dumbbell } from 'lucide-react';
-import { LLM_DRILL_TYPES } from './constants';
+import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS } from './constants';
 
 const DRILL_LABELS = {
   'doubling-chain': 'Doubling Chain',
@@ -12,7 +12,15 @@ const DRILL_LABELS = {
   'story-recall': 'Story Recall',
   'verbal-fluency': 'Verbal Fluency',
   'wit-comeback': 'Wit & Comeback',
-  'pun-wordplay': 'Pun & Wordplay'
+  'pun-wordplay': 'Pun & Wordplay',
+  'memory-fill-blank': 'Memory Fill Blank',
+  'memory-sequence': 'Memory Sequence',
+  'memory-element-flash': 'Element Flash',
+  'what-if': 'What If?',
+  'alternative-uses': 'Alternative Uses',
+  'story-prompt': 'Story Prompt',
+  'invention-pitch': 'Invention Pitch',
+  'reframe': 'Reframe',
 };
 
 export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
@@ -43,6 +51,35 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
           </div>
         )}
       </div>
+
+      {/* Domain Scores (for multi-domain sessions) */}
+      {(() => {
+        const byDomain = {};
+        for (const r of drillResults) {
+          const dk = DRILL_TO_DOMAIN[r.type];
+          if (dk) {
+            if (!byDomain[dk]) byDomain[dk] = [];
+            byDomain[dk].push(r.score || 0);
+          }
+        }
+        const domainKeys = Object.keys(byDomain);
+        if (domainKeys.length < 2) return null;
+        return (
+          <div className="flex justify-center gap-4">
+            {domainKeys.map(dk => {
+              const d = DOMAINS[dk];
+              const avg = Math.round(byDomain[dk].reduce((a, b) => a + b, 0) / byDomain[dk].length);
+              const sc = avg >= 80 ? 'text-port-success' : avg >= 50 ? 'text-port-warning' : 'text-port-error';
+              return (
+                <div key={dk} className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg ${d?.bgColor || 'bg-port-card'}`}>
+                  <span className={`text-xs font-medium ${d?.color || 'text-gray-400'}`}>{d?.label || dk}</span>
+                  <span className={`text-lg font-mono font-bold ${sc}`}>{avg}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Per-drill Breakdown */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">

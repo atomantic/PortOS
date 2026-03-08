@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell } from 'lucide-react';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer } from 'lucide-react';
 import { getProviders } from '../../../services/api';
+import { DOMAINS, DRILL_TO_DOMAIN } from './constants';
 
 const DRILL_LABELS = {
   'doubling-chain': 'Doubling Chain',
@@ -82,7 +83,63 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
     onStart(drillConfigs, cleanTags, mode === 'train');
   }
 
+  // Build domain → enabled drills map for quick session
+  const allEnabledDrills = [
+    ...enabledMathDrills.map(([type, cfg]) => ({ type, cfg, source: 'math' })),
+    ...enabledLlmDrills.map(([type, cfg]) => ({ type, cfg, source: 'llm' })),
+  ];
+
+  const enabledDomains = {};
+  for (const { type, cfg, source } of allEnabledDrills) {
+    const domain = DRILL_TO_DOMAIN[type];
+    if (!domain) continue;
+    if (!enabledDomains[domain]) enabledDomains[domain] = [];
+    enabledDomains[domain].push({ type, cfg, source });
+  }
+
+  function handleQuickSession() {
+    const drillConfigs = [];
+    for (const [domainKey, drills] of Object.entries(enabledDomains)) {
+      const domain = DOMAINS[domainKey];
+      // Pick one random drill from this domain
+      const pick = drills[Math.floor(Math.random() * drills.length)];
+      const cfg = pick.cfg;
+
+      const drillConfig = {
+        type: pick.type,
+        domain: domainKey,
+        config: pick.source === 'math'
+          ? {
+              steps: cfg.steps,
+              count: cfg.count ? Math.min(cfg.count, 5) : undefined,
+              maxDigits: cfg.maxDigits,
+              subtrahend: cfg.subtrahend,
+              startRange: cfg.startRange,
+              bases: cfg.bases,
+              maxExponent: cfg.maxExponent,
+              tolerancePct: cfg.tolerancePct,
+            }
+          : { count: Math.min(cfg.count || 5, 3) }, // Fewer prompts for quick session
+        timeLimitSec: domain.timeBudgetSec,
+      };
+
+      if (pick.source === 'llm') {
+        drillConfig.providerId = cfg.providerId || llmProviderId;
+        drillConfig.model = cfg.model || llmModel;
+      }
+
+      drillConfigs.push(drillConfig);
+    }
+
+    const cleanTags = {};
+    for (const [k, v] of Object.entries(tags)) {
+      if (v.trim()) cleanTags[k] = v.trim();
+    }
+    onStart(drillConfigs, cleanTags, mode === 'train');
+  }
+
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0;
+  const domainCount = Object.keys(enabledDomains).length;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -234,19 +291,35 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
         </div>
       </div>}
 
-      {/* Start Button */}
-      <button
-        onClick={handleStart}
-        disabled={!hasAnyDrills}
-        className={`w-full flex items-center justify-center gap-2 px-6 py-3 ${
-          mode === 'train'
-            ? 'bg-purple-600 hover:bg-purple-500'
-            : 'bg-port-accent hover:bg-port-accent/80'
-        } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
-      >
-        {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
-        {mode === 'train' ? 'Start Training' : 'Start POST'}
-      </button>
+      {/* Start Buttons */}
+      <div className="flex gap-3">
+        {domainCount >= 2 && (
+          <button
+            onClick={handleQuickSession}
+            disabled={!hasAnyDrills}
+            className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
+              mode === 'train'
+                ? 'bg-purple-600 hover:bg-purple-500'
+                : 'bg-port-success hover:bg-port-success/80'
+            } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
+          >
+            <Timer size={18} />
+            Quick 5 Min ({domainCount} domains)
+          </button>
+        )}
+        <button
+          onClick={handleStart}
+          disabled={!hasAnyDrills}
+          className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
+            mode === 'train'
+              ? 'bg-purple-600/70 hover:bg-purple-500/70'
+              : 'bg-port-accent hover:bg-port-accent/80'
+          } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
+        >
+          {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
+          {mode === 'train' ? 'Full Training' : 'Full POST'}
+        </button>
+      </div>
 
       {/* Recent Scores */}
       {lastThree.length > 0 && (
