@@ -2590,6 +2590,18 @@ ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (lat
 **Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
+  // Build simplify section if enabled
+  const simplifySection = task.metadata?.simplify ? `
+## Simplify Step
+After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found before committing.
+` : '';
+
+  // Build review loop section if enabled
+  const reviewLoopSection = task.metadata?.reviewLoop ? `
+## Review Loop
+After opening the PR, run \`/do:rpr\` to resolve PR review feedback and complete the merge validation. Continue running the review loop until all checks pass and the PR is approved.
+` : '';
+
   // Build JIRA context section if applicable
   const jiraSection = task.metadata?.jiraTicketId ? `
 ## JIRA Integration
@@ -2638,6 +2650,8 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     digitalTwinSection,
     worktreeSection,
     jiraSection,
+    simplifySection,
+    reviewLoopSection,
     compactionSection,
     skillSection,
     planningContextSection,
@@ -2668,6 +2682,8 @@ ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}\n- **Target App D
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}
 ${jiraSection}
+${simplifySection}
+${reviewLoopSection}
 ${compactionSection}
 ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${planningContextSection}
 ## Instructions
