@@ -9,13 +9,11 @@ import path from 'path';
 import { PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
-const DEFAULT_CONFIG = { instances: {} };
-
 /**
  * Get DataDog instances configuration
  */
 export async function getInstances() {
-  return await readJSONFile(DATADOG_CONFIG_FILE, DEFAULT_CONFIG);
+  return await readJSONFile(DATADOG_CONFIG_FILE, { instances: {} });
 }
 
 /**
