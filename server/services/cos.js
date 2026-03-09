@@ -21,7 +21,7 @@ import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSumma
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
-import { getDueJobs, generateTaskFromJob, recordJobExecution, isScriptJob, executeScriptJob } from './autonomousJobs.js';
+import { generateTaskFromJob, recordJobExecution, isScriptJob, executeScriptJob } from './autonomousJobs.js';
 import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
@@ -893,12 +893,6 @@ export async function evaluateTasks() {
   const runningAgents = runningAgentEntries.length;
   const availableSlots = state.config.maxConcurrentAgents - runningAgents;
 
-  // Track jobIds with running agents to prevent duplicate job spawns
-  const inFlightJobIds = new Set(
-    runningAgentEntries
-      .map(a => a.metadata?.jobId)
-      .filter(Boolean)
-  );
   const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
   const agentsByProject = countRunningAgentsByProject(state.agents);
 
@@ -1082,42 +1076,11 @@ export async function evaluateTasks() {
     }
   }
 
-  // Priority 3.5: Autonomous jobs (recurring scheduled jobs)
-  if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks && state.config.autonomousJobsEnabled) {
-    const dueJobs = await getDueJobs().catch(err => {
-      emitLog('debug', `Autonomous jobs check failed: ${err.message}`);
-      return [];
-    });
-
-    for (const job of dueJobs) {
-      // Skip jobs that already have a running agent (prevents duplicate spawns)
-      if (inFlightJobIds.has(job.id)) {
-        emitLog('debug', `Skipping job ${job.name} - agent already running`, { jobId: job.id });
-        continue;
-      }
-
-      // Script jobs execute directly without spawning an AI agent
-      if (isScriptJob(job)) {
-        await executeScriptJob(job).catch(err => {
-          emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
-        });
-        emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
-        continue;
-      }
-
-      if (tasksToSpawn.length >= availableSlots) break;
-      const task = await generateTaskFromJob(job);
-      if (!canSpawnTask(task)) continue;
-      tasksToSpawn.push(task);
-      trackSpawn(task);
-      // Track this job as in-flight so it's not spawned again within this evaluation
-      inFlightJobIds.add(job.id);
-      emitLog('info', `Autonomous job due: ${job.name} (${job.reason})`, {
-        jobId: job.id,
-        category: job.category
-      });
-    }
-  }
+  // Priority 3.5: Autonomous jobs are handled by registerJobSchedules() which
+  // sets up individual one-shot timers per job via executeScheduledJob().
+  // Previously this section also checked getDueJobs() and spawned tasks here,
+  // which caused duplicate agent spawns on startup when both paths fired
+  // for the same past-due job within seconds of each other.
 
   // Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks)
   if (tasksToSpawn.length < availableSlots && !hasPendingUserTasks) {
@@ -3642,6 +3605,10 @@ async function registerSingleJobSchedule(jobId) {
   });
 }
 
+// Track jobs currently being spawned (between task:ready emit and agent registration)
+// to prevent duplicate spawns when timers overlap or fire during spawn
+const spawningJobIds = new Set();
+
 /**
  * Execute a scheduled autonomous job and re-register its timer.
  */
@@ -3673,7 +3640,12 @@ async function executeScheduledJob(jobId) {
     });
     emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
   } else {
-    // Check if an agent is already running for this job (prevents duplicate spawns)
+    // Check if this job is already being spawned or has a running agent
+    if (spawningJobIds.has(jobId)) {
+      emitLog('debug', `Job ${job.name} skipped - already spawning`, { jobId });
+      await registerSingleJobSchedule(jobId);
+      return;
+    }
     const agentAlreadyRunning = Object.values(state.agents).some(
       a => a.status === 'running' && a.metadata?.jobId === jobId
     );
@@ -3698,6 +3670,8 @@ async function executeScheduledJob(jobId) {
       return;
     }
 
+    // Mark as spawning before emitting task:ready to prevent races
+    spawningJobIds.add(jobId);
     const task = await generateTaskFromJob(job);
     emitLog('info', `Autonomous job firing: ${job.name}`, { jobId, category: job.category });
     cosEvents.emit('task:ready', task);
@@ -3804,6 +3778,7 @@ async function init() {
 
   // Record autonomous job execution only after the agent actually spawns
   cosEvents.on('job:spawned', async ({ jobId }) => {
+    spawningJobIds.delete(jobId);
     await recordJobExecution(jobId).catch(err =>
       console.error(`❌ Failed to record job execution for ${jobId}: ${err.message}`)
     );
