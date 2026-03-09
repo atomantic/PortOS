@@ -232,7 +232,7 @@ start_native() {
   local datadir
   datadir=$(native_data_dir)
 
-  if [ ! -d "$datadir" ]; then
+  if [ ! -d "$datadir" ] || [ ! -f "$datadir/PG_VERSION" ]; then
     err "Database not initialized. Run: scripts/db.sh setup-native"
     exit 1
   fi
@@ -469,7 +469,7 @@ run_psql() {
   if command -v psql >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif [ "$mode" = "docker" ] && docker_running; then
-    docker compose --project-directory "$ROOT_DIR" exec -T -e PGPASSWORD="$PGPASSWORD" db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+    docker exec -e PGPASSWORD="$PGPASSWORD" portos-db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "psql not found on host and Docker DB is not running"
     exit 1
@@ -483,7 +483,7 @@ run_pg_dump() {
   if command -v pg_dump >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif [ "$mode" = "docker" ] && docker_running; then
-    docker compose --project-directory "$ROOT_DIR" exec -T -e PGPASSWORD="$PGPASSWORD" db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
+    docker exec -e PGPASSWORD="$PGPASSWORD" portos-db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "pg_dump not found on host and Docker DB is not running"
     exit 1
@@ -505,7 +505,11 @@ cmd_export() {
 
   info "Exporting database to $dumpfile..." >&2
 
-  run_pg_dump --no-owner --no-privileges --if-exists --clean > "$dumpfile"
+  # Dump to a temp file first to avoid leaving a partial/corrupt dump on failure
+  local tmpfile
+  tmpfile="$(mktemp "$DUMP_DIR/portos-export.XXXXXX")"
+  run_pg_dump --no-owner --no-privileges --if-exists --clean > "$tmpfile"
+  mv "$tmpfile" "$dumpfile"
 
   log "Exported to: $dumpfile" >&2
   echo "$dumpfile"
