@@ -105,6 +105,7 @@ export default function InboxTab({ accounts }) {
     if (targets.length === 0) return toast.error('No enabled accounts to sync');
     setSyncing(true);
     let totalNew = 0;
+    let totalPruned = 0;
     for (const acct of targets) {
       toast(`Syncing ${acct.name} (${mode})...`, { icon: '📧' });
       const result = await api.syncMessageAccount(acct.id, mode).catch(err => {
@@ -112,9 +113,12 @@ export default function InboxTab({ accounts }) {
         return null;
       });
       if (result?.newMessages) totalNew += result.newMessages;
+      if (result?.pruned) totalPruned += result.pruned;
     }
     setSyncing(false);
-    toast.success(`Sync complete — ${totalNew} new messages`);
+    const parts = [`${totalNew} new`];
+    if (totalPruned > 0) parts.push(`${totalPruned} removed`);
+    toast.success(`Sync complete — ${parts.join(', ')}`);
     fetchMessages();
   };
 

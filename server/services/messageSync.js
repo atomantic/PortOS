@@ -163,6 +163,16 @@ export async function syncAccount(accountId, io, options = {}) {
     }
     cache.messages.push(...uniqueNew);
 
+    // Reconcile: remove cached messages no longer present in inbox during full sync
+    let pruned = 0;
+    if (mode === 'full' && providerStatus === 'success' && newMessages.length > 0) {
+      const fetchedIds = new Set(newMessages.filter(m => m.externalId).map(m => m.externalId));
+      const before = cache.messages.length;
+      cache.messages = cache.messages.filter(m => !m.externalId || fetchedIds.has(m.externalId));
+      pruned = before - cache.messages.length;
+      if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale messages from ${account.name}`);
+    }
+
     // Trim to maxMessages
     if (account.syncConfig?.maxMessages && cache.messages.length > account.syncConfig.maxMessages) {
       cache.messages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
@@ -172,13 +182,13 @@ export async function syncAccount(accountId, io, options = {}) {
     await saveCache(accountId, cache);
     await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
 
-    io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, status: providerStatus });
+    io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
     if (providerStatus === 'success') {
       io?.emit('messages:changed', {});
     }
-    console.log(`📧 Sync complete for ${account.name}: ${uniqueNew.length} new, status=${providerStatus}`);
+    console.log(`📧 Sync complete for ${account.name}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
 
-    return { newMessages: uniqueNew.length, total: cache.messages.length, status: providerStatus };
+    return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus };
   };
 
   const result = await providerSync().catch(async (error) => {

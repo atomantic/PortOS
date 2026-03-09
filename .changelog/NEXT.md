@@ -1,6 +1,7 @@
 # Unreleased Changes
 
 ## Added
+- Messages Full Sync now reconciles cache against inbox, pruning messages that were archived/deleted/replied outside PortOS
 - MeatSpace Life Calendar tab — "4000 Weeks" mortality-aware time grid with weeks from birth to death, remaining Saturdays/Sundays/sleep/seasons stats, and customizable activity budgets (coffees, showers, workouts, etc.)
 - Life Calendar tile on MeatSpace Overview linking to full calendar view
 
