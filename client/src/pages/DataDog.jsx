@@ -96,8 +96,8 @@ export default function DataDog() {
         id: formData.id || formData.name.toLowerCase().replace(/\s+/g, '-'),
         name: formData.name,
         site: formData.site,
-        apiKey: formData.apiKey,
-        appKey: formData.appKey
+        ...(formData.apiKey && { apiKey: formData.apiKey }),
+        ...(formData.appKey && { appKey: formData.appKey })
       };
 
       await api.post('/datadog/instances', payload);
@@ -305,7 +305,7 @@ export default function DataDog() {
                 value={formData.apiKey}
                 onChange={handleInputChange}
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-                placeholder="Enter your DataDog API Key"
+                placeholder={editingInstance === 'new' ? 'Enter your DataDog API Key' : 'Leave blank to keep existing key'}
               />
               <p className="text-xs text-gray-400 mt-1">
                 Found in DataDog Organization Settings &rarr; API Keys
@@ -322,7 +322,7 @@ export default function DataDog() {
                 value={formData.appKey}
                 onChange={handleInputChange}
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-                placeholder="Enter your DataDog Application Key"
+                placeholder={editingInstance === 'new' ? 'Enter your DataDog Application Key' : 'Leave blank to keep existing key'}
               />
               <p className="text-xs text-gray-400 mt-1">
                 Found in DataDog Organization Settings &rarr; Application Keys
@@ -332,7 +332,7 @@ export default function DataDog() {
             <div className="flex flex-col sm:flex-row gap-2">
               <button
                 onClick={handleSave}
-                disabled={saving || !formData.name || !formData.site || !formData.apiKey || !formData.appKey}
+                disabled={saving || !formData.name || !formData.site || (editingInstance === 'new' && (!formData.apiKey || !formData.appKey))}
                 className="w-full sm:w-auto px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'Saving...' : 'Save'}

@@ -9,6 +9,15 @@ import path from 'path';
 import { PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
+
+// Hostname-only pattern: no scheme, no path, no port, no special chars
+const VALID_HOSTNAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
+
+function validateSite(site) {
+  if (!site || !VALID_HOSTNAME_RE.test(site)) {
+    throw new Error(`Invalid DataDog site hostname: "${site}". Must be a valid hostname (e.g., api.datadoghq.com)`);
+  }
+}
 /**
  * Get DataDog instances configuration
  */
@@ -32,6 +41,7 @@ export async function saveInstances(config) {
  * Add or update DataDog instance
  */
 export async function upsertInstance(instanceId, instanceData) {
+  validateSite(instanceData.site);
   const config = await getInstances();
 
   const existing = config.instances[instanceId];
@@ -40,8 +50,8 @@ export async function upsertInstance(instanceId, instanceData) {
     id: instanceId,
     name: instanceData.name,
     site: instanceData.site,
-    apiKey: instanceData.apiKey,
-    appKey: instanceData.appKey,
+    apiKey: instanceData.apiKey || existing?.apiKey,
+    appKey: instanceData.appKey || existing?.appKey,
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

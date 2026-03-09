@@ -48,8 +48,18 @@ router.post('/instances', async (req, res, next) => {
   try {
     const { id, name, site, apiKey, appKey } = req.body;
 
-    if (!id || !name || !site || !apiKey || !appKey) {
-      throw new ServerError('Missing required fields', {
+    if (!id || !name || !site) {
+      throw new ServerError('Missing required fields: id, name, site', {
+        status: 400,
+        code: 'INVALID_INPUT'
+      });
+    }
+
+    // For new instances, both keys are required
+    const config = await datadogService.getInstances();
+    const isNew = !config.instances[id];
+    if (isNew && (!apiKey || !appKey)) {
+      throw new ServerError('API Key and Application Key are required for new instances', {
         status: 400,
         code: 'INVALID_INPUT'
       });
@@ -58,8 +68,8 @@ router.post('/instances', async (req, res, next) => {
     const instance = await datadogService.upsertInstance(id, {
       name,
       site,
-      apiKey,
-      appKey
+      ...(apiKey && { apiKey }),
+      ...(appKey && { appKey })
     });
 
     res.json(sanitizeInstance(instance));
