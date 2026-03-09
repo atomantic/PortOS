@@ -45,6 +45,16 @@ warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 err()  { echo -e "${RED}❌ $1${NC}"; }
 info() { echo -e "${BLUE}🗄️  $1${NC}"; }
 
+# Portable in-place sed helper (works with BSD and GNU sed)
+inplace_sed() {
+  local script="$1"
+  local file="$2"
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")" || return 1
+  sed "$script" "$file" >"$tmp"
+  mv "$tmp" "$file"
+}
+
 # Detect current mode from .env or default to docker
 get_mode() {
   if [ -f "$ENV_FILE" ]; then
@@ -61,7 +71,7 @@ set_mode() {
   local mode="$1"
   if [ -f "$ENV_FILE" ]; then
     if grep -q '^PGMODE=' "$ENV_FILE"; then
-      sed -i '' "s/^PGMODE=.*/PGMODE=$mode/" "$ENV_FILE"
+      inplace_sed "s/^PGMODE=.*/PGMODE=$mode/" "$ENV_FILE"
     else
       echo "PGMODE=$mode" >> "$ENV_FILE"
     fi
@@ -271,6 +281,16 @@ cmd_fix() {
 fix_docker() {
   info "Fixing Docker PostgreSQL..."
 
+  if ! command -v docker >/dev/null 2>&1; then
+    err "Docker not installed"
+    exit 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    err "Docker daemon is not running"
+    exit 1
+  fi
+
   cd "$ROOT_DIR"
 
   # Stop and remove container
@@ -300,7 +320,7 @@ fix_native() {
   info "Fixing native PostgreSQL..."
 
   # Try graceful shutdown first
-  pg_ctl -D "$datadir" stop -m immediate 2>/dev/null || true
+  pg_ctl -D "$datadir" stop -m fast 2>/dev/null || true
 
   # Remove stale pid
   rm -f "$datadir/postmaster.pid"
@@ -355,7 +375,12 @@ cmd_setup_native() {
   else
     info "Initializing database cluster..."
     mkdir -p "$datadir"
-    initdb -D "$datadir" --username="$PGUSER" --auth=trust --no-locale --encoding=UTF8
+    local pwfile
+    pwfile="$(mktemp)"
+    chmod 600 "$pwfile"
+    printf '%s\n' "$PGPASSWORD" > "$pwfile"
+    initdb -D "$datadir" --username="$PGUSER" --auth=scram-sha-256 --pwfile="$pwfile" --no-locale --encoding=UTF8
+    rm -f "$pwfile"
     log "Database cluster initialized"
 
     # Configure to use our port
@@ -373,9 +398,9 @@ cmd_setup_native() {
     createdb -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
   fi
 
-  # Set user password (using psql variable to avoid shell injection)
+  # Set user password (using psql variables to avoid shell injection)
   PGPASSWORD="" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-    -v pw="$PGPASSWORD" -c "ALTER USER $PGUSER WITH PASSWORD :'pw';" 2>/dev/null || true
+    -v pw="$PGPASSWORD" -v user="$PGUSER" -c "ALTER USER :\"user\" WITH PASSWORD :'pw';" 2>/dev/null || true
 
   # Run init SQL
   info "Applying schema..."
@@ -388,7 +413,7 @@ cmd_setup_native() {
   # Update PGPORT in .env if not already correct
   if [ -f "$ENV_FILE" ] && ! grep -q "^PGPORT=$PGPORT" "$ENV_FILE"; then
     if grep -q "^PGPORT=" "$ENV_FILE"; then
-      sed -i '' "s/^PGPORT=.*/PGPORT=$PGPORT/" "$ENV_FILE"
+      inplace_sed "s/^PGPORT=.*/PGPORT=$PGPORT/" "$ENV_FILE"
     fi
   fi
 
@@ -404,14 +429,14 @@ cmd_export() {
   mkdir -p "$DUMP_DIR"
   local dumpfile="$DUMP_DIR/portos-$label.sql"
 
-  info "Exporting database to $dumpfile..."
+  info "Exporting database to $dumpfile..." >&2
 
   PGPASSWORD="$PGPASSWORD" pg_dump \
     -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
     --no-owner --no-privileges --if-exists --clean \
     -f "$dumpfile"
 
-  log "Exported to: $dumpfile"
+  log "Exported to: $dumpfile" >&2
   echo "$dumpfile"
 }
 
