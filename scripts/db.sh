@@ -25,6 +25,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Note: In Docker mode, PGPORT must match the published port in docker-compose.yml (default 5561)
 PGPORT="${PGPORT:-5561}"
 PGUSER="${PGUSER:-portos}"
 PGDATABASE="${PGDATABASE:-portos}"
@@ -84,6 +85,22 @@ set_mode() {
 # Check if Docker PostgreSQL is running
 docker_running() {
   docker ps --filter name=portos-db --format '{{.Status}}' 2>/dev/null | grep -qi "up"
+}
+
+# Verify Docker and Compose plugin are available
+require_docker_compose() {
+  if ! command -v docker >/dev/null 2>&1; then
+    err "Docker not installed"
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    err "Docker daemon is not running. Start Docker Desktop or the Docker service."
+    exit 1
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    err "Docker Compose plugin not available. Install it: https://docs.docker.com/compose/install/"
+    exit 1
+  fi
 }
 
 # Check if native PostgreSQL is running on our port
@@ -167,20 +184,7 @@ cmd_start() {
 start_docker() {
   info "Starting Docker PostgreSQL..."
 
-  if ! command -v docker >/dev/null 2>&1; then
-    err "Docker not installed"
-    exit 1
-  fi
-
-  if ! docker info >/dev/null 2>&1; then
-    err "Docker daemon is not running. Start Docker Desktop or the Docker service."
-    exit 1
-  fi
-
-  if ! docker compose version >/dev/null 2>&1; then
-    err "Docker Compose plugin not available. Install it: https://docs.docker.com/compose/install/"
-    exit 1
-  fi
+  require_docker_compose
 
   if docker_running; then
     log "Already running"
@@ -265,6 +269,7 @@ cmd_stop() {
 
 stop_docker() {
   info "Stopping Docker PostgreSQL..."
+  require_docker_compose
   cd "$ROOT_DIR"
   docker compose stop db 2>/dev/null || true
   log "Stopped"
@@ -299,15 +304,7 @@ cmd_fix() {
 fix_docker() {
   info "Fixing Docker PostgreSQL..."
 
-  if ! command -v docker >/dev/null 2>&1; then
-    err "Docker not installed"
-    exit 1
-  fi
-
-  if ! docker info >/dev/null 2>&1; then
-    err "Docker daemon is not running"
-    exit 1
-  fi
+  require_docker_compose
 
   cd "$ROOT_DIR"
 
@@ -464,7 +461,7 @@ run_psql() {
   if command -v psql >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif [ "$mode" = "docker" ] && docker_running; then
-    docker compose exec -T -e PGPASSWORD="$PGPASSWORD" db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+    docker compose --project-directory "$ROOT_DIR" exec -T -e PGPASSWORD="$PGPASSWORD" db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "psql not found on host and Docker DB is not running"
     exit 1
@@ -478,7 +475,7 @@ run_pg_dump() {
   if command -v pg_dump >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   elif [ "$mode" = "docker" ] && docker_running; then
-    docker compose exec -T -e PGPASSWORD="$PGPASSWORD" db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
+    docker compose --project-directory "$ROOT_DIR" exec -T -e PGPASSWORD="$PGPASSWORD" db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
     err "pg_dump not found on host and Docker DB is not running"
     exit 1
@@ -488,6 +485,13 @@ run_pg_dump() {
 # Export database to SQL dump
 cmd_export() {
   local label="${1:-$(date +%Y%m%d-%H%M%S)}"
+
+  # Sanitize label to prevent path traversal
+  if echo "$label" | grep -qE '[^A-Za-z0-9._-]'; then
+    err "Invalid label: only alphanumeric, dots, hyphens, and underscores are allowed"
+    exit 1
+  fi
+
   mkdir -p "$DUMP_DIR"
   local dumpfile="$DUMP_DIR/portos-$label.sql"
 
@@ -549,13 +553,15 @@ cmd_migrate() {
   info "Stopping $current_mode..."
   cmd_stop
 
-  # Switch mode and start target
+  # Switch mode and start target — restore mode on failure
   set_mode "$target_mode"
+  trap 'warn "Migration failed — restoring mode to $current_mode"; set_mode "$current_mode"' ERR
 
   if [ "$target_mode" = "native" ]; then
     if [ ! -d "$(native_data_dir)" ]; then
       err "Native PostgreSQL not set up. Run: scripts/db.sh setup-native"
       set_mode "$current_mode"
+      trap - ERR
       exit 1
     fi
     start_native
@@ -565,6 +571,9 @@ cmd_migrate() {
 
   # Import into target
   cmd_import "$dumpfile"
+
+  # Clear the error trap after successful import
+  trap - ERR
 
   # Verify
   local new_count
@@ -605,6 +614,7 @@ cmd_logs() {
   mode=$(get_mode)
 
   if [ "$mode" = "docker" ]; then
+    require_docker_compose
     cd "$ROOT_DIR"
     docker compose logs -f db
   else
