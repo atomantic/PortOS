@@ -105,7 +105,7 @@ require_docker_compose() {
 
 # Check if native PostgreSQL is running on our port
 native_running() {
-  pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1
+  PGPASSWORD="$PGPASSWORD" pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1
 }
 
 # Get native PostgreSQL data directory
@@ -150,7 +150,7 @@ cmd_status() {
   if has_native_pg; then
     local datadir
     datadir=$(native_data_dir)
-    if [ -f "$datadir/postmaster.pid" ] && pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
+    if [ -f "$datadir/postmaster.pid" ] && PGPASSWORD="$PGPASSWORD" pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
       log "  Native PostgreSQL is running (data: $datadir)"
     elif [ -d "$datadir" ]; then
       warn "  Native PostgreSQL configured but not running (data: $datadir)"
@@ -237,9 +237,10 @@ start_native() {
     exit 1
   fi
 
-  # Clean stale pid if needed
+  # Clean stale pid if needed — use credential-free pg_ctl status to avoid
+  # false negatives from SCRAM auth when the server is actually running
   if [ -f "$datadir/postmaster.pid" ]; then
-    if ! pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+    if ! pg_ctl -D "$datadir" status >/dev/null 2>&1; then
       warn "Removing stale postmaster.pid..."
       rm -f "$datadir/postmaster.pid"
     fi
@@ -248,7 +249,7 @@ start_native() {
   pg_ctl -D "$datadir" -l "$datadir/server.log" -o "-p $PGPORT" start
 
   for i in $(seq 1 15); do
-    if pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+    if PGPASSWORD="$PGPASSWORD" pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
       log "Native PostgreSQL ready on port $PGPORT"
       return
     fi
@@ -428,7 +429,7 @@ cmd_setup_native() {
   # Create the database and run init SQL
   if ! PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -lqt 2>/dev/null | cut -d\| -f1 | grep -qw "$PGDATABASE"; then
     info "Creating database: $PGDATABASE"
-    createdb -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
+    PGPASSWORD="$PGPASSWORD" createdb -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" "$PGDATABASE"
   fi
 
   # Set user password (using psql variables to avoid shell injection)
