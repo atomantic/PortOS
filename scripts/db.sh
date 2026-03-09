@@ -121,7 +121,7 @@ cmd_status() {
   if has_native_pg; then
     local datadir
     datadir=$(native_data_dir)
-    if [ -f "$datadir/postmaster.pid" ] && pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+    if [ -f "$datadir/postmaster.pid" ] && pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
       log "  Native PostgreSQL is running (data: $datadir)"
     elif [ -d "$datadir" ]; then
       warn "  Native PostgreSQL configured but not running (data: $datadir)"
@@ -161,6 +161,16 @@ start_docker() {
 
   if ! command -v docker >/dev/null 2>&1; then
     err "Docker not installed"
+    exit 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    err "Docker daemon is not running. Start Docker Desktop or the Docker service."
+    exit 1
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    err "Docker Compose plugin not available. Install it: https://docs.docker.com/compose/install/"
     exit 1
   fi
 
@@ -293,16 +303,24 @@ fix_docker() {
 
   cd "$ROOT_DIR"
 
+  # Determine the actual data volume used by the portos-db container, if it exists
+  local data_volume=""
+  data_volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' portos-db 2>/dev/null || echo "")
+
   # Stop and remove container
   docker compose stop db 2>/dev/null || true
   docker rm -f portos-db 2>/dev/null || true
 
   # Remove stale postmaster.pid from the volume
-  # Compose prefixes volume names with project name: portos_portos-pgdata
-  local project_name
-  project_name=$(docker compose config --format json 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "portos")
-  docker run --rm -v "${project_name}_portos-pgdata:/data" alpine rm -f /data/postmaster.pid 2>/dev/null ||
-    docker run --rm -v "portos-pgdata:/data" alpine rm -f /data/postmaster.pid 2>/dev/null || true
+  if [ -n "$data_volume" ]; then
+    docker run --rm -v "${data_volume}:/data" alpine rm -f /data/postmaster.pid 2>/dev/null || true
+  else
+    # Fallback: derive volume name from compose project name
+    local project_name
+    project_name=$(docker compose config --format json 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "portos")
+    docker run --rm -v "${project_name}_portos-pgdata:/data" alpine rm -f /data/postmaster.pid 2>/dev/null ||
+      docker run --rm -v "portos-pgdata:/data" alpine rm -f /data/postmaster.pid 2>/dev/null || true
+  fi
 
   log "Stale lock files cleaned"
   info "Run 'scripts/db.sh start' to restart"
@@ -399,8 +417,8 @@ cmd_setup_native() {
   fi
 
   # Set user password (using psql variables to avoid shell injection)
-  PGPASSWORD="" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-    -v pw="$PGPASSWORD" -v user="$PGUSER" -c "ALTER USER :\"user\" WITH PASSWORD :'pw';" 2>/dev/null || true
+  PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+    -v pw="$PGPASSWORD" -v user="$PGUSER" -c "ALTER USER :\"user\" WITH PASSWORD :'pw';" 2>/dev/null
 
   # Run init SQL
   info "Applying schema..."
@@ -414,6 +432,8 @@ cmd_setup_native() {
   if [ -f "$ENV_FILE" ] && ! grep -q "^PGPORT=$PGPORT" "$ENV_FILE"; then
     if grep -q "^PGPORT=" "$ENV_FILE"; then
       inplace_sed "s/^PGPORT=.*/PGPORT=$PGPORT/" "$ENV_FILE"
+    else
+      printf '\nPGPORT=%s\n' "$PGPORT" >> "$ENV_FILE"
     fi
   fi
 
@@ -421,6 +441,34 @@ cmd_setup_native() {
   log "Native PostgreSQL is ready!"
   info "Data directory: $datadir"
   info "To migrate data from Docker: scripts/db.sh migrate"
+}
+
+# Run psql command, using Docker exec in Docker mode if host psql is unavailable
+run_psql() {
+  local mode
+  mode=$(get_mode)
+  if command -v psql >/dev/null 2>&1; then
+    PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+  elif [ "$mode" = "docker" ] && docker_running; then
+    docker compose exec -T -e PGPASSWORD="$PGPASSWORD" db psql -U "$PGUSER" -d "$PGDATABASE" "$@"
+  else
+    err "psql not found on host and Docker DB is not running"
+    exit 1
+  fi
+}
+
+# Run pg_dump, using Docker exec in Docker mode if host pg_dump is unavailable
+run_pg_dump() {
+  local mode
+  mode=$(get_mode)
+  if command -v pg_dump >/dev/null 2>&1; then
+    PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+  elif [ "$mode" = "docker" ] && docker_running; then
+    docker compose exec -T -e PGPASSWORD="$PGPASSWORD" db pg_dump -U "$PGUSER" -d "$PGDATABASE" "$@"
+  else
+    err "pg_dump not found on host and Docker DB is not running"
+    exit 1
+  fi
 }
 
 # Export database to SQL dump
@@ -431,10 +479,7 @@ cmd_export() {
 
   info "Exporting database to $dumpfile..." >&2
 
-  PGPASSWORD="$PGPASSWORD" pg_dump \
-    -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-    --no-owner --no-privileges --if-exists --clean \
-    -f "$dumpfile"
+  run_pg_dump --no-owner --no-privileges --if-exists --clean > "$dumpfile"
 
   log "Exported to: $dumpfile" >&2
   echo "$dumpfile"
@@ -451,9 +496,7 @@ cmd_import() {
 
   info "Importing $dumpfile..."
 
-  PGPASSWORD="$PGPASSWORD" psql \
-    -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-    -f "$dumpfile"
+  run_psql -f "$dumpfile"
 
   log "Import complete"
 }
@@ -473,7 +516,7 @@ cmd_migrate() {
   info "Migrating data from $current_mode to $target_mode..."
 
   # Verify source is running
-  if ! PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c "SELECT 1" >/dev/null 2>&1; then
+  if ! run_psql -c "SELECT 1" >/dev/null 2>&1; then
     err "Source database ($current_mode) is not running on port $PGPORT"
     echo "  Start it first: scripts/db.sh start"
     exit 1
@@ -481,7 +524,7 @@ cmd_migrate() {
 
   # Count source records
   local count
-  count=$(PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "0")
+  count=$(run_psql -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "0")
   info "Source has $count memories"
 
   # Export from source
@@ -511,7 +554,7 @@ cmd_migrate() {
 
   # Verify
   local new_count
-  new_count=$(PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "0")
+  new_count=$(run_psql -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "0")
 
   echo ""
   log "Migration complete!"
