@@ -135,7 +135,11 @@ cmd_status() {
 
   echo ""
   echo "Docker:"
-  if docker ps --filter name=portos-db --format '{{.Status}}' 2>/dev/null | grep -qi "up"; then
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "  Docker not installed"
+  elif ! docker info >/dev/null 2>&1; then
+    warn "  Docker daemon is not running"
+  elif docker ps --filter name=portos-db --format '{{.Status}}' 2>/dev/null | grep -qi "up"; then
     log "  Container portos-db is running"
   else
     warn "  Container portos-db is not running"
@@ -318,13 +322,13 @@ fix_docker() {
 
   # Remove stale postmaster.pid from the volume
   if [ -n "$data_volume" ]; then
-    docker run --rm -v "${data_volume}:/data" alpine rm -f /data/postmaster.pid 2>/dev/null || true
+    docker run --rm -v "${data_volume}:/data" alpine:3.20 rm -f /data/postmaster.pid 2>/dev/null || true
   else
     # Fallback: derive volume name from compose project name
     local project_name
     project_name=$(docker compose config --format json 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "portos")
-    docker run --rm -v "${project_name}_portos-pgdata:/data" alpine rm -f /data/postmaster.pid 2>/dev/null ||
-      docker run --rm -v "portos-pgdata:/data" alpine rm -f /data/postmaster.pid 2>/dev/null || true
+    docker run --rm -v "${project_name}_portos-pgdata:/data" alpine:3.20 rm -f /data/postmaster.pid 2>/dev/null ||
+      docker run --rm -v "portos-pgdata:/data" alpine:3.20 rm -f /data/postmaster.pid 2>/dev/null || true
   fi
 
   log "Stale lock files cleaned"
@@ -514,7 +518,8 @@ cmd_import() {
 
   info "Importing $dumpfile..."
 
-  run_psql -v ON_ERROR_STOP=1 --single-transaction -f "$dumpfile"
+  # Use stdin redirection so the dump is accessible even in Docker exec mode
+  run_psql -v ON_ERROR_STOP=1 --single-transaction < "$dumpfile"
 
   log "Import complete"
 }
@@ -553,9 +558,13 @@ cmd_migrate() {
   info "Stopping $current_mode..."
   cmd_stop
 
-  # Switch mode and start target — restore mode on failure
+  # Switch mode and start target — restore mode on failure or interruption
   set_mode "$target_mode"
-  trap 'warn "Migration failed — restoring mode to $current_mode"; set_mode "$current_mode"' ERR
+  _migrate_cleanup() {
+    warn "Migration aborted — restoring mode to $current_mode"
+    set_mode "$current_mode"
+  }
+  trap '_migrate_cleanup' ERR INT TERM
 
   if [ "$target_mode" = "native" ]; then
     if [ ! -d "$(native_data_dir)" ]; then
@@ -572,8 +581,8 @@ cmd_migrate() {
   # Import into target
   cmd_import "$dumpfile"
 
-  # Clear the error trap after successful import
-  trap - ERR
+  # Clear traps after successful import
+  trap - ERR INT TERM
 
   # Verify
   local new_count
