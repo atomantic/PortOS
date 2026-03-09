@@ -32,6 +32,22 @@ vi.mock('../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn()
 }));
 
+vi.mock('../services/appUpdater.js', () => ({
+  updateApp: vi.fn()
+}));
+
+vi.mock('../services/cos.js', () => ({
+  getAgents: vi.fn().mockResolvedValue([]),
+  getAgentDates: vi.fn().mockResolvedValue([]),
+  getAgentsByDate: vi.fn().mockResolvedValue([])
+}));
+
+vi.mock('../services/git.js', () => ({
+  stageFiles: vi.fn(),
+  getStatus: vi.fn(),
+  commit: vi.fn()
+}));
+
 // Import mocked modules
 import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
