@@ -413,7 +413,10 @@ cmd_setup_native() {
     pwfile="$(mktemp)"
     chmod 600 "$pwfile"
     printf '%s\n' "$PGPASSWORD" > "$pwfile"
+    # Ensure the temp password file is cleared and removed on any exit/error path
+    trap 'if [ -n "${pwfile-}" ] && [ -f "$pwfile" ]; then : > "$pwfile"; rm -f "$pwfile"; fi' RETURN ERR
     initdb -D "$datadir" --username="$PGUSER" --auth=scram-sha-256 --pwfile="$pwfile" --no-locale --encoding=UTF8
+    : > "$pwfile"
     rm -f "$pwfile"
     log "Database cluster initialized"
 
@@ -613,7 +616,13 @@ cmd_use_native() {
     err "Native database not initialized. Run: scripts/db.sh setup-native"
     exit 1
   fi
-  stop_docker 2>/dev/null || true
+  # Best-effort stop of Docker DB container without requiring Docker to be installed/running
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    (
+      cd "$ROOT_DIR"
+      docker compose stop db >/dev/null 2>&1 || true
+    )
+  fi
   set_mode native
   info "Switched to native mode. Run 'scripts/db.sh start' to start."
 }
