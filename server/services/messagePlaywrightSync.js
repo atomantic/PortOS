@@ -38,13 +38,13 @@ async function cdpFetch(path, options = {}) {
   return response;
 }
 
-async function getPages() {
+export async function getPages() {
   const response = await cdpFetch('/json/list');
   if (!response.ok) return [];
   return response.json();
 }
 
-async function findOrOpenPage(targetUrl) {
+export async function findOrOpenPage(targetUrl) {
   const pages = await getPages();
   // Find existing tab matching the target
   const existing = pages.find(p => p.url?.includes(new URL(targetUrl).hostname));
@@ -55,13 +55,13 @@ async function findOrOpenPage(targetUrl) {
   return response.json();
 }
 
-function isAuthPage(page) {
+export function isAuthPage(page) {
   const url = page.url || '';
   const title = page.title || '';
   return AUTH_PATTERNS.some(p => url.includes(p) || title.includes(p));
 }
 
-async function evaluateOnPage(page, expression) {
+export async function evaluateOnPage(page, expression) {
   const wsUrl = page.webSocketDebuggerUrl;
   if (!wsUrl) return null;
 

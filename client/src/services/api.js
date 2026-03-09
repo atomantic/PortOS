@@ -1717,7 +1717,7 @@ export const refreshMessage = (accountId, messageId) =>
 export const fetchFullContent = (accountId, { force } = {}) =>
   request(`/messages/fetch-full/${accountId}`, { method: 'POST', body: force ? JSON.stringify({ force: true }) : undefined });
 export const executeMessageAction = (accountId, messageId, action) =>
-  request(`/messages/${accountId}/${messageId}/action`, { method: 'POST', body: JSON.stringify({ action }) });
+  request(`/messages/${accountId}/${messageId}/action`, { method: 'POST', body: JSON.stringify({ action }), silent: true });
 export const clearMessageCache = (accountId) =>
   request(`/messages/accounts/${accountId}/cache/clear`, { method: 'POST' });
 

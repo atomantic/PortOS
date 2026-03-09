@@ -1,6 +1,7 @@
 import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
 import { createRun, executeApiRun, executeCliRun } from './runner.js';
+import { buildRulesPromptSection } from './messageTriageRules.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.
 
@@ -123,7 +124,8 @@ export async function evaluateMessages(messages) {
   const { provider, model } = await resolveProviderConfig('triage');
 
   const payload = buildEvalPayload(messages);
-  const prompt = EVAL_PROMPT + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
+  const rulesSection = await buildRulesPromptSection();
+  const prompt = EVAL_PROMPT + rulesSection + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
 
   console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}/${model || provider.defaultModel}`);
   const response = await runPrompt(provider, model, prompt, 'messages-triage');

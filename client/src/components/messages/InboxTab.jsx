@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Mail, Search, RefreshCw, ChevronRight, Sparkles, Archive, Trash2, Reply, Eye, Flag, Pin } from 'lucide-react';
+import { Mail, Search, RefreshCw, ChevronRight, Sparkles, Archive, Trash2, Reply, Eye, Flag, Pin, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import * as api from '../../services/api';
@@ -7,11 +7,16 @@ import socket from '../../services/socket';
 import MessageDetail from './MessageDetail';
 
 const ACTION_CONFIG = {
-  reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  label: 'Reply' },
-  archive: { icon: Archive,  color: 'text-gray-400',     bg: 'bg-gray-500/10',     label: 'Archive' },
-  delete:  { icon: Trash2,   color: 'text-port-error',   bg: 'bg-port-error/10',   label: 'Delete' },
-  review:  { icon: Eye,      color: 'text-port-warning', bg: 'bg-port-warning/10', label: 'Review' }
+  reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
+  archive: { icon: Archive,  color: 'text-gray-400',     bg: 'bg-gray-500/10',     hoverBg: 'hover:bg-gray-500/20',     label: 'Archive' },
+  delete:  { icon: Trash2,   color: 'text-port-error',   bg: 'bg-port-error/10',   hoverBg: 'hover:bg-port-error/20',   label: 'Delete' },
+  review:  { icon: Eye,      color: 'text-port-warning', bg: 'bg-port-warning/10', hoverBg: 'hover:bg-port-warning/20', label: 'Review' }
 };
+
+const ACTION_ORDER = ['reply', 'review', 'archive', 'delete'];
+
+// Email sources that support archive/delete actions
+const ACTIONABLE_SOURCES = ['outlook', 'gmail'];
 
 const PRIORITY_DOT = {
   high: 'bg-port-error',
@@ -146,6 +151,28 @@ export default function InboxTab({ accounts }) {
     if (draft) {
       toast.success('Draft created — opening Drafts');
       navigate('/messages/drafts');
+    }
+  };
+
+  const handleAction = async (msg, action, e) => {
+    e.stopPropagation();
+    if (actionInProgress) return;
+    const account = accounts.find(a => a.id === msg.accountId);
+    if (!account) return toast.error('No account found for this message');
+    if (!ACTIONABLE_SOURCES.includes(msg.source || account.type)) {
+      return toast.error(`${action} not supported for ${msg.source || account.type}`);
+    }
+    setActionInProgress(msg.id);
+    toast(`${action === 'archive' ? 'Archiving' : 'Deleting'}...`, { icon: '📧' });
+    const result = await api.executeMessageAction(msg.accountId, msg.id, action).catch(err => {
+      toast.error(err?.message || `${action} failed`);
+      return null;
+    });
+    setActionInProgress(null);
+    if (result?.success) {
+      toast.success(`Message ${action === 'archive' ? 'archived' : 'deleted'}`);
+      setMessages(prev => prev.filter(m => m.id !== msg.id));
+      setTotal(prev => Math.max(0, prev - 1));
     }
   };
 
@@ -329,33 +356,47 @@ export default function InboxTab({ accounts }) {
                 </div>
               </button>
 
-              {/* Evaluation badge + quick action */}
-              <div className="flex items-center gap-2 shrink-0">
-                {ev && (
-                  <span className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${actionCfg.bg} ${actionCfg.color}`} title={ev.reason}>
-                    {ActionIcon && <ActionIcon size={12} />}
-                    {actionCfg.label}
-                  </span>
-                )}
-                {ev?.action === 'reply' && (
-                  <button
-                    onClick={(e) => handleQuickReply(msg, e)}
-                    className="flex items-center gap-1 px-2 py-1 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20 transition-colors opacity-0 group-hover:opacity-100"
-                    title="Generate AI reply draft"
-                  >
-                    <Sparkles size={12} /> Draft
-                  </button>
-                )}
-                {!ev && (
-                  <button
-                    onClick={(e) => handleQuickReply(msg, e)}
-                    className="flex items-center gap-1 px-2 py-1 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20 transition-colors opacity-0 group-hover:opacity-100"
-                    title="Generate AI reply draft"
-                  >
-                    <Reply size={12} /> Reply
-                  </button>
-                )}
-                <ChevronRight size={16} className="text-gray-600" />
+              {/* Action buttons — always show all, highlight AI recommendation */}
+              <div className="flex items-center gap-1 shrink-0">
+                {ACTION_ORDER.map(actionKey => {
+                  const cfg = ACTION_CONFIG[actionKey];
+                  const Icon = cfg.icon;
+                  const isRecommended = ev?.action === actionKey;
+                  const msgSource = msg.source || accounts.find(a => a.id === msg.accountId)?.type;
+                  const isActionable = ['archive', 'delete'].includes(actionKey) && ACTIONABLE_SOURCES.includes(msgSource);
+
+                  const onClick = actionKey === 'reply'
+                    ? (e) => handleQuickReply(msg, e)
+                    : actionKey === 'review'
+                      ? (e) => { e.stopPropagation(); setSelectedMessage(msg); }
+                      : isActionable
+                        ? (e) => handleAction(msg, actionKey, e)
+                        : (e) => { e.stopPropagation(); setSelectedMessage(msg); };
+
+                  const title = isRecommended && ev?.reason
+                    ? `AI: ${cfg.label} — ${ev.reason}`
+                    : cfg.label;
+
+                  return (
+                    <button
+                      key={actionKey}
+                      onClick={onClick}
+                      disabled={actionInProgress === msg.id}
+                      className={`flex items-center p-1.5 rounded text-xs transition-colors cursor-pointer disabled:opacity-50 ${
+                        isRecommended
+                          ? `${cfg.bg} ${cfg.color} ring-1 ring-current`
+                          : 'text-gray-500 hover:text-gray-300 hover:bg-port-border/50'
+                      }`}
+                      title={title}
+                    >
+                      {actionInProgress === msg.id && isActionable
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : <Icon size={14} />
+                      }
+                    </button>
+                  );
+                })}
+                <ChevronRight size={16} className="text-gray-600 ml-1" />
               </div>
             </div>
           );

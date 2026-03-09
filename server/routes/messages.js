@@ -8,6 +8,8 @@ import * as messageDrafts from '../services/messageDrafts.js';
 import * as messageSender from '../services/messageSender.js';
 import { getSelectors, updateSelectors, testSelectors, launchProvider } from '../services/messagePlaywrightSync.js';
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
+import { executeAction } from '../services/messageActions.js';
+import { listRules, deleteRule } from '../services/messageTriageRules.js';
 
 const router = express.Router();
 
@@ -142,6 +144,20 @@ router.get('/inbox', asyncHandler(async (req, res) => {
     offset: parsedOffset
   });
   res.json(result);
+}));
+
+// === Triage Rules Routes ===
+router.get('/triage-rules', asyncHandler(async (req, res) => {
+  const rules = await listRules();
+  res.json({ rules });
+}));
+
+router.delete('/triage-rules/:index', asyncHandler(async (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  if (Number.isNaN(index) || index < 0) return res.status(400).json({ error: 'Invalid rule index' });
+  const deleted = await deleteRule(index);
+  if (!deleted) return res.status(404).json({ error: 'Rule not found' });
+  res.status(204).send();
 }));
 
 // === Evaluate Route ===
@@ -368,6 +384,20 @@ router.post('/accounts/:id/cache/clear', asyncHandler(async (req, res) => {
   await messageSync.deleteCache(req.params.id);
   req.app.get('io')?.emit('messages:changed', {});
   res.status(204).send();
+}));
+
+// === Message Action Route (archive/delete) ===
+router.post('/:accountId/:messageId/action', asyncHandler(async (req, res) => {
+  const parsed = messageParamsSchema.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid accountId or messageId format' });
+  const { accountId, messageId } = parsed.data;
+  const action = req.body?.action;
+  if (!['archive', 'delete'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action — must be "archive" or "delete"' });
+  }
+  const result = await executeAction(accountId, messageId, action);
+  req.app.get('io')?.emit('messages:changed', {});
+  res.json(result);
 }));
 
 // === Message Detail Route (last to avoid capturing /launch, /selectors paths) ===
