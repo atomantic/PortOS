@@ -96,10 +96,8 @@ describe('getTrainingStats', () => {
   });
 
   it('computes streak for consecutive days', async () => {
-    const today = new Date();
     const dates = [0, 1, 2].map(d => {
-      const dt = new Date(today);
-      dt.setDate(dt.getDate() - d);
+      const dt = new Date(Date.now() - d * 86400000);
       return dt.toISOString().split('T')[0];
     });
 
