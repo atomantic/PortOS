@@ -1575,7 +1575,7 @@ export const removeLifeEvent = (id) => request(`/meatspace/life-events/${id}`, {
 
 // DataDog
 export const getDatadogInstances = () => request('/datadog/instances');
-export const testDatadogConnection = (id) => request(`/datadog/instances/${id}/test`, { method: 'POST' });
+
 
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');

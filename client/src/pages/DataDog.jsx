@@ -54,7 +54,7 @@ export default function DataDog() {
     setFormData({
       id: instance.id,
       name: instance.name,
-      site: isCustom ? instance.site : instance.site,
+      site: instance.site,
       apiKey: '',
       appKey: ''
     });

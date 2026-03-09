@@ -114,7 +114,7 @@ export async function searchErrors(instanceId, serviceName, environment = 'produ
 
   const response = await client.post('/api/v2/logs/events/search', {
     filter: {
-      query: `status:error service:${serviceName} env:${environment}`,
+      query: `status:error service:"${serviceName}" env:"${environment}"`,
       from
     },
     sort: '-timestamp',
