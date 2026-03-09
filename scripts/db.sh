@@ -96,6 +96,14 @@ native_data_dir() {
   echo "$ROOT_DIR/data/pgdata"
 }
 
+# Auto-detect Homebrew PostgreSQL on macOS and add to PATH
+if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  _pg_bin="$(brew --prefix postgresql@17 2>/dev/null)/bin"
+  if [ -d "$_pg_bin" ]; then
+    export PATH="$_pg_bin:$PATH"
+  fi
+fi
+
 # Check if native PostgreSQL is installed
 has_native_pg() {
   command -v pg_ctl >/dev/null 2>&1
@@ -134,10 +142,10 @@ cmd_status() {
 
   echo ""
   echo "Connectivity:"
-  if PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c "SELECT 1" >/dev/null 2>&1; then
+  if run_psql -c "SELECT 1" >/dev/null 2>&1; then
     log "  Database is accepting connections on port $PGPORT"
     local count
-    count=$(PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "N/A")
+    count=$(run_psql -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "N/A")
     info "  Memories table has $count rows"
   else
     warn "  Cannot connect to database on port $PGPORT"
@@ -379,6 +387,12 @@ cmd_setup_native() {
     PG_BIN="$(brew --prefix postgresql@17)/bin"
     export PATH="$PG_BIN:$PATH"
     info "Using PostgreSQL from: $PG_BIN"
+    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$PG_BIN"; then
+      warn "PostgreSQL bin dir is not on your default PATH"
+      echo "  Add this to your shell profile (~/.zshrc or ~/.bashrc):"
+      echo "    export PATH=\"$PG_BIN:\\\$PATH\""
+      echo "  Then restart your terminal or run: source ~/.zshrc"
+    fi
   else
     if ! command -v pg_ctl >/dev/null 2>&1; then
       err "Please install PostgreSQL 17 and pgvector for your platform"
@@ -422,7 +436,7 @@ cmd_setup_native() {
 
   # Run init SQL
   info "Applying schema..."
-  PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -f "$ROOT_DIR/server/scripts/init-db.sql"
+  PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 --single-transaction -f "$ROOT_DIR/server/scripts/init-db.sql"
   log "Schema applied"
 
   # Switch mode
@@ -496,7 +510,7 @@ cmd_import() {
 
   info "Importing $dumpfile..."
 
-  run_psql -f "$dumpfile"
+  run_psql -v ON_ERROR_STOP=1 --single-transaction -f "$dumpfile"
 
   log "Import complete"
 }
