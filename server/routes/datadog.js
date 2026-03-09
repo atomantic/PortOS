@@ -1,0 +1,124 @@
+/**
+ * DataDog API Routes
+ */
+
+import express from 'express';
+import * as datadogService from '../services/datadog.js';
+import { ServerError } from '../lib/errorHandler.js';
+
+const router = express.Router();
+
+function sanitizeInstance(instance) {
+  return {
+    id: instance.id,
+    name: instance.name,
+    site: instance.site,
+    hasApiKey: !!instance.apiKey,
+    hasAppKey: !!instance.appKey,
+    createdAt: instance.createdAt,
+    updatedAt: instance.updatedAt
+  };
+}
+
+/**
+ * GET /api/datadog/instances
+ * Get all DataDog instances
+ */
+router.get('/instances', async (req, res, next) => {
+  try {
+    const config = await datadogService.getInstances();
+
+    const sanitized = {
+      instances: Object.fromEntries(
+        Object.entries(config.instances).map(([id, instance]) => [id, sanitizeInstance(instance)])
+      )
+    };
+
+    res.json(sanitized);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/datadog/instances
+ * Create or update DataDog instance
+ */
+router.post('/instances', async (req, res, next) => {
+  try {
+    const { id, name, site, apiKey, appKey } = req.body;
+
+    if (!id || !name || !site || !apiKey || !appKey) {
+      throw new ServerError('Missing required fields', {
+        status: 400,
+        code: 'INVALID_INPUT'
+      });
+    }
+
+    const instance = await datadogService.upsertInstance(id, {
+      name,
+      site,
+      apiKey,
+      appKey
+    });
+
+    res.json(sanitizeInstance(instance));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/datadog/instances/:id
+ * Delete DataDog instance
+ */
+router.delete('/instances/:id', async (req, res, next) => {
+  try {
+    await datadogService.deleteInstance(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/datadog/instances/:id/test
+ * Test DataDog instance connection
+ */
+router.post('/instances/:id/test', async (req, res, next) => {
+  try {
+    const result = await datadogService.testConnection(req.params.id);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/datadog/instances/:id/search-errors
+ * Search for errors in DataDog logs
+ */
+router.post('/instances/:id/search-errors', async (req, res, next) => {
+  try {
+    const { serviceName, environment, fromTime } = req.body;
+
+    if (!serviceName) {
+      throw new ServerError('serviceName is required', {
+        status: 400,
+        code: 'INVALID_INPUT'
+      });
+    }
+
+    const result = await datadogService.searchErrors(
+      req.params.id,
+      serviceName,
+      environment,
+      fromTime
+    );
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;

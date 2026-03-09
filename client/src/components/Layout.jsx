@@ -61,6 +61,7 @@ import {
   Mail,
   Inbox,
   RefreshCw,
+  Dog,
   FilePen
 } from 'lucide-react';
 /* global __APP_VERSION__ */
@@ -142,6 +143,7 @@ const navItems = [
       { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
       { to: '/browser', label: 'Browser', icon: Globe },
       { to: '/devtools/runner', label: 'Code', icon: Code2 },
+      { to: '/devtools/datadog', label: 'DataDog', icon: Dog },
       { to: '/devtools/github', label: 'GitHub', icon: Github },
       { to: '/devtools/history', label: 'History', icon: History },
       { to: '/devtools/jira', label: 'JIRA', icon: Ticket },

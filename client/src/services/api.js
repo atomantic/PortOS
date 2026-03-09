@@ -1573,6 +1573,10 @@ export const updateLifeEvent = (id, data) => request(`/meatspace/life-events/${i
 });
 export const removeLifeEvent = (id) => request(`/meatspace/life-events/${id}`, { method: 'DELETE' });
 
+// DataDog
+export const getDatadogInstances = () => request('/datadog/instances');
+export const testDatadogConnection = (id) => request(`/datadog/instances/${id}/test`, { method: 'POST' });
+
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);

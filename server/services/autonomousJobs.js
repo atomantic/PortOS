@@ -86,6 +86,7 @@ const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-review': 'brain-review',
+  'job-datadog-error-monitor': 'datadog-error-monitor',
   'job-jira-sprint-manager': 'jira-sprint-manager',
   'job-autobiography-prompt': 'autobiography-prompt'
 }
@@ -257,6 +258,48 @@ Phase 2 — Implement:
 
 Phase 3 — Report:
 8. Generate a summary report covering triage actions taken and implementation work completed`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-datadog-error-monitor',
+    name: 'DataDog Error Monitor',
+    description: 'Check DataDog for new errors in configured apps, create tasks for new errors, and optionally create JIRA tickets.',
+    category: 'datadog-error-monitor',
+    interval: 'daily',
+    intervalMs: DAY,
+    scheduledTime: '08:00',
+    enabled: false,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] DataDog Error Monitor
+
+You are acting as my Chief of Staff, monitoring DataDog for new application errors.
+
+Phase 1 — Discover:
+1. Call GET /api/apps to get all managed apps
+2. Filter for apps with datadog.enabled = true and datadog.instanceId + datadog.serviceName set
+3. Skip archived apps
+
+Phase 2 — Check Errors:
+4. For each DataDog-enabled app:
+   - Call POST /api/datadog/instances/:instanceId/search-errors with serviceName, environment, and fromTime (24h ago)
+   - Compare results against the error cache in /data/cos/datadog-errors.json
+   - Identify new errors (by fingerprint/message hash)
+
+Phase 3 — Act on New Errors:
+5. For each new error:
+   - Create a CoS task describing the error and the app it affects
+   - If the app also has jira.enabled = true, create a JIRA ticket for the error
+   - Update the error cache with the new error fingerprint
+
+Phase 4 — Report:
+6. Generate a summary report covering:
+   - Apps checked and error counts
+   - New errors found and tasks/tickets created
+   - Recurring errors that are increasing in frequency`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
