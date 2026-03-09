@@ -225,5 +225,21 @@ describe('DataDog Service', () => {
       expect(callArgs[0]).toBe('/api/v2/logs/events/search');
       expect(callArgs[1].filter.query).toBe('status:error service:"my service" env:"staging env"');
     });
+
+    it('should strip double quotes from service and environment to prevent injection', async () => {
+      readJSONFile.mockResolvedValue({
+        instances: { 'test-dd': MOCK_INSTANCE }
+      });
+
+      const mockClient = {
+        post: vi.fn().mockResolvedValue({ data: { data: [] } })
+      };
+      axios.create.mockReturnValue(mockClient);
+
+      await searchErrors('test-dd', 'my-service" status:warn', 'prod" OR env:dev');
+
+      const callArgs = mockClient.post.mock.calls[0];
+      expect(callArgs[1].filter.query).toBe('status:error service:"my-service status:warn" env:"prod OR env:dev"');
+    });
   });
 });

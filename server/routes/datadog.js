@@ -119,6 +119,13 @@ router.post('/instances/:id/search-errors', async (req, res, next) => {
       });
     }
 
+    if (fromTime && isNaN(Date.parse(fromTime))) {
+      throw new ServerError('fromTime must be a valid ISO 8601 date string', {
+        status: 400,
+        code: 'INVALID_INPUT'
+      });
+    }
+
     const result = await datadogService.searchErrors(
       req.params.id,
       serviceName,

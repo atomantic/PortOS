@@ -18,6 +18,10 @@ function validateSite(site) {
     throw new Error(`Invalid DataDog site hostname: "${site}". Must be a valid hostname (e.g., api.datadoghq.com)`);
   }
 }
+
+function sanitizeQueryValue(value) {
+  return value.replace(/"/g, '');
+}
 /**
  * Get DataDog instances configuration
  */
@@ -124,7 +128,7 @@ export async function searchErrors(instanceId, serviceName, environment = 'produ
 
   const response = await client.post('/api/v2/logs/events/search', {
     filter: {
-      query: `status:error service:"${serviceName}" env:"${environment}"`,
+      query: `status:error service:"${sanitizeQueryValue(serviceName)}" env:"${sanitizeQueryValue(environment)}"`,
       from
     },
     sort: '-timestamp',

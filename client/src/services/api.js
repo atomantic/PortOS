@@ -1576,7 +1576,6 @@ export const removeLifeEvent = (id) => request(`/meatspace/life-events/${id}`, {
 // DataDog
 export const getDatadogInstances = () => request('/datadog/instances');
 
-
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
