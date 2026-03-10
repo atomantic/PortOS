@@ -3800,6 +3800,10 @@ async function init() {
     if (daemonRunning) setImmediate(() => dequeueNextTask());
   });
 
+  cosEvents.on('task:on-demand-requested', () => {
+    if (daemonRunning) setImmediate(() => dequeueNextTask());
+  });
+
   // Autonomous job lifecycle → re-register/cancel individual job timers
   cosEvents.on('jobs:toggled', async ({ id }) => {
     if (daemonRunning) await registerSingleJobSchedule(id);
