@@ -71,7 +71,10 @@ if (-not $slashDoFound) {
     $reply = Read-Host "Install slash-do now? [y/N]"
     if ($reply -match "^[Yy]$") {
         Write-Host "Installing slash-do..." -ForegroundColor Yellow
-        npm install -g slash-do@latest
+        npm install -g slash-do@latest 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "⚠️  Failed to install slash-do. Continuing without it." -ForegroundColor Red
+        }
     } else {
         Write-Host "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
     }

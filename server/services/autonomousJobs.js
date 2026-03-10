@@ -338,7 +338,7 @@ Phase 4 — Report:
 You are acting as my Chief of Staff, reviewing pull requests and merge requests across managed apps.
 
 Phase 0 — Prerequisites:
-0. Ensure slashdo is installed by running \`npx slash-do@latest --version\`. If the command fails, install it with \`npx slash-do@latest\` to make /do: commands available.
+0. Ensure slash-do is installed by running \`npx slash-do@latest --version\`. If the command fails, install it with \`npx slash-do@latest\` to make /do: commands available.
 
 Phase 1 — Discover PRs:
 1. Call GET /api/apps to get all managed apps

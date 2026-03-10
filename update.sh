@@ -68,7 +68,9 @@ if ! command -v slash-do >/dev/null 2>&1; then
   echo ""
   if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Installing slash-do..."
-    npm install -g slash-do@latest
+    if ! npm install -g slash-do@latest; then
+      echo "⚠️  Failed to install slash-do. Continuing without it."
+    fi
   else
     echo "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
   fi

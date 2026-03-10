@@ -215,6 +215,19 @@ describe('autonomousJobs', () => {
       expect(job.intervalMs).toBe(7 * 24 * 60 * 60 * 1000)
       expect(job.interval).toBe('weekly')
     })
+
+    it('every-2-hours interval produces correct intervalMs', async () => {
+      const jobData = {
+        name: 'Bi-Hourly Job',
+        interval: 'every-2-hours',
+        promptTemplate: 'Do bi-hourly thing'
+      }
+
+      const job = await createJob(jobData)
+
+      expect(job.intervalMs).toBe(2 * 60 * 60 * 1000)
+      expect(job.interval).toBe('every-2-hours')
+    })
   })
 
   describe('INTERVAL_OPTIONS', () => {
