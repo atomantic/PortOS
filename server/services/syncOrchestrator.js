@@ -134,6 +134,34 @@ async function syncMemoryFromPeer(peer, cursor) {
 }
 
 /**
+ * Detect and reset stale cursors when peer's sequence has been reset
+ * (e.g. database rebuild). Returns corrected cursor.
+ */
+function detectCursorReset(cursor, peer) {
+  const corrected = { ...cursor };
+  const remote = peer.remoteSyncSeqs;
+  if (!remote) return corrected;
+
+  // Brain: integer comparison
+  const cursorBrain = corrected.brainSeq ?? 0;
+  const peerBrain = remote.brainSeq ?? 0;
+  if (cursorBrain > 0 && cursorBrain > peerBrain) {
+    console.log(`🔄 Brain cursor reset for ${peer.name}: cursor ${cursorBrain} > peer max ${peerBrain}`);
+    corrected.brainSeq = 0;
+  }
+
+  // Memory: string-as-number comparison (BIGSERIAL)
+  const cursorMem = Number(corrected.memorySeq ?? '0');
+  const peerMem = Number(remote.memorySeq ?? '0');
+  if (cursorMem > 0 && cursorMem > peerMem) {
+    console.log(`🔄 Memory cursor reset for ${peer.name}: cursor ${cursorMem} > peer max ${peerMem}`);
+    corrected.memorySeq = '0';
+  }
+
+  return corrected;
+}
+
+/**
  * Sync all data from a single peer
  */
 export async function syncWithPeer(peer) {
@@ -146,8 +174,10 @@ export async function syncWithPeer(peer) {
   syncingPeers.add(peerId);
 
   // Read cursor snapshot outside lock so network I/O doesn't block other peers
+  // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
   const cursor = await readCursors((cursors) => {
-    return { ...(cursors[peerId] || {}) };
+    const raw = { ...(cursors[peerId] || {}) };
+    return detectCursorReset(raw, peer);
   });
 
   try {

@@ -143,6 +143,80 @@ describe('syncOrchestrator', () => {
       expect(result.brain.totalApplied).toBe(2);
     });
 
+    it('resets memory cursor when peer DB was rebuilt (cursor > peerMax)', async () => {
+      const peerWithReset = {
+        ...mockPeer,
+        remoteSyncSeqs: { brainSeq: 0, memorySeq: '2' }
+      };
+
+      // Simulate stale cursor (we previously synced to 1127 but peer reset to 2)
+      const { readJSONFile } = await import('../lib/fileUtils.js');
+      readJSONFile.mockResolvedValue({
+        [peerWithReset.instanceId]: { brainSeq: 0, memorySeq: '1127', lastSyncAt: '2026-01-01T00:00:00.000Z' }
+      });
+
+      // Brain: no changes
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ changes: [], maxSeq: 0, hasMore: false })
+        })
+        // Memory: returns data from seq 0 (after cursor reset)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            memories: [{ id: 'm1', content: 'new' }],
+            maxSequence: '2',
+            hasMore: false
+          })
+        });
+
+      applyMemoryChanges.mockResolvedValue({ inserted: 1, updated: 0 });
+
+      const result = await syncWithPeer(peerWithReset);
+
+      // Memory sync should have fetched since=0 (reset), not since=1127
+      const memoryCall = mockFetch.mock.calls.find(c => c[0].includes('/api/memory/sync'));
+      expect(memoryCall[0]).toContain('since=0');
+      expect(result.memory.totalApplied).toBe(1);
+    });
+
+    it('resets brain cursor when peer sync log was rebuilt', async () => {
+      const peerWithReset = {
+        ...mockPeer,
+        remoteSyncSeqs: { brainSeq: 0, memorySeq: '10' }
+      };
+
+      const { readJSONFile } = await import('../lib/fileUtils.js');
+      readJSONFile.mockResolvedValue({
+        [peerWithReset.instanceId]: { brainSeq: 5, memorySeq: '10', lastSyncAt: '2026-01-01T00:00:00.000Z' }
+      });
+
+      // Brain: returns data from seq 0 (after cursor reset)
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            changes: [{ seq: 1, op: 'create', type: 'people', id: 'p1', record: {} }],
+            maxSeq: 1,
+            hasMore: false
+          })
+        })
+        // Memory: no changes
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ memories: [], maxSequence: '10', hasMore: false })
+        });
+
+      applyBrainChanges.mockResolvedValue({ inserted: 1, updated: 0, deleted: 0, skipped: 0 });
+
+      const result = await syncWithPeer(peerWithReset);
+
+      const brainCall = mockFetch.mock.calls.find(c => c[0].includes('/api/brain/sync'));
+      expect(brainCall[0]).toContain('since=0');
+      expect(result.brain.totalApplied).toBe(1);
+    });
+
     it('handles fetch failure gracefully', async () => {
       mockFetch.mockRejectedValue(new Error('Network error'));
 
