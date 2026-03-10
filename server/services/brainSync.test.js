@@ -5,11 +5,11 @@ vi.mock('./brainStorage.js', () => ({
 }));
 
 vi.mock('./brainSyncLog.js', () => ({
-  appendChange: vi.fn().mockResolvedValue({})
+  appendChanges: vi.fn().mockResolvedValue([])
 }));
 
 import { applyRemoteRecord } from './brainStorage.js';
-import { appendChange } from './brainSyncLog.js';
+import { appendChanges } from './brainSyncLog.js';
 import { applyRemoteChanges } from './brainSync.js';
 
 describe('brainSync', () => {
@@ -96,7 +96,9 @@ describe('brainSync', () => {
       { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'peer-1' }
     ]);
 
-    expect(appendChange).toHaveBeenCalledWith('create', 'people', 'p1', { name: 'A' }, 'peer-1');
+    expect(appendChanges).toHaveBeenCalledWith([
+      { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'peer-1' }
+    ]);
   });
 
   it('does not log skipped changes to sync log', async () => {
@@ -106,7 +108,7 @@ describe('brainSync', () => {
       { op: 'update', type: 'people', id: 'p1', record: { name: 'Old' }, originInstanceId: 'peer-1' }
     ]);
 
-    expect(appendChange).not.toHaveBeenCalled();
+    expect(appendChanges).not.toHaveBeenCalled();
   });
 
   it('handles mixed operations correctly', async () => {

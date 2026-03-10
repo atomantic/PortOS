@@ -134,6 +134,20 @@ async function syncMemoryFromPeer(peer, cursor) {
 }
 
 /**
+ * Safely parse a value to BigInt for BIGSERIAL comparison.
+ * Returns 0n for invalid/empty/negative inputs.
+ */
+function safeBigInt(value) {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? BigInt(Math.trunc(value)) : 0n;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const parsed = BigInt(value.trim());
+    return parsed;
+  }
+  return 0n;
+}
+
+/**
  * Detect and reset stale cursors when peer's sequence has been reset
  * (e.g. database rebuild). Returns corrected cursor.
  */
@@ -150,11 +164,13 @@ function detectCursorReset(cursor, peer) {
     corrected.brainSeq = 0;
   }
 
-  // Memory: string-as-number comparison (BIGSERIAL)
-  const cursorMem = Number(corrected.memorySeq ?? '0');
-  const peerMem = Number(remote.memorySeq ?? '0');
-  if (cursorMem > 0 && cursorMem > peerMem) {
-    console.log(`🔄 Memory cursor reset for ${peer.name}: cursor ${cursorMem} > peer max ${peerMem}`);
+  // Memory: BigInt comparison (BIGSERIAL can exceed Number.MAX_SAFE_INTEGER)
+  const cursorMemStr = corrected.memorySeq ?? '0';
+  const peerMemStr = remote.memorySeq ?? '0';
+  const cursorMem = safeBigInt(cursorMemStr);
+  const peerMem = safeBigInt(peerMemStr);
+  if (cursorMem > 0n && cursorMem > peerMem) {
+    console.log(`🔄 Memory cursor reset for ${peer.name}: cursor ${cursorMemStr} > peer max ${peerMemStr}`);
     corrected.memorySeq = '0';
   }
 
