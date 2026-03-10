@@ -1,16 +1,18 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch } from 'lucide-react';
+import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, Wand2, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultApp = '' }) {
-  const [newTask, setNewTask] = useState({ description: '', context: '', model: '', provider: '', app: defaultApp });
+  const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', app: defaultApp });
   const [addToTop, setAddToTop] = useState(false);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [useWorktree, setUseWorktree] = useState(false);
+  const [simplify, setSimplify] = useState(true);
+  const [reviewLoop, setReviewLoop] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -58,7 +60,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const applyTemplate = useCallback(async (template) => {
     setNewTask({
       description: template.description,
-      context: template.context || '',
       model: template.model || '',
       provider: template.provider || '',
       app: template.app || ''
@@ -88,7 +89,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     const result = await api.createCosTaskTemplate({
       name: templateNameInput.trim(),
       description: newTask.description,
-      context: newTask.context,
       provider: newTask.provider,
       model: newTask.model,
       app: newTask.app
@@ -160,8 +160,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     if (enhancePrompt) {
       setIsEnhancing(true);
       const enhanceResult = await api.enhanceCosTaskPrompt({
-        description: newTask.description,
-        context: newTask.context
+        description: newTask.description
       }).catch(err => {
         toast('Enhancement failed, using original description', { icon: '\u26a0\ufe0f' });
         console.warn('Task enhancement failed:', err.message);
@@ -180,12 +179,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
 
     const result = await api.addCosTask({
       description: finalDescription,
-      context: newTask.context,
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
       app: newTask.app || undefined,
       createJiraTicket: createJiraTicket || undefined,
       useWorktree: useWorktree || undefined,
+      simplify: simplify || undefined,
+      reviewLoop: reviewLoop || undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -204,13 +204,15 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     if (!result) return;
 
     toast.success('Task added');
-    setNewTask({ description: '', context: '', model: '', provider: '', app: defaultApp });
+    setNewTask({ description: '', model: '', provider: '', app: defaultApp });
     setScreenshots([]);
     setAttachments([]);
     setAddToTop(false);
     setEnhancePrompt(false);
     setCreateJiraTicket(false);
     setUseWorktree(false);
+    setSimplify(true);
+    setReviewLoop(false);
     setExpanded(false);
     setIsSubmitting(false);
     onTaskAdded?.();
@@ -356,17 +358,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </span>
           </label>
         </div>
-        <div>
-          <label htmlFor="task-context" className="sr-only">Context</label>
-          <input
-            id="task-context"
-            type="text"
-            placeholder="Context (optional)"
-            value={newTask.context}
-            onChange={e => setNewTask(t => ({ ...t, context: e.target.value }))}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-          />
-        </div>
         <div className="flex gap-3 items-center">
           {!compact && (
             <div className="flex-1">
@@ -394,6 +385,30 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             <span className="flex items-center gap-1.5 text-sm text-gray-400">
               <GitBranch size={14} className="text-emerald-400" />
               Branch + PR
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={simplify}
+              onChange={(e) => setSimplify(e.target.checked)}
+              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+            />
+            <span className="flex items-center gap-1.5 text-sm text-gray-400">
+              <Wand2 size={14} className="text-purple-400" />
+              Simplify
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={reviewLoop}
+              onChange={(e) => setReviewLoop(e.target.checked)}
+              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+            />
+            <span className="flex items-center gap-1.5 text-sm text-gray-400">
+              <RefreshCw size={14} className="text-amber-400" />
+              Review Loop
             </span>
           </label>
           {appHasJira && (
