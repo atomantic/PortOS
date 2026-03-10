@@ -21,7 +21,7 @@ import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSumma
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
-import { generateTaskFromJob, recordJobExecution, isScriptJob, executeScriptJob } from './autonomousJobs.js';
+import { generateTaskFromJob, recordJobExecution, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
@@ -3635,12 +3635,17 @@ async function executeScheduledJob(jobId) {
     return;
   }
 
-  // Script jobs execute directly without spawning an AI agent
+  // Script jobs and shell jobs execute directly without spawning an AI agent
   if (isScriptJob(job)) {
     await executeScriptJob(job).catch(err => {
       emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
     });
     emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
+  } else if (isShellJob(job)) {
+    await executeShellJob(job).catch(err => {
+      emitLog('error', `Shell job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+    });
+    emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
   } else {
     // Check if this job is already being spawned or has a running agent
     if (spawningJobIds.has(jobId)) {

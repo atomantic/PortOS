@@ -110,7 +110,7 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 }
 
 // ============================================================
-// Unified DEFAULT_TASK_PROMPTS (14 task types)
+// Unified DEFAULT_TASK_PROMPTS (15 task types)
 // All prompts use {appName} and {repoPath} template variables
 // ============================================================
 
@@ -499,15 +499,55 @@ Summarize:
 - Number of review iterations needed
 - Any unresolved issues
 
-IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`
+IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`,
+
+  'pr-reviewer': `[Improvement: {appName}] PR Review — Check Open PRs
+
+Review open pull requests / merge requests on {appName} from other contributors and post code reviews on any that lack a review since the last commit.
+
+Repository: {repoPath}
+
+## Phase 0 — Prerequisites
+
+0. Ensure slash-do is installed by running \`command -v slash-do\`. If not found, install it with \`npm install -g slash-do@latest\`.
+
+## Phase 1 — Discover PRs
+
+1. cd into {repoPath}
+2. Detect SCM provider from git remote URL:
+   - Contains "github.com" -> use \`gh\` CLI
+   - Contains "gitlab" -> use \`glab\` CLI
+3. List open PRs/MRs authored by others (not by atomantic):
+   - GitHub: \`gh pr list --state open --json number,author,headRefName,updatedAt,title\`
+   - GitLab: \`glab mr list --state opened -F json\`
+
+## Phase 2 — Check Review Status
+
+4. For each PR/MR from other contributors:
+   - GitHub: \`gh pr view <number> --json reviews,commits\` — check if I have a review newer than the latest commit
+   - GitLab: \`glab mr view <iid> -F json\` — check notes/approvals vs last commit date
+5. Skip PRs where I already have a review posted after the most recent commit push
+
+## Phase 3 — Review
+
+6. For each PR/MR needing review:
+   - cd into {repoPath}
+   - Run \`/do:review\` to perform a deep code review of the changed files
+   - Post the review:
+     - GitHub: \`gh pr review <number> --comment --body "<review>"\`
+     - GitLab: \`glab mr note <iid> --message "<review>"\`
+
+## Phase 4 — Report
+
+7. Summarize: apps checked, PRs reviewed (with links), PRs skipped (already reviewed)`
 };
 
-// Unified default interval settings for all 14 task types
+// Unified default interval settings for all 15 task types
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'error-handling',
-  'typing', 'release-check'
+  'typing', 'release-check', 'pr-reviewer'
 ];
 
 const DEFAULT_TASK_INTERVALS = {
@@ -524,7 +564,8 @@ const DEFAULT_TASK_INTERVALS = {
   'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
-  'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null }
+  'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
+  'pr-reviewer':         { type: INTERVAL_TYPES.CUSTOM, intervalMs: 7200000, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null }
 };
 
 /**
@@ -766,6 +807,14 @@ export async function shouldRunTask(taskType, appId = null) {
 
   if (!interval || !interval.enabled) {
     return { shouldRun: false, reason: 'disabled' };
+  }
+
+  // Weekday-only tasks skip weekends
+  if (interval.weekdaysOnly) {
+    const day = new Date().getDay();
+    if (day === 0 || day === 6) {
+      return { shouldRun: false, reason: 'weekday-only' };
+    }
   }
 
   // Check per-app override
@@ -1232,7 +1281,8 @@ function getTaskTypeDescription(taskType) {
     'dependency-updates': 'Update dependencies',
     'release-check': 'Check dev for release readiness',
     'error-handling': 'Improve error handling',
-    'typing': 'Improve TypeScript types'
+    'typing': 'Improve TypeScript types',
+    'pr-reviewer': 'Review open PRs from contributors'
   };
   return descriptions[taskType] || taskType.replace(/-/g, ' ');
 }

@@ -1,7 +1,6 @@
 import {
   FileText,
   Cpu,
-  Terminal,
   Brain,
   Activity,
   Settings,
@@ -18,8 +17,7 @@ export const TABS = [
   { id: 'briefing', label: 'Briefing', icon: Newspaper },
   { id: 'tasks', label: 'Tasks', icon: FileText },
   { id: 'agents', label: 'Agents', icon: Cpu },
-  { id: 'jobs', label: 'Jobs', icon: Bot },
-  { id: 'scripts', label: 'Scripts', icon: Terminal },
+  { id: 'jobs', label: 'System Tasks', icon: Bot },
   { id: 'schedule', label: 'Schedule', icon: Clock },
   { id: 'digest', label: 'Digest', icon: Calendar },
   { id: 'gsd', label: 'GSD', icon: Compass },

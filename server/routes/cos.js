@@ -827,6 +827,11 @@ router.get('/jobs/intervals', (req, res) => {
   res.json({ intervals: autonomousJobs.INTERVAL_OPTIONS });
 });
 
+// GET /api/cos/jobs/allowed-commands - Get allowed commands for shell jobs
+router.get('/jobs/allowed-commands', (req, res) => {
+  res.json({ commands: autonomousJobs.getAllowedCommands() });
+});
+
 // GET /api/cos/jobs/:id - Get a single job
 router.get('/jobs/:id', asyncHandler(async (req, res) => {
   const job = await autonomousJobs.getJob(req.params.id);
@@ -838,15 +843,22 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 
 // POST /api/cos/jobs - Create a new autonomous job
 router.post('/jobs', asyncHandler(async (req, res) => {
-  const { name, description, category, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate } = req.body;
+  const { name, description, category, type, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = req.body;
 
-  if (!name || !promptTemplate) {
-    throw new ServerError('name and promptTemplate are required', { status: 400, code: 'VALIDATION_ERROR' });
+  // Shell jobs require command, agent jobs require promptTemplate
+  if (!name) {
+    throw new ServerError('name is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (type === 'shell' && !command) {
+    throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (type !== 'shell' && !promptTemplate) {
+    throw new ServerError('promptTemplate is required for agent jobs', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   const job = await autonomousJobs.createJob({
-    name, description, category, interval, intervalMs, scheduledTime,
-    enabled, priority, autonomyLevel, promptTemplate
+    name, description, category, type, interval, intervalMs, scheduledTime,
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction
   });
   res.json({ success: true, job });
 }));

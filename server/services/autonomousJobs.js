@@ -14,15 +14,17 @@
  * - Custom user-defined jobs
  */
 
-import { writeFile, readFile, rename } from 'fs/promises'
+import { writeFile, readFile, rename, readdir, stat, rm } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { existsSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { spawn } from 'child_process'
 import { cosEvents } from './cosEvents.js'
 import { DAY, ensureDir, HOUR, PATHS, readJSONFile } from '../lib/fileUtils.js'
 import { createMutex } from '../lib/asyncMutex.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
+import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../lib/commandSecurity.js'
 
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
@@ -67,9 +69,35 @@ function runMoltworldExploration() {
  * Registry of script handlers for jobs that execute functions directly
  * instead of spawning AI agents. Key is the scriptHandler name, value is the function.
  */
+/**
+ * Remove completed agent data directories older than 7 days.
+ */
+async function agentDataCleanup() {
+  const agentsDir = join(PATHS.cos, 'agents')
+  if (!existsSync(agentsDir)) return { cleaned: 0 }
+
+  const entries = await readdir(agentsDir)
+  const cutoff = Date.now() - 7 * DAY
+  let cleaned = 0
+
+  for (const entry of entries) {
+    const entryPath = join(agentsDir, entry)
+    const info = await stat(entryPath).catch(() => null)
+    if (!info?.isDirectory()) continue
+    if (info.mtimeMs < cutoff) {
+      await rm(entryPath, { recursive: true, force: true })
+      cleaned++
+    }
+  }
+
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} directories older than 7 days`)
+  return { cleaned }
+}
+
 const SCRIPT_HANDLERS = {
   'autobiography-prompt': autobiographyCheckAndPrompt,
-  'moltworld-exploration': runMoltworldExploration
+  'moltworld-exploration': runMoltworldExploration,
+  'agent-data-cleanup': agentDataCleanup
 }
 
 const __filename = fileURLToPath(import.meta.url)
@@ -88,8 +116,7 @@ const JOB_SKILL_MAP = {
   'job-brain-review': 'brain-review',
   'job-datadog-error-monitor': 'datadog-error-monitor',
   'job-jira-sprint-manager': 'jira-sprint-manager',
-  'job-autobiography-prompt': 'autobiography-prompt',
-  'job-pr-reviewer': 'pr-reviewer'
+  'job-autobiography-prompt': 'autobiography-prompt'
 }
 
 const WEEK = 7 * DAY
@@ -323,53 +350,33 @@ Phase 4 — Report:
     updatedAt: null
   },
   {
-    id: 'job-pr-reviewer',
-    name: 'PR Reviewer',
-    description: 'Check managed apps for open PRs/MRs by other contributors and post code reviews on any that lack a review since the last commit.',
-    category: 'pr-reviewer',
-    interval: 'every-2-hours',
-    intervalMs: 2 * HOUR,
-    weekdaysOnly: true,
-    enabled: false,
-    priority: 'HIGH',
-    autonomyLevel: 'manager',
-    promptTemplate: `[Autonomous Job] PR Reviewer
-
-You are acting as my Chief of Staff, reviewing pull requests and merge requests across managed apps.
-
-Phase 0 — Prerequisites:
-0. Ensure slash-do is installed by running \`command -v slash-do\`. If not found, install it with \`npm install -g slash-do@latest\` to make /do: commands available.
-
-Phase 1 — Discover PRs:
-1. Call GET /api/apps to get all managed apps
-2. For each app with a repoPath, cd into the repo directory
-3. Detect the SCM provider by checking the git remote URL:
-   - If remote contains "github.com" -> use \`gh\` CLI
-   - If remote contains "gitlab" -> use \`glab\` CLI
-4. List open PRs/MRs authored by others (not by me):
-   - GitHub: \`gh pr list --state open --json number,author,headRefName,updatedAt,title\`
-   - GitLab: \`glab mr list --state opened -F json\`
-5. Filter out PRs/MRs authored by my username (atomantic)
-
-Phase 2 — Check Review Status:
-6. For each PR/MR from other contributors:
-   - GitHub: \`gh pr view <number> --json reviews,commits\` — check if I have a review newer than the latest commit
-   - GitLab: \`glab mr view <iid> -F json\` and check notes/approvals vs last commit date
-7. Skip PRs where I already have a review posted after the most recent commit push
-
-Phase 3 — Review:
-8. For each PR/MR needing review:
-   - cd into the app's repoPath
-   - Run \`/do:review\` to perform a deep code review of the changed files
-   - Post the review output as a comment on the PR/MR:
-     - GitHub: \`gh pr review <number> --comment --body "<review>"\`
-     - GitLab: \`glab mr note <iid> --message "<review>"\`
-
-Phase 4 — Report:
-9. Generate a summary report covering:
-   - Apps checked and PR/MR counts
-   - Reviews posted (with links)
-   - PRs skipped (already reviewed)`,
+    id: 'job-system-health-check',
+    name: 'System Health Check',
+    description: 'Check PM2 process status.',
+    category: 'system-health',
+    interval: 'custom',
+    intervalMs: 15 * 60 * 1000,
+    enabled: true,
+    priority: 'LOW',
+    type: 'shell',
+    command: 'pm2 jlist',
+    triggerAction: 'log-only',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-agent-data-cleanup',
+    name: 'Agent Data Cleanup',
+    description: 'Remove completed agent data older than 7 days.',
+    category: 'agent-data-cleanup',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: true,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'agent-data-cleanup',
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -387,13 +394,60 @@ async function loadJobs() {
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
     const initial = createDefaultJobsData()
+    await migrateScriptsState(initial)
     await saveJobs(initial)
     return initial
   }
 
   // Merge with defaults to ensure all default jobs exist
   const merged = mergeWithDefaults(loaded)
+  await migrateScriptsState(merged)
   return merged
+}
+
+/**
+ * Migrate scripts-state.json entries into jobs (one-time migration)
+ */
+async function migrateScriptsState(jobsData) {
+  const scriptsFile = join(DATA_DIR, 'scripts-state.json')
+  const raw = await readFile(scriptsFile, 'utf-8').catch(() => null)
+  if (!raw) return
+
+  const scriptsState = JSON.parse(raw)
+  const scripts = scriptsState.scripts ? Object.values(scriptsState.scripts) : []
+  if (scripts.length === 0) {
+    await rename(scriptsFile, scriptsFile + '.migrated')
+    return
+  }
+
+  const now = new Date().toISOString()
+  const existingIds = new Set(jobsData.jobs.map(j => j.id))
+
+  for (const script of scripts) {
+    const jobId = `job-migrated-${script.id}`
+    if (existingIds.has(jobId)) continue
+
+    jobsData.jobs.push({
+      id: jobId,
+      name: script.name,
+      description: script.description || '',
+      category: 'migrated-script',
+      type: 'shell',
+      command: script.command,
+      interval: script.schedule === 'on-demand' ? 'daily' : (script.schedule || 'daily'),
+      intervalMs: resolveIntervalMs(script.schedule === 'on-demand' ? 'daily' : (script.schedule || 'daily')),
+      enabled: script.enabled || false,
+      priority: script.triggerPriority || 'MEDIUM',
+      triggerAction: script.triggerAction || 'log-only',
+      lastRun: script.lastRun || null,
+      runCount: script.runCount || 0,
+      createdAt: script.createdAt || now,
+      updatedAt: now
+    })
+  }
+
+  await rename(scriptsFile, scriptsFile + '.migrated')
+  console.log(`📦 Migrated ${scripts.length} scripts to jobs`)
 }
 
 /**
@@ -416,6 +470,9 @@ function createDefaultJobsData() {
  * Merge loaded data with defaults (add any missing default jobs)
  */
 function mergeWithDefaults(loaded) {
+  // Migration: remove pr-reviewer job (moved to Schedule system)
+  loaded.jobs = loaded.jobs.filter(j => j.id !== 'job-pr-reviewer')
+
   const existingById = new Map(loaded.jobs.map(j => [j.id, j]))
   const now = new Date().toISOString()
 
@@ -547,11 +604,20 @@ async function createJob(jobData) {
     const data = await loadJobs()
     const now = new Date().toISOString()
 
+    // Validate shell command at creation time
+    if (jobData.type === 'shell' && jobData.command) {
+      const validation = validateCommand(jobData.command)
+      if (!validation.valid) {
+        throw new Error(`Invalid command: ${validation.error}`)
+      }
+    }
+
     const job = {
       id: jobData.id || `job-${uuidv4().slice(0, 8)}`,
       name: jobData.name,
       description: jobData.description || '',
       category: jobData.category || 'custom',
+      type: jobData.type || 'agent',
       interval: jobData.interval || 'weekly',
       intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
       scheduledTime: jobData.scheduledTime || null,
@@ -560,6 +626,8 @@ async function createJob(jobData) {
       priority: jobData.priority || 'MEDIUM',
       autonomyLevel: jobData.autonomyLevel || 'manager',
       promptTemplate: jobData.promptTemplate || '',
+      command: jobData.command || null,
+      triggerAction: jobData.triggerAction || null,
       lastRun: null,
       runCount: 0,
       createdAt: now,
@@ -588,9 +656,18 @@ async function updateJob(jobId, updates) {
     const job = data.jobs.find(j => j.id === jobId)
     if (!job) return null
 
+    // Validate shell command if being updated
+    if (updates.command !== undefined) {
+      const validation = validateCommand(updates.command)
+      if (!validation.valid) {
+        throw new Error(`Invalid command: ${validation.error}`)
+      }
+    }
+
     const updatableFields = [
-      'name', 'description', 'category', 'interval', 'intervalMs',
-      'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
+      'name', 'description', 'category', 'type', 'interval', 'intervalMs',
+      'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
+      'command', 'triggerAction'
     ]
 
     for (const field of updatableFields) {
@@ -923,6 +1000,79 @@ async function executeScriptJob(job) {
   return result
 }
 
+
+/**
+ * Execute a shell job directly (no AI agent needed)
+ */
+async function executeShellJob(job) {
+  const validation = validateCommand(job.command)
+  if (!validation.valid) {
+    throw new Error(`Invalid shell command: ${validation.error}`)
+  }
+
+  console.log(`🐚 Executing shell job: ${job.name}`)
+
+  return new Promise((resolve) => {
+    const child = spawn(validation.baseCommand, validation.args || [], {
+      cwd: join(__dirname, '../../'),
+      timeout: 60000,
+      shell: false,
+      windowsHide: true
+    })
+
+    const outChunks = []
+    const errChunks = []
+
+    child.stdout.on('data', (data) => { outChunks.push(data.toString()) })
+    child.stderr.on('data', (data) => { errChunks.push(data.toString()) })
+
+    child.on('close', async (code) => {
+      const output = outChunks.join('')
+      const error = errChunks.join('')
+      const fullOutput = output + (error ? `\n[stderr]\n${error}` : '')
+      const redactedOutput = redactOutput(fullOutput)
+
+      // Store last output/exit code on the job
+      await withLock(async () => {
+        const data = await loadJobs()
+        const j = data.jobs.find(x => x.id === job.id)
+        if (j) {
+          j.lastOutput = redactedOutput.substring(0, 10000)
+          j.lastExitCode = code
+          await saveJobs(data)
+        }
+      })
+
+      await recordJobExecution(job.id)
+
+      console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
+      cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+
+      resolve({ success: code === 0, exitCode: code, output: redactedOutput })
+    })
+
+    child.on('error', async (err) => {
+      console.error(`❌ Shell job ${job.name} error: ${err.message}`)
+      await recordJobExecution(job.id)
+      resolve({ success: false, error: err.message })
+    })
+  })
+}
+
+/**
+ * Check if a job is a shell command job
+ */
+function isShellJob(job) {
+  return job.type === 'shell' && !!job.command
+}
+
+/**
+ * Get list of allowed commands for shell jobs
+ */
+function getAllowedCommands() {
+  return ALLOWED_COMMANDS_SORTED
+}
+
 export {
   getAllJobs,
   getJob,
@@ -945,5 +1095,9 @@ export {
   getJobEffectivePrompt,
   JOB_SKILL_MAP,
   isScriptJob,
-  executeScriptJob
+  executeScriptJob,
+  isShellJob,
+  executeShellJob,
+  getAllowedCommands,
+  validateCommand
 }

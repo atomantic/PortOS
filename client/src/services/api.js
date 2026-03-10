@@ -717,22 +717,6 @@ export const updateCosTaskTemplate = (id, data) => request(`/cos/templates/${id}
 });
 export const deleteCosTaskTemplate = (id) => request(`/cos/templates/${id}`, { method: 'DELETE' });
 
-// CoS Scripts
-export const getCosScripts = () => request('/cos/scripts');
-export const getCosScript = (id) => request(`/cos/scripts/${id}`);
-export const createCosScript = (data) => request('/cos/scripts', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
-export const updateCosScript = (id, data) => request(`/cos/scripts/${id}`, {
-  method: 'PUT',
-  body: JSON.stringify(data)
-});
-export const deleteCosScript = (id) => request(`/cos/scripts/${id}`, { method: 'DELETE' });
-export const runCosScript = (id) => request(`/cos/scripts/${id}/run`, { method: 'POST' });
-export const getCosScriptRuns = (id) => request(`/cos/scripts/${id}/runs`);
-export const getCosScriptPresets = () => request('/cos/scripts/presets');
-
 // Weekly Digest
 export const getCosWeeklyDigest = (weekId = null) => {
   if (weekId) return request(`/cos/digest/${weekId}`);
@@ -807,6 +791,7 @@ export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/
 export const getCosJobs = () => request('/cos/jobs');
 export const getCosJobsDue = () => request('/cos/jobs/due');
 export const getCosJobIntervals = () => request('/cos/jobs/intervals');
+export const getCosJobAllowedCommands = () => request('/cos/jobs/allowed-commands');
 export const getCosJob = (id) => request(`/cos/jobs/${id}`);
 export const createCosJob = (data) => request('/cos/jobs', {
   method: 'POST',
