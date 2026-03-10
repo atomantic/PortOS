@@ -471,9 +471,8 @@ async function migrateScriptsState(jobsData) {
     if (existingIds.has(jobId)) continue
 
     const mappedInterval = mapLegacySchedule(script.schedule, script.name)
-    const cronExpression = script.cronExpression || null
-    if (cronExpression) {
-      console.log(`📦 Preserving cron expression '${cronExpression}' for migrated script '${script.name}'`)
+    if (script.cronExpression) {
+      console.warn(`⚠️ Legacy cron expression '${script.cronExpression}' for script '${script.name}' not supported by job scheduler, using interval '${mappedInterval}' instead`)
     }
     const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
 
@@ -495,7 +494,6 @@ async function migrateScriptsState(jobsData) {
       type: 'shell',
       command: commandValid ? script.command : null,
       interval: mappedInterval,
-      cronExpression,
       intervalMs: resolveIntervalMs(mappedInterval),
       enabled: commandValid ? (isOnDemandOrStartup ? false : (script.enabled || false)) : false,
       priority: script.triggerPriority || 'MEDIUM',

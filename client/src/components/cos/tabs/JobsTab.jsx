@@ -104,8 +104,8 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
   const handleSave = async () => {
     const payload = { ...editData };
     if (payload.type !== 'shell' && payload.type !== 'script') {
-      delete payload.command;
-      delete payload.triggerAction;
+      payload.command = null;
+      payload.triggerAction = null;
     }
     await api.updateCosJob(job.id, payload).catch(err => {
       toast.error(err.message);
