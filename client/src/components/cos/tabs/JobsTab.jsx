@@ -78,7 +78,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
   const isScript = job.type === 'script';
 
   const startEditing = () => {
-    setEditData({
+    const base = {
       name: job.name,
       description: job.description,
       type: job.type || 'agent',
@@ -86,16 +86,24 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
       scheduledTime: job.scheduledTime || '',
       priority: job.priority,
       autonomyLevel: job.autonomyLevel,
-      promptTemplate: job.promptTemplate || '',
-      command: job.command || '',
-      triggerAction: job.triggerAction || 'log-only'
-    });
+      promptTemplate: job.promptTemplate || ''
+    };
+    if (job.type === 'shell') {
+      base.command = job.command || '';
+      base.triggerAction = job.triggerAction || 'log-only';
+    }
+    setEditData(base);
     setEditing(true);
     setExpanded(true);
   };
 
   const handleSave = async () => {
-    await api.updateCosJob(job.id, editData).catch(err => {
+    const payload = { ...editData };
+    if (payload.type !== 'shell') {
+      delete payload.command;
+      delete payload.triggerAction;
+    }
+    await api.updateCosJob(job.id, payload).catch(err => {
       toast.error(err.message);
       return null;
     });

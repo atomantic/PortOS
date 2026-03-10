@@ -413,10 +413,19 @@ async function migrateScriptsState(jobsData) {
   const raw = await readFile(scriptsFile, 'utf-8').catch(() => null)
   if (!raw) return
 
-  const scriptsState = JSON.parse(raw)
+  let scriptsState
+  try {
+    scriptsState = JSON.parse(raw)
+  } catch (err) {
+    console.warn(`⚠️ scripts-state.json is corrupted, skipping migration: ${err.message}`)
+    const failedSuffix = `.failed-${Date.now()}`
+    await rename(scriptsFile, scriptsFile + failedSuffix)
+    return
+  }
   const scripts = scriptsState.scripts ? Object.values(scriptsState.scripts) : []
   if (scripts.length === 0) {
-    await rename(scriptsFile, scriptsFile + '.migrated')
+    const migrateSuffix = `.migrated-${Date.now()}`
+    await rename(scriptsFile, scriptsFile + migrateSuffix)
     return
   }
 
@@ -436,7 +445,7 @@ async function migrateScriptsState(jobsData) {
       command: script.command,
       interval: script.schedule === 'on-demand' ? 'daily' : (script.schedule || 'daily'),
       intervalMs: resolveIntervalMs(script.schedule === 'on-demand' ? 'daily' : (script.schedule || 'daily')),
-      enabled: script.enabled || false,
+      enabled: script.schedule === 'on-demand' ? false : (script.enabled || false),
       priority: script.triggerPriority || 'MEDIUM',
       triggerAction: script.triggerAction || 'log-only',
       lastRun: script.lastRun || null,
@@ -446,7 +455,9 @@ async function migrateScriptsState(jobsData) {
     })
   }
 
-  await rename(scriptsFile, scriptsFile + '.migrated')
+  await saveJobs(jobsData)
+  const migrateSuffix = `.migrated-${Date.now()}`
+  await rename(scriptsFile, scriptsFile + migrateSuffix)
   console.log(`📦 Migrated ${scripts.length} scripts to jobs`)
 }
 
@@ -656,12 +667,17 @@ async function updateJob(jobId, updates) {
     const job = data.jobs.find(j => j.id === jobId)
     if (!job) return null
 
-    // Validate shell command if being updated
-    if (updates.command !== undefined) {
+    // Validate shell command if being updated (only for shell-type jobs)
+    const effectiveType = updates.type ?? job.type
+    if (effectiveType === 'shell' && updates.command !== undefined && updates.command !== '') {
       const validation = validateCommand(updates.command)
       if (!validation.valid) {
         throw new Error(`Invalid command: ${validation.error}`)
       }
+    }
+    // If type is being changed away from shell, allow clearing the command
+    if (effectiveType !== 'shell' && updates.command === '') {
+      updates.command = null
     }
 
     const updatableFields = [
@@ -1012,7 +1028,7 @@ async function executeShellJob(job) {
 
   console.log(`🐚 Executing shell job: ${job.name}`)
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const child = spawn(validation.baseCommand, validation.args || [], {
       cwd: join(__dirname, '../../'),
       timeout: 60000,
@@ -1045,10 +1061,17 @@ async function executeShellJob(job) {
 
       await recordJobExecution(job.id)
 
+      if (code !== 0) {
+        console.error(`❌ Shell job failed: ${job.name} (exit ${code})`)
+        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+        reject(new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`))
+        return
+      }
+
       console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
       cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
 
-      resolve({ success: code === 0, exitCode: code, output: redactedOutput })
+      resolve({ success: true, exitCode: code, output: redactedOutput })
     })
 
     child.on('error', async (err) => {
