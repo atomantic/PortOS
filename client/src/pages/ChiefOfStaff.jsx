@@ -42,7 +42,8 @@ import { resolveDynamicAvatar } from '../components/cos/constants';
 export default function ChiefOfStaff() {
   const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = tab || 'tasks';
+  const validTabIds = useMemo(() => new Set(TABS.map(t => t.id)), []);
+  const activeTab = (tab && validTabIds.has(tab)) ? tab : 'tasks';
 
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState({ user: null, cos: null });
@@ -136,6 +137,13 @@ export default function ChiefOfStaff() {
     const runningAgent = agentsData.find(a => a.status === 'running');
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
+
+  // Redirect unknown tab IDs to the default tab
+  useEffect(() => {
+    if (tab && !validTabIds.has(tab)) {
+      navigate('/cos/tasks', { replace: true });
+    }
+  }, [tab, validTabIds, navigate]);
 
   useEffect(() => {
     fetchData();

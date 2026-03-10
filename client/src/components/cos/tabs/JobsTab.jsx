@@ -103,7 +103,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
 
   const handleSave = async () => {
     const payload = { ...editData };
-    if (payload.type !== 'shell') {
+    if (payload.type !== 'shell' && payload.type !== 'script') {
       delete payload.command;
       delete payload.triggerAction;
     }
@@ -270,7 +270,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                   </select>
                 )}
               </div>
-              {editData.type === 'shell' ? (
+              {editData.type === 'shell' || editData.type === 'script' ? (
                 <>
                   <textarea
                     value={editData.command}
@@ -283,7 +283,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                     onChange={e => setEditData(d => ({ ...d, triggerAction: e.target.value }))}
                     className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                   >
-                    {(editData.type === 'shell' ? SHELL_TRIGGER_ACTION_OPTIONS : TRIGGER_ACTION_OPTIONS).map(opt => (
+                    {SHELL_TRIGGER_ACTION_OPTIONS.map(opt => (
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>

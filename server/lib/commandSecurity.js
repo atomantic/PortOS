@@ -35,7 +35,7 @@ export function validateCommand(command) {
   const parts = trimmed.split(/\s+/);
   const baseCommand = parts[0];
   if (!ALLOWED_COMMANDS.has(baseCommand)) {
-    return { valid: false, error: `Command '${baseCommand}' is not in the allowlist` };
+    return { valid: false, error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${ALLOWED_COMMANDS_SORTED.join(', ')}` };
   }
   return { valid: true, baseCommand, args: parts.slice(1) };
 }
@@ -45,6 +45,10 @@ const SENSITIVE_ENV_PATTERN = /("(?:[a-z0-9]+_)*(?:KEY|SECRET|TOKEN|PASSWORD|PAS
 
 /**
  * Redact sensitive env var values from command output before persisting.
+ * Only redacts JSON key/value patterns (e.g. "SECRET_KEY": "value"). Shell-level
+ * leaks (env expansion, command substitution) are not covered — acceptable for
+ * PortOS's single-user, private-network deployment where the operator is the
+ * only user and shell output is not exposed to external consumers.
  */
 export function redactOutput(output) {
   if (!output) return output;

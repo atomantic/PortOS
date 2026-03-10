@@ -64,10 +64,10 @@ Write-Host ""
 node scripts/setup-ghostty.js
 Write-Host ""
 
-# Check for slash-do (optional, used by PR Reviewer job)
+# Check for slash-do (optional, used by the PR Reviewer schedule task)
 $slashDoFound = Get-Command slash-do -ErrorAction SilentlyContinue
 if (-not $slashDoFound) {
-    Write-Host "slash-do is not installed. It is used by the PR Reviewer job." -ForegroundColor Yellow
+    Write-Host "slash-do is not installed. It is used by the PR Reviewer schedule task." -ForegroundColor Yellow
     if ([Environment]::UserInteractive) {
         $reply = Read-Host "Install slash-do now? [y/N]"
         if ($reply -match "^[Yy]$") {

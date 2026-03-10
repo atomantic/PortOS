@@ -895,7 +895,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
       exitCode: Number(err.message.match(/exited with code (\d+)/)?.[1] ?? 1),
       output: err.message
     }));
-    return res.json({ success: result.success !== false, type: 'shell', result });
+    return res.json({ success: result.success !== false, type: 'shell', ...result });
   }
 
   // Generate task and add to CoS internal task queue
@@ -909,7 +909,7 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     approvalRequired: false
   }, 'internal');
 
-  res.json({ success: true, type: 'agent', result: { taskId: taskResult.id } });
+  res.json({ success: true, type: 'agent', taskId: taskResult.id });
 }));
 
 // DELETE /api/cos/jobs/:id - Delete a job

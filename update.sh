@@ -61,9 +61,9 @@ echo ""
 node scripts/setup-ghostty.js
 echo ""
 
-# Check for slash-do (optional, used by PR Reviewer job)
+# Check for slash-do (optional, used by the PR Reviewer schedule task)
 if ! command -v slash-do >/dev/null 2>&1; then
-  echo "slash-do is not installed. It is used by the PR Reviewer job."
+  echo "slash-do is not installed. It is used by the PR Reviewer schedule task."
   if [ -t 0 ]; then
     read -p "Install slash-do now? [y/N] " -n 1 -r
     echo ""

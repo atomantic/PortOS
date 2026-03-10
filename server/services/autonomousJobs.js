@@ -472,6 +472,17 @@ async function migrateScriptsState(jobsData) {
 
     const mappedInterval = mapLegacySchedule(script.schedule, script.name)
     const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
+
+    // Validate command against allowlist — disable jobs with invalid commands
+    let commandValid = true
+    if (script.command) {
+      const cmdValidation = validateCommand(script.command)
+      if (!cmdValidation.valid) {
+        console.warn(`⚠️ Migrated script '${script.name}' has invalid command, disabling: ${cmdValidation.error}`)
+        commandValid = false
+      }
+    }
+
     jobsData.jobs.push({
       id: jobId,
       name: script.name,
@@ -481,7 +492,7 @@ async function migrateScriptsState(jobsData) {
       command: script.command,
       interval: mappedInterval,
       intervalMs: resolveIntervalMs(mappedInterval),
-      enabled: isOnDemandOrStartup ? false : (script.enabled || false),
+      enabled: commandValid ? (isOnDemandOrStartup ? false : (script.enabled || false)) : false,
       priority: script.triggerPriority || 'MEDIUM',
       triggerAction: 'log-only',
       lastRun: script.lastRun || null,
@@ -1095,13 +1106,21 @@ async function executeShellJob(job) {
 
   console.log(`🐚 Executing shell job: ${job.name}`)
 
+  const timeoutMs = job.timeout || 5 * 60 * 1000 // default 5 minutes
+
   return new Promise((resolve, reject) => {
+    let killed = false
     const child = spawn(validation.baseCommand, validation.args || [], {
       cwd: join(__dirname, '../../'),
-      timeout: 60000,
       shell: false,
       windowsHide: true
     })
+
+    const timer = setTimeout(() => {
+      killed = true
+      child.kill('SIGKILL')
+      console.error(`⏰ Shell job timed out after ${timeoutMs}ms: ${job.name}`)
+    }, timeoutMs)
 
     const outChunks = []
     const errChunks = []
@@ -1110,6 +1129,29 @@ async function executeShellJob(job) {
     child.stderr.on('data', (data) => { errChunks.push(data.toString()) })
 
     child.on('close', (code) => {
+      clearTimeout(timer)
+      if (killed) {
+        const persistTimeout = async () => {
+          await withLock(async () => {
+            const data = await loadJobs()
+            const j = data.jobs.find(x => x.id === job.id)
+            if (j) {
+              j.lastOutput = `Process killed after ${timeoutMs}ms timeout`
+              j.lastExitCode = -1
+              j.lastResult = 'timeout'
+              await saveJobs(data)
+            }
+          })
+          await recordJobExecution(job.id)
+        }
+        persistTimeout().then(() => {
+          reject(new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`))
+        }).catch((persistErr) => {
+          console.error(`❌ Shell job ${job.name} failed to persist timeout state: ${persistErr.message}`)
+          reject(new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`))
+        })
+        return
+      }
       const output = outChunks.join('')
       const error = errChunks.join('')
       const fullOutput = output + (error ? `\n[stderr]\n${error}` : '')
@@ -1147,6 +1189,7 @@ async function executeShellJob(job) {
     })
 
     child.on('error', (err) => {
+      clearTimeout(timer)
       console.error(`❌ Shell job ${job.name} error: ${err.message}`)
       const persistError = async () => {
         await withLock(async () => {
