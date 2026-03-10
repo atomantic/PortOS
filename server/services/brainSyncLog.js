@@ -79,6 +79,31 @@ export async function appendChange(op, type, id, record, originInstanceId) {
 }
 
 /**
+ * Append multiple change entries in a single mutex-guarded batch (reduces lock contention)
+ */
+export async function appendChanges(entries) {
+  if (!entries.length) return [];
+  return withLock(async () => {
+    await ensureDir();
+    const startSeq = currentSeq;
+    const results = [];
+    const lines = [];
+    let nextSeq = startSeq;
+    for (const { op, type, id, record, originInstanceId } of entries) {
+      nextSeq++;
+      const entry = { seq: nextSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
+      lines.push(JSON.stringify(entry));
+      results.push(entry);
+    }
+    // Reserve sequence numbers before write to avoid reuse on partial failure
+    // (matches appendChange semantics where currentSeq advances pre-write)
+    currentSeq = nextSeq;
+    await appendFile(SYNC_LOG_FILE, lines.join('\n') + '\n');
+    return results;
+  });
+}
+
+/**
  * Get changes since a given sequence number
  */
 // Mutex-guarded to prevent reading a partially-written file during compaction.
