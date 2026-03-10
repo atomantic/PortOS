@@ -62,15 +62,15 @@ node scripts/setup-ghostty.js
 echo ""
 
 # Check for slash-do (optional, used by PR Reviewer job)
-if ! npx slash-do@latest --version >/dev/null 2>&1; then
+if ! command -v slash-do >/dev/null 2>&1; then
   echo "slash-do is not installed. It is used by the PR Reviewer job."
   read -p "Install slash-do now? [y/N] " -n 1 -r
   echo ""
   if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Installing slash-do..."
-    npx slash-do@latest
+    npm install -g slash-do@latest
   else
-    echo "Skipping slash-do install. You can install later with: npx slash-do@latest"
+    echo "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
   fi
   echo ""
 fi
