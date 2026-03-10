@@ -432,10 +432,19 @@ async function migrateScriptsState(jobsData) {
   const now = new Date().toISOString()
   const existingIds = new Set(jobsData.jobs.map(j => j.id))
 
+  // Map legacy schedule values to valid interval values
+  const VALID_INTERVALS = new Set(['hourly', 'every-2-hours', 'every-4-hours', 'every-8-hours', 'daily', 'weekly', 'biweekly', 'monthly', 'custom'])
+  const mapLegacySchedule = (schedule) => {
+    if (!schedule || schedule === 'on-demand' || schedule === 'startup') return 'daily'
+    return VALID_INTERVALS.has(schedule) ? schedule : 'daily'
+  }
+
   for (const script of scripts) {
     const jobId = `job-migrated-${script.id}`
     if (existingIds.has(jobId)) continue
 
+    const mappedInterval = mapLegacySchedule(script.schedule)
+    const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
     jobsData.jobs.push({
       id: jobId,
       name: script.name,
@@ -443,9 +452,9 @@ async function migrateScriptsState(jobsData) {
       category: 'migrated-script',
       type: 'shell',
       command: script.command,
-      interval: script.schedule === 'on-demand' ? 'daily' : (script.schedule || 'daily'),
-      intervalMs: resolveIntervalMs(script.schedule === 'on-demand' ? 'daily' : (script.schedule || 'daily')),
-      enabled: script.schedule === 'on-demand' ? false : (script.enabled || false),
+      interval: mappedInterval,
+      intervalMs: resolveIntervalMs(mappedInterval),
+      enabled: isOnDemandOrStartup ? false : (script.enabled || false),
       priority: script.triggerPriority || 'MEDIUM',
       triggerAction: script.triggerAction || 'log-only',
       lastRun: script.lastRun || null,
@@ -623,12 +632,20 @@ async function createJob(jobData) {
       }
     }
 
+    const jobType = jobData.type || 'agent'
+
+    // Strip agent-specific triggerAction values from shell jobs
+    const agentOnlyActions = ['spawn-agent', 'create-task']
+    const triggerAction = (jobType === 'shell' && agentOnlyActions.includes(jobData.triggerAction))
+      ? 'log-only'
+      : (jobData.triggerAction || null)
+
     const job = {
       id: jobData.id || `job-${uuidv4().slice(0, 8)}`,
       name: jobData.name,
       description: jobData.description || '',
       category: jobData.category || 'custom',
-      type: jobData.type || 'agent',
+      type: jobType,
       interval: jobData.interval || 'weekly',
       intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
       scheduledTime: jobData.scheduledTime || null,
@@ -638,7 +655,7 @@ async function createJob(jobData) {
       autonomyLevel: jobData.autonomyLevel || 'manager',
       promptTemplate: jobData.promptTemplate || '',
       command: jobData.command || null,
-      triggerAction: jobData.triggerAction || null,
+      triggerAction,
       lastRun: null,
       runCount: 0,
       createdAt: now,
@@ -695,6 +712,17 @@ async function updateJob(jobId, updates) {
     // Recalculate intervalMs if interval changed
     if (updates.interval) {
       job.intervalMs = resolveIntervalMs(updates.interval, updates.intervalMs)
+    }
+
+    // Ensure shell jobs always have a non-empty command
+    if (job.type === 'shell' && !job.command) {
+      throw new Error('Shell jobs require a non-empty command')
+    }
+
+    // Strip agent-specific triggerAction values from shell jobs
+    const agentOnlyActions = ['spawn-agent', 'create-task']
+    if (job.type === 'shell' && agentOnlyActions.includes(job.triggerAction)) {
+      job.triggerAction = 'log-only'
     }
 
     job.updatedAt = new Date().toISOString()
@@ -1042,42 +1070,65 @@ async function executeShellJob(job) {
     child.stdout.on('data', (data) => { outChunks.push(data.toString()) })
     child.stderr.on('data', (data) => { errChunks.push(data.toString()) })
 
-    child.on('close', async (code) => {
+    child.on('close', (code) => {
       const output = outChunks.join('')
       const error = errChunks.join('')
       const fullOutput = output + (error ? `\n[stderr]\n${error}` : '')
       const redactedOutput = redactOutput(fullOutput)
 
-      // Store last output/exit code on the job
-      await withLock(async () => {
-        const data = await loadJobs()
-        const j = data.jobs.find(x => x.id === job.id)
-        if (j) {
-          j.lastOutput = redactedOutput.substring(0, 10000)
-          j.lastExitCode = code
-          await saveJobs(data)
-        }
-      })
-
-      await recordJobExecution(job.id)
-
-      if (code !== 0) {
-        console.error(`❌ Shell job failed: ${job.name} (exit ${code})`)
-        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
-        reject(new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`))
-        return
+      // Persist output/exit code and record execution, then resolve/reject
+      const persist = async () => {
+        await withLock(async () => {
+          const data = await loadJobs()
+          const j = data.jobs.find(x => x.id === job.id)
+          if (j) {
+            j.lastOutput = redactedOutput.substring(0, 10000)
+            j.lastExitCode = code
+            await saveJobs(data)
+          }
+        })
+        await recordJobExecution(job.id)
       }
 
-      console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
-      cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+      persist().then(() => {
+        if (code !== 0) {
+          console.error(`❌ Shell job failed: ${job.name} (exit ${code})`)
+          cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+          reject(new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`))
+          return
+        }
 
-      resolve({ success: true, exitCode: code, output: redactedOutput })
+        console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
+        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+        resolve({ success: true, exitCode: code, output: redactedOutput })
+      }).catch((persistErr) => {
+        console.error(`❌ Shell job ${job.name} failed to persist state: ${persistErr.message}`)
+        reject(persistErr)
+      })
     })
 
-    child.on('error', async (err) => {
+    child.on('error', (err) => {
       console.error(`❌ Shell job ${job.name} error: ${err.message}`)
-      await recordJobExecution(job.id)
-      resolve({ success: false, error: err.message })
+      const persistError = async () => {
+        await withLock(async () => {
+          const data = await loadJobs()
+          const j = data.jobs.find(x => x.id === job.id)
+          if (j) {
+            j.lastOutput = err.message
+            j.lastExitCode = -1
+            j.lastRun = new Date().toISOString()
+            j.lastResult = 'error'
+            await saveJobs(data)
+          }
+        })
+        await recordJobExecution(job.id)
+      }
+      persistError().then(() => {
+        resolve({ success: false, error: err.message })
+      }).catch((persistErr) => {
+        console.error(`❌ Shell job ${job.name} failed to persist error state: ${persistErr.message}`)
+        resolve({ success: false, error: err.message })
+      })
     })
   })
 }

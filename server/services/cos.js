@@ -3637,15 +3637,17 @@ async function executeScheduledJob(jobId) {
 
   // Script jobs and shell jobs execute directly without spawning an AI agent
   if (isScriptJob(job)) {
-    await executeScriptJob(job).catch(err => {
+    const scriptOk = await executeScriptJob(job).then(() => true, err => {
       emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+      return false;
     });
-    emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
+    if (scriptOk) emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
   } else if (isShellJob(job)) {
-    await executeShellJob(job).catch(err => {
+    const shellOk = await executeShellJob(job).then(() => true, err => {
       emitLog('error', `Shell job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+      return false;
     });
-    emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
+    if (shellOk) emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
   } else {
     // Check if this job is already being spawned or has a running agent
     if (spawningJobIds.has(jobId)) {

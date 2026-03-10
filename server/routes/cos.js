@@ -888,6 +888,12 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
 
+  // Shell jobs execute directly — no agent needed
+  if (autonomousJobs.isShellJob(job)) {
+    const result = await autonomousJobs.executeShellJob(job);
+    return res.json({ success: true, result });
+  }
+
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
   // Manual triggers always bypass approval — the user explicitly requested execution
