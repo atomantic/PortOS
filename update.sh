@@ -64,15 +64,19 @@ echo ""
 # Check for slash-do (optional, used by PR Reviewer job)
 if ! command -v slash-do >/dev/null 2>&1; then
   echo "slash-do is not installed. It is used by the PR Reviewer job."
-  read -p "Install slash-do now? [y/N] " -n 1 -r
-  echo ""
-  if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "Installing slash-do..."
-    if ! npm install -g slash-do@latest; then
-      echo "⚠️  Failed to install slash-do. Continuing without it."
+  if [ -t 0 ]; then
+    read -p "Install slash-do now? [y/N] " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      echo "Installing slash-do..."
+      if ! npm install -g slash-do@latest; then
+        echo "⚠️  Failed to install slash-do. Continuing without it."
+      fi
+    else
+      echo "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
     fi
   else
-    echo "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
+    echo "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
   fi
   echo ""
 fi

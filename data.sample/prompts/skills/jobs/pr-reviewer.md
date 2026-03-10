@@ -1,6 +1,6 @@
 # PR Reviewer Job
 
-Autonomous job that checks managed apps for open PRs/MRs by other contributors and posts code reviews on any that lack a review since the last commit. Runs every 2 hours during working hours (weekdays only).
+Autonomous job that checks managed apps for open PRs/MRs by other contributors and posts code reviews on any that lack a review since the last commit. Runs every 2 hours on weekdays.
 
 ## Prompt Template
 
@@ -10,9 +10,9 @@ You are acting as my Chief of Staff, reviewing pull requests and merge requests 
 
 ### Phase 0 — Prerequisites
 
-0. **Ensure slashdo is installed**
-   - Run `npx slash-do@latest --version` to check availability
-   - If the command fails, install it with `npx slash-do@latest` to make `/do:` commands available
+0. **Ensure slash-do is installed**
+   - Run `command -v slash-do` to check availability
+   - If not found, install it with `npm install -g slash-do@latest` to make `/do:` commands available
 
 ### Phase 1 — Discover PRs
 
