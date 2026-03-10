@@ -162,11 +162,17 @@ function detectCursorReset(cursor, peer) {
   if (!remote) return corrected;
 
   // Brain: integer comparison
-  const cursorBrain = corrected.brainSeq ?? 0;
-  const peerBrain = remote.brainSeq ?? 0;
-  if (cursorBrain > 0 && cursorBrain > peerBrain) {
-    console.log(`🔄 Brain cursor reset for ${peer.name}: cursor ${cursorBrain} > peer max ${peerBrain}`);
-    corrected.brainSeq = 0;
+  // Only check when peer reports a finite non-negative brainSeq (older peers may omit it)
+  const remoteBrainRaw = remote.brainSeq;
+  const hasNumericRemoteBrain = typeof remoteBrainRaw === 'number' &&
+    Number.isFinite(remoteBrainRaw) &&
+    remoteBrainRaw >= 0;
+  if (hasNumericRemoteBrain) {
+    const cursorBrain = corrected.brainSeq ?? 0;
+    if (cursorBrain > 0 && cursorBrain > remoteBrainRaw) {
+      console.log(`🔄 Brain cursor reset for ${peer.name}: cursor ${cursorBrain} > peer max ${remoteBrainRaw}`);
+      corrected.brainSeq = 0;
+    }
   }
 
   // Memory: BigInt comparison (BIGSERIAL can exceed Number.MAX_SAFE_INTEGER)
