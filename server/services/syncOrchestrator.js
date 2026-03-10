@@ -150,6 +150,11 @@ function safeBigInt(value) {
 /**
  * Detect and reset stale cursors when peer's sequence has been reset
  * (e.g. database rebuild). Returns corrected cursor.
+ *
+ * Uses cached remoteSyncSeqs from periodic peer probing. If null (probe hasn't
+ * run yet or failed), we skip detection — a real reset will be caught on the
+ * next probe cycle. Stale probe data may trigger a conservative full re-sync
+ * (cursor reset to 0), which is safe since sync is idempotent (LWW dedup).
  */
 function detectCursorReset(cursor, peer) {
   const corrected = { ...cursor };

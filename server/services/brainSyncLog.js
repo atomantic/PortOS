@@ -85,15 +85,19 @@ export async function appendChanges(entries) {
   if (!entries.length) return [];
   return withLock(async () => {
     await ensureDir();
+    const startSeq = currentSeq;
     const results = [];
     const lines = [];
+    let nextSeq = startSeq;
     for (const { op, type, id, record, originInstanceId } of entries) {
-      currentSeq++;
-      const entry = { seq: currentSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
+      nextSeq++;
+      const entry = { seq: nextSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
       lines.push(JSON.stringify(entry));
       results.push(entry);
     }
     await appendFile(SYNC_LOG_FILE, lines.join('\n') + '\n');
+    // Only advance currentSeq after successful write
+    currentSeq = nextSeq;
     return results;
   });
 }
