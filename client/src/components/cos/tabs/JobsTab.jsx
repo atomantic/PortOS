@@ -410,10 +410,11 @@ export default function JobsTab() {
       return;
     }
 
-    await api.createCosJob(newJob).catch(err => {
+    const created = await api.createCosJob(newJob).catch(err => {
       toast.error(err.message);
       return null;
     });
+    if (!created) return;
     toast.success('Job created');
     setNewJob({
       name: '',

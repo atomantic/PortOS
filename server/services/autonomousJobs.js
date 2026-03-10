@@ -489,7 +489,7 @@ async function migrateScriptsState(jobsData) {
       description: script.description || '',
       category: 'migrated-script',
       type: 'shell',
-      command: script.command,
+      command: commandValid ? script.command : null,
       interval: mappedInterval,
       intervalMs: resolveIntervalMs(mappedInterval),
       enabled: commandValid ? (isOnDemandOrStartup ? false : (script.enabled || false)) : false,
@@ -664,7 +664,12 @@ async function createJob(jobData) {
     const now = new Date().toISOString()
 
     // Validate shell command at creation time
-    if (jobData.type === 'shell' && jobData.command) {
+    if (jobData.type === 'shell') {
+      if (!jobData.command || !jobData.command.trim()) {
+        const err = new Error('Shell jobs require a non-empty command')
+        err.status = 400
+        throw err
+      }
       const validation = validateCommand(jobData.command)
       if (!validation.valid) {
         const err = new Error(`Invalid command: ${validation.error}`)
