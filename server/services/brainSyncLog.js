@@ -95,9 +95,10 @@ export async function appendChanges(entries) {
       lines.push(JSON.stringify(entry));
       results.push(entry);
     }
-    await appendFile(SYNC_LOG_FILE, lines.join('\n') + '\n');
-    // Only advance currentSeq after successful write
+    // Reserve sequence numbers before write to avoid reuse on partial failure
+    // (matches appendChange semantics where currentSeq advances pre-write)
     currentSeq = nextSeq;
+    await appendFile(SYNC_LOG_FILE, lines.join('\n') + '\n');
     return results;
   });
 }
