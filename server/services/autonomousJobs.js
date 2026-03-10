@@ -407,6 +407,9 @@ async function loadJobs() {
   // Merge with defaults to ensure all default jobs exist
   const merged = mergeWithDefaults(loaded)
   await migrateScriptsState(merged)
+  // Persist merged defaults (migration may or may not have saved already,
+  // but mergeWithDefaults can add new default jobs that need persisting)
+  await saveJobs(merged)
   return merged
 }
 
@@ -1139,10 +1142,10 @@ async function executeShellJob(job) {
         await recordJobExecution(job.id)
       }
       persistError().then(() => {
-        resolve({ success: false, error: err.message })
+        reject(new Error(`Shell job "${job.name}" spawn error: ${err.message}`))
       }).catch((persistErr) => {
         console.error(`❌ Shell job ${job.name} failed to persist error state: ${persistErr.message}`)
-        resolve({ success: false, error: err.message })
+        reject(new Error(`Shell job "${job.name}" spawn error: ${err.message}`))
       })
     })
   })

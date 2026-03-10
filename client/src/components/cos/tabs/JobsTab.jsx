@@ -93,10 +93,9 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
       autonomyLevel: job.autonomyLevel,
       promptTemplate: job.promptTemplate || ''
     };
-    if (job.type === 'shell') {
-      base.command = job.command || '';
-      base.triggerAction = job.triggerAction || 'log-only';
-    }
+    // Always initialize shell fields so switching type to 'shell' during editing works
+    base.command = job.command || '';
+    base.triggerAction = job.triggerAction || 'log-only';
     setEditData(base);
     setEditing(true);
     setExpanded(true);
