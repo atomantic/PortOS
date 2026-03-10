@@ -890,8 +890,12 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
 
   // Shell jobs execute directly — no agent needed
   if (autonomousJobs.isShellJob(job)) {
-    const result = await autonomousJobs.executeShellJob(job);
-    return res.json({ success: true, result });
+    const result = await autonomousJobs.executeShellJob(job).catch(err => ({
+      success: false,
+      exitCode: Number(err.message.match(/exited with code (\d+)/)?.[1] ?? 1),
+      output: err.message
+    }));
+    return res.json(result);
   }
 
   // Generate task and add to CoS internal task queue

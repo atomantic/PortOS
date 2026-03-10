@@ -434,16 +434,20 @@ async function migrateScriptsState(jobsData) {
 
   // Map legacy schedule values to valid interval values
   const VALID_INTERVALS = new Set(['hourly', 'every-2-hours', 'every-4-hours', 'every-8-hours', 'daily', 'weekly', 'biweekly', 'monthly', 'custom'])
-  const mapLegacySchedule = (schedule) => {
+  const mapLegacySchedule = (schedule, scriptName) => {
     if (!schedule || schedule === 'on-demand' || schedule === 'startup') return 'daily'
-    return VALID_INTERVALS.has(schedule) ? schedule : 'daily'
+    if (!VALID_INTERVALS.has(schedule)) {
+      console.warn(`⚠️ Legacy schedule '${schedule}' for script '${scriptName}' not recognized, defaulting to 'daily'`)
+      return 'daily'
+    }
+    return schedule
   }
 
   for (const script of scripts) {
     const jobId = `job-migrated-${script.id}`
     if (existingIds.has(jobId)) continue
 
-    const mappedInterval = mapLegacySchedule(script.schedule)
+    const mappedInterval = mapLegacySchedule(script.schedule, script.name)
     const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
     jobsData.jobs.push({
       id: jobId,
@@ -628,7 +632,9 @@ async function createJob(jobData) {
     if (jobData.type === 'shell' && jobData.command) {
       const validation = validateCommand(jobData.command)
       if (!validation.valid) {
-        throw new Error(`Invalid command: ${validation.error}`)
+        const err = new Error(`Invalid command: ${validation.error}`)
+        err.status = 400
+        throw err
       }
     }
 
@@ -689,7 +695,9 @@ async function updateJob(jobId, updates) {
     if (effectiveType === 'shell' && updates.command !== undefined && updates.command !== '') {
       const validation = validateCommand(updates.command)
       if (!validation.valid) {
-        throw new Error(`Invalid command: ${validation.error}`)
+        const err = new Error(`Invalid command: ${validation.error}`)
+        err.status = 400
+        throw err
       }
     }
     // If type is being changed away from shell, allow clearing the command

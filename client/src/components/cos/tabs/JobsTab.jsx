@@ -28,6 +28,11 @@ const TRIGGER_ACTION_OPTIONS = [
   { value: 'create-task', label: 'Create Task' }
 ];
 
+const SHELL_TRIGGER_ACTIONS = new Set(['spawn-agent', 'create-task']);
+const SHELL_TRIGGER_ACTION_OPTIONS = TRIGGER_ACTION_OPTIONS.filter(
+  opt => !SHELL_TRIGGER_ACTIONS.has(opt.value)
+);
+
 const JOB_TYPE_OPTIONS = [
   { value: 'agent', label: 'AI Agent' },
   { value: 'shell', label: 'Shell Command' }
@@ -279,7 +284,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                     onChange={e => setEditData(d => ({ ...d, triggerAction: e.target.value }))}
                     className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                   >
-                    {TRIGGER_ACTION_OPTIONS.map(opt => (
+                    {(editData.type === 'shell' ? SHELL_TRIGGER_ACTION_OPTIONS : TRIGGER_ACTION_OPTIONS).map(opt => (
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
@@ -596,7 +601,7 @@ export default function JobsTab() {
                   onChange={e => setNewJob(j => ({ ...j, triggerAction: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 >
-                  {TRIGGER_ACTION_OPTIONS.map(opt => (
+                  {(newJob.type === 'shell' ? SHELL_TRIGGER_ACTION_OPTIONS : TRIGGER_ACTION_OPTIONS).map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
