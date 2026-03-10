@@ -88,7 +88,8 @@ const JOB_SKILL_MAP = {
   'job-brain-review': 'brain-review',
   'job-datadog-error-monitor': 'datadog-error-monitor',
   'job-jira-sprint-manager': 'jira-sprint-manager',
-  'job-autobiography-prompt': 'autobiography-prompt'
+  'job-autobiography-prompt': 'autobiography-prompt',
+  'job-pr-reviewer': 'pr-reviewer'
 }
 
 const WEEK = 7 * DAY
@@ -316,6 +317,59 @@ Phase 4 — Report:
     priority: 'LOW',
     type: 'script',
     scriptHandler: 'autobiography-prompt',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-pr-reviewer',
+    name: 'PR Reviewer',
+    description: 'Check managed apps for open PRs/MRs by other contributors and post code reviews on any that lack a review since the last commit.',
+    category: 'pr-reviewer',
+    interval: 'every-2-hours',
+    intervalMs: 2 * HOUR,
+    weekdaysOnly: true,
+    enabled: false,
+    priority: 'HIGH',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] PR Reviewer
+
+You are acting as my Chief of Staff, reviewing pull requests and merge requests across managed apps.
+
+Phase 0 — Prerequisites:
+0. Ensure slashdo is installed by running \`npx slash-do@latest --version\`. If the command fails, install it with \`npx slash-do@latest\` to make /do: commands available.
+
+Phase 1 — Discover PRs:
+1. Call GET /api/apps to get all managed apps
+2. For each app with a repoPath, cd into the repo directory
+3. Detect the SCM provider by checking the git remote URL:
+   - If remote contains "github.com" -> use \`gh\` CLI
+   - If remote contains "gitlab" -> use \`glab\` CLI
+4. List open PRs/MRs authored by others (not by me):
+   - GitHub: \`gh pr list --state open --json number,author,headRefName,updatedAt,title\`
+   - GitLab: \`glab mr list --state opened -F json\`
+5. Filter out PRs/MRs authored by my username (atomantic)
+
+Phase 2 — Check Review Status:
+6. For each PR/MR from other contributors:
+   - GitHub: \`gh pr view <number> --json reviews,commits\` — check if I have a review newer than the latest commit
+   - GitLab: \`glab mr view <iid> -F json\` and check notes/approvals vs last commit date
+7. Skip PRs where I already have a review posted after the most recent commit push
+
+Phase 3 — Review:
+8. For each PR/MR needing review:
+   - cd into the app's repoPath
+   - Run \`/do:review\` to perform a deep code review of the changed files
+   - Post the review output as a comment on the PR/MR:
+     - GitHub: \`gh pr review <number> --comment --body "<review>"\`
+     - GitLab: \`glab mr note <iid> --message "<review>"\`
+
+Phase 4 — Report:
+9. Generate a summary report covering:
+   - Apps checked and PR/MR counts
+   - Reviews posted (with links)
+   - PRs skipped (already reviewed)`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -810,6 +864,7 @@ async function getNextDueJob() {
 function resolveIntervalMs(interval, customMs) {
   switch (interval) {
     case 'hourly': return HOUR
+    case 'every-2-hours': return 2 * HOUR
     case 'every-4-hours': return 4 * HOUR
     case 'every-8-hours': return 8 * HOUR
     case 'daily': return DAY
@@ -826,6 +881,7 @@ function resolveIntervalMs(interval, customMs) {
  */
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour', ms: HOUR },
+  { value: 'every-2-hours', label: 'Every 2 Hours', ms: 2 * HOUR },
   { value: 'every-4-hours', label: 'Every 4 Hours', ms: 4 * HOUR },
   { value: 'every-8-hours', label: 'Every 8 Hours', ms: 8 * HOUR },
   { value: 'daily', label: 'Daily', ms: DAY },

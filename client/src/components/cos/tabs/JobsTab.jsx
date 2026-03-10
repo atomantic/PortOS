@@ -5,6 +5,7 @@ import * as api from '../../../services/api';
 
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour' },
+  { value: 'every-2-hours', label: 'Every 2 Hours' },
   { value: 'every-4-hours', label: 'Every 4 Hours' },
   { value: 'every-8-hours', label: 'Every 8 Hours' },
   { value: 'daily', label: 'Daily' },
