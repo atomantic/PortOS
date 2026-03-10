@@ -80,7 +80,12 @@ async function agentDataCleanup() {
   const cutoff = Date.now() - 7 * DAY
   let cleaned = 0
 
+  // Get active agent IDs so we never delete data for running agents
+  const { getActiveAgentIds } = await import('./subAgentSpawner.js')
+  const activeIds = new Set(getActiveAgentIds())
+
   for (const entry of entries) {
+    if (activeIds.has(entry)) continue
     const entryPath = join(agentsDir, entry)
     const info = await stat(entryPath).catch(() => null)
     if (!info?.isDirectory()) continue
@@ -724,7 +729,9 @@ async function updateJob(jobId, updates) {
 
     // Ensure shell jobs always have a non-empty command
     if (job.type === 'shell' && !job.command) {
-      throw new Error('Shell jobs require a non-empty command')
+      const err = new Error('Shell jobs require a non-empty command')
+      err.status = 400
+      throw err
     }
 
     // Strip agent-specific triggerAction values from shell jobs
