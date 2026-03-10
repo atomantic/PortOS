@@ -151,9 +151,13 @@ describe('syncOrchestrator', () => {
 
       // Simulate stale cursor (we previously synced to 1127 but peer reset to 2)
       const { readJSONFile } = await import('../lib/fileUtils.js');
-      readJSONFile.mockResolvedValue({
+      const cursorData = {
         [peerWithReset.instanceId]: { brainSeq: 0, memorySeq: '1127', lastSyncAt: '2026-01-01T00:00:00.000Z' }
-      });
+      };
+      // readJSONFile is called 3 times in syncWithPeer: readCursors + 2x withCursors
+      readJSONFile.mockResolvedValueOnce(cursorData)
+        .mockResolvedValueOnce(cursorData)
+        .mockResolvedValueOnce(cursorData);
 
       // Brain: no changes
       mockFetch
@@ -188,9 +192,13 @@ describe('syncOrchestrator', () => {
       };
 
       const { readJSONFile } = await import('../lib/fileUtils.js');
-      readJSONFile.mockResolvedValue({
+      const cursorData = {
         [peerWithReset.instanceId]: { brainSeq: 5, memorySeq: '10', lastSyncAt: '2026-01-01T00:00:00.000Z' }
-      });
+      };
+      // readJSONFile is called 3 times in syncWithPeer: readCursors + 2x withCursors
+      readJSONFile.mockResolvedValueOnce(cursorData)
+        .mockResolvedValueOnce(cursorData)
+        .mockResolvedValueOnce(cursorData);
 
       // Brain: returns data from seq 0 (after cursor reset)
       mockFetch

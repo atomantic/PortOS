@@ -138,7 +138,7 @@ async function syncMemoryFromPeer(peer, cursor) {
  * Returns 0n for invalid/empty/negative inputs.
  */
 function safeBigInt(value) {
-  if (typeof value === 'bigint') return value;
+  if (typeof value === 'bigint') return value >= 0n ? value : 0n;
   if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? BigInt(Math.trunc(value)) : 0n;
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
     const parsed = BigInt(value.trim());
