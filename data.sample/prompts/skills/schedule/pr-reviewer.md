@@ -1,6 +1,6 @@
-# PR Reviewer Job
+# PR Reviewer
 
-Autonomous job that checks managed apps for open PRs/MRs by other contributors and posts code reviews on any that lack a review since the last commit. Runs every 2 hours on weekdays.
+Scheduled task that checks managed apps for open PRs/MRs by other contributors and posts code reviews on any that lack a review since the last commit. Runs every 2 hours on weekdays.
 
 ## Prompt Template
 
@@ -90,7 +90,7 @@ You are acting as my Chief of Staff, reviewing pull requests and merge requests 
 - Review is posted as a comment on the PR/MR
 - Report provides clear visibility into review activity
 
-## Job Metadata
+## Schedule Metadata
 
 - **Category**: pr-reviewer
 - **Interval**: Every 2 hours (weekdays only)

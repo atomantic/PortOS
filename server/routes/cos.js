@@ -895,21 +895,21 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
       exitCode: Number(err.message.match(/exited with code (\d+)/)?.[1] ?? 1),
       output: err.message
     }));
-    return res.json(result);
+    return res.json({ success: result.success !== false, type: 'shell', result });
   }
 
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
   // Manual triggers always bypass approval — the user explicitly requested execution
   const task = await autonomousJobs.generateTaskFromJob(job);
-  const result = await cos.addTask({
+  const taskResult = await cos.addTask({
     description: task.description,
     priority: task.priority,
     context: `Manually triggered autonomous job: ${job.name}`,
     approvalRequired: false
   }, 'internal');
 
-  res.json({ success: true, task: result });
+  res.json({ success: true, type: 'agent', result: { taskId: taskResult.id } });
 }));
 
 // DELETE /api/cos/jobs/:id - Delete a job

@@ -405,11 +405,13 @@ async function loadJobs() {
   }
 
   // Merge with defaults to ensure all default jobs exist
+  const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
-  await migrateScriptsState(merged)
-  // Persist merged defaults (migration may or may not have saved already,
-  // but mergeWithDefaults can add new default jobs that need persisting)
-  await saveJobs(merged)
+  const migrated = await migrateScriptsState(merged)
+  // Only persist if mergeWithDefaults added new jobs or migration occurred
+  if (merged.jobs.length !== jobCountBefore || migrated) {
+    await saveJobs(merged)
+  }
   return merged
 }
 
@@ -419,7 +421,7 @@ async function loadJobs() {
 async function migrateScriptsState(jobsData) {
   const scriptsFile = join(DATA_DIR, 'scripts-state.json')
   const raw = await readFile(scriptsFile, 'utf-8').catch(() => null)
-  if (!raw) return
+  if (!raw) return false
 
   let scriptsState
   try {
@@ -428,13 +430,13 @@ async function migrateScriptsState(jobsData) {
     console.warn(`⚠️ scripts-state.json is corrupted, skipping migration: ${err.message}`)
     const failedSuffix = `.failed-${Date.now()}`
     await rename(scriptsFile, scriptsFile + failedSuffix)
-    return
+    return false
   }
   const scripts = scriptsState.scripts ? Object.values(scriptsState.scripts) : []
   if (scripts.length === 0) {
     const migrateSuffix = `.migrated-${Date.now()}`
     await rename(scriptsFile, scriptsFile + migrateSuffix)
-    return
+    return false
   }
 
   const now = new Date().toISOString()
@@ -442,13 +444,26 @@ async function migrateScriptsState(jobsData) {
 
   // Map legacy schedule values to valid interval values
   const VALID_INTERVALS = new Set(['hourly', 'every-2-hours', 'every-4-hours', 'every-8-hours', 'daily', 'weekly', 'biweekly', 'monthly', 'custom'])
+  const LEGACY_SCHEDULE_MAP = {
+    'every-5-min': 'hourly',
+    'every-10-min': 'hourly',
+    'every-15-min': 'hourly',
+    'every-30-min': 'hourly',
+    'every-hour': 'hourly',
+    'every-3-hours': 'every-4-hours',
+    'every-6-hours': 'every-8-hours',
+    'every-12-hours': 'daily',
+    'twice-daily': 'daily'
+  }
   const mapLegacySchedule = (schedule, scriptName) => {
     if (!schedule || schedule === 'on-demand' || schedule === 'startup') return 'daily'
-    if (!VALID_INTERVALS.has(schedule)) {
-      console.warn(`⚠️ Legacy schedule '${schedule}' for script '${scriptName}' not recognized, defaulting to 'daily'`)
-      return 'daily'
+    if (VALID_INTERVALS.has(schedule)) return schedule
+    if (LEGACY_SCHEDULE_MAP[schedule]) {
+      console.log(`📦 Mapped legacy schedule '${schedule}' for '${scriptName}' to '${LEGACY_SCHEDULE_MAP[schedule]}'`)
+      return LEGACY_SCHEDULE_MAP[schedule]
     }
-    return schedule
+    console.warn(`⚠️ Legacy schedule '${schedule}' for script '${scriptName}' not recognized, defaulting to 'daily'`)
+    return 'daily'
   }
 
   for (const script of scripts) {
@@ -468,7 +483,7 @@ async function migrateScriptsState(jobsData) {
       intervalMs: resolveIntervalMs(mappedInterval),
       enabled: isOnDemandOrStartup ? false : (script.enabled || false),
       priority: script.triggerPriority || 'MEDIUM',
-      triggerAction: script.triggerAction || 'log-only',
+      triggerAction: 'log-only',
       lastRun: script.lastRun || null,
       runCount: script.runCount || 0,
       createdAt: script.createdAt || now,
@@ -480,6 +495,7 @@ async function migrateScriptsState(jobsData) {
   const migrateSuffix = `.migrated-${Date.now()}`
   await rename(scriptsFile, scriptsFile + migrateSuffix)
   console.log(`📦 Migrated ${scripts.length} scripts to jobs`)
+  return true
 }
 
 /**
@@ -697,6 +713,11 @@ async function updateJob(jobId, updates) {
     const data = await loadJobs()
     const job = data.jobs.find(j => j.id === jobId)
     if (!job) return null
+
+    // Normalize falsy command values to empty string for consistent validation
+    if (updates.command !== undefined && !updates.command) {
+      updates.command = ''
+    }
 
     // Validate shell command if being updated (only for shell-type jobs)
     const effectiveType = updates.type ?? job.type
