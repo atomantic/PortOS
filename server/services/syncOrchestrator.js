@@ -165,13 +165,21 @@ function detectCursorReset(cursor, peer) {
   }
 
   // Memory: BigInt comparison (BIGSERIAL can exceed Number.MAX_SAFE_INTEGER)
-  const cursorMemStr = corrected.memorySeq ?? '0';
-  const peerMemStr = remote.memorySeq ?? '0';
-  const cursorMem = safeBigInt(cursorMemStr);
-  const peerMem = safeBigInt(peerMemStr);
-  if (cursorMem > 0n && cursorMem > peerMem) {
-    console.log(`🔄 Memory cursor reset for ${peer.name}: cursor ${cursorMemStr} > peer max ${peerMemStr}`);
-    corrected.memorySeq = '0';
+  // Only check when peer reports a numeric memorySeq (null means non-Postgres peer)
+  const remoteMemRaw = remote.memorySeq;
+  const hasNumericRemoteMem = remoteMemRaw != null && (
+    typeof remoteMemRaw === 'bigint' ||
+    (typeof remoteMemRaw === 'number' && Number.isFinite(remoteMemRaw) && remoteMemRaw >= 0) ||
+    (typeof remoteMemRaw === 'string' && /^\d+$/.test(remoteMemRaw.trim()))
+  );
+  if (hasNumericRemoteMem) {
+    const cursorMemStr = corrected.memorySeq ?? '0';
+    const cursorMem = safeBigInt(cursorMemStr);
+    const peerMem = safeBigInt(remoteMemRaw);
+    if (cursorMem > 0n && cursorMem > peerMem) {
+      console.log(`🔄 Memory cursor reset for ${peer.name}: cursor ${cursorMemStr} > peer max ${String(remoteMemRaw)}`);
+      corrected.memorySeq = '0';
+    }
   }
 
   return corrected;
