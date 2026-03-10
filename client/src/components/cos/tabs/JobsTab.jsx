@@ -270,7 +270,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                   </select>
                 )}
               </div>
-              {editData.type === 'shell' || editData.type === 'script' ? (
+              {editData.type === 'shell' ? (
                 <>
                   <textarea
                     value={editData.command}
@@ -288,6 +288,11 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                     ))}
                   </select>
                 </>
+              ) : editData.type === 'script' ? (
+                <div className="space-y-1">
+                  <span className="text-xs text-gray-400">Legacy script command (read-only)</span>
+                  <pre className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-sm font-mono">{editData.command || 'No command'}</pre>
+                </div>
               ) : (
                 <textarea
                   value={editData.promptTemplate}

@@ -471,6 +471,10 @@ async function migrateScriptsState(jobsData) {
     if (existingIds.has(jobId)) continue
 
     const mappedInterval = mapLegacySchedule(script.schedule, script.name)
+    const cronExpression = script.cronExpression || null
+    if (cronExpression) {
+      console.log(`📦 Preserving cron expression '${cronExpression}' for migrated script '${script.name}'`)
+    }
     const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
 
     // Validate command against allowlist — disable jobs with invalid commands
@@ -491,6 +495,7 @@ async function migrateScriptsState(jobsData) {
       type: 'shell',
       command: commandValid ? script.command : null,
       interval: mappedInterval,
+      cronExpression,
       intervalMs: resolveIntervalMs(mappedInterval),
       enabled: commandValid ? (isOnDemandOrStartup ? false : (script.enabled || false)) : false,
       priority: script.triggerPriority || 'MEDIUM',
@@ -1122,6 +1127,7 @@ async function executeShellJob(job) {
     })
 
     const timer = setTimeout(() => {
+      if (child.exitCode !== null) return
       killed = true
       child.kill('SIGKILL')
       console.error(`⏰ Shell job timed out after ${timeoutMs}ms: ${job.name}`)
