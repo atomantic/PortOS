@@ -23,7 +23,7 @@ Example progression: `0.22.0` → `0.22.1` (fix) → `0.23.0` (feature) → `1.0
 
 ### Version Bumping
 
-Version is managed by the `/do:release` slash command (defined in the [slashdo](https://github.com/atomantic/slashdo) toolkit). Do not bump `package.json` version manually during development.
+Version is managed by the `/do:release` Claude Code slash command (provided by the [slashdo](https://github.com/atomantic/slashdo) skill). Do not bump `package.json` version manually during development.
 
 ### On Push/PR to `main`
 

@@ -59,6 +59,8 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 3. Push `main` to `release` branch to trigger GitHub Release workflow
 4. Push pattern: `git pull --rebase --autostash && git push`
 
+> **Note:** Some older code or automation notes may still reference a `dev` branch workflow. The `main`→`release` workflow described here is the current source of truth.
+
 ### Commit Messages
 
 Use conventional commit format:
