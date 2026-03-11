@@ -888,11 +888,11 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  // Shell jobs execute directly — no agent needed
-  if (autonomousJobs.isShellJob(job)) {
+  // Shell and script jobs execute directly — no agent needed
+  if (autonomousJobs.isShellJob(job) || job.type === 'script') {
     const result = await autonomousJobs.executeShellJob(job).catch(err => ({
       success: false,
-      exitCode: Number(err.message.match(/exited with code (\d+)/)?.[1] ?? 1),
+      exitCode: err.exitCode ?? 1,
       output: err.message
     }));
     return res.json({ success: result.success !== false, type: 'shell', ...result });

@@ -90,8 +90,11 @@ async function agentDataCleanup() {
     const info = await stat(entryPath).catch(() => null)
     if (!info?.isDirectory()) continue
     if (info.mtimeMs < cutoff) {
-      await rm(entryPath, { recursive: true, force: true })
-      cleaned++
+      const removed = await rm(entryPath, { recursive: true, force: true }).then(() => true, (err) => {
+        console.warn(`⚠️ Failed to clean agent dir ${entry}: ${err.message}`)
+        return false
+      })
+      if (removed) cleaned++
     }
   }
 
@@ -389,6 +392,8 @@ Phase 4 — Report:
   },
 ]
 
+let migrationComplete = false
+
 /**
  * Load jobs from disk
  * @returns {Promise<Object>} Jobs data
@@ -399,7 +404,10 @@ async function loadJobs() {
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
     const initial = createDefaultJobsData()
-    await migrateScriptsState(initial)
+    if (!migrationComplete) {
+      await migrateScriptsState(initial)
+      migrationComplete = true
+    }
     await saveJobs(initial)
     return initial
   }
@@ -407,9 +415,14 @@ async function loadJobs() {
   // Merge with defaults to ensure all default jobs exist
   const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
-  const migrated = await migrateScriptsState(merged)
-  // Only persist if mergeWithDefaults added new default jobs (migration saves its own state)
-  if (!migrated && merged.jobs.length !== jobCountBefore) {
+  if (!migrationComplete) {
+    const migrated = await migrateScriptsState(merged)
+    migrationComplete = true
+    // Only persist if mergeWithDefaults added new default jobs (migration saves its own state)
+    if (!migrated && merged.jobs.length !== jobCountBefore) {
+      await saveJobs(merged)
+    }
+  } else if (merged.jobs.length !== jobCountBefore) {
     await saveJobs(merged)
   }
   return merged
@@ -1154,10 +1167,14 @@ async function executeShellJob(job) {
           await recordJobExecution(job.id)
         }
         persistTimeout().then(() => {
-          reject(new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`))
+          const err = new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`)
+          err.exitCode = -1
+          reject(err)
         }).catch((persistErr) => {
           console.error(`❌ Shell job ${job.name} failed to persist timeout state: ${persistErr.message}`)
-          reject(new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`))
+          const err = new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`)
+          err.exitCode = -1
+          reject(err)
         })
         return
       }
@@ -1189,7 +1206,9 @@ async function executeShellJob(job) {
         if (code !== 0) {
           console.error(`❌ Shell job failed: ${job.name} (exit ${code})`)
           cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
-          reject(new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`))
+          const err = new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`)
+          err.exitCode = code
+          reject(err)
           return
         }
 
