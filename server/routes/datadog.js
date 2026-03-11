@@ -30,7 +30,7 @@ router.get('/instances', async (req, res, next) => {
 
     const sanitized = {
       instances: Object.fromEntries(
-        Object.entries(config.instances).map(([id, instance]) => [id, sanitizeInstance(instance)])
+        Object.entries(config.instances ?? {}).map(([id, instance]) => [id, sanitizeInstance(instance)])
       )
     };
 

@@ -84,10 +84,10 @@ export async function getTrainingStats(days = 30) {
     let checkDate = allDates.includes(today) ? today : allDates.includes(yesterday) ? yesterday : null;
     if (checkDate) {
       currentStreak = 1;
-      let d = new Date(checkDate);
+      let ts = new Date(checkDate + 'T00:00:00Z').getTime();
       while (true) {
-        d.setDate(d.getDate() - 1);
-        const prev = d.toISOString().split('T')[0];
+        ts -= 86400000;
+        const prev = new Date(ts).toISOString().split('T')[0];
         if (allDates.includes(prev)) {
           currentStreak++;
         } else {
@@ -121,5 +121,6 @@ export async function getTrainingStats(days = 30) {
  */
 export async function getTrainingEntries(limit = 20) {
   const data = await loadTrainingLog();
+  if (!limit) return data.entries.slice().reverse();
   return data.entries.slice(-limit).reverse();
 }

@@ -4,7 +4,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
-import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/messageTokenExtractor.js';
+import { getToken, getTokenStatus, clearTokenCache } from '../services/messageTokenExtractor.js';
 
 const router = express.Router();
 

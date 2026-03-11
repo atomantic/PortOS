@@ -129,6 +129,10 @@ export async function syncAccount(accountId, io, options = {}) {
       throw new Error(`Unsupported calendar account type: ${account.type}`);
     }
 
+    // syncOutlookCalendarApi returns null when token is unavailable — treat as no-op
+    if (providerResult === null) {
+      return { newEvents: 0, pruned: 0, total: cache.events.length, status: 'skipped' };
+    }
     const newEvents = Array.isArray(providerResult) ? providerResult : providerResult?.events ?? [];
     const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
 

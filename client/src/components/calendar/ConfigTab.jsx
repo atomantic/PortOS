@@ -75,7 +75,6 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
               >
                 <option value="outlook-calendar">Outlook Calendar (API)</option>
-                <option value="gmail-calendar">Google Calendar (API)</option>
               </select>
             </div>
             <div>
