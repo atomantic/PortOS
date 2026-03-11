@@ -419,12 +419,17 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     if (existsSync(join(subDir, 'package.json'))) {
       const label = sub || 'root';
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
+      const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
         const child = spawn('npm', ['install'], { cwd: subDir, shell: false, windowsHide: true });
         let stderr = '';
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) { settled = true; child.kill('SIGTERM'); resolve({ success: false, stderr: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
+        }, INSTALL_TIMEOUT_MS);
         child.stderr.on('data', d => { stderr += d; });
-        child.on('close', code => resolve({ success: code === 0, stderr: stderr.trim() }));
-        child.on('error', err => resolve({ success: false, stderr: err.message }));
+        child.on('close', code => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: code === 0, stderr: stderr.trim() }); } });
+        child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, stderr: err.message }); } });
       });
       if (!installResult.success) {
         await logAction('build', app.id, app.name, { buildCommand, step: `npm install (${label})` }, false);

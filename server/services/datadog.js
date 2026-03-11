@@ -47,6 +47,7 @@ export async function saveInstances(config) {
 export async function upsertInstance(instanceId, instanceData) {
   validateSite(instanceData.site);
   const config = await getInstances();
+  if (!config.instances) config.instances = {};
 
   const existing = config.instances[instanceId];
 

@@ -13,6 +13,11 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const [refreshing, setRefreshing] = useState(false);
   const [displayedMessage, setDisplayedMessage] = useState(message);
 
+  // Sync displayedMessage when the message prop changes (e.g., selecting a different message)
+  useEffect(() => {
+    setDisplayedMessage(message);
+  }, [message]);
+
   const account = accounts.find(a => a.id === message.accountId) || accounts[0];
 
   // Load thread messages if this message is part of a thread
