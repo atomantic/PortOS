@@ -348,4 +348,16 @@ describe('scoreDrill', () => {
     expect(recomputed[1].correct).toBe(false);
     expect(recomputed[1].answered).toBe(null);
   });
+
+  it('treats empty and whitespace string answered as unanswered', () => {
+    const questions = [
+      { prompt: '5 x 3', answered: '', responseMs: 1000 },
+      { prompt: '7 x 4', answered: '  ', responseMs: 1500 }
+    ];
+    const { questions: recomputed } = scoreDrill('multiplication', questions, 60000);
+    expect(recomputed[0].answered).toBe(null);
+    expect(recomputed[0].correct).toBe(false);
+    expect(recomputed[1].answered).toBe(null);
+    expect(recomputed[1].correct).toBe(false);
+  });
 });

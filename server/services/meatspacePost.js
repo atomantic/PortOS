@@ -309,9 +309,16 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   // Recompute expected from the prompt server-side — never trust client-provided expected
   const recomputed = questions.map(q => {
     const expected = computeExpectedFromPrompt(q.prompt);
-    // Coerce answered to number for math drills (handles string "42" → 42, NaN → null)
-    const rawNum = q.answered != null ? Number(q.answered) : null;
-    const answered = (rawNum !== null && isNaN(rawNum)) ? null : rawNum;
+    // Coerce answered to number: empty/whitespace → null, NaN → null, "42" → 42
+    let answered = null;
+    if (q.answered != null) {
+      if (typeof q.answered === 'string' && q.answered.trim() === '') {
+        answered = null;
+      } else {
+        const rawNum = Number(q.answered);
+        answered = Number.isNaN(rawNum) ? null : rawNum;
+      }
+    }
     let correct;
     if (expected == null || answered == null || isNaN(answered)) {
       correct = false;
