@@ -395,39 +395,39 @@ Phase 4 — Report:
 let migrationComplete = false
 
 /**
- * Load jobs from disk
- * @returns {Promise<Object>} Jobs data
+ * Initialize jobs — called once at startup. Handles migration and default merging.
  */
-async function loadJobs() {
+async function initJobs() {
   await ensureDir(DATA_DIR)
 
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
     const initial = createDefaultJobsData()
-    if (!migrationComplete) {
-      await migrateScriptsState(initial)
-      migrationComplete = true
-    }
+    await migrateScriptsState(initial)
     await saveJobs(initial)
+    migrationComplete = true
     return initial
   }
 
-  // Merge with defaults to ensure all default jobs exist.
-  // Write-on-read only occurs when new defaults are added (deploy-time, not runtime).
-  // Safe for single-instance PortOS — no concurrent write concern.
   const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
-  if (!migrationComplete) {
-    const migrated = await migrateScriptsState(merged)
-    migrationComplete = true
-    // Only persist if mergeWithDefaults added new default jobs (migration saves its own state)
-    if (!migrated && merged.jobs.length !== jobCountBefore) {
-      await saveJobs(merged)
-    }
-  } else if (merged.jobs.length !== jobCountBefore) {
+  const migrated = await migrateScriptsState(merged)
+  migrationComplete = true
+  if (!migrated && merged.jobs.length !== jobCountBefore) {
     await saveJobs(merged)
   }
   return merged
+}
+
+/**
+ * Load jobs from disk (pure read, no writes)
+ * @returns {Promise<Object>} Jobs data
+ */
+async function loadJobs() {
+  if (!migrationComplete) return initJobs()
+  const loaded = await readJSONFile(JOBS_FILE, null)
+  if (!loaded) return createDefaultJobsData()
+  return mergeWithDefaults(loaded)
 }
 
 /**

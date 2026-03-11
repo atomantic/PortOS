@@ -27,19 +27,22 @@ function parseCommandArgs(str) {
   const args = [];
   let current = '';
   let inQuote = null;
+  let hasQuote = false;
   for (const ch of str) {
     if (inQuote) {
       if (ch === inQuote) { inQuote = null; continue; }
       current += ch;
     } else if (ch === '"' || ch === "'") {
       inQuote = ch;
+      hasQuote = true;
     } else if (/\s/.test(ch)) {
-      if (current) { args.push(current); current = ''; }
+      if (current || hasQuote) { args.push(current); current = ''; hasQuote = false; }
     } else {
       current += ch;
     }
   }
-  if (current) args.push(current);
+  if (inQuote) return str.split(/\s+/); // fallback on unmatched quotes
+  if (current || hasQuote) args.push(current);
   return args;
 }
 
