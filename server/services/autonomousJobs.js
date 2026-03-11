@@ -412,7 +412,9 @@ async function loadJobs() {
     return initial
   }
 
-  // Merge with defaults to ensure all default jobs exist
+  // Merge with defaults to ensure all default jobs exist.
+  // Write-on-read only occurs when new defaults are added (deploy-time, not runtime).
+  // Safe for single-instance PortOS — no concurrent write concern.
   const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
   if (!migrationComplete) {
@@ -1144,11 +1146,20 @@ async function executeShellJob(job) {
       console.error(`⏰ Shell job timed out after ${timeoutMs}ms: ${job.name}`)
     }, timeoutMs)
 
+    const MAX_OUTPUT_BYTES = 512 * 1024 // 512KB buffer limit
     const outChunks = []
     const errChunks = []
+    let outBytes = 0
+    let errBytes = 0
 
-    child.stdout.on('data', (data) => { outChunks.push(data.toString()) })
-    child.stderr.on('data', (data) => { errChunks.push(data.toString()) })
+    child.stdout.on('data', (data) => {
+      const str = data.toString()
+      if (outBytes < MAX_OUTPUT_BYTES) { outChunks.push(str); outBytes += str.length }
+    })
+    child.stderr.on('data', (data) => {
+      const str = data.toString()
+      if (errBytes < MAX_OUTPUT_BYTES) { errChunks.push(str); errBytes += str.length }
+    })
 
     child.on('close', (rawCode, signal) => {
       const code = rawCode ?? (signal ? 128 : 1)

@@ -849,7 +849,7 @@ router.post('/jobs', asyncHandler(async (req, res) => {
   if (!name) {
     throw new ServerError('name is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (type === 'shell' && !command) {
+  if (type === 'shell' && !command?.trim()) {
     throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (type !== 'shell' && !promptTemplate) {
