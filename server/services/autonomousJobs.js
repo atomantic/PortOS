@@ -408,8 +408,8 @@ async function loadJobs() {
   const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
   const migrated = await migrateScriptsState(merged)
-  // Only persist if mergeWithDefaults added new jobs or migration occurred
-  if (merged.jobs.length !== jobCountBefore || migrated) {
+  // Only persist if mergeWithDefaults added new default jobs (migration saves its own state)
+  if (!migrated && merged.jobs.length !== jobCountBefore) {
     await saveJobs(merged)
   }
   return merged
@@ -1233,7 +1233,7 @@ async function executeShellJob(job) {
  * Check if a job is a shell command job
  */
 function isShellJob(job) {
-  return job.type === 'shell' && !!job.command
+  return job.type === 'shell'
 }
 
 /**
