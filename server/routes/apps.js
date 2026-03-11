@@ -263,10 +263,20 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
   }
 
   // Validate and sanitize taskMetadata to allowed agent-option keys only
-  if (taskMetadata !== undefined && taskMetadata !== null && (typeof taskMetadata !== 'object' || Array.isArray(taskMetadata))) {
-    throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
+  let sanitizedTaskMetadata;
+  if (taskMetadata === undefined) {
+    sanitizedTaskMetadata = undefined;
+  } else if (taskMetadata === null) {
+    sanitizedTaskMetadata = null;
+  } else {
+    if (typeof taskMetadata !== 'object' || Array.isArray(taskMetadata)) {
+      throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    sanitizedTaskMetadata = sanitizeTaskMetadata(taskMetadata);
+    if (sanitizedTaskMetadata === null) {
+      throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
-  const sanitizedTaskMetadata = taskMetadata === undefined ? undefined : sanitizeTaskMetadata(taskMetadata);
 
   // Validate interval against allowed values
   if (interval !== undefined) {

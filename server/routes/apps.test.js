@@ -11,6 +11,8 @@ vi.mock('../services/apps.js', () => ({
   updateApp: vi.fn(),
   deleteApp: vi.fn(),
   archiveApp: vi.fn(),
+  updateAppTaskTypeOverride: vi.fn(),
+  getAppTaskTypeOverrides: vi.fn(),
   notifyAppsChanged: vi.fn(),
   PORTOS_APP_ID: 'portos-default'
 }));
@@ -472,6 +474,70 @@ describe('Apps Routes', () => {
       appsService.getAppById.mockResolvedValue(mockApp);
 
       const response = await request(app).get('/api/apps/app-001/logs');
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('PUT /api/apps/:id/task-types/:taskType', () => {
+    it('should accept valid taskMetadata with allowed boolean keys', async () => {
+      appsService.updateAppTaskTypeOverride.mockResolvedValue({
+        id: 'app-001',
+        name: 'Test App',
+        taskTypeOverrides: { 'feature-ideas': { taskMetadata: { useWorktree: true } } }
+      });
+
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ taskMetadata: { useWorktree: true, simplify: false } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+    });
+
+    it('should accept taskMetadata: null to clear metadata', async () => {
+      appsService.updateAppTaskTypeOverride.mockResolvedValue({
+        id: 'app-001',
+        name: 'Test App',
+        taskTypeOverrides: {}
+      });
+
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ taskMetadata: null });
+
+      expect(response.status).toBe(200);
+    });
+
+    it('should reject taskMetadata that is an array', async () => {
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ taskMetadata: [1, 2, 3] });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should reject taskMetadata with only unknown keys', async () => {
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ taskMetadata: { unknownKey: true } });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('unrecognized');
+    });
+
+    it('should reject taskMetadata with non-boolean values for allowed keys', async () => {
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ taskMetadata: { useWorktree: 'yes' } });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 400 when no valid fields provided', async () => {
+      const response = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({});
 
       expect(response.status).toBe(400);
     });
