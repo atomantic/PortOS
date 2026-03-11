@@ -11,8 +11,8 @@ export const postTagsSchema = z.record(z.string().max(200));
 // expected and correct are optional — the server recomputes both via scoreDrill
 const questionResultSchema = z.object({
   prompt: z.string(),
-  expected: z.number().optional(),
-  answered: z.number().nullable(),
+  expected: z.union([z.number(), z.string()]).optional(),
+  answered: z.union([z.number(), z.string()]).nullable(),
   correct: z.boolean().optional(),
   responseMs: z.number().min(0)
 });

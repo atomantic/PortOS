@@ -128,14 +128,14 @@ export function usePostSession() {
     const q = currentDrill.questions?.[currentQuestionIndex];
     if (!q) return;
     const responseMs = Date.now() - questionStartRef.current;
-    const isTextAnswer = typeof q.expected === 'string' && isNaN(Number(q.expected));
+    const isTextAnswer = typeof q.expected === 'string';
 
     // For estimation drills, check within tolerance
     let correct;
     let answered;
     if (isTextAnswer) {
       answered = value;
-      correct = value !== null && value.toLowerCase().trim() === q.expected.toLowerCase().trim();
+      correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
     } else if (currentDrill.type === 'estimation') {
       answered = value === null ? null : Number(value);
       const tolerance = (currentDrill.config?.tolerancePct || 10) / 100;

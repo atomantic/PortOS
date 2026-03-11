@@ -92,7 +92,9 @@ export default function PostDrillRunner({ session }) {
   if (state !== 'drilling' || !currentDrill) return null;
 
   const question = currentDrill.questions[currentQuestionIndex];
-  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
+  const isTextDrill =
+    MEMORY_DRILL_TYPES.includes(currentDrill.type) &&
+    currentDrill.type !== 'memory-fill-blank';
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
   const progressPct = totalQuestions > 0 ? ((currentQuestionIndex + 1) / totalQuestions) * 100 : 0;
 
