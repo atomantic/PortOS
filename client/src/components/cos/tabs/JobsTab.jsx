@@ -457,8 +457,12 @@ export default function JobsTab() {
       return null;
     });
     if (result) {
-      const msg = result.type === 'shell' ? 'Shell job executed' : 'Job triggered — task queued';
-      toast.success(msg, { id: 'job-trigger' });
+      if (result.success === false) {
+        toast.error(`Job failed (exit ${result.exitCode ?? '?'})`, { id: 'job-trigger' });
+      } else {
+        const msg = result.type === 'shell' || result.type === 'script' ? 'Job executed successfully' : 'Job triggered — task queued';
+        toast.success(msg, { id: 'job-trigger' });
+      }
       fetchJobs();
     }
   };

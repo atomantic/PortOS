@@ -1150,7 +1150,8 @@ async function executeShellJob(job) {
     child.stdout.on('data', (data) => { outChunks.push(data.toString()) })
     child.stderr.on('data', (data) => { errChunks.push(data.toString()) })
 
-    child.on('close', (code) => {
+    child.on('close', (rawCode, signal) => {
+      const code = rawCode ?? (signal ? 128 : 1)
       clearTimeout(timer)
       if (killed) {
         const persistTimeout = async () => {
