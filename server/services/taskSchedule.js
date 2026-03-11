@@ -324,33 +324,42 @@ Use Playwright MCP to test the app at different viewport sizes:
 4. Fix CSS responsive classes as needed
 5. Test fixes and commit changes`,
 
-  'feature-ideas': `[Improvement: {appName}] Feature Review and Development
+  'feature-ideas': `[Improvement: {appName}] Implement a Feature Idea
 
-Evaluate existing features and consider new ones to make {appName} more useful:
+You are working in a git worktree on a feature branch. Your goal is to implement ONE feature and open a PR.
 
 Repository: {repoPath}
 
+## Research Phase
+
 1. Read GOALS.md from {repoPath} for context on the app's goals and priorities.
    If no GOALS.md exists, focus on general improvements.
-2. Review recent completed tasks and user feedback to understand patterns
-3. Assess current features:
-   - Are existing features working well toward our goals?
-   - Are there features that could be improved or refined?
-   - Are there features that are underperforming or causing friction?
+2. Read PLAN.md from {repoPath} for the current roadmap and planned work.
+3. Search for existing feature idea documents:
+   - Check .planning/ directory for feature specs, research docs, or FEATURES.md
+   - Check for any TODO.md, IDEAS.md, or similar feature tracking files
+4. Review recent completed tasks and user feedback to understand patterns
+5. Review recent git log to see what's been implemented recently
 
-4. Choose ONE action to take (in order of preference):
-   a) IMPROVE an existing feature that isn't meeting its potential
-   b) ADD a new high-impact feature
-   c) ARCHIVE a feature that is not helping our goals
+## Selection Phase
 
-5. Implement it:
+6. Choose ONE feature to implement that:
+   - Aligns with GOALS.md priorities
+   - Is NOT already planned in PLAN.md (avoid duplicating roadmap work)
+   - Is NOT already documented in existing feature idea files
+   - Is a small, self-contained improvement (completable in one session)
+   - Saves user time, improves the developer experience, or makes the app more useful
+
+## Implementation Phase
+
+7. Implement the feature:
    - Write clean, tested code
-   - Follow existing patterns
-   - Update relevant documentation
+   - Follow existing patterns in the codebase
+   - Run tests to ensure nothing is broken
 
-6. Commit with a clear description of the change and rationale
+8. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
 
-Think critically about what we have before adding more.`,
+9. Commit with a clear description of the feature and rationale`,
 
   'error-handling': `[Improvement: {appName}] Improve Error Handling
 
@@ -542,6 +551,12 @@ Repository: {repoPath}
 7. Summarize: apps checked, PRs reviewed (with links), PRs skipped (already reviewed)`
 };
 
+// Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
+// Only non-customized prompts (promptCustomized !== true) are upgraded.
+const PROMPT_VERSIONS = {
+  'feature-ideas': 2   // v2: implement feature in worktree+PR with /simplify, check GOALS/PLAN/FEATURES
+};
+
 // Unified default interval settings for all 15 task types
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
@@ -561,7 +576,7 @@ const DEFAULT_TASK_INTERVALS = {
   'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
   'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
-  'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null },
+  'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, simplify: true } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
@@ -709,12 +724,22 @@ export async function loadSchedule() {
     templates: loaded.templates || []
   };
 
-  // Populate prompts from defaults if they don't exist
+  // Populate prompts from defaults if missing, and auto-upgrade stale defaults
   let needsSave = false;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
     if (!config.prompt && DEFAULT_TASK_PROMPTS[taskType]) {
       config.prompt = DEFAULT_TASK_PROMPTS[taskType];
+      config.promptVersion = PROMPT_VERSIONS[taskType] || 1;
       needsSave = true;
+    } else if (PROMPT_VERSIONS[taskType] && !config.promptCustomized) {
+      // Auto-upgrade non-customized prompts when code version is newer
+      const storedVersion = config.promptVersion || 1;
+      if (storedVersion < PROMPT_VERSIONS[taskType]) {
+        emitLog('info', `Upgrading ${taskType} prompt v${storedVersion} → v${PROMPT_VERSIONS[taskType]}`, { taskType }, '📅 TaskSchedule');
+        config.prompt = DEFAULT_TASK_PROMPTS[taskType];
+        config.promptVersion = PROMPT_VERSIONS[taskType];
+        needsSave = true;
+      }
     }
   }
 
@@ -745,6 +770,12 @@ export async function updateTaskInterval(taskType, settings) {
 
   if (!schedule.tasks[taskType]) {
     schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null };
+  }
+
+  // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
+  // If user clears the prompt (null), remove the customized flag to resume defaults.
+  if ('prompt' in settings) {
+    settings.promptCustomized = settings.prompt != null;
   }
 
   schedule.tasks[taskType] = {
@@ -1107,7 +1138,8 @@ export async function getScheduleStatus() {
       if (override) {
         appOverrides[activeApps[i].id] = {
           enabled: override.enabled !== false,
-          interval: override.interval || null
+          interval: override.interval || null,
+          ...(override.taskMetadata && { taskMetadata: override.taskMetadata })
         };
       }
       if (!override || override.enabled !== false) {

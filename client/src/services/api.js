@@ -149,9 +149,9 @@ export const pullAndUpdateApp = (id) => request(`/apps/${id}/update`, { method: 
 export const buildApp = (id) => request(`/apps/${id}/build`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
-export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval } = {}) => request(`/apps/${id}/task-types/${taskType}`, {
+export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}) => request(`/apps/${id}/task-types/${taskType}`, {
   method: 'PUT',
-  body: JSON.stringify({ enabled, interval })
+  body: JSON.stringify({ enabled, interval, taskMetadata })
 });
 export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }) => request(`/apps/bulk-task-type/${taskType}`, {
   method: 'PUT',

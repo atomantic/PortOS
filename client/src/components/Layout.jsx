@@ -125,12 +125,12 @@ const navItems = [
       { to: '/cos/digest', label: 'Digest', icon: Calendar },
       { to: '/cos/gsd', label: 'GSD', icon: Compass },
       { to: '/cos/health', label: 'Health', icon: Activity },
-      { to: '/cos/jobs', label: 'Jobs', icon: Bot },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
       { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
       { to: '/cos/productivity', label: 'Streaks', icon: Flame },
+      { to: '/cos/jobs', label: 'System Tasks', icon: Bot },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText }
     ]
   },

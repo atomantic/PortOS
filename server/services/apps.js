@@ -320,7 +320,7 @@ export async function getAppTaskTypeInterval(appId, taskType) {
 /**
  * Update a task type override for a specific app (enable/disable + optional interval)
  */
-export async function updateAppTaskTypeOverride(id, taskType, { enabled, interval } = {}) {
+export async function updateAppTaskTypeOverride(id, taskType, { enabled, interval, taskMetadata } = {}) {
   const data = await loadApps();
   if (!data.apps[id]) return null;
 
@@ -333,9 +333,16 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   const updated = { ...existing };
   if (typeof enabled === 'boolean') updated.enabled = enabled;
   if (interval !== undefined) updated.interval = interval;
+  if (taskMetadata !== undefined) {
+    if (taskMetadata === null || Object.keys(taskMetadata).length === 0) {
+      delete updated.taskMetadata;
+    } else {
+      updated.taskMetadata = taskMetadata;
+    }
+  }
 
   // If override matches "inherit everything" defaults, remove the entry
-  if (updated.enabled !== false && !updated.interval) {
+  if (updated.enabled !== false && !updated.interval && !updated.taskMetadata) {
     delete overrides[taskType];
   } else {
     overrides[taskType] = updated;
