@@ -323,6 +323,28 @@ export default function ChiefOfStaff() {
     setTimeout(() => setSpeaking(false), 2000);
   };
 
+  const handleTaskUnblocked = (taskId) => {
+    setTasks(prev => {
+      if (!prev.user) return prev;
+      const blockedTask = prev.user.grouped?.blocked?.find(t => t.id === taskId);
+      const unblocked = blockedTask
+        ? { ...blockedTask, status: 'pending', metadata: { ...blockedTask.metadata, blocker: undefined } }
+        : null;
+      return {
+        ...prev,
+        user: {
+          ...prev.user,
+          tasks: prev.user.tasks?.map(t => t.id === taskId ? { ...t, status: 'pending', metadata: { ...t.metadata, blocker: undefined } } : t),
+          grouped: {
+            ...prev.user.grouped,
+            blocked: prev.user.grouped?.blocked?.filter(t => t.id !== taskId) || [],
+            pending: [...(prev.user.grouped?.pending || []), ...(unblocked ? [unblocked] : [])]
+          }
+        }
+      };
+    });
+  };
+
   const handleHealthCheck = async () => {
     setAgentState('investigating');
     setStatusMessage("Running system health check...");
@@ -735,7 +757,7 @@ export default function ChiefOfStaff() {
         </div>
 
         {/* Actionable Insights - priority items requiring attention */}
-        {activeTab === 'tasks' && <ActionableInsightsBanner />}
+        {activeTab === 'tasks' && <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} />}
 
         {/* Quick Summary - at-a-glance stats on tasks tab only */}
         {activeTab === 'tasks' && <QuickSummary />}

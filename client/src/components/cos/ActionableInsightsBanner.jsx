@@ -59,7 +59,7 @@ const PRIORITY_STYLES = {
   }
 };
 
-export default function ActionableInsightsBanner() {
+export default function ActionableInsightsBanner({ onTaskUnblocked }) {
   const [data, setData] = useState(null);
   const [dismissed, setDismissed] = useState([]);
   const [expanded, setExpanded] = useState({});
@@ -94,13 +94,27 @@ export default function ActionableInsightsBanner() {
   };
 
   const handleUnblockTask = async (taskId) => {
-    await api.updateCosTask(taskId, { status: 'pending' }).catch(err => {
+    const result = await api.updateCosTask(taskId, { status: 'pending' }).catch(err => {
       toast.error(err.message);
       return null;
     });
+    if (!result) return;
     toast.success('Task unblocked and moved to pending');
-    // Refresh insights to reflect change
-    await loadInsights();
+    // Optimistically remove the task from local banner state
+    setData(prev => {
+      if (!prev?.insights) return prev;
+      return {
+        ...prev,
+        insights: prev.insights.map(insight => {
+          if (insight.type !== 'blocked' || !insight.tasks) return insight;
+          const remaining = insight.tasks.filter(t => t.id !== taskId);
+          if (remaining.length === 0) return null;
+          return { ...insight, tasks: remaining, title: `${remaining.length} blocked task${remaining.length !== 1 ? 's' : ''} need attention` };
+        }).filter(Boolean)
+      };
+    });
+    // Notify parent to update task list reactively
+    onTaskUnblocked?.(taskId);
   };
 
   if (loading || !data) {
