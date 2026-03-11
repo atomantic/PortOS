@@ -18,6 +18,15 @@ import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
 const router = Router();
 
+/**
+ * Derive uiPort from apiPort when app has dev UI but no dedicated prod UI port
+ * (prod UI is served by the API server in these cases).
+ */
+function deriveUiPort(uiPort, apiPort, devUiPort) {
+  if (!uiPort && apiPort && devUiPort) return apiPort;
+  return uiPort;
+}
+
 /** Read and parse a JSON file, returning null on any failure (missing file, bad JSON, etc.) */
 const safeReadJson = (path) => readFile(path, 'utf-8').then(JSON.parse).catch(() => null);
 
@@ -98,11 +107,7 @@ router.get('/', asyncHandler(async (req, res) => {
       const devUiProc = processes.find(p => p.ports?.devUi);
       if (devUiProc) devUiPort = devUiProc.ports.devUi;
     }
-    // When app has API + Vite dev processes but no dedicated UI port,
-    // the prod UI is served by the API server
-    if (!uiPort && apiPort && devUiPort) {
-      uiPort = apiPort;
-    }
+    uiPort = deriveUiPort(uiPort, apiPort, devUiPort);
 
     return {
       ...app,
@@ -155,11 +160,7 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     const devUiProc = processes.find(p => p.ports?.devUi);
     if (devUiProc) devUiPort = devUiProc.ports.devUi;
   }
-  // When app has API + Vite dev processes but no dedicated UI port,
-  // the prod UI is served by the API server
-  if (!uiPort && apiPort && devUiPort) {
-    uiPort = apiPort;
-  }
+  uiPort = deriveUiPort(uiPort, apiPort, devUiPort);
 
   // Read version from app's package.json if available
   let appVersion = null;
@@ -675,11 +676,7 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     const devUiProc = processes.find(p => p.ports?.devUi);
     if (devUiProc) updates.devUiPort = devUiProc.ports.devUi;
 
-    // When app has API + Vite dev but no dedicated UI port,
-    // the prod UI is served by the API server
-    if (!updates.uiPort && updates.apiPort && (updates.devUiPort || app.devUiPort)) {
-      updates.uiPort = updates.apiPort;
-    }
+    updates.uiPort = deriveUiPort(updates.uiPort, updates.apiPort, updates.devUiPort || app.devUiPort);
   }
 
   // Only update if we have changes

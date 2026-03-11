@@ -855,8 +855,10 @@ router.post('/jobs', asyncHandler(async (req, res) => {
   if (type === 'shell' && !command?.trim()) {
     throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (type !== 'shell' && !promptTemplate) {
-    throw new ServerError('promptTemplate is required for agent jobs', { status: 400, code: 'VALIDATION_ERROR' });
+  if (!type || type === 'agent') {
+    if (!promptTemplate) {
+      throw new ServerError('promptTemplate is required for agent jobs', { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
 
   const job = await autonomousJobs.createJob({
