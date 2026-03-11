@@ -11,7 +11,7 @@ This directory contains detailed release notes for each version of PortOS.
 During development, all changelog entries are appended to `NEXT.md`. This file accumulates changes across multiple commits until a release is created.
 
 - During development, append changelog entries to `NEXT.md` under the appropriate section (Added, Changed, Fixed, Removed)
-- `/do:release` renames `NEXT.md` to `v{version}.md` and finalizes it with the version number and release date
+- `/do:release` (a Claude Code slash command skill) renames `NEXT.md` to `v{version}.md` and finalizes it with the version number and release date
 - Do NOT create versioned changelog files manually — `/do:release` handles that
 
 ### Versioned Files

@@ -107,7 +107,7 @@ port-error: #ef4444
 - **main**: Active development
 - **release**: Push `main` to `release` to trigger GitHub Release workflow
 - **Push pattern**: `git pull --rebase --autostash && git push`
-- **Changelog**: Append entries to `.changelog/NEXT.md` during development; `/do:release` finalizes it into a versioned file
+- **Changelog**: Append entries to `.changelog/NEXT.md` during development; `/do:release` (Claude Code slash command) finalizes it into a versioned file
 - **Versioning**: Version in `package.json` reflects the last release. Do not bump during development — `/do:release` handles version bumps
 - After each feature or bug fix, run `/simplify` and then commit and push code
 - If we have created enough commits to wrap up a feature or issue to warrant a production release, pull the latest main and release branches and then run `/do:release` from main
