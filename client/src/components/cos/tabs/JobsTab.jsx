@@ -457,7 +457,8 @@ export default function JobsTab() {
       return null;
     });
     if (result) {
-      toast.success('Job triggered — task queued', { id: 'job-trigger' });
+      const msg = result.type === 'shell' ? 'Shell job executed' : 'Job triggered — task queued';
+      toast.success(msg, { id: 'job-trigger' });
       fetchJobs();
     }
   };

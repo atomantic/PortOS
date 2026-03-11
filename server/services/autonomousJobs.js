@@ -1166,7 +1166,7 @@ async function executeShellJob(job) {
       const fullOutput = output + (error ? `\n[stderr]\n${error}` : '')
       const redactedOutput = redactOutput(fullOutput)
 
-      // Persist output/exit code and record execution, then resolve/reject
+      // Persist output/exit code and record execution in a single lock cycle
       const persist = async () => {
         await withLock(async () => {
           const data = await loadJobs()
@@ -1174,10 +1174,15 @@ async function executeShellJob(job) {
           if (j) {
             j.lastOutput = redactedOutput.substring(0, 10000)
             j.lastExitCode = code
+            j.lastRun = new Date().toISOString()
+            j.lastResult = code === 0 ? 'success' : 'failure'
+            j.runCount = (j.runCount || 0) + 1
+            j.updatedAt = j.lastRun
             await saveJobs(data)
+            console.log(`🤖 Shell job executed: ${j.name} (run #${j.runCount})`)
+            cosEvents.emit('jobs:executed', { id: job.id, runCount: j.runCount })
           }
         })
-        await recordJobExecution(job.id)
       }
 
       persist().then(() => {
