@@ -1083,6 +1083,11 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const blockedCount = blockedUser.length + blockedCos.length;
   if (blockedCount > 0) {
     const firstBlocked = blockedUser[0] || blockedCos[0];
+    const blockedTasks = [...blockedUser, ...blockedCos].map(t => ({
+      id: t.id,
+      description: t.description?.substring(0, 80) || 'Unknown task',
+      blocker: t.metadata?.blocker || null
+    }));
     insights.push({
       type: 'blocked',
       priority: 'high',
@@ -1090,7 +1095,8 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       title: `${blockedCount} blocked task${blockedCount > 1 ? 's' : ''}`,
       description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80) || 'Task is blocked',
       action: { label: 'Unblock', route: '/cos/tasks' },
-      count: blockedCount
+      count: blockedCount,
+      tasks: blockedTasks
     });
   }
 
