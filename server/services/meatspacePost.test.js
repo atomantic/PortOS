@@ -323,4 +323,29 @@ describe('scoreDrill', () => {
     const { questions: q5 } = scoreDrill('estimation', questions, 60000, { tolerancePct: 5 });
     expect(q5[0].correct).toBe(false);
   });
+
+  it('coerces string answered values to numbers', () => {
+    const questions = [
+      { prompt: '5 x 3', answered: '15', responseMs: 1000 },
+      { prompt: '7 x 4', answered: '28', responseMs: 1500 }
+    ];
+    const { questions: recomputed, score } = scoreDrill('multiplication', questions, 60000);
+    expect(recomputed[0].correct).toBe(true);
+    expect(recomputed[0].answered).toBe(15);
+    expect(recomputed[1].correct).toBe(true);
+    expect(recomputed[1].answered).toBe(28);
+    expect(score).toBeGreaterThanOrEqual(80);
+  });
+
+  it('treats non-numeric string answered as unanswered', () => {
+    const questions = [
+      { prompt: '5 x 3', answered: 'abc', responseMs: 1000 },
+      { prompt: '7 x 4', answered: 'xyz', responseMs: 1500 }
+    ];
+    const { questions: recomputed } = scoreDrill('multiplication', questions, 60000);
+    expect(recomputed[0].correct).toBe(false);
+    expect(recomputed[0].answered).toBe(null);
+    expect(recomputed[1].correct).toBe(false);
+    expect(recomputed[1].answered).toBe(null);
+  });
 });
