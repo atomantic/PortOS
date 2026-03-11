@@ -32,7 +32,7 @@ export async function createAccount(data) {
   accounts[id] = {
     id,
     name: data.name,
-    type: data.type, // outlook-calendar, gmail-calendar
+    type: data.type, // outlook-calendar
     email: data.email || '',
     enabled: true,
     syncConfig: {

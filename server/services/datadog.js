@@ -20,7 +20,7 @@ function validateSite(site) {
 }
 
 function sanitizeQueryValue(value) {
-  return value.replace(/"/g, '');
+  return String(value ?? '').replace(/"/g, '');
 }
 /**
  * Get DataDog instances configuration

@@ -48,13 +48,6 @@ export default function DrillTransition({ nextDrillType, drillIndex, drillCount,
     return () => clearTimeout(timer);
   }, [countdown, onContinue]);
 
-  // Show completed drill scores so far
-  const completedDomains = {};
-  for (const r of completedResults) {
-    const dk = DRILL_TO_DOMAIN[r.type];
-    if (dk) completedDomains[dk] = r.score;
-  }
-
   return (
     <div className="max-w-lg mx-auto space-y-8">
       {/* Completed domains summary */}

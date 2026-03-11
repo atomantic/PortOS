@@ -30,10 +30,9 @@ function normalizeDateTime(dateTimeStr, timeZone) {
   if (/[Zz]$/.test(dateTimeStr) || /[+-]\d{2}:\d{2}$/.test(dateTimeStr)) {
     return new Date(dateTimeStr).toISOString();
   }
-  // Bare datetime — assume UTC only when TimeZone says so (or is absent)
-  const isUtc = !timeZone || timeZone === 'UTC' || timeZone === 'tzone://Microsoft/Utc';
-  const suffix = isUtc ? 'Z' : '';
-  return new Date(dateTimeStr + suffix).toISOString();
+  // Bare datetime — always treat as UTC since Outlook Graph API returns UTC
+  // datetimes with a separate TimeZone field. We store the timeZone separately.
+  return new Date(dateTimeStr + 'Z').toISOString();
 }
 
 function mapAttendeeStatus(status) {
