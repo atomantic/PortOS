@@ -75,20 +75,20 @@ export async function getTrainingStats(days = 30) {
   }
 
   // Compute streaks (consecutive days of practice)
-  const allDates = [...new Set(entries.map(e => e.date))].sort();
+  const dateSet = new Set(entries.map(e => e.date));
   let currentStreak = 0;
-  if (allDates.length > 0) {
+  if (dateSet.size > 0) {
     const today = new Date().toISOString().split('T')[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
     // Count backwards from today/yesterday
-    let checkDate = allDates.includes(today) ? today : allDates.includes(yesterday) ? yesterday : null;
+    let checkDate = dateSet.has(today) ? today : dateSet.has(yesterday) ? yesterday : null;
     if (checkDate) {
       currentStreak = 1;
       let ts = new Date(checkDate + 'T00:00:00Z').getTime();
       while (true) {
         ts -= 86400000;
         const prev = new Date(ts).toISOString().split('T')[0];
-        if (allDates.includes(prev)) {
+        if (dateSet.has(prev)) {
           currentStreak++;
         } else {
           break;
@@ -96,6 +96,7 @@ export async function getTrainingStats(days = 30) {
       }
     }
   }
+  const activeDays = dateSet.size;
 
   // Summarize
   const summary = {};
@@ -110,6 +111,7 @@ export async function getTrainingStats(days = 30) {
 
   return {
     days,
+    activeDays,
     totalEntries: entries.length,
     currentStreak,
     byDrill: summary,

@@ -845,9 +845,12 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 router.post('/jobs', asyncHandler(async (req, res) => {
   const { name, description, category, type, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = req.body;
 
-  // Shell jobs require command, agent jobs require promptTemplate
+  const VALID_JOB_TYPES = ['agent', 'shell', 'script'];
   if (!name) {
     throw new ServerError('name is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (type && !VALID_JOB_TYPES.includes(type)) {
+    throw new ServerError(`Invalid job type: ${type}. Must be one of: ${VALID_JOB_TYPES.join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (type === 'shell' && !command?.trim()) {
     throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
