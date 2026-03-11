@@ -738,17 +738,8 @@ async function updateJob(jobId, updates) {
       updates.command = ''
     }
 
-    // Validate shell command if being updated (only for shell-type jobs)
-    const effectiveType = updates.type ?? job.type
-    if (effectiveType === 'shell' && updates.command !== undefined && updates.command !== '') {
-      const validation = validateCommand(updates.command)
-      if (!validation.valid) {
-        const err = new Error(`Invalid command: ${validation.error}`)
-        err.status = 400
-        throw err
-      }
-    }
     // If type is being changed away from shell, allow clearing the command
+    const effectiveType = updates.type ?? job.type
     if (effectiveType !== 'shell' && updates.command === '') {
       updates.command = null
     }
@@ -770,11 +761,19 @@ async function updateJob(jobId, updates) {
       job.intervalMs = resolveIntervalMs(updates.interval, updates.intervalMs)
     }
 
-    // Ensure shell jobs always have a non-empty command
-    if (job.type === 'shell' && !job.command) {
-      const err = new Error('Shell jobs require a non-empty command')
-      err.status = 400
-      throw err
+    // Validate shell jobs have a valid command after all fields are applied
+    if (job.type === 'shell') {
+      if (!job.command || !job.command.trim()) {
+        const err = new Error('Shell jobs require a non-empty command')
+        err.status = 400
+        throw err
+      }
+      const cmdValidation = validateCommand(job.command)
+      if (!cmdValidation.valid) {
+        const err = new Error(`Invalid command: ${cmdValidation.error}`)
+        err.status = 400
+        throw err
+      }
     }
 
     // Strip agent-specific triggerAction values from shell jobs
@@ -1114,7 +1113,8 @@ async function executeShellJob(job) {
 
   console.log(`🐚 Executing shell job: ${job.name}`)
 
-  const timeoutMs = job.timeout || 5 * 60 * 1000 // default 5 minutes
+  const SHELL_JOB_TIMEOUT_MS = 5 * 60 * 1000
+  const timeoutMs = SHELL_JOB_TIMEOUT_MS
 
   return new Promise((resolve, reject) => {
     let killed = false

@@ -20,6 +20,30 @@ export const ALLOWED_COMMANDS_SORTED = Array.from(ALLOWED_COMMANDS).sort();
 export const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
 
 /**
+ * Parse command string into args, respecting quoted strings.
+ * e.g. 'git commit -m "msg with spaces"' → ['git', 'commit', '-m', 'msg with spaces']
+ */
+function parseCommandArgs(str) {
+  const args = [];
+  let current = '';
+  let inQuote = null;
+  for (const ch of str) {
+    if (inQuote) {
+      if (ch === inQuote) { inQuote = null; continue; }
+      current += ch;
+    } else if (ch === '"' || ch === "'") {
+      inQuote = ch;
+    } else if (/\s/.test(ch)) {
+      if (current) { args.push(current); current = ''; }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) args.push(current);
+  return args;
+}
+
+/**
  * Validate a command against the allowlist.
  * Returns { valid, error?, baseCommand?, args? }
  */
@@ -32,7 +56,7 @@ export function validateCommand(command) {
   if (DANGEROUS_SHELL_CHARS.test(trimmed)) {
     return { valid: false, error: 'Command contains disallowed shell characters' };
   }
-  const parts = trimmed.split(/\s+/);
+  const parts = parseCommandArgs(trimmed);
   const baseCommand = parts[0];
   if (!ALLOWED_COMMANDS.has(baseCommand)) {
     return { valid: false, error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${ALLOWED_COMMANDS_SORTED.join(', ')}` };
