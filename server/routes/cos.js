@@ -888,14 +888,23 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  // Shell and script jobs execute directly — no agent needed
-  if (autonomousJobs.isShellJob(job) || job.type === 'script') {
+  // Shell jobs execute the command directly
+  if (autonomousJobs.isShellJob(job)) {
     const result = await autonomousJobs.executeShellJob(job).catch(err => ({
       success: false,
       exitCode: err.exitCode ?? 1,
       output: err.message
     }));
     return res.json({ success: result.success !== false, type: 'shell', ...result });
+  }
+
+  // Script jobs run their built-in handler directly
+  if (autonomousJobs.isScriptJob(job)) {
+    const result = await autonomousJobs.executeScriptJob(job).catch(err => ({
+      success: false,
+      error: err.message
+    }));
+    return res.json({ success: result.success !== false, type: 'script', ...result });
   }
 
   // Generate task and add to CoS internal task queue
