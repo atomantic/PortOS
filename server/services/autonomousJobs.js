@@ -392,10 +392,11 @@ Phase 4 — Report:
   },
 ]
 
-let migrationComplete = false
+let initPromise = null
 
 /**
  * Initialize jobs — called once at startup. Handles migration and default merging.
+ * Guarded by initPromise to prevent concurrent init from parallel requests.
  */
 async function initJobs() {
   await ensureDir(DATA_DIR)
@@ -405,14 +406,12 @@ async function initJobs() {
     const initial = createDefaultJobsData()
     await migrateScriptsState(initial)
     await saveJobs(initial)
-    migrationComplete = true
     return initial
   }
 
   const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
   const migrated = await migrateScriptsState(merged)
-  migrationComplete = true
   if (!migrated && merged.jobs.length !== jobCountBefore) {
     await saveJobs(merged)
   }
@@ -420,11 +419,15 @@ async function initJobs() {
 }
 
 /**
- * Load jobs from disk (pure read, no writes)
+ * Load jobs from disk. On first call, runs one-time init (migration + defaults).
+ * Subsequent calls are read-only with in-memory default merging.
  * @returns {Promise<Object>} Jobs data
  */
 async function loadJobs() {
-  if (!migrationComplete) return initJobs()
+  if (!initPromise) {
+    initPromise = initJobs()
+  }
+  await initPromise
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) return createDefaultJobsData()
   return mergeWithDefaults(loaded)
@@ -1153,12 +1156,10 @@ async function executeShellJob(job) {
     let errBytes = 0
 
     child.stdout.on('data', (data) => {
-      const str = data.toString()
-      if (outBytes < MAX_OUTPUT_BYTES) { outChunks.push(str); outBytes += str.length }
+      if (outBytes < MAX_OUTPUT_BYTES) { outChunks.push(data.toString()); outBytes += data.length }
     })
     child.stderr.on('data', (data) => {
-      const str = data.toString()
-      if (errBytes < MAX_OUTPUT_BYTES) { errChunks.push(str); errBytes += str.length }
+      if (errBytes < MAX_OUTPUT_BYTES) { errChunks.push(data.toString()); errBytes += data.length }
     })
 
     child.on('close', (rawCode, signal) => {
