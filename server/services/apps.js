@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
+import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { PORTS } from '../lib/ports.js';
 
 const DATA_DIR = PATHS.data;
@@ -334,10 +335,11 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   if (typeof enabled === 'boolean') updated.enabled = enabled;
   if (interval !== undefined) updated.interval = interval;
   if (taskMetadata !== undefined) {
-    if (taskMetadata === null || Object.keys(taskMetadata).length === 0) {
+    const sanitized = sanitizeTaskMetadata(taskMetadata);
+    if (!sanitized) {
       delete updated.taskMetadata;
     } else {
-      updated.taskMetadata = taskMetadata;
+      updated.taskMetadata = sanitized;
     }
   }
 

@@ -23,6 +23,7 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { generateTaskFromJob, recordJobExecution, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { formatDuration, safeJSONParse } from '../lib/fileUtils.js';
+import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
@@ -1531,9 +1532,10 @@ async function generateSelfImprovementTaskForType(taskType, state, taskDescripti
     selfImprovement: true
   };
 
-  // Apply task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
-  if (interval.taskMetadata) {
-    Object.assign(metadata, interval.taskMetadata);
+  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
+  const sanitizedMeta = sanitizeTaskMetadata(interval.taskMetadata);
+  if (sanitizedMeta) {
+    Object.assign(metadata, sanitizedMeta);
   }
 
   // Use configured model/provider if specified, otherwise use default
@@ -1914,6 +1916,19 @@ async function generateManagedAppImprovementTask(app, state) {
     comprehensiveImprovement: true
   };
 
+  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
+  const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
+  if (sanitizedGlobalMeta) {
+    Object.assign(metadata, sanitizedGlobalMeta);
+  }
+
+  // Apply sanitized per-app taskMetadata overrides (merge on top of global)
+  const appOverrides = await getAppTaskTypeOverrides(app.id);
+  const sanitizedAppMeta = sanitizeTaskMetadata(appOverrides[nextType]?.taskMetadata);
+  if (sanitizedAppMeta) {
+    Object.assign(metadata, sanitizedAppMeta);
+  }
+
   // Use configured model/provider if specified, otherwise use default
   if (interval.providerId) {
     metadata.providerId = interval.providerId;
@@ -1978,15 +1993,17 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
     comprehensiveImprovement: true
   };
 
-  // Apply task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
-  if (interval.taskMetadata) {
-    Object.assign(metadata, interval.taskMetadata);
+  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
+  const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
+  if (sanitizedGlobalMeta) {
+    Object.assign(metadata, sanitizedGlobalMeta);
   }
 
-  // Apply per-app taskMetadata overrides (merge on top of global)
+  // Apply sanitized per-app taskMetadata overrides (merge on top of global)
   const appOverrides = await getAppTaskTypeOverrides(app.id);
-  if (appOverrides[taskType]?.taskMetadata) {
-    Object.assign(metadata, appOverrides[taskType].taskMetadata);
+  const sanitizedAppMeta = sanitizeTaskMetadata(appOverrides[taskType]?.taskMetadata);
+  if (sanitizedAppMeta) {
+    Object.assign(metadata, sanitizedAppMeta);
   }
 
   // Use configured model/provider if specified, otherwise use default

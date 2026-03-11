@@ -10,7 +10,7 @@ import * as appUpdater from '../services/appUpdater.js';
 import * as cos from '../services/cos.js';
 import { logAction } from '../services/history.js';
 import { z } from 'zod';
-import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
+import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata } from '../lib/validation.js';
 import * as git from '../services/git.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
@@ -262,10 +262,11 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     throw new ServerError('enabled (boolean), interval (string|null), or taskMetadata (object|null) required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  // Validate taskMetadata shape
+  // Validate and sanitize taskMetadata to allowed agent-option keys only
   if (taskMetadata !== undefined && taskMetadata !== null && (typeof taskMetadata !== 'object' || Array.isArray(taskMetadata))) {
     throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  const sanitizedTaskMetadata = taskMetadata === undefined ? undefined : sanitizeTaskMetadata(taskMetadata);
 
   // Validate interval against allowed values
   if (interval !== undefined) {
@@ -275,7 +276,7 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     }
   }
 
-  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, taskMetadata });
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, taskMetadata: sanitizedTaskMetadata });
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }

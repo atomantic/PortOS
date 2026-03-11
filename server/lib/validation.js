@@ -536,3 +536,28 @@ export function validateRequest(schema, data) {
     context: { details: errors }
   });
 }
+
+// =============================================================================
+// TASK METADATA SANITIZATION
+// =============================================================================
+
+const ALLOWED_TASK_METADATA_KEYS = ['useWorktree', 'simplify'];
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Sanitize taskMetadata to only allowed agent-option keys with boolean values.
+ * Prevents prototype pollution and reserved metadata field overrides.
+ * Returns a clean plain object or null if input is empty/invalid.
+ */
+export function sanitizeTaskMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const clean = {};
+  let hasKeys = false;
+  for (const key of ALLOWED_TASK_METADATA_KEYS) {
+    if (key in raw && !DANGEROUS_KEYS.has(key) && typeof raw[key] === 'boolean') {
+      clean[key] = raw[key];
+      hasKeys = true;
+    }
+  }
+  return hasKeys ? clean : null;
+}
