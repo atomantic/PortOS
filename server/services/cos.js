@@ -976,8 +976,11 @@ export async function evaluateTasks() {
       }
 
       if (task && canSpawnTask(task)) {
-        tasksToSpawn.push(task);
-        trackSpawn(task);
+        const persisted = await addTask(task, 'internal', { raw: true });
+        if (!persisted?.duplicate) {
+          tasksToSpawn.push(task);
+          trackSpawn(task);
+        }
       }
     }
   }
@@ -3122,7 +3125,7 @@ export function isRunning() {
 /**
  * Add a new task to TASKS.md or COS-TASKS.md
  */
-export async function addTask(taskData, taskType = 'user') {
+export async function addTask(taskData, taskType = 'user', { raw = false } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -3147,36 +3150,42 @@ export async function addTask(taskData, taskType = 'user') {
     return { ...duplicate, duplicate: true };
   }
 
-  // Generate a unique ID if not provided
-  const id = taskData.id || `${taskType === 'user' ? 'task' : 'sys'}-${Date.now().toString(36)}`;
+  // When raw=true, use the pre-built task object directly (for on-demand/generated tasks)
+  let newTask;
+  if (raw) {
+    newTask = taskData;
+  } else {
+    // Generate a unique ID if not provided
+    const id = taskData.id || `${taskType === 'user' ? 'task' : 'sys'}-${Date.now().toString(36)}`;
 
-  // Build metadata object
-  const metadata = {};
-  if (taskData.context) metadata.context = taskData.context;
-  if (taskData.model) metadata.model = taskData.model;
-  if (taskData.provider) metadata.provider = taskData.provider;
-  if (taskData.app) metadata.app = taskData.app;
-  if (taskData.createJiraTicket) metadata.createJiraTicket = true;
-  if (taskData.useWorktree) metadata.useWorktree = true;
-  if (taskData.simplify) metadata.simplify = true;
-  if (taskData.reviewLoop) metadata.reviewLoop = true;
-  if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
-  if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
-  if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
-  if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
+    // Build metadata object
+    const metadata = {};
+    if (taskData.context) metadata.context = taskData.context;
+    if (taskData.model) metadata.model = taskData.model;
+    if (taskData.provider) metadata.provider = taskData.provider;
+    if (taskData.app) metadata.app = taskData.app;
+    if (taskData.createJiraTicket) metadata.createJiraTicket = true;
+    if (taskData.useWorktree) metadata.useWorktree = true;
+    if (taskData.simplify) metadata.simplify = true;
+    if (taskData.reviewLoop) metadata.reviewLoop = true;
+    if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
+    if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
+    if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
+    if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
 
-  // Create the new task
-  const newTask = {
-    id: id.startsWith('task-') || id.startsWith('sys-') ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
-    status: 'pending',
-    priority: (taskData.priority || 'MEDIUM').toUpperCase(),
-    priorityValue: PRIORITY_VALUES[taskData.priority?.toUpperCase()] || 2,
-    description: taskData.description,
-    metadata,
-    approvalRequired: taskType === 'internal' && taskData.approvalRequired,
-    autoApproved: taskType === 'internal' && !taskData.approvalRequired,
-    section: 'pending'
-  };
+    // Create the new task
+    newTask = {
+      id: id.startsWith('task-') || id.startsWith('sys-') ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
+      status: 'pending',
+      priority: (taskData.priority || 'MEDIUM').toUpperCase(),
+      priorityValue: PRIORITY_VALUES[taskData.priority?.toUpperCase()] || 2,
+      description: taskData.description,
+      metadata,
+      approvalRequired: taskType === 'internal' && taskData.approvalRequired,
+      autoApproved: taskType === 'internal' && !taskData.approvalRequired,
+      section: 'pending'
+    };
+  }
 
   // Add task to top or bottom based on position parameter
   if (taskData.position === 'top') {
@@ -3326,8 +3335,11 @@ async function dequeueNextTask() {
     }
 
     if (task && canSpawn(task)) {
-      cosEvents.emit('task:ready', task);
-      trackSpawn(task);
+      const persisted = await addTask(task, 'internal', { raw: true });
+      if (!persisted?.duplicate) {
+        cosEvents.emit('task:ready', task);
+        trackSpawn(task);
+      }
     }
   }
 
