@@ -325,22 +325,27 @@ export default function ChiefOfStaff() {
 
   const handleTaskUnblocked = (taskId) => {
     setTasks(prev => {
-      if (!prev.user) return prev;
-      const blockedTask = prev.user.grouped?.blocked?.find(t => t.id === taskId);
-      const unblocked = blockedTask
-        ? { ...blockedTask, status: 'pending', metadata: { ...blockedTask.metadata, blocker: undefined } }
-        : null;
+      const unblockSlice = (slice) => {
+        if (!slice) return slice;
+        const blockedTask = slice.grouped?.blocked?.find(t => t.id === taskId);
+        if (!blockedTask && !slice.tasks?.some(t => t.id === taskId)) return slice;
+        const unblocked = blockedTask
+          ? { ...blockedTask, status: 'pending', metadata: { ...blockedTask.metadata, blocker: undefined } }
+          : null;
+        return {
+          ...slice,
+          tasks: slice.tasks?.map(t => t.id === taskId ? { ...t, status: 'pending', metadata: { ...t.metadata, blocker: undefined } } : t),
+          grouped: {
+            ...slice.grouped,
+            blocked: slice.grouped?.blocked?.filter(t => t.id !== taskId) || [],
+            pending: [...(slice.grouped?.pending || []), ...(unblocked ? [unblocked] : [])]
+          }
+        };
+      };
       return {
         ...prev,
-        user: {
-          ...prev.user,
-          tasks: prev.user.tasks?.map(t => t.id === taskId ? { ...t, status: 'pending', metadata: { ...t.metadata, blocker: undefined } } : t),
-          grouped: {
-            ...prev.user.grouped,
-            blocked: prev.user.grouped?.blocked?.filter(t => t.id !== taskId) || [],
-            pending: [...(prev.user.grouped?.pending || []), ...(unblocked ? [unblocked] : [])]
-          }
-        }
+        user: unblockSlice(prev.user),
+        cos: unblockSlice(prev.cos)
       };
     });
   };

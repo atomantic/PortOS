@@ -1037,9 +1037,16 @@ router.post('/templates/:id/use', asyncHandler(async (req, res) => {
 // PUT /api/cos/templates/:id - Update a template
 router.put('/templates/:id', asyncHandler(async (req, res) => {
   const { name, icon, description, context, category, provider, model, app } = req.body;
-  const result = await taskTemplates.updateTemplate(req.params.id, {
-    name, icon, description, context, category, provider, model, app
-  });
+  const updates = {};
+  if (name !== undefined) updates.name = name;
+  if (icon !== undefined) updates.icon = icon;
+  if (description !== undefined) updates.description = description;
+  if (context !== undefined) updates.context = context;
+  if (category !== undefined) updates.category = category;
+  if (provider !== undefined) updates.provider = provider;
+  if (model !== undefined) updates.model = model;
+  if (app !== undefined) updates.app = app;
+  const result = await taskTemplates.updateTemplate(req.params.id, updates);
   if (result.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }

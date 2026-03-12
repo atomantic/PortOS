@@ -16,7 +16,7 @@ import { getInboxLogCounts } from './brainStorage.js';
 
 /**
  * Brain Review gate: skip if there are no needs_review inbox items
- * and no active ideas to process.
+ * and no items still classifying.
  */
 async function brainReviewGate() {
   const counts = await getInboxLogCounts();

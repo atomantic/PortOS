@@ -3753,6 +3753,10 @@ async function executeScheduledJob(jobId) {
     }
     if (!gateResult.shouldRun) {
       emitLog('debug', `Job ${job.name} gate skipped: ${gateResult.reason}`, { jobId, gate: gateResult });
+      // Update lastRun so the job schedules at the next interval rather than firing immediately
+      await recordJobExecution(jobId).catch(err =>
+        console.error(`❌ Failed to record gate-skip execution for ${jobId}: ${err.message}`)
+      );
       await registerSingleJobSchedule(jobId);
       return;
     }
