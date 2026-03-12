@@ -37,7 +37,8 @@ function formatTimeRemaining(ms) {
 function toggleMetadataField(metadata, field) {
   const current = metadata || {};
   const newMeta = { ...current, [field]: !current[field] };
-  return Object.keys(newMeta).length ? newMeta : null;
+  const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v));
+  return Object.keys(active).length ? active : null;
 }
 
 const AGENT_OPTIONS = [
