@@ -748,10 +748,18 @@ export async function loadSchedule() {
     return migrated;
   }
 
-  // v2: merge each task config with its default (shallow per-task) to backfill new top-level fields
+  // v2: merge each task config with its default to backfill new fields
+  // Deep-merge taskMetadata so new default keys are inherited unless explicitly overridden
   const mergedTasks = {};
   for (const taskType of Object.keys(DEFAULT_TASK_INTERVALS)) {
-    mergedTasks[taskType] = { ...DEFAULT_TASK_INTERVALS[taskType], ...(loaded.tasks?.[taskType] || {}) };
+    const defaultTask = DEFAULT_TASK_INTERVALS[taskType];
+    const loadedTask = loaded.tasks?.[taskType] || {};
+    const merged = { ...defaultTask, ...loadedTask };
+    // Deep-merge taskMetadata: preserve explicit null (clears metadata), otherwise merge defaults with stored
+    if (defaultTask.taskMetadata && loadedTask.taskMetadata !== null) {
+      merged.taskMetadata = { ...defaultTask.taskMetadata, ...(loadedTask.taskMetadata || {}) };
+    }
+    mergedTasks[taskType] = merged;
   }
   // Preserve any extra task types from loaded that aren't in defaults
   for (const taskType of Object.keys(loaded.tasks || {})) {

@@ -51,9 +51,9 @@ async function brainReviewGate() {
  * Registry of gate functions keyed by job ID.
  * Jobs without a gate entry always run (no precondition).
  */
-const GATES = {
+const GATES = Object.assign(Object.create(null), {
   'job-brain-review': brainReviewGate
-};
+});
 
 /**
  * Check whether a job should run by evaluating its gate function.
@@ -76,7 +76,7 @@ export async function checkJobGate(jobId) {
  * @returns {boolean}
  */
 export function hasGate(jobId) {
-  return jobId in GATES;
+  return Object.prototype.hasOwnProperty.call(GATES, jobId);
 }
 
 /**

@@ -73,8 +73,15 @@ function pickScheduleSettings(body) {
   for (const key of SCHEDULE_FIELDS) {
     if (body[key] !== undefined) settings[key] = body[key];
   }
-  if (settings.taskMetadata) {
-    settings.taskMetadata = sanitizeTaskMetadata(settings.taskMetadata);
+  if (settings.taskMetadata !== undefined && settings.taskMetadata !== null) {
+    if (typeof settings.taskMetadata !== 'object' || Array.isArray(settings.taskMetadata)) {
+      throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const sanitized = sanitizeTaskMetadata(settings.taskMetadata);
+    if (sanitized === null) {
+      throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.taskMetadata = sanitized;
   }
   return settings;
 }

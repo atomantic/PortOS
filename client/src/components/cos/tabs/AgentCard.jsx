@@ -42,8 +42,9 @@ function extractTaskType(description) {
 }
 
 // Pre-compiled regexes for normalizeDescriptionToMarkdown
-const RE_NUMBERED_LIST = /(?<=[.!?:]) (\d+)\. /g;
-const RE_DASH_LIST = /(?<=[.!?:]) - /g;
+// Avoid lookbehind to support older Safari/iOS runtimes
+const RE_NUMBERED_LIST = /([.!?:]) (\d+)\. /g;
+const RE_DASH_LIST = /([.!?:]) - /g;
 const RE_SECTION_LABELS = / (Expected output|Steps|Success criteria|Actionable focus|Focus|Suggestions?|Notes?|Context|Requirements?|Constraints?|Result|Output|Summary|Details)([: ])/gi;
 
 // Normalize raw task description text into markdown for readable rendering.
@@ -53,8 +54,8 @@ const RE_SECTION_LABELS = / (Expected output|Steps|Success criteria|Actionable f
 function normalizeDescriptionToMarkdown(text) {
   if (!text) return '';
   return text
-    .replace(RE_NUMBERED_LIST, '\n$1. ')
-    .replace(RE_DASH_LIST, '\n- ')
+    .replace(RE_NUMBERED_LIST, '$1\n$2. ')
+    .replace(RE_DASH_LIST, '$1\n- ')
     .replace(RE_SECTION_LABELS, '\n\n**$1**$2')
     .trim();
 }
