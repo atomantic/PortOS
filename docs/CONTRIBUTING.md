@@ -54,10 +54,12 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 ### Quick Reference
 
-1. Work on `dev` branch
-2. Push triggers CI → auto-bumps build number
-3. Create PR `dev` → `main` for releases
-4. Merge triggers release creation + version prep
+1. Work on `main` branch (or feature branches merged to `main`)
+2. PRs to `main` trigger CI tests
+3. Push `main` to `release` branch to trigger GitHub Release workflow
+4. Push pattern: `git pull --rebase --autostash && git push`
+
+> **Note:** Some older code or automation notes may still reference a `dev` branch workflow. The `main`→`release` workflow described here is the current source of truth.
 
 ### Commit Messages
 
