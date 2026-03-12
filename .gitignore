@@ -39,6 +39,7 @@ Thumbs.db
 
 # Claude worktrees
 .claude/worktrees/
+.claude/settings.local.json
 
 # Browser service node_modules (code is committed)
 browser/node_modules/

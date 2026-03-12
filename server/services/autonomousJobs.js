@@ -14,15 +14,17 @@
  * - Custom user-defined jobs
  */
 
-import { writeFile, readFile, rename } from 'fs/promises'
+import { writeFile, readFile, rename, readdir, stat, rm } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { existsSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { spawn } from 'child_process'
 import { cosEvents } from './cosEvents.js'
 import { DAY, ensureDir, HOUR, PATHS, readJSONFile } from '../lib/fileUtils.js'
 import { createMutex } from '../lib/asyncMutex.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
+import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../lib/commandSecurity.js'
 
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
@@ -67,9 +69,43 @@ function runMoltworldExploration() {
  * Registry of script handlers for jobs that execute functions directly
  * instead of spawning AI agents. Key is the scriptHandler name, value is the function.
  */
+/**
+ * Remove completed agent data directories older than 7 days.
+ */
+async function agentDataCleanup() {
+  const agentsDir = join(PATHS.cos, 'agents')
+  if (!existsSync(agentsDir)) return { cleaned: 0 }
+
+  const entries = await readdir(agentsDir)
+  const cutoff = Date.now() - 7 * DAY
+  let cleaned = 0
+
+  // Get active agent IDs so we never delete data for running agents
+  const { getActiveAgentIds } = await import('./subAgentSpawner.js')
+  const activeIds = new Set(getActiveAgentIds())
+
+  for (const entry of entries) {
+    if (activeIds.has(entry)) continue
+    const entryPath = join(agentsDir, entry)
+    const info = await stat(entryPath).catch(() => null)
+    if (!info?.isDirectory()) continue
+    if (info.mtimeMs < cutoff) {
+      const removed = await rm(entryPath, { recursive: true, force: true }).then(() => true, (err) => {
+        console.warn(`⚠️ Failed to clean agent dir ${entry}: ${err.message}`)
+        return false
+      })
+      if (removed) cleaned++
+    }
+  }
+
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} directories older than 7 days`)
+  return { cleaned }
+}
+
 const SCRIPT_HANDLERS = {
   'autobiography-prompt': autobiographyCheckAndPrompt,
-  'moltworld-exploration': runMoltworldExploration
+  'moltworld-exploration': runMoltworldExploration,
+  'agent-data-cleanup': agentDataCleanup
 }
 
 const __filename = fileURLToPath(import.meta.url)
@@ -86,6 +122,7 @@ const JOB_SKILL_MAP = {
   'job-daily-briefing': 'daily-briefing',
   'job-github-repo-maintenance': 'github-repo-maintenance',
   'job-brain-review': 'brain-review',
+  'job-datadog-error-monitor': 'datadog-error-monitor',
   'job-jira-sprint-manager': 'jira-sprint-manager',
   'job-autobiography-prompt': 'autobiography-prompt'
 }
@@ -263,6 +300,48 @@ Phase 3 — Report:
     updatedAt: null
   },
   {
+    id: 'job-datadog-error-monitor',
+    name: 'DataDog Error Monitor',
+    description: 'Check DataDog for new errors in configured apps, create tasks for new errors, and optionally create JIRA tickets.',
+    category: 'datadog-error-monitor',
+    interval: 'daily',
+    intervalMs: DAY,
+    scheduledTime: '08:00',
+    enabled: false,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    promptTemplate: `[Autonomous Job] DataDog Error Monitor
+
+You are acting as my Chief of Staff, monitoring DataDog for new application errors.
+
+Phase 1 — Discover:
+1. Call GET /api/apps to get all managed apps
+2. Filter for apps with datadog.enabled = true and datadog.instanceId + datadog.serviceName set
+3. Skip archived apps
+
+Phase 2 — Check Errors:
+4. For each DataDog-enabled app:
+   - Call POST /api/datadog/instances/:instanceId/search-errors with serviceName, environment, and fromTime (24h ago)
+   - Compare results against the error cache in /data/cos/datadog-errors.json
+   - Identify new errors (by fingerprint/message hash)
+
+Phase 3 — Act on New Errors:
+5. For each new error:
+   - Create a CoS task describing the error and the app it affects
+   - If the app also has jira.enabled = true, create a JIRA ticket for the error
+   - Update the error cache with the new error fingerprint
+
+Phase 4 — Report:
+6. Generate a summary report covering:
+   - Apps checked and error counts
+   - New errors found and tasks/tickets created
+   - Recurring errors that are increasing in frequency`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
     id: 'job-autobiography-prompt',
     name: 'Autobiography Story Prompt',
     description: 'Send a notification prompting the user to write a 5-minute autobiographical story based on a thematic prompt.',
@@ -278,25 +357,177 @@ Phase 3 — Report:
     createdAt: null,
     updatedAt: null
   },
+  {
+    id: 'job-system-health-check',
+    name: 'System Health Check',
+    description: 'Check PM2 process status.',
+    category: 'system-health',
+    interval: 'custom',
+    intervalMs: 15 * 60 * 1000,
+    enabled: true,
+    priority: 'LOW',
+    type: 'shell',
+    command: 'pm2 jlist',
+    triggerAction: 'log-only',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: 'job-agent-data-cleanup',
+    name: 'Agent Data Cleanup',
+    description: 'Remove completed agent data older than 7 days.',
+    category: 'agent-data-cleanup',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: true,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'agent-data-cleanup',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
 ]
 
+let initPromise = null
+
 /**
- * Load jobs from disk
- * @returns {Promise<Object>} Jobs data
+ * Initialize jobs — called once at startup. Handles migration and default merging.
+ * Guarded by initPromise to prevent concurrent init from parallel requests.
  */
-async function loadJobs() {
+async function initJobs() {
   await ensureDir(DATA_DIR)
 
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
     const initial = createDefaultJobsData()
+    await migrateScriptsState(initial)
     await saveJobs(initial)
     return initial
   }
 
-  // Merge with defaults to ensure all default jobs exist
+  const jobCountBefore = loaded.jobs.length
   const merged = mergeWithDefaults(loaded)
+  const migrated = await migrateScriptsState(merged)
+  if (!migrated && merged.jobs.length !== jobCountBefore) {
+    await saveJobs(merged)
+  }
   return merged
+}
+
+/**
+ * Load jobs from disk. On first call, runs one-time init (migration + defaults).
+ * Subsequent calls are read-only with in-memory default merging.
+ * @returns {Promise<Object>} Jobs data
+ */
+async function loadJobs() {
+  if (!initPromise) {
+    initPromise = initJobs()
+  }
+  await initPromise
+  const loaded = await readJSONFile(JOBS_FILE, null)
+  if (!loaded) return createDefaultJobsData()
+  return mergeWithDefaults(loaded)
+}
+
+/**
+ * Migrate scripts-state.json entries into jobs (one-time migration)
+ */
+async function migrateScriptsState(jobsData) {
+  const scriptsFile = join(DATA_DIR, 'scripts-state.json')
+  const raw = await readFile(scriptsFile, 'utf-8').catch(() => null)
+  if (!raw) return false
+
+  let scriptsState
+  try {
+    scriptsState = JSON.parse(raw)
+  } catch (err) {
+    console.warn(`⚠️ scripts-state.json is corrupted, skipping migration: ${err.message}`)
+    const failedSuffix = `.failed-${Date.now()}`
+    await rename(scriptsFile, scriptsFile + failedSuffix)
+    return false
+  }
+  const scripts = scriptsState.scripts ? Object.values(scriptsState.scripts) : []
+  if (scripts.length === 0) {
+    const migrateSuffix = `.migrated-${Date.now()}`
+    await rename(scriptsFile, scriptsFile + migrateSuffix)
+    return false
+  }
+
+  const now = new Date().toISOString()
+  const existingIds = new Set(jobsData.jobs.map(j => j.id))
+
+  // Map legacy schedule values to valid interval values
+  const VALID_INTERVALS = new Set(['hourly', 'every-2-hours', 'every-4-hours', 'every-8-hours', 'daily', 'weekly', 'biweekly', 'monthly', 'custom'])
+  const LEGACY_SCHEDULE_MAP = {
+    'every-5-min': 'hourly',
+    'every-10-min': 'hourly',
+    'every-15-min': 'hourly',
+    'every-30-min': 'hourly',
+    'every-hour': 'hourly',
+    'every-3-hours': 'every-4-hours',
+    'every-6-hours': 'every-8-hours',
+    'every-12-hours': 'daily',
+    'twice-daily': 'daily'
+  }
+  const mapLegacySchedule = (schedule, scriptName) => {
+    if (!schedule || schedule === 'on-demand' || schedule === 'startup') return 'daily'
+    if (VALID_INTERVALS.has(schedule)) return schedule
+    if (LEGACY_SCHEDULE_MAP[schedule]) {
+      console.log(`📦 Mapped legacy schedule '${schedule}' for '${scriptName}' to '${LEGACY_SCHEDULE_MAP[schedule]}'`)
+      return LEGACY_SCHEDULE_MAP[schedule]
+    }
+    console.warn(`⚠️ Legacy schedule '${schedule}' for script '${scriptName}' not recognized, defaulting to 'daily'`)
+    return 'daily'
+  }
+
+  for (const script of scripts) {
+    const jobId = `job-migrated-${script.id}`
+    if (existingIds.has(jobId)) continue
+
+    const mappedInterval = mapLegacySchedule(script.schedule, script.name)
+    if (script.cronExpression) {
+      console.warn(`⚠️ Legacy cron expression '${script.cronExpression}' for script '${script.name}' not supported by job scheduler, using interval '${mappedInterval}' instead`)
+    }
+    const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
+
+    // Validate command against allowlist — disable jobs with invalid commands
+    let commandValid = true
+    if (script.command) {
+      const cmdValidation = validateCommand(script.command)
+      if (!cmdValidation.valid) {
+        console.warn(`⚠️ Migrated script '${script.name}' has invalid command, disabling: ${cmdValidation.error}`)
+        commandValid = false
+      }
+    }
+
+    jobsData.jobs.push({
+      id: jobId,
+      name: script.name,
+      description: script.description || '',
+      category: 'migrated-script',
+      type: 'shell',
+      command: commandValid ? script.command : null,
+      interval: mappedInterval,
+      intervalMs: resolveIntervalMs(mappedInterval),
+      enabled: commandValid ? (isOnDemandOrStartup ? false : (script.enabled || false)) : false,
+      priority: script.triggerPriority || 'MEDIUM',
+      triggerAction: 'log-only',
+      lastRun: script.lastRun || null,
+      runCount: script.runCount || 0,
+      createdAt: script.createdAt || now,
+      updatedAt: now
+    })
+  }
+
+  await saveJobs(jobsData)
+  const migrateSuffix = `.migrated-${Date.now()}`
+  await rename(scriptsFile, scriptsFile + migrateSuffix)
+  console.log(`📦 Migrated ${scripts.length} scripts to jobs`)
+  return true
 }
 
 /**
@@ -319,6 +550,9 @@ function createDefaultJobsData() {
  * Merge loaded data with defaults (add any missing default jobs)
  */
 function mergeWithDefaults(loaded) {
+  // Migration: remove pr-reviewer job (moved to Schedule system)
+  loaded.jobs = loaded.jobs.filter(j => j.id !== 'job-pr-reviewer')
+
   const existingById = new Map(loaded.jobs.map(j => [j.id, j]))
   const now = new Date().toISOString()
 
@@ -450,11 +684,35 @@ async function createJob(jobData) {
     const data = await loadJobs()
     const now = new Date().toISOString()
 
+    // Validate shell command at creation time
+    if (jobData.type === 'shell') {
+      if (!jobData.command || !jobData.command.trim()) {
+        const err = new Error('Shell jobs require a non-empty command')
+        err.status = 400
+        throw err
+      }
+      const validation = validateCommand(jobData.command)
+      if (!validation.valid) {
+        const err = new Error(`Invalid command: ${validation.error}`)
+        err.status = 400
+        throw err
+      }
+    }
+
+    const jobType = jobData.type || 'agent'
+
+    // Strip agent-specific triggerAction values from shell jobs
+    const agentOnlyActions = ['spawn-agent', 'create-task']
+    const triggerAction = (jobType === 'shell' && agentOnlyActions.includes(jobData.triggerAction))
+      ? 'log-only'
+      : (jobData.triggerAction || null)
+
     const job = {
       id: jobData.id || `job-${uuidv4().slice(0, 8)}`,
       name: jobData.name,
       description: jobData.description || '',
       category: jobData.category || 'custom',
+      type: jobType,
       interval: jobData.interval || 'weekly',
       intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
       scheduledTime: jobData.scheduledTime || null,
@@ -463,6 +721,8 @@ async function createJob(jobData) {
       priority: jobData.priority || 'MEDIUM',
       autonomyLevel: jobData.autonomyLevel || 'manager',
       promptTemplate: jobData.promptTemplate || '',
+      command: jobData.command || null,
+      triggerAction,
       lastRun: null,
       runCount: 0,
       createdAt: now,
@@ -491,9 +751,21 @@ async function updateJob(jobId, updates) {
     const job = data.jobs.find(j => j.id === jobId)
     if (!job) return null
 
+    // Normalize falsy command values to empty string for consistent validation
+    if (updates.command !== undefined && !updates.command) {
+      updates.command = ''
+    }
+
+    // If type is being changed away from shell, allow clearing the command
+    const effectiveType = updates.type ?? job.type
+    if (effectiveType !== 'shell' && updates.command === '') {
+      updates.command = null
+    }
+
     const updatableFields = [
-      'name', 'description', 'category', 'interval', 'intervalMs',
-      'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate'
+      'name', 'description', 'category', 'type', 'interval', 'intervalMs',
+      'scheduledTime', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
+      'command', 'triggerAction'
     ]
 
     for (const field of updatableFields) {
@@ -505,6 +777,27 @@ async function updateJob(jobId, updates) {
     // Recalculate intervalMs if interval changed
     if (updates.interval) {
       job.intervalMs = resolveIntervalMs(updates.interval, updates.intervalMs)
+    }
+
+    // Validate shell jobs have a valid command after all fields are applied
+    if (job.type === 'shell') {
+      if (!job.command || !job.command.trim()) {
+        const err = new Error('Shell jobs require a non-empty command')
+        err.status = 400
+        throw err
+      }
+      const cmdValidation = validateCommand(job.command)
+      if (!cmdValidation.valid) {
+        const err = new Error(`Invalid command: ${cmdValidation.error}`)
+        err.status = 400
+        throw err
+      }
+    }
+
+    // Strip agent-specific triggerAction values from shell jobs
+    const agentOnlyActions = ['spawn-agent', 'create-task']
+    if (job.type === 'shell' && agentOnlyActions.includes(job.triggerAction)) {
+      job.triggerAction = 'log-only'
     }
 
     job.updatedAt = new Date().toISOString()
@@ -767,6 +1060,7 @@ async function getNextDueJob() {
 function resolveIntervalMs(interval, customMs) {
   switch (interval) {
     case 'hourly': return HOUR
+    case 'every-2-hours': return 2 * HOUR
     case 'every-4-hours': return 4 * HOUR
     case 'every-8-hours': return 8 * HOUR
     case 'daily': return DAY
@@ -783,6 +1077,7 @@ function resolveIntervalMs(interval, customMs) {
  */
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour', ms: HOUR },
+  { value: 'every-2-hours', label: 'Every 2 Hours', ms: 2 * HOUR },
   { value: 'every-4-hours', label: 'Every 4 Hours', ms: 4 * HOUR },
   { value: 'every-8-hours', label: 'Every 8 Hours', ms: 8 * HOUR },
   { value: 'daily', label: 'Daily', ms: DAY },
@@ -824,6 +1119,162 @@ async function executeScriptJob(job) {
   return result
 }
 
+
+/**
+ * Execute a shell job directly (no AI agent needed)
+ */
+async function executeShellJob(job) {
+  const validation = validateCommand(job.command)
+  if (!validation.valid) {
+    throw new Error(`Invalid shell command: ${validation.error}`)
+  }
+
+  console.log(`🐚 Executing shell job: ${job.name}`)
+
+  const SHELL_JOB_TIMEOUT_MS = 5 * 60 * 1000
+  const timeoutMs = SHELL_JOB_TIMEOUT_MS
+
+  return new Promise((resolve, reject) => {
+    let killed = false
+    const child = spawn(validation.baseCommand, validation.args || [], {
+      cwd: join(__dirname, '../../'),
+      shell: false,
+      windowsHide: true
+    })
+
+    const timer = setTimeout(() => {
+      if (child.exitCode !== null) return
+      killed = true
+      child.kill('SIGKILL')
+      console.error(`⏰ Shell job timed out after ${timeoutMs}ms: ${job.name}`)
+    }, timeoutMs)
+
+    const MAX_OUTPUT_BYTES = 512 * 1024 // 512KB buffer limit
+    const outChunks = []
+    const errChunks = []
+    let outBytes = 0
+    let errBytes = 0
+
+    child.stdout.on('data', (data) => {
+      if (outBytes < MAX_OUTPUT_BYTES) { outChunks.push(data.toString()); outBytes += data.length }
+    })
+    child.stderr.on('data', (data) => {
+      if (errBytes < MAX_OUTPUT_BYTES) { errChunks.push(data.toString()); errBytes += data.length }
+    })
+
+    child.on('close', (rawCode, signal) => {
+      const code = rawCode ?? (signal ? 128 : 1)
+      clearTimeout(timer)
+      if (killed) {
+        const persistTimeout = async () => {
+          await withLock(async () => {
+            const data = await loadJobs()
+            const j = data.jobs.find(x => x.id === job.id)
+            if (j) {
+              j.lastOutput = `Process killed after ${timeoutMs}ms timeout`
+              j.lastExitCode = -1
+              j.lastResult = 'timeout'
+              await saveJobs(data)
+            }
+          })
+          await recordJobExecution(job.id)
+        }
+        persistTimeout().then(() => {
+          const err = new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`)
+          err.exitCode = -1
+          reject(err)
+        }).catch((persistErr) => {
+          console.error(`❌ Shell job ${job.name} failed to persist timeout state: ${persistErr.message}`)
+          const err = new Error(`Shell job "${job.name}" timed out after ${timeoutMs}ms`)
+          err.exitCode = -1
+          reject(err)
+        })
+        return
+      }
+      const output = outChunks.join('')
+      const error = errChunks.join('')
+      const fullOutput = output + (error ? `\n[stderr]\n${error}` : '')
+      const redactedOutput = redactOutput(fullOutput)
+
+      // Persist output/exit code and record execution in a single lock cycle
+      const persist = async () => {
+        await withLock(async () => {
+          const data = await loadJobs()
+          const j = data.jobs.find(x => x.id === job.id)
+          if (j) {
+            j.lastOutput = redactedOutput.substring(0, 10000)
+            j.lastExitCode = code
+            j.lastRun = new Date().toISOString()
+            j.lastResult = code === 0 ? 'success' : 'failure'
+            j.runCount = (j.runCount || 0) + 1
+            j.updatedAt = j.lastRun
+            await saveJobs(data)
+            console.log(`🤖 Shell job executed: ${j.name} (run #${j.runCount})`)
+            cosEvents.emit('jobs:executed', { id: job.id, runCount: j.runCount })
+          }
+        })
+      }
+
+      persist().then(() => {
+        if (code !== 0) {
+          console.error(`❌ Shell job failed: ${job.name} (exit ${code})`)
+          cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+          const err = new Error(`Shell job "${job.name}" exited with code ${code}: ${redactedOutput.substring(0, 500)}`)
+          err.exitCode = code
+          reject(err)
+          return
+        }
+
+        console.log(`✅ Shell job completed: ${job.name} (exit ${code})`)
+        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
+        resolve({ success: true, exitCode: code, output: redactedOutput })
+      }).catch((persistErr) => {
+        console.error(`❌ Shell job ${job.name} failed to persist state: ${persistErr.message}`)
+        reject(persistErr)
+      })
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      console.error(`❌ Shell job ${job.name} error: ${err.message}`)
+      const persistError = async () => {
+        await withLock(async () => {
+          const data = await loadJobs()
+          const j = data.jobs.find(x => x.id === job.id)
+          if (j) {
+            j.lastOutput = err.message
+            j.lastExitCode = -1
+            j.lastRun = new Date().toISOString()
+            j.lastResult = 'error'
+            await saveJobs(data)
+          }
+        })
+        await recordJobExecution(job.id)
+      }
+      persistError().then(() => {
+        reject(new Error(`Shell job "${job.name}" spawn error: ${err.message}`))
+      }).catch((persistErr) => {
+        console.error(`❌ Shell job ${job.name} failed to persist error state: ${persistErr.message}`)
+        reject(new Error(`Shell job "${job.name}" spawn error: ${err.message}`))
+      })
+    })
+  })
+}
+
+/**
+ * Check if a job is a shell command job
+ */
+function isShellJob(job) {
+  return job.type === 'shell'
+}
+
+/**
+ * Get list of allowed commands for shell jobs
+ */
+function getAllowedCommands() {
+  return ALLOWED_COMMANDS_SORTED
+}
+
 export {
   getAllJobs,
   getJob,
@@ -846,5 +1297,9 @@ export {
   getJobEffectivePrompt,
   JOB_SKILL_MAP,
   isScriptJob,
-  executeScriptJob
+  executeScriptJob,
+  isShellJob,
+  executeShellJob,
+  getAllowedCommands,
+  validateCommand
 }

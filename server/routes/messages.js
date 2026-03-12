@@ -269,7 +269,7 @@ router.post('/drafts/:id/send', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const result = await messageSender.sendDraft(req.params.id, io);
   if (!result.success) {
-    return res.status(result.status).json({ code: result.code, error: result.error });
+    return res.status(result.status || 500).json({ code: result.code, error: result.error });
   }
   res.json(result);
 }));

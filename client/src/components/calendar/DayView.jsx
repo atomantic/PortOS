@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, RefreshCw, MapPin, Users } from 'lucide-react';
+import { ChevronLeft, ChevronRight, RefreshCw, MapPin } from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';

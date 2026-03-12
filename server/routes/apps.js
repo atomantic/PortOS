@@ -10,12 +10,22 @@ import * as appUpdater from '../services/appUpdater.js';
 import * as cos from '../services/cos.js';
 import { logAction } from '../services/history.js';
 import { z } from 'zod';
-import { validateRequest, appSchema, appUpdateSchema } from '../lib/validation.js';
+import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata } from '../lib/validation.js';
 import * as git from '../services/git.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 import { parseEcosystemFromPath } from '../services/streamingDetect.js';
 
 const router = Router();
+
+/**
+ * Derive uiPort from apiPort when app has dev UI but no dedicated prod UI port
+ * (prod UI is served by the API server in these cases).
+ */
+function deriveUiPort(uiPort, apiPort, devUiPort) {
+  if (!uiPort && apiPort && devUiPort) return apiPort;
+  return uiPort;
+}
 
 /** Read and parse a JSON file, returning null on any failure (missing file, bad JSON, etc.) */
 const safeReadJson = (path) => readFile(path, 'utf-8').then(JSON.parse).catch(() => null);
@@ -97,11 +107,7 @@ router.get('/', asyncHandler(async (req, res) => {
       const devUiProc = processes.find(p => p.ports?.devUi);
       if (devUiProc) devUiPort = devUiProc.ports.devUi;
     }
-    // When app has API + Vite dev processes but no dedicated UI port,
-    // the prod UI is served by the API server
-    if (!uiPort && apiPort && devUiPort) {
-      uiPort = apiPort;
-    }
+    uiPort = deriveUiPort(uiPort, apiPort, devUiPort);
 
     return {
       ...app,
@@ -154,11 +160,7 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     const devUiProc = processes.find(p => p.ports?.devUi);
     if (devUiProc) devUiPort = devUiProc.ports.devUi;
   }
-  // When app has API + Vite dev processes but no dedicated UI port,
-  // the prod UI is served by the API server
-  if (!uiPort && apiPort && devUiPort) {
-    uiPort = apiPort;
-  }
+  uiPort = deriveUiPort(uiPort, apiPort, devUiPort);
 
   // Read version from app's package.json if available
   let appVersion = null;
@@ -255,9 +257,25 @@ router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
 
 // PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
-  const { enabled, interval } = req.body;
-  if (typeof enabled !== 'boolean' && interval === undefined) {
-    throw new ServerError('enabled (boolean) or interval (string|null) required', { status: 400, code: 'VALIDATION_ERROR' });
+  const { enabled, interval, taskMetadata } = req.body;
+  if (typeof enabled !== 'boolean' && interval === undefined && taskMetadata === undefined) {
+    throw new ServerError('enabled (boolean), interval (string|null), or taskMetadata (object|null) required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  // Validate and sanitize taskMetadata to allowed agent-option keys only
+  let sanitizedTaskMetadata;
+  if (taskMetadata === undefined) {
+    sanitizedTaskMetadata = undefined;
+  } else if (taskMetadata === null) {
+    sanitizedTaskMetadata = null;
+  } else {
+    if (typeof taskMetadata !== 'object' || Array.isArray(taskMetadata)) {
+      throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    sanitizedTaskMetadata = sanitizeTaskMetadata(taskMetadata);
+    if (sanitizedTaskMetadata === null) {
+      throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
 
   // Validate interval against allowed values
@@ -268,7 +286,7 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     }
   }
 
-  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval });
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, taskMetadata: sanitizedTaskMetadata });
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -417,12 +435,17 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     if (existsSync(join(subDir, 'package.json'))) {
       const label = sub || 'root';
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
+      const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
         const child = spawn('npm', ['install'], { cwd: subDir, shell: false, windowsHide: true });
         let stderr = '';
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) { settled = true; child.kill('SIGTERM'); resolve({ success: false, stderr: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
+        }, INSTALL_TIMEOUT_MS);
         child.stderr.on('data', d => { stderr += d; });
-        child.on('close', code => resolve({ success: code === 0, stderr: stderr.trim() }));
-        child.on('error', err => resolve({ success: false, stderr: err.message }));
+        child.on('close', code => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: code === 0, stderr: stderr.trim() }); } });
+        child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, stderr: err.message }); } });
       });
       if (!installResult.success) {
         await logAction('build', app.id, app.name, { buildCommand, step: `npm install (${label})` }, false);
@@ -650,8 +673,8 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     const pkgPath = join(app.repoPath, 'package.json');
     const pkgContent = await readFile(pkgPath, 'utf-8').catch(() => null);
     if (pkgContent) {
-      const pkg = JSON.parse(pkgContent);
-      if (pkg.scripts?.build) updates.buildCommand = 'npm run build';
+      const pkg = safeJSONParse(pkgContent);
+      if (pkg?.scripts?.build) updates.buildCommand = 'npm run build';
     }
   }
 
@@ -674,11 +697,7 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     const devUiProc = processes.find(p => p.ports?.devUi);
     if (devUiProc) updates.devUiPort = devUiProc.ports.devUi;
 
-    // When app has API + Vite dev but no dedicated UI port,
-    // the prod UI is served by the API server
-    if (!updates.uiPort && updates.apiPort && (updates.devUiPort || app.devUiPort)) {
-      updates.uiPort = updates.apiPort;
-    }
+    updates.uiPort = deriveUiPort(updates.uiPort, updates.apiPort, updates.devUiPort || app.devUiPort);
   }
 
   // Only update if we have changes

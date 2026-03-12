@@ -7,7 +7,8 @@ import {
   runSchema,
   featureAgentSchema,
   featureAgentUpdateSchema,
-  validate
+  validate,
+  sanitizeTaskMetadata
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -425,6 +426,54 @@ describe('validation.js', () => {
       const result = validate(appSchema, data);
       expect(result.success).toBe(true);
       expect(result.data.type).toBe('express'); // default value
+    });
+  });
+
+  describe('sanitizeTaskMetadata', () => {
+    it('should return null for null/undefined/non-object input', () => {
+      expect(sanitizeTaskMetadata(null)).toBeNull();
+      expect(sanitizeTaskMetadata(undefined)).toBeNull();
+      expect(sanitizeTaskMetadata('string')).toBeNull();
+      expect(sanitizeTaskMetadata(42)).toBeNull();
+      expect(sanitizeTaskMetadata(true)).toBeNull();
+    });
+
+    it('should return null for arrays', () => {
+      expect(sanitizeTaskMetadata([1, 2, 3])).toBeNull();
+      expect(sanitizeTaskMetadata([])).toBeNull();
+    });
+
+    it('should return null for empty objects', () => {
+      expect(sanitizeTaskMetadata({})).toBeNull();
+    });
+
+    it('should accept allowed keys with boolean values', () => {
+      expect(sanitizeTaskMetadata({ useWorktree: true })).toEqual({ useWorktree: true });
+      expect(sanitizeTaskMetadata({ simplify: false })).toEqual({ simplify: false });
+      expect(sanitizeTaskMetadata({ useWorktree: true, simplify: false })).toEqual({ useWorktree: true, simplify: false });
+    });
+
+    it('should drop non-boolean values for allowed keys', () => {
+      expect(sanitizeTaskMetadata({ useWorktree: 'yes' })).toBeNull();
+      expect(sanitizeTaskMetadata({ simplify: 1 })).toBeNull();
+      expect(sanitizeTaskMetadata({ useWorktree: null })).toBeNull();
+    });
+
+    it('should drop unknown keys', () => {
+      expect(sanitizeTaskMetadata({ unknownKey: true })).toBeNull();
+      expect(sanitizeTaskMetadata({ useWorktree: true, foo: 'bar' })).toEqual({ useWorktree: true });
+    });
+
+    it('should reject prototype pollution keys', () => {
+      expect(sanitizeTaskMetadata({ __proto__: { malicious: true } })).toBeNull();
+      expect(sanitizeTaskMetadata({ constructor: true })).toBeNull();
+      expect(sanitizeTaskMetadata({ prototype: true })).toBeNull();
+    });
+
+    it('should not accept inherited properties', () => {
+      const proto = { useWorktree: true };
+      const obj = Object.create(proto);
+      expect(sanitizeTaskMetadata(obj)).toBeNull();
     });
   });
 });

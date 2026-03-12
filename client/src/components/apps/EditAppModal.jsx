@@ -25,22 +25,32 @@ export default function EditAppModal({ app, onClose, onSave }) {
     jiraLabels: (app.jira?.labels || []).join(', '),
     jiraAssignee: app.jira?.assignee || '',
     jiraEpicKey: app.jira?.epicKey || '',
-    jiraCreatePR: app.jira?.createPR !== false
+    jiraCreatePR: app.jira?.createPR !== false,
+    datadogEnabled: app.datadog?.enabled || false,
+    datadogInstanceId: app.datadog?.instanceId || '',
+    datadogServiceName: app.datadog?.serviceName || '',
+    datadogEnvironment: app.datadog?.environment || ''
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [jiraExpanded, setJiraExpanded] = useState(app.jira?.enabled || false);
   const [jiraInstances, setJiraInstances] = useState([]);
+  const [datadogExpanded, setDatadogExpanded] = useState(app.datadog?.enabled || false);
+  const [datadogInstances, setDatadogInstances] = useState([]);
   const [jiraProjects, setJiraProjects] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [projectSearch, setProjectSearch] = useState('');
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
 
   useEffect(() => {
-    api.getJiraInstances().then(data => {
-      const instances = data?.instances ? Object.values(data.instances) : [];
-      setJiraInstances(instances);
-    }).catch(() => setJiraInstances([]));
+    const toInstances = (data) => data?.instances ? Object.values(data.instances) : [];
+    Promise.all([
+      api.getJiraInstances().then(toInstances).catch(() => []),
+      api.getDatadogInstances().then(toInstances).catch(() => [])
+    ]).then(([jira, datadog]) => {
+      setJiraInstances(jira);
+      setDatadogInstances(datadog);
+    });
   }, []);
 
   useEffect(() => {
@@ -91,6 +101,12 @@ export default function EditAppModal({ app, onClose, onSave }) {
         assignee: formData.jiraAssignee || undefined,
         epicKey: formData.jiraEpicKey || undefined,
         createPR: formData.jiraCreatePR
+      } : { enabled: false },
+      datadog: formData.datadogEnabled ? {
+        enabled: true,
+        instanceId: formData.datadogInstanceId || undefined,
+        serviceName: formData.datadogServiceName || undefined,
+        environment: formData.datadogEnvironment || undefined
       } : { enabled: false }
     };
 
@@ -432,6 +448,85 @@ export default function EditAppModal({ app, onClose, onSave }) {
                           />
                           <span className="text-sm text-white">Create Pull Request on completion</span>
                         </label>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* DataDog Integration Section */}
+          <div className="border border-port-border rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setDatadogExpanded(prev => !prev)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-port-bg hover:bg-port-border/50 transition-colors"
+            >
+              <span className="text-sm font-medium text-gray-300">DataDog Integration</span>
+              <div className="flex items-center gap-2">
+                {formData.datadogEnabled && (
+                  <span className="text-xs px-2 py-0.5 bg-port-accent/20 text-port-accent rounded">Enabled</span>
+                )}
+                {datadogExpanded ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+              </div>
+            </button>
+
+            {datadogExpanded && (
+              <div className="p-4 space-y-3 border-t border-port-border">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.datadogEnabled}
+                    onChange={e => setFormData({ ...formData, datadogEnabled: e.target.checked })}
+                    className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                  />
+                  <span className="text-sm text-white">Enable DataDog Monitoring</span>
+                </label>
+
+                {formData.datadogEnabled && (
+                  <>
+                    {datadogInstances.length === 0 ? (
+                      <div className="p-3 bg-port-warning/10 border border-port-warning/30 rounded-lg text-sm text-port-warning">
+                        No DataDog instances configured. <Link to="/devtools/datadog" className="underline hover:text-white">Configure DataDog</Link> first.
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">DataDog Instance</label>
+                          <select
+                            value={formData.datadogInstanceId}
+                            onChange={e => setFormData({ ...formData, datadogInstanceId: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                          >
+                            <option value="">Select instance...</option>
+                            {datadogInstances.map(inst => (
+                              <option key={inst.id} value={inst.id}>{inst.name} ({inst.site})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Service Name</label>
+                          <input
+                            type="text"
+                            value={formData.datadogServiceName}
+                            onChange={e => setFormData({ ...formData, datadogServiceName: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                            placeholder="e.g., my-app-service"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Environment</label>
+                          <input
+                            type="text"
+                            value={formData.datadogEnvironment}
+                            onChange={e => setFormData({ ...formData, datadogEnvironment: e.target.value })}
+                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                            placeholder="e.g., production"
+                          />
+                        </div>
                       </>
                     )}
                   </>

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronLeft, Play, Check, X, SkipForward, RotateCcw, Target, ChevronDown } from 'lucide-react';
 import { submitMemoryPractice, getChunkMastery } from '../../../services/api';
 
@@ -419,19 +419,23 @@ export default function MemoryPractice({ item, onBack, onComplete }) {
     );
   }
 
-  // FILL-IN-THE-BLANK mode
+  // FILL-IN-THE-BLANK mode — compute blanks outside conditional to respect Rules of Hooks
+  const fillBlankLine = mode === 'fill-blank' ? lines[currentIdx] : null;
+  const fillBlankWords = fillBlankLine?.text.split(/\s+/) || [];
+  // Blank out ~40% of words — recompute when line changes
+  const blanks = useMemo(() => {
+    if (!fillBlankWords.length) return new Set();
+    const blankSet = new Set();
+    const count = Math.max(1, Math.floor(fillBlankWords.length * 0.4));
+    while (blankSet.size < count && blankSet.size < fillBlankWords.length) {
+      blankSet.add(Math.floor(Math.random() * fillBlankWords.length));
+    }
+    return blankSet;
+  }, [currentIdx, mode, fillBlankWords.length]);
+
   if (mode === 'fill-blank') {
-    const line = lines[currentIdx];
-    const words = line?.text.split(/\s+/) || [];
-    // Blank out ~40% of words
-    const [blanks] = useState(() => {
-      const blankSet = new Set();
-      const count = Math.max(1, Math.floor(words.length * 0.4));
-      while (blankSet.size < count && blankSet.size < words.length) {
-        blankSet.add(Math.floor(Math.random() * words.length));
-      }
-      return blankSet;
-    });
+    const line = fillBlankLine;
+    const words = fillBlankWords;
 
     const blankWords = [...blanks].sort((a, b) => a - b).map(i => words[i]?.replace(/[,.]$/, ''));
     const displayText = words.map((w, i) => blanks.has(i) ? '____' : w).join(' ');

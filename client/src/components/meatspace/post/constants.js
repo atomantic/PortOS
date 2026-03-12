@@ -1,5 +1,9 @@
 export const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
-export const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
+export const MEMORY_DRILL_TYPES = ['memory-sequence', 'memory-element-flash'];
+
+// Drill types valid elsewhere but not yet supported by the POST runner.
+// These use answers[] arrays instead of expected and need dedicated runners.
+export const POST_UNSUPPORTED_DRILL_TYPES = ['memory-fill-blank'];
 
 // Domain definitions for 5-minute balanced sessions
 export const DOMAINS = {
@@ -17,7 +21,7 @@ export const DOMAINS = {
     color: 'text-green-400',
     bgColor: 'bg-green-500/20',
     timeBudgetSec: 90,
-    drillTypes: ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'],
+    drillTypes: ['memory-sequence', 'memory-element-flash'],
   },
   wordplay: {
     label: 'Wordplay',

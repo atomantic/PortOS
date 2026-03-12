@@ -38,7 +38,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
   const [selectedActivity, setSelectedActivity] = useState('');
 
   useEffect(() => {
-    api.getActivities().then(setActivities);
+    api.getActivities().then(setActivities).catch(() => {});
   }, []);
 
   if (!goal) return null;

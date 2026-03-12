@@ -26,6 +26,7 @@ import {
   initSyncLog,
   getCurrentSeq,
   appendChange,
+  appendChanges,
   getChangesSince,
   compactLog
 } from './brainSyncLog.js';
@@ -120,6 +121,76 @@ describe('brainSyncLog', () => {
       expect(written.endsWith('\n')).toBe(true);
       const parsed = JSON.parse(written.trim());
       expect(parsed.op).toBe('delete');
+    });
+  });
+
+  describe('appendChanges', () => {
+    beforeEach(async () => {
+      existsSync.mockReturnValue(false);
+      mkdir.mockResolvedValue();
+      await initSyncLog();
+      existsSync.mockReturnValue(true);
+      appendFile.mockResolvedValue();
+    });
+
+    it('increments seq across all entries in the batch', async () => {
+      const entries = await appendChanges([
+        { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'inst-1' },
+        { op: 'update', type: 'ideas', id: 'i1', record: { title: 'B' }, originInstanceId: 'inst-1' },
+        { op: 'delete', type: 'projects', id: 'pr1', record: null, originInstanceId: 'inst-2' }
+      ]);
+
+      expect(entries).toHaveLength(3);
+      expect(entries[0].seq).toBe(1);
+      expect(entries[1].seq).toBe(2);
+      expect(entries[2].seq).toBe(3);
+      expect(getCurrentSeq()).toBe(3);
+    });
+
+    it('makes a single appendFile call for the entire batch', async () => {
+      await appendChanges([
+        { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'inst-1' },
+        { op: 'update', type: 'people', id: 'p2', record: { name: 'B' }, originInstanceId: 'inst-1' }
+      ]);
+
+      expect(appendFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes newline-separated JSON entries ending with newline', async () => {
+      await appendChanges([
+        { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'inst-1' },
+        { op: 'delete', type: 'ideas', id: 'i1', record: null, originInstanceId: 'inst-2' }
+      ]);
+
+      const written = appendFile.mock.calls[0][1];
+      expect(written.endsWith('\n')).toBe(true);
+      const lines = written.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0]).op).toBe('create');
+      expect(JSON.parse(lines[1]).op).toBe('delete');
+    });
+
+    it('returns empty array for empty input', async () => {
+      const entries = await appendChanges([]);
+
+      expect(entries).toEqual([]);
+      expect(appendFile).not.toHaveBeenCalled();
+    });
+
+    it('returns entries with correct shape', async () => {
+      const entries = await appendChanges([
+        { op: 'create', type: 'links', id: 'l1', record: { url: 'http://x' }, originInstanceId: 'peer-3' }
+      ]);
+
+      expect(entries[0]).toMatchObject({
+        seq: expect.any(Number),
+        op: 'create',
+        type: 'links',
+        id: 'l1',
+        record: { url: 'http://x' },
+        originInstanceId: 'peer-3',
+        ts: expect.any(String)
+      });
     });
   });
 

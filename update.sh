@@ -61,6 +61,26 @@ echo ""
 node scripts/setup-ghostty.js
 echo ""
 
+# Check for slash-do (optional, used by the PR Reviewer schedule task)
+if ! command -v slash-do >/dev/null 2>&1; then
+  echo "slash-do is not installed. It is used by the PR Reviewer schedule task."
+  if [ -t 0 ]; then
+    read -p "Install slash-do now? [y/N] " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      echo "Installing slash-do..."
+      if ! npm install -g slash-do@latest; then
+        echo "⚠️  Failed to install slash-do. Continuing without it."
+      fi
+    else
+      echo "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
+    fi
+  else
+    echo "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
+  fi
+  echo ""
+fi
+
 # Build UI assets for production serving
 echo "Building UI assets..."
 npm run build

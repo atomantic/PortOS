@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Loader } from 'lucide-react';
 import { getPostConfig, getPostSessions } from '../../../services/api';
 import { usePostSession } from '../../../hooks/usePostSession';
 import PostSessionLauncher from '../post/PostSessionLauncher';
@@ -79,7 +80,11 @@ export default function PostTab() {
 
   // When between drills, show transition (handled in switch/case below)
 
-  const isLlmDrill = session.currentDrill && LLM_DRILL_TYPES.includes(session.currentDrill.type);
+  // Use queued drill config type (always current) rather than currentDrill (stale during loading transitions)
+  const currentDrillConfig = session.drills[session.currentDrillIndex];
+  const isLlmDrill = currentDrillConfig
+    ? LLM_DRILL_TYPES.includes(currentDrillConfig.type)
+    : session.currentDrill && LLM_DRILL_TYPES.includes(session.currentDrill.type);
 
   // Show transition between drills
   if (session.state === 'between-drills' && view === 'running') {
@@ -100,8 +105,15 @@ export default function PostTab() {
 
   switch (view) {
     case 'running':
+      if (session.state === 'loading' && isLlmDrill) {
+        return (
+          <div className="flex flex-col items-center justify-center h-64 gap-3">
+            <Loader size={32} className="text-purple-400 animate-spin" />
+            <div className="text-gray-400">Processing {currentDrillConfig?.type ? currentDrillConfig.type.replace(/-/g, ' ') : 'drill'}...</div>
+          </div>
+        );
+      }
       if (isLlmDrill) {
-        const drillConfig = session.drills[session.currentDrillIndex];
         return (
           <PostLlmDrillRunner
             drill={session.currentDrill}
@@ -110,8 +122,8 @@ export default function PostTab() {
             drillCount={session.drillCount}
             onComplete={session.completeLlmDrill}
             isTraining={session.isTraining}
-            providerId={drillConfig?.providerId}
-            model={drillConfig?.model}
+            providerId={currentDrillConfig?.providerId}
+            model={currentDrillConfig?.model}
           />
         );
       }

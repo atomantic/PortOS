@@ -134,6 +134,69 @@ async function syncMemoryFromPeer(peer, cursor) {
 }
 
 /**
+ * Safely parse a value to BigInt for BIGSERIAL comparison.
+ * Returns 0n for invalid/empty/negative inputs.
+ */
+function safeBigInt(value) {
+  if (typeof value === 'bigint') return value >= 0n ? value : 0n;
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? BigInt(Math.trunc(value)) : 0n;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const parsed = BigInt(value.trim());
+    return parsed;
+  }
+  return 0n;
+}
+
+/**
+ * Detect and reset stale cursors when peer's sequence has been reset
+ * (e.g. database rebuild). Returns corrected cursor.
+ *
+ * Uses cached remoteSyncSeqs from periodic peer probing. If null (probe hasn't
+ * run yet or failed), we skip detection — a real reset will be caught on the
+ * next probe cycle. Stale probe data may trigger a conservative full re-sync
+ * (cursor reset to 0), which is safe since sync is idempotent (LWW dedup).
+ */
+function detectCursorReset(cursor, peer) {
+  const corrected = { ...cursor };
+  const remote = peer.remoteSyncSeqs;
+  if (!remote) return corrected;
+
+  // Brain: integer comparison
+  // Only check when peer reports a finite non-negative brainSeq (older peers may omit it)
+  const remoteBrainRaw = remote.brainSeq;
+  const hasNumericRemoteBrain = typeof remoteBrainRaw === 'number' &&
+    Number.isFinite(remoteBrainRaw) &&
+    remoteBrainRaw >= 0;
+  if (hasNumericRemoteBrain) {
+    const cursorBrain = corrected.brainSeq ?? 0;
+    if (cursorBrain > 0 && cursorBrain > remoteBrainRaw) {
+      console.log(`🔄 Brain cursor reset for ${peer.name}: cursor ${cursorBrain} > peer max ${remoteBrainRaw}`);
+      corrected.brainSeq = 0;
+    }
+  }
+
+  // Memory: BigInt comparison (BIGSERIAL can exceed Number.MAX_SAFE_INTEGER)
+  // Only check when peer reports a numeric memorySeq (null means non-Postgres peer)
+  const remoteMemRaw = remote.memorySeq;
+  const hasNumericRemoteMem = remoteMemRaw != null && (
+    typeof remoteMemRaw === 'bigint' ||
+    (typeof remoteMemRaw === 'number' && Number.isFinite(remoteMemRaw) && remoteMemRaw >= 0) ||
+    (typeof remoteMemRaw === 'string' && /^\d+$/.test(remoteMemRaw.trim()))
+  );
+  if (hasNumericRemoteMem) {
+    const cursorMemStr = corrected.memorySeq ?? '0';
+    const cursorMem = safeBigInt(cursorMemStr);
+    const peerMem = safeBigInt(remoteMemRaw);
+    if (cursorMem > 0n && cursorMem > peerMem) {
+      console.log(`🔄 Memory cursor reset for ${peer.name}: cursor ${cursorMemStr} > peer max ${String(remoteMemRaw)}`);
+      corrected.memorySeq = '0';
+    }
+  }
+
+  return corrected;
+}
+
+/**
  * Sync all data from a single peer
  */
 export async function syncWithPeer(peer) {
@@ -146,8 +209,10 @@ export async function syncWithPeer(peer) {
   syncingPeers.add(peerId);
 
   // Read cursor snapshot outside lock so network I/O doesn't block other peers
+  // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
   const cursor = await readCursors((cursors) => {
-    return { ...(cursors[peerId] || {}) };
+    const raw = { ...(cursors[peerId] || {}) };
+    return detectCursorReset(raw, peer);
   });
 
   try {

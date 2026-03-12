@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X } from 'lucide-react';
+import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour' },
+  { value: 'every-2-hours', label: 'Every 2 Hours' },
   { value: 'every-4-hours', label: 'Every 4 Hours' },
   { value: 'every-8-hours', label: 'Every 8 Hours' },
   { value: 'daily', label: 'Daily' },
@@ -21,6 +22,22 @@ const AUTONOMY_OPTIONS = [
   { value: 'yolo', label: 'YOLO', desc: 'Full autonomy, no guardrails' }
 ];
 
+const TRIGGER_ACTION_OPTIONS = [
+  { value: 'log-only', label: 'Log Only' },
+  { value: 'spawn-agent', label: 'Spawn Agent' },
+  { value: 'create-task', label: 'Create Task' }
+];
+
+const SHELL_TRIGGER_ACTIONS = new Set(['spawn-agent', 'create-task']);
+const SHELL_TRIGGER_ACTION_OPTIONS = TRIGGER_ACTION_OPTIONS.filter(
+  opt => !SHELL_TRIGGER_ACTIONS.has(opt.value)
+);
+
+const JOB_TYPE_OPTIONS = [
+  { value: 'agent', label: 'AI Agent' },
+  { value: 'shell', label: 'Shell Command' }
+];
+
 function formatTimeAgo(dateStr) {
   if (!dateStr) return 'Never';
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -35,7 +52,6 @@ function formatTimeAgo(dateStr) {
 function formatNextDue(lastRun, intervalMs, scheduledTime) {
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
   let nextDue = new Date(lastRun).getTime() + intervalMs;
-  // If there's a scheduledTime, adjust the next-due to that time of day
   if (scheduledTime) {
     const [hours, minutes] = scheduledTime.split(':').map(Number);
     const nextDate = new Date(nextDue);
@@ -52,27 +68,46 @@ function formatNextDue(lastRun, intervalMs, scheduledTime) {
   return `in ${mins}m`;
 }
 
+function getJobTypeLabel(job) {
+  if (job.type === 'shell') return 'Shell';
+  if (job.type === 'script') return 'Script';
+  return 'AI';
+}
+
 function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({});
 
+  const isShell = job.type === 'shell';
+  const isScript = job.type === 'script';
+
   const startEditing = () => {
-    setEditData({
+    const base = {
       name: job.name,
       description: job.description,
+      type: job.type || 'agent',
       interval: job.interval,
       scheduledTime: job.scheduledTime || '',
       priority: job.priority,
       autonomyLevel: job.autonomyLevel,
-      promptTemplate: job.promptTemplate
-    });
+      promptTemplate: job.promptTemplate || ''
+    };
+    // Always initialize shell fields so switching type to 'shell' during editing works
+    base.command = job.command || '';
+    base.triggerAction = job.triggerAction || 'log-only';
+    setEditData(base);
     setEditing(true);
     setExpanded(true);
   };
 
   const handleSave = async () => {
-    await api.updateCosJob(job.id, editData).catch(err => {
+    const payload = { ...editData };
+    if (payload.type !== 'shell' && payload.type !== 'script') {
+      payload.command = null;
+      payload.triggerAction = null;
+    }
+    await api.updateCosJob(job.id, payload).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -110,6 +145,13 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                 Due
               </span>
             )}
+            <span className={`px-1.5 py-0.5 text-xs rounded ${
+              isShell ? 'bg-emerald-500/20 text-emerald-400' :
+              isScript ? 'bg-purple-500/20 text-purple-400' :
+              'bg-port-bg text-gray-400'
+            }`}>
+              {getJobTypeLabel(job)}
+            </span>
             <span className="px-1.5 py-0.5 bg-port-bg text-gray-400 text-xs rounded">
               {job.category}
             </span>
@@ -127,6 +169,11 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
               </span>
             )}
             <span>Runs: {job.runCount || 0}</span>
+            {isShell && job.lastExitCode != null && (
+              <span className={job.lastExitCode === 0 ? 'text-port-success' : 'text-port-error'}>
+                Exit: {job.lastExitCode}
+              </span>
+            )}
           </div>
         </div>
 
@@ -176,6 +223,17 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
               />
               <div className="flex gap-3">
                 <select
+                  value={editData.type}
+                  onChange={e => setEditData(d => ({ ...d, type: e.target.value }))}
+                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  disabled={isScript}
+                >
+                  {JOB_TYPE_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                  {isScript && <option value="script">Script Handler</option>}
+                </select>
+                <select
                   value={editData.interval}
                   onChange={e => setEditData(d => ({ ...d, interval: e.target.value }))}
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -200,22 +258,49 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>
-                <select
-                  value={editData.autonomyLevel}
-                  onChange={e => setEditData(d => ({ ...d, autonomyLevel: e.target.value }))}
-                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                >
-                  {AUTONOMY_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
+                {editData.type !== 'shell' && (
+                  <select
+                    value={editData.autonomyLevel}
+                    onChange={e => setEditData(d => ({ ...d, autonomyLevel: e.target.value }))}
+                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  >
+                    {AUTONOMY_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                )}
               </div>
-              <textarea
-                value={editData.promptTemplate}
-                onChange={e => setEditData(d => ({ ...d, promptTemplate: e.target.value }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-40"
-                placeholder="Prompt template for the agent"
-              />
+              {editData.type === 'shell' ? (
+                <>
+                  <textarea
+                    value={editData.command}
+                    onChange={e => setEditData(d => ({ ...d, command: e.target.value }))}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
+                    placeholder="Shell command"
+                  />
+                  <select
+                    value={editData.triggerAction}
+                    onChange={e => setEditData(d => ({ ...d, triggerAction: e.target.value }))}
+                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  >
+                    {SHELL_TRIGGER_ACTION_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </>
+              ) : editData.type === 'script' ? (
+                <div className="space-y-1">
+                  <span className="text-xs text-gray-400">Legacy script command (read-only)</span>
+                  <pre className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-sm font-mono">{editData.command || 'No command'}</pre>
+                </div>
+              ) : (
+                <textarea
+                  value={editData.promptTemplate}
+                  onChange={e => setEditData(d => ({ ...d, promptTemplate: e.target.value }))}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-40"
+                  placeholder="Prompt template for the agent"
+                />
+              )}
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => setEditing(false)}
@@ -234,19 +319,38 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
           ) : (
             <>
               <p className="text-sm text-gray-400">{job.description}</p>
+              {isShell && job.command && (
+                <div className="flex items-center gap-2 text-xs">
+                  <Terminal size={12} className="text-emerald-400 shrink-0" />
+                  <code className="text-emerald-300 bg-port-bg px-2 py-1 rounded font-mono">{job.command}</code>
+                </div>
+              )}
               <div className="flex gap-4 text-xs text-gray-500">
                 <span>Priority: <span className="text-gray-300">{job.priority}</span></span>
-                <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>
-                <span>Created: <span className="text-gray-300">{new Date(job.createdAt).toLocaleDateString()}</span></span>
+                {!isShell && <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>}
+                {isShell && <span>Action: <span className="text-gray-300">{job.triggerAction || 'log-only'}</span></span>}
+                <span>Created: <span className="text-gray-300">{job.createdAt ? new Date(job.createdAt).toLocaleDateString() : '—'}</span></span>
               </div>
-              <details className="group">
-                <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">
-                  View prompt template
-                </summary>
-                <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
-                  {job.promptTemplate}
-                </pre>
-              </details>
+              {isShell && job.lastOutput && (
+                <details className="group">
+                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">
+                    Last output (exit {job.lastExitCode})
+                  </summary>
+                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                    {job.lastOutput}
+                  </pre>
+                </details>
+              )}
+              {!isShell && !isScript && (
+                <details className="group">
+                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">
+                    View prompt template
+                  </summary>
+                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                    {job.promptTemplate}
+                  </pre>
+                </details>
+              )}
               <div className="flex justify-end">
                 <button
                   onClick={() => onDelete(job.id)}
@@ -272,11 +376,14 @@ export default function JobsTab() {
     name: '',
     description: '',
     category: 'custom',
+    type: 'agent',
     interval: 'daily',
     scheduledTime: '',
     priority: 'MEDIUM',
     autonomyLevel: 'manager',
     promptTemplate: '',
+    command: '',
+    triggerAction: 'log-only',
     enabled: false
   });
 
@@ -295,25 +402,37 @@ export default function JobsTab() {
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
   const handleCreate = async () => {
-    if (!newJob.name.trim() || !newJob.promptTemplate.trim()) {
-      toast.error('Name and prompt template are required');
+    if (!newJob.name.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    if (newJob.type === 'shell' && !newJob.command.trim()) {
+      toast.error('Command is required for shell jobs');
+      return;
+    }
+    if (newJob.type !== 'shell' && !newJob.promptTemplate.trim()) {
+      toast.error('Prompt template is required for AI jobs');
       return;
     }
 
-    await api.createCosJob(newJob).catch(err => {
+    const created = await api.createCosJob(newJob).catch(err => {
       toast.error(err.message);
       return null;
     });
+    if (!created) return;
     toast.success('Job created');
     setNewJob({
       name: '',
       description: '',
       category: 'custom',
+      type: 'agent',
       interval: 'daily',
       scheduledTime: '',
       priority: 'MEDIUM',
       autonomyLevel: 'manager',
       promptTemplate: '',
+      command: '',
+      triggerAction: 'log-only',
       enabled: false
     });
     setShowCreate(false);
@@ -338,7 +457,12 @@ export default function JobsTab() {
       return null;
     });
     if (result) {
-      toast.success('Job triggered — task queued', { id: 'job-trigger' });
+      if (result.success === false) {
+        toast.error(`Job failed (exit ${result.exitCode ?? '?'})`, { id: 'job-trigger' });
+      } else {
+        const msg = result.type === 'shell' || result.type === 'script' ? 'Job executed successfully' : 'Job triggered — task queued';
+        toast.success(msg, { id: 'job-trigger' });
+      }
       fetchJobs();
     }
   };
@@ -355,7 +479,7 @@ export default function JobsTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12 text-gray-500">
-        Loading autonomous jobs...
+        Loading system tasks...
       </div>
     );
   }
@@ -365,9 +489,9 @@ export default function JobsTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-white">Autonomous Jobs</h3>
+          <h3 className="text-lg font-semibold text-white">System Tasks</h3>
           <p className="text-sm text-gray-500 mt-1">
-            Recurring jobs that run on your behalf using your digital twin identity
+            Recurring system-level jobs — AI agents and shell commands
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -412,6 +536,15 @@ export default function JobsTab() {
                 onChange={e => setNewJob(j => ({ ...j, name: e.target.value }))}
                 className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
               />
+              <select
+                value={newJob.type}
+                onChange={e => setNewJob(j => ({ ...j, type: e.target.value }))}
+                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              >
+                {JOB_TYPE_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
               <input
                 type="text"
                 placeholder="Category"
@@ -453,22 +586,44 @@ export default function JobsTab() {
                   <option key={p} value={p}>{p}</option>
                 ))}
               </select>
-              <select
-                value={newJob.autonomyLevel}
-                onChange={e => setNewJob(j => ({ ...j, autonomyLevel: e.target.value }))}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              >
-                {AUTONOMY_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label} — {opt.desc}</option>
-                ))}
-              </select>
+              {newJob.type !== 'shell' && (
+                <select
+                  value={newJob.autonomyLevel}
+                  onChange={e => setNewJob(j => ({ ...j, autonomyLevel: e.target.value }))}
+                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                >
+                  {AUTONOMY_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label} — {opt.desc}</option>
+                  ))}
+                </select>
+              )}
             </div>
-            <textarea
-              placeholder="Prompt template for the agent *"
-              value={newJob.promptTemplate}
-              onChange={e => setNewJob(j => ({ ...j, promptTemplate: e.target.value }))}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-32"
-            />
+            {newJob.type === 'shell' ? (
+              <>
+                <textarea
+                  placeholder="Shell command *"
+                  value={newJob.command}
+                  onChange={e => setNewJob(j => ({ ...j, command: e.target.value }))}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
+                />
+                <select
+                  value={newJob.triggerAction}
+                  onChange={e => setNewJob(j => ({ ...j, triggerAction: e.target.value }))}
+                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                >
+                  {(newJob.type === 'shell' ? SHELL_TRIGGER_ACTION_OPTIONS : TRIGGER_ACTION_OPTIONS).map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </>
+            ) : (
+              <textarea
+                placeholder="Prompt template for the agent *"
+                value={newJob.promptTemplate}
+                onChange={e => setNewJob(j => ({ ...j, promptTemplate: e.target.value }))}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-32"
+              />
+            )}
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowCreate(false)}
@@ -491,9 +646,9 @@ export default function JobsTab() {
       {/* Jobs list */}
       {jobs.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <div className="text-gray-500 mb-3">No autonomous jobs configured.</div>
+          <div className="text-gray-500 mb-3">No system tasks configured.</div>
           <p className="text-xs text-gray-600 max-w-md mx-auto">
-            Autonomous jobs let the Chief of Staff act proactively on your behalf — maintaining repositories, processing brain ideas, and more.
+            System tasks let the Chief of Staff act proactively on your behalf — maintaining repositories, running health checks, processing brain ideas, and more.
           </p>
         </div>
       ) : (

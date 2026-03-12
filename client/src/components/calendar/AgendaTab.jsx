@@ -76,9 +76,7 @@ export default function AgendaTab({ accounts }) {
   const handleSync = async () => {
     setSyncing(true);
     const enabledAccounts = accounts.filter(a => a.enabled);
-    for (const account of enabledAccounts) {
-      await api.syncCalendarAccount(account.id).catch(() => null);
-    }
+    await Promise.allSettled(enabledAccounts.map(a => api.syncCalendarAccount(a.id)));
     setSyncing(false);
     toast.success('Calendar sync started');
   };

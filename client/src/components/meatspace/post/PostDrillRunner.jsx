@@ -1,12 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CheckCircle, XCircle } from 'lucide-react';
 
+import { MEMORY_DRILL_TYPES } from './constants';
+
 const DRILL_LABELS = {
   'doubling-chain': 'Doubling Chain',
   'serial-subtraction': 'Serial Subtraction',
   'multiplication': 'Multiplication',
   'powers': 'Powers',
-  'estimation': 'Estimation'
+  'estimation': 'Estimation',
+  'memory-fill-blank': 'Memory Fill Blank',
+  'memory-sequence': 'Memory Sequence',
+  'memory-element-flash': 'Element Flash',
 };
 
 export default function PostDrillRunner({ session }) {
@@ -87,6 +92,7 @@ export default function PostDrillRunner({ session }) {
   if (state !== 'drilling' || !currentDrill) return null;
 
   const question = currentDrill.questions[currentQuestionIndex];
+  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
   const progressPct = totalQuestions > 0 ? ((currentQuestionIndex + 1) / totalQuestions) * 100 : 0;
 
@@ -181,6 +187,9 @@ export default function PostDrillRunner({ session }) {
 
       {/* Question */}
       <div className="text-center py-8">
+        {question?.promptLabel && (
+          <div className="text-sm text-gray-500 mb-2">{question.promptLabel}</div>
+        )}
         <div className="text-4xl font-mono font-bold text-white">
           {question?.prompt}
         </div>
@@ -190,8 +199,8 @@ export default function PostDrillRunner({ session }) {
       <form onSubmit={handleSubmit} className="flex gap-3">
         <input
           ref={inputRef}
-          type="number"
-          inputMode="numeric"
+          type={isTextDrill ? 'text' : 'number'}
+          inputMode={isTextDrill ? 'text' : 'numeric'}
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           placeholder="Answer"

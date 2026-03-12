@@ -62,7 +62,7 @@ Calendar integration, life goal tracking, and email management transform PortOS 
 
 - **Multi-user support**: PortOS is a personal tool built for one person. Adding auth, roles, or multi-tenancy would add complexity with no benefit.
 - **Public internet deployment**: Runs on a private Tailscale network. No HTTPS, CORS, rate limiting, or public-facing hardening needed.
-- **Database-backed persistence**: JSON files are intentional. They're human-readable, git-friendly, and sufficient for single-user scale. No Postgres, SQLite, or MongoDB.
+- **Database-backed persistence (general)**: JSON files are the primary persistence layer — human-readable, git-friendly, and sufficient for single-user scale. PostgreSQL + pgvector is used only for the memory system (vector search requires it). Do not migrate other data stores to a database.
 - **Authentication / Authorization**: Single-user on a private network. Auth would be security theater here.
 - **Cloud hosting**: Runs on your local machine. Your data stays on your hardware.
 

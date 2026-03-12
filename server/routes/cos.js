@@ -10,6 +10,7 @@ import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import * as taskSchedule from '../services/taskSchedule.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
+import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
@@ -62,7 +63,7 @@ const cosConfigSchema = z.object({
   }).optional()
 }).strict();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt'];
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt', 'taskMetadata'];
 
 /**
  * Pick only defined values from body for schedule settings updates
@@ -813,7 +814,8 @@ router.get('/schedule/interval-types', (req, res) => {
 router.get('/jobs', asyncHandler(async (req, res) => {
   const jobs = await autonomousJobs.getAllJobs();
   const stats = await autonomousJobs.getJobStats();
-  res.json({ jobs, stats });
+  const jobsWithGates = jobs.map(j => ({ ...j, hasGate: hasGate(j.id) }));
+  res.json({ jobs: jobsWithGates, stats, registeredGates: getRegisteredGates() });
 }));
 
 // GET /api/cos/jobs/due - Get jobs that are due to run
@@ -827,6 +829,29 @@ router.get('/jobs/intervals', (req, res) => {
   res.json({ intervals: autonomousJobs.INTERVAL_OPTIONS });
 });
 
+// GET /api/cos/jobs/allowed-commands - Get allowed commands for shell jobs
+router.get('/jobs/allowed-commands', (req, res) => {
+  res.json({ commands: autonomousJobs.getAllowedCommands() });
+});
+
+// GET /api/cos/jobs/gates - Get all registered LLM gates
+router.get('/jobs/gates', asyncHandler(async (req, res) => {
+  const gateIds = getRegisteredGates();
+  const results = await Promise.all(
+    gateIds.map(async (id) => {
+      const result = await checkJobGate(id);
+      return { jobId: id, ...result };
+    })
+  );
+  res.json({ gates: results });
+}));
+
+// POST /api/cos/jobs/:id/gate-check - Check a job's LLM gate without running
+router.post('/jobs/:id/gate-check', asyncHandler(async (req, res) => {
+  const result = await checkJobGate(req.params.id);
+  res.json({ jobId: req.params.id, hasGate: hasGate(req.params.id), ...result });
+}));
+
 // GET /api/cos/jobs/:id - Get a single job
 router.get('/jobs/:id', asyncHandler(async (req, res) => {
   const job = await autonomousJobs.getJob(req.params.id);
@@ -838,15 +863,27 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 
 // POST /api/cos/jobs - Create a new autonomous job
 router.post('/jobs', asyncHandler(async (req, res) => {
-  const { name, description, category, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate } = req.body;
+  const { name, description, category, type, interval, intervalMs, scheduledTime, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = req.body;
 
-  if (!name || !promptTemplate) {
-    throw new ServerError('name and promptTemplate are required', { status: 400, code: 'VALIDATION_ERROR' });
+  const VALID_JOB_TYPES = ['agent', 'shell', 'script'];
+  if (!name) {
+    throw new ServerError('name is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (type && !VALID_JOB_TYPES.includes(type)) {
+    throw new ServerError(`Invalid job type: ${type}. Must be one of: ${VALID_JOB_TYPES.join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (type === 'shell' && !command?.trim()) {
+    throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (!type || type === 'agent') {
+    if (!promptTemplate) {
+      throw new ServerError('promptTemplate is required for agent jobs', { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
 
   const job = await autonomousJobs.createJob({
-    name, description, category, interval, intervalMs, scheduledTime,
-    enabled, priority, autonomyLevel, promptTemplate
+    name, description, category, type, interval, intervalMs, scheduledTime,
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction
   });
   res.json({ success: true, job });
 }));
@@ -876,18 +913,41 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
 
+  // Shell jobs execute the command directly
+  if (autonomousJobs.isShellJob(job)) {
+    const result = await autonomousJobs.executeShellJob(job).catch(err => ({
+      success: false,
+      exitCode: err.exitCode ?? 1,
+      output: err.message
+    }));
+    return res.json({ success: result.success !== false, type: 'shell', ...result });
+  }
+
+  // Script jobs run their built-in handler directly
+  if (autonomousJobs.isScriptJob(job)) {
+    const result = await autonomousJobs.executeScriptJob(job).catch(err => ({
+      success: false,
+      error: err.message
+    }));
+    return res.json({ success: (result?.success ?? true) !== false, type: 'script', ...(result || {}) });
+  }
+
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
   // Manual triggers always bypass approval — the user explicitly requested execution
   const task = await autonomousJobs.generateTaskFromJob(job);
-  const result = await cos.addTask({
+  const taskResult = await cos.addTask({
     description: task.description,
     priority: task.priority,
     context: `Manually triggered autonomous job: ${job.name}`,
     approvalRequired: false
   }, 'internal');
 
-  res.json({ success: true, task: result });
+  if (!taskResult?.id) {
+    res.json({ success: false, type: 'agent', error: 'Task was not queued (may be duplicate or blocked)' });
+    return;
+  }
+  res.json({ success: true, type: 'agent', taskId: taskResult.id });
 }));
 
 // DELETE /api/cos/jobs/:id - Delete a job
@@ -1015,11 +1075,11 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
     cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
-    import('../services/notifications.js'),
+    import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
     productivity.getOptimalTimeInfo().catch(() => ({ hasData: false }))
   ]);
 
-  const notificationsData = await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []);
+  const notificationsData = notificationsModule ? await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []) : [];
 
   const insights = [];
 
@@ -1043,6 +1103,11 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const blockedCount = blockedUser.length + blockedCos.length;
   if (blockedCount > 0) {
     const firstBlocked = blockedUser[0] || blockedCos[0];
+    const blockedTasks = [...blockedUser, ...blockedCos].map(t => ({
+      id: t.id,
+      description: t.description?.substring(0, 80) || 'Unknown task',
+      blocker: t.metadata?.blocker || null
+    }));
     insights.push({
       type: 'blocked',
       priority: 'high',
@@ -1050,7 +1115,8 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       title: `${blockedCount} blocked task${blockedCount > 1 ? 's' : ''}`,
       description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80) || 'Task is blocked',
       action: { label: 'Unblock', route: '/cos/tasks' },
-      count: blockedCount
+      count: blockedCount,
+      tasks: blockedTasks
     });
   }
 

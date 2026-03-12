@@ -64,6 +64,27 @@ Write-Host ""
 node scripts/setup-ghostty.js
 Write-Host ""
 
+# Check for slash-do (optional, used by the PR Reviewer schedule task)
+$slashDoFound = Get-Command slash-do -ErrorAction SilentlyContinue
+if (-not $slashDoFound) {
+    Write-Host "slash-do is not installed. It is used by the PR Reviewer schedule task." -ForegroundColor Yellow
+    if ([Environment]::UserInteractive) {
+        $reply = Read-Host "Install slash-do now? [y/N]"
+        if ($reply -match "^[Yy]$") {
+            Write-Host "Installing slash-do..." -ForegroundColor Yellow
+            npm install -g slash-do@latest 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "⚠️  Failed to install slash-do. Continuing without it." -ForegroundColor Red
+            }
+        } else {
+            Write-Host "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
+        }
+    } else {
+        Write-Host "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
+    }
+    Write-Host ""
+}
+
 # Build UI assets for production serving
 Write-Host "Building UI assets..." -ForegroundColor Yellow
 npm run build

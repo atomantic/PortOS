@@ -26,7 +26,6 @@ export { default as DailyTrendsChart } from './DailyTrendsChart';
 export { default as TasksTab } from './tabs/TasksTab';
 export { default as AgentsTab } from './tabs/AgentsTab';
 export { default as JobsTab } from './tabs/JobsTab';
-export { default as ScriptsTab } from './tabs/ScriptsTab';
 export { default as ScheduleTab } from './tabs/ScheduleTab';
 export { default as LearningTab } from './tabs/LearningTab';
 export { default as MemoryTab } from './tabs/MemoryTab';

@@ -47,6 +47,7 @@ const RunnerPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ 
 const UsagePage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.UsagePage })));
 const ProcessesPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.ProcessesPage })));
 const AgentsPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.AgentsPage })));
+const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const CyberCity = lazyWithReload(() => import('./pages/CyberCity'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
@@ -77,6 +78,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
+          <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/github" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
           <Route path="devtools/runs" element={<RunsHistoryPage />} />
@@ -117,6 +119,7 @@ export default function App() {
           <Route path="post" element={<Post />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           <Route path="messages/:tab" element={<Messages />} />
+          <Route path="datadog" element={<Navigate to="/devtools/datadog" replace />} />
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />
           <Route path="city" element={<CyberCity />} />

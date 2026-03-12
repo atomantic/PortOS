@@ -21,7 +21,7 @@ export default function EventDetail({ event, onClose }) {
         aria-label="Close panel"
         className="absolute inset-0 bg-black/50"
         onClick={onClose}
-        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+        onKeyDown={(e) => (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') && onClose()}
       />
       <div className="relative w-full max-w-md bg-port-card border-l border-port-border overflow-y-auto animate-slide-in-right">
         <div className="sticky top-0 bg-port-card border-b border-port-border p-4 flex items-center justify-between">

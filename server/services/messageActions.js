@@ -132,7 +132,7 @@ async function executeOutlookAction(page, subject, action) {
   // Step 1: Find and click the message row using evaluateOnPage
   const selectScript = `(async () => {
     const listbox = document.querySelector("[role='listbox']");
-    if (!listbox) return { error: 'No message list found' };
+    if (!listbox) return { notInInbox: true, error: 'No message list found' };
     const target = ${JSON.stringify(subject)}.toLowerCase();
     const scrollContainer = listbox.closest('[role="region"]') || listbox.parentElement;
     function findMatch() {

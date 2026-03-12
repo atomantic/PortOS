@@ -61,6 +61,7 @@ import {
   Mail,
   Inbox,
   RefreshCw,
+  Dog,
   FilePen
 } from 'lucide-react';
 /* global __APP_VERSION__ */
@@ -124,12 +125,12 @@ const navItems = [
       { to: '/cos/digest', label: 'Digest', icon: Calendar },
       { to: '/cos/gsd', label: 'GSD', icon: Compass },
       { to: '/cos/health', label: 'Health', icon: Activity },
-      { to: '/cos/jobs', label: 'Jobs', icon: Bot },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
       { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
       { to: '/cos/productivity', label: 'Streaks', icon: Flame },
+      { to: '/cos/jobs', label: 'System Tasks', icon: Bot },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText }
     ]
   },
@@ -142,6 +143,7 @@ const navItems = [
       { href: '//:5560', label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true },
       { to: '/browser', label: 'Browser', icon: Globe },
       { to: '/devtools/runner', label: 'Code', icon: Code2 },
+      { to: '/devtools/datadog', label: 'DataDog', icon: Dog },
       { to: '/devtools/github', label: 'GitHub', icon: Github },
       { to: '/devtools/history', label: 'History', icon: History },
       { to: '/devtools/jira', label: 'JIRA', icon: Ticket },
@@ -191,10 +193,10 @@ const navItems = [
     label: 'Messages',
     icon: Mail,
     children: [
+      { to: '/messages/config', label: 'Config', icon: Settings },
       { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
       { to: '/messages/inbox', label: 'Inbox', icon: Inbox },
-      { to: '/messages/sync', label: 'Sync', icon: RefreshCw },
-      { to: '/messages/config', label: 'Config', icon: Settings }
+      { to: '/messages/sync', label: 'Sync', icon: RefreshCw }
     ]
   },
   { to: '/post', label: 'POST', icon: Zap, single: true },

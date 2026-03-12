@@ -1459,12 +1459,11 @@ export async function spawnAgentForTask(task) {
     }
   }
 
-  // Determine worktree usage: explicit user flag takes priority, then auto-detection.
+  // Determine worktree usage: explicit user flag takes priority, then conflict-based auto-detection.
   // The useWorktree metadata flag is set from the task creation UI checkbox.
-  // When true, always create a worktree (branch + PR). When not set, fall back to
-  // existing auto-detection (managed apps = worktree, non-managed = conflict-based).
+  // When true, always create a worktree (branch + PR). When not set, only create a
+  // worktree if conflict is detected with other running agents.
   let worktreeInfo = null;
-  const isManagedApp = !!task.metadata?.app;
   const explicitWorktree = task.metadata?.useWorktree === 'true' || task.metadata?.useWorktree === true;
 
   // Feature agent tasks: use persistent worktree instead of creating a new one
@@ -1515,29 +1514,8 @@ export async function spawnAgentForTask(task) {
         agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
       });
     }
-  } else if (isManagedApp && !jiraBranchName) {
-    // Managed apps: auto-detect — always use a worktree based on the latest default branch
-    // to prevent cross-agent contamination (dirty state, stale branches, other agents' commits).
-    const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
-    emitLog('info', `🌳 Managed app task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
-      taskId: task.id, app: task.metadata.app, baseBranch: detectedBase
-    });
-
-    worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-      baseBranch: detectedBase || undefined
-    }).catch(err => {
-      emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
-      return null;
-    });
-
-    if (worktreeInfo) {
-      workspacePath = worktreeInfo.worktreePath;
-      emitLog('success', `🌳 Agent ${agentId} will work in worktree: ${worktreeInfo.branchName} (base: ${worktreeInfo.baseBranch})`, {
-        agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
-      });
-    }
   } else if (!jiraBranchName) {
-    // Non-managed (PortOS) tasks: use worktree only when conflict is detected
+    // No explicit worktree requested: use worktree only when conflict is detected
     const { getAgents } = await import('./cos.js');
     const allAgents = await getAgents();
     const runningAgents = allAgents.filter(a => a.status === 'running');

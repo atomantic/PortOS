@@ -73,10 +73,13 @@ export default function AppDetailView() {
 
   const handleBuild = async () => {
     setBuildLoading(true);
+    const isSelfBuild = appId === api.PORTOS_APP_ID;
     const result = await api.buildApp(appId).catch(() => null);
     setBuildLoading(false);
     if (result?.success) {
       toast.success(`${app.name} production build complete`);
+    } else if (isSelfBuild) {
+      toast.success(`${app.name} build triggered — server may restart`);
     }
   };
 

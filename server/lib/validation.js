@@ -164,6 +164,14 @@ export const jiraConfigSchema = z.object({
   createPR: z.boolean().optional().default(true)
 });
 
+// DataDog integration config for apps
+export const datadogConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  instanceId: z.string().optional(),
+  serviceName: z.string().optional(),
+  environment: z.string().optional()
+});
+
 // App schema for registration/update
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
@@ -189,7 +197,8 @@ export const appSchema = z.object({
     interval: z.string().nullable().optional()
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
   defaultUseWorktree: z.boolean().optional().default(false),
-  jira: jiraConfigSchema.optional().nullable()
+  jira: jiraConfigSchema.optional().nullable(),
+  datadog: datadogConfigSchema.optional().nullable()
 });
 
 // Partial schema for updates
@@ -526,4 +535,28 @@ export function validateRequest(schema, data) {
     code: 'VALIDATION_ERROR',
     context: { details: errors }
   });
+}
+
+// =============================================================================
+// TASK METADATA SANITIZATION
+// =============================================================================
+
+const ALLOWED_TASK_METADATA_KEYS = ['useWorktree', 'simplify'];
+
+/**
+ * Sanitize taskMetadata to only allowed agent-option keys with boolean values.
+ * Prevents prototype pollution and reserved metadata field overrides.
+ * Returns a clean plain object or null if input is empty/invalid.
+ */
+export function sanitizeTaskMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const clean = Object.create(null);
+  let hasKeys = false;
+  for (const key of ALLOWED_TASK_METADATA_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(raw, key) && typeof raw[key] === 'boolean') {
+      clean[key] = raw[key];
+      hasKeys = true;
+    }
+  }
+  return hasKeys ? { ...clean } : null;
 }

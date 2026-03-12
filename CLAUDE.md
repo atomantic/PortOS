@@ -82,7 +82,7 @@ When CoS agents or AI tools work on managed apps outside PortOS, all research, p
 - **Zod validation** - all route inputs validated via `lib/validation.js`
 - **Command allowlist** - shell execution restricted to approved commands only
 - **Mobile responsive** - all pages should be mobile responsive friendly
-- **Above the fold** - keep actionable content and info above the fold and design pages for maximum information and acess without scrolling
+- **Above the fold** - keep actionable content and info above the fold and design pages for maximum information and access without scrolling
 - **No hardcoded localhost** - use `window.location.hostname` for URLs; app accessed via Tailscale remotely
 - **Alphabetical navigation** - sidebar nav items in `Layout.jsx` are alphabetically ordered after the Dashboard+CyberCity top section and separator; children within collapsible sections are also alphabetical
 - **Reactive UI updates** - after mutations (delete, create, update), update local state directly instead of refetching the entire list from the server. Use `setState(prev => prev.filter(...))` or similar patterns for immediate feedback
@@ -107,9 +107,9 @@ port-error: #ef4444
 - **main**: Active development
 - **release**: Push `main` to `release` to trigger GitHub Release workflow
 - **Push pattern**: `git pull --rebase --autostash && git push`
-- **Changelog**: `/cam` appends to `.changelog/NEXT.md`; `/release` finalizes it into a versioned file
-- **Versioning**: Version in `package.json` reflects the last release. Do not bump during development — `/release` handles version bumps
+- **Changelog**: Append entries to `.changelog/NEXT.md` during development; `/do:release` (Claude Code slash command) finalizes it into a versioned file
+- **Versioning**: Version in `package.json` reflects the last release. Do not bump during development — `/do:release` handles version bumps
 - After each feature or bug fix, run `/simplify` and then commit and push code
-- If we have created enough commits to wrap up a feature or issue to warrent a production release, pull the latest maina nd release branches and then run `/release` from main
+- If we have created enough commits to wrap up a feature or issue to warrant a production release, pull the latest main and release branches and then run `/do:release` from main
 
 See `.changelog/README.md` for detailed format and best practices.

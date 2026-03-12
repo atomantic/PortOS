@@ -9,7 +9,7 @@ import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
-import { LLM_DRILL_TYPES } from '../lib/postValidation.js';
+import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -105,6 +105,15 @@ export async function submitPostSession(sessionData) {
     // The evaluation field and per-response llmScore/llmFeedback contain the server-generated breakdown.
     if (LLM_DRILL_TYPES.includes(rest.type)) {
       return { ...rest, score: t.score || 0 };
+    }
+
+    // Memory drills: trust client-side scoring only for supported types
+    if (POST_SUPPORTED_MEMORY_TYPES.includes(rest.type)) {
+      return { ...rest, score: t.score || 0 };
+    }
+    // Unsupported memory drills (e.g. memory-fill-blank): preserve data, zero score
+    if (MEMORY_DRILL_TYPES.includes(rest.type)) {
+      return { ...rest, score: 0 };
     }
 
     // Math drills: strip correct from individual questions and rescore
@@ -300,16 +309,26 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   // Recompute expected from the prompt server-side — never trust client-provided expected
   const recomputed = questions.map(q => {
     const expected = computeExpectedFromPrompt(q.prompt);
+    // Coerce answered to number: empty/whitespace → null, NaN → null, "42" → 42
+    let answered = null;
+    if (q.answered != null) {
+      if (typeof q.answered === 'string' && q.answered.trim() === '') {
+        answered = null;
+      } else {
+        const rawNum = Number(q.answered);
+        answered = Number.isNaN(rawNum) ? null : rawNum;
+      }
+    }
     let correct;
-    if (expected == null || q.answered == null) {
+    if (expected == null || answered == null || isNaN(answered)) {
       correct = false;
     } else if (type === 'estimation') {
       const tolerance = ((config.tolerancePct ?? 10) / 100);
-      correct = Math.abs(q.answered - expected) <= Math.abs(expected * tolerance);
+      correct = Math.abs(answered - expected) <= Math.abs(expected * tolerance);
     } else {
-      correct = q.answered === expected;
+      correct = answered === expected;
     }
-    return { ...q, expected, correct };
+    return { ...q, answered, expected, correct };
   });
 
   const answered = recomputed.filter(q => q.answered != null);

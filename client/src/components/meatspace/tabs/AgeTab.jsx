@@ -8,6 +8,10 @@ function BirthDateSection({ birthDate, onUpdate }) {
   const [input, setInput] = useState(birthDate || '');
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!editing) setInput(birthDate || '');
+  }, [birthDate, editing]);
+
   const handleSave = async () => {
     if (!input) return;
     setSaving(true);

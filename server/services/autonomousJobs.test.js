@@ -136,7 +136,7 @@ describe('autonomousJobs', () => {
 
       // Verify only expected test jobs plus any default jobs are present
       const testJobIds = new Set(['job-test-1', 'job-1', 'job-2'])
-      const defaultJobPrefixes = ['job-github-', 'job-brain-', 'job-daily-', 'job-moltworld-', 'job-jira-', 'job-autobiography-']
+      const defaultJobPrefixes = ['job-github-', 'job-brain-', 'job-daily-', 'job-moltworld-', 'job-jira-', 'job-autobiography-', 'job-system-', 'job-agent-', 'job-datadog-']
       const unexpectedJobs = due.filter(j => !testJobIds.has(j.id) && !defaultJobPrefixes.some(p => j.id.startsWith(p)))
       expect(unexpectedJobs).toHaveLength(0)
     })
@@ -214,6 +214,19 @@ describe('autonomousJobs', () => {
 
       expect(job.intervalMs).toBe(7 * 24 * 60 * 60 * 1000)
       expect(job.interval).toBe('weekly')
+    })
+
+    it('every-2-hours interval produces correct intervalMs', async () => {
+      const jobData = {
+        name: 'Bi-Hourly Job',
+        interval: 'every-2-hours',
+        promptTemplate: 'Do bi-hourly thing'
+      }
+
+      const job = await createJob(jobData)
+
+      expect(job.intervalMs).toBe(2 * 60 * 60 * 1000)
+      expect(job.interval).toBe('every-2-hours')
     })
   })
 

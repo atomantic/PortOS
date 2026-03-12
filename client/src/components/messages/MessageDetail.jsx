@@ -13,7 +13,12 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const [refreshing, setRefreshing] = useState(false);
   const [displayedMessage, setDisplayedMessage] = useState(message);
 
-  const account = accounts.find(a => a.id === message.accountId) || accounts[0];
+  // Sync displayedMessage when the message prop changes (e.g., selecting a different message)
+  useEffect(() => {
+    setDisplayedMessage(message);
+  }, [message]);
+
+  const account = accounts.find(a => a.id === displayedMessage.accountId) || accounts[0];
 
   // Load thread messages if this message is part of a thread
   useEffect(() => {
@@ -45,9 +50,9 @@ export default function MessageDetail({ message, accounts, onBack }) {
     setGenerating(true);
     const draft = await api.generateMessageDraft({
       accountId: account.id,
-      replyToMessageId: message.id,
-      threadId: message.threadId,
-      context: `Replying to: "${message.subject}" from ${message.from?.name || message.from?.email}`,
+      replyToMessageId: displayedMessage.id,
+      threadId: displayedMessage.threadId,
+      context: `Replying to: "${displayedMessage.subject}" from ${displayedMessage.from?.name || displayedMessage.from?.email}`,
       instructions: ''
     }).catch(() => null);
     setGenerating(false);
@@ -61,14 +66,14 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   const handleCreateDraft = async () => {
     if (!account) return toast.error('No account available');
-    const to = [message.from?.email].filter(Boolean);
-    const subject = `Re: ${message.subject || ''}`;
+    const to = [displayedMessage.from?.email].filter(Boolean);
+    const subject = `Re: ${displayedMessage.subject || ''}`;
     const result = generatedDraftId
       ? await api.updateMessageDraft(generatedDraftId, { to, subject, body: replyBody }).catch(() => null)
       : await api.createMessageDraft({
           accountId: account.id,
-          replyToMessageId: message.id,
-          threadId: message.threadId,
+          replyToMessageId: displayedMessage.id,
+          threadId: displayedMessage.threadId,
           to, subject, body: replyBody,
           generatedBy: 'manual'
         }).catch(() => null);

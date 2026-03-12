@@ -19,6 +19,21 @@ function mapResponseStatus(status) {
   return map[status?.Response] || 'unknown';
 }
 
+/**
+ * Normalize an Outlook DateTime value to ISO string.
+ * Outlook Graph API returns bare datetimes (no offset/Z) in UTC with a separate
+ * TimeZone field. We always treat bare values as UTC and store the timeZone
+ * separately on the event object for display purposes.
+ */
+function normalizeDateTime(dateTimeStr) {
+  // Already has timezone offset or Z suffix — parse as-is
+  if (/[Zz]$/.test(dateTimeStr) || /[+-]\d{2}:\d{2}$/.test(dateTimeStr)) {
+    return new Date(dateTimeStr).toISOString();
+  }
+  // Bare datetime — treat as UTC
+  return new Date(dateTimeStr + 'Z').toISOString();
+}
+
 function mapAttendeeStatus(status) {
   const map = {
     None: 'none',
@@ -29,7 +44,7 @@ function mapAttendeeStatus(status) {
   return map[status?.Response] || 'unknown';
 }
 
-export async function syncOutlookCalendarApi(account, cache, io, options = {}) {
+export async function syncOutlookCalendarApi(account, _cache, io, options = {}) {
   const tokenResult = await getToken('outlook');
 
   if (tokenResult.error) {
@@ -39,8 +54,10 @@ export async function syncOutlookCalendarApi(account, cache, io, options = {}) {
 
   const token = tokenResult.token;
   const now = new Date();
-  const startRange = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // -7d
-  const endRange = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000); // +90d
+  const pastDays = options.pastDays ?? 7;
+  const futureDays = options.futureDays ?? 90;
+  const startRange = new Date(now.getTime() - pastDays * 24 * 60 * 60 * 1000);
+  const endRange = new Date(now.getTime() + futureDays * 24 * 60 * 60 * 1000);
   const startDateTime = startRange.toISOString();
   const endDateTime = endRange.toISOString();
 
@@ -90,8 +107,8 @@ export async function syncOutlookCalendarApi(account, cache, io, options = {}) {
         title: item.Subject || '',
         description: item.Body?.Content || '',
         location: item.Location?.DisplayName || '',
-        startTime: item.Start?.DateTime ? new Date(item.Start.DateTime + 'Z').toISOString() : null,
-        endTime: item.End?.DateTime ? new Date(item.End.DateTime + 'Z').toISOString() : null,
+        startTime: item.Start?.DateTime ? normalizeDateTime(item.Start.DateTime) : null,
+        endTime: item.End?.DateTime ? normalizeDateTime(item.End.DateTime) : null,
         isAllDay: item.IsAllDay || false,
         timeZone: item.Start?.TimeZone || 'UTC',
         organizer: {

@@ -2,29 +2,6 @@
 
 See [GOALS.md](./GOALS.md) for project goals and direction.
 
-## Quick Reference
-
-### Tech Stack
-- Frontend: React + Tailwind CSS + Vite (port 5554)
-- Backend: Express.js (port 5555)
-- Process Manager: PM2
-- Data Storage: JSON files in `./data/`, PostgreSQL + pgvector (memory system)
-
-### Commands
-```bash
-# Install all dependencies
-npm run install:all
-
-# Start development (both client and server)
-npm run dev
-
-# Start with PM2
-pm2 start ecosystem.config.cjs
-
-# View PM2 logs
-pm2 logs
-```
-
 ---
 
 ## Milestones
@@ -99,51 +76,6 @@ pm2 logs
 
 ## Planned Feature Details
 
-### M55: POST Enhancement — Training + Memory Builder + Imagination
-
-Evolves POST from a test-only system into a cognitive training platform. Covers five domains: **Math** (existing), **Memory** (new), **Wordplay** (existing), **Verbal Agility** (existing), **Imagination** (new). Sessions take ~5 minutes with balanced time budgets across domains.
-
-**Phases:**
-
-- **P1: Memory Builder Engine + Elements Song** — Memory item data model (`data/meatspace/post-memory-items.json`), CRUD routes (`GET/POST/PUT/DELETE /api/meatspace/post/memory-items`), practice submission with mastery tracking (`POST /memory-items/:id/practice`), mastery retrieval. Built-in Elements Song: Tom Lehrer lyrics parsed into lines with element name → symbol/atomic number mapping, chunked into verses.
-- **P2: Memory Builder UI** — `MemoryItemList` (browse/add items), `MemoryPractice` with 5 training modes (learn, fill-in-the-blank, sequence recall, random prompt, speed run), `ElementsSong` component with periodic table grid colored by mastery (green/yellow/red), karaoke-style progressive reveal.
-- **P3: Imagination & Ideation Drills** — 5 new LLM drill types: `what-if` (absurd hypotheticals), `alternative-uses` (divergent thinking), `story-prompt` (connect 3 random words), `invention-pitch` (solve a problem creatively), `reframe` (positive reframing). LLM generation prompts + scoring prompts. `ImaginationDrillRunner` UI with textarea input and difficulty badges.
-- **P4: Training Mode** — Per-domain train/test toggle in `PostSessionLauncher`. Train mode: progressive difficulty, hints on wrong answers, immediate feedback, no final score. Practice log in `data/meatspace/post-training-log.json` tracks practice count, streaks, time spent. Train sessions don't appear in scored POST history.
-- **P5: 5-Minute Session Flow** — Session pulls 1 drill per enabled domain with time budgets (Math ~60s, Memory ~90s, Wordplay ~60s, Verbal ~60s, Imagination ~60s). Smooth transition UI between drills with domain label and progress. Session score = weighted average across domains.
-- **P6: Custom Memory Items** ✅ — Config UI for adding songs/poems/speeches/sequences with title, type picker, and content textarea. Auto-chunking splits by blank lines (verse boundaries) with 4-line fallback. Spaced repetition mode orders chunks by mastery (weakest first) with graduated hint levels (full first-letters → partial → word-count-only → none). Chunk mastery overview with expandable per-chunk accuracy bars. New `GET /memory-items/:id/chunk-mastery` endpoint.
-
-**Data:** `data/meatspace/post-memory-items.json` (content + mastery), `data/meatspace/post-training-log.json` (practice sessions), extended `post-config.json` (imagination + memory drill settings)
-
-**Routes:** Extend existing POST routes + new memory item CRUD + practice endpoints. See [POST feature doc](./docs/features/post.md).
-
-*Touches: server/services/meatspacePost.js, server/services/meatspacePostLlm.js, new server/services/meatspacePostMemory.js, server/routes/meatspace.js, server/lib/postValidation.js, client/src/components/meatspace/post/*, client/src/hooks/usePostSession.js, client/src/services/api.js*
-
-### M44 P7: Apple Health Integration
-
-Bring Apple Health data into MeatSpace via two complementary paths: live sync from the [Health Auto Export](https://apps.apple.com/us/app/health-auto-export-json-csv/id1115567069) iOS app (~$4) and bulk historical import from Apple Health XML exports.
-
-**Live Sync (Health Auto Export)**
-- `POST /api/health/ingest` — accepts Health Auto Export JSON payload (metrics, workouts, sleep, ECG, medications)
-- Validate payload with Zod, deduplicate by metric name + timestamp
-- Persist to `data/health/YYYY-MM-DD.json` (one file per day, append/merge)
-- Configure app to POST to `http://<tailscale-ip>:5554/api/health/ingest` on 15-60 min interval
-- Support custom auth header for basic request validation
-- 150+ metric types: steps, heart rate, HRV, VO2 max, sleep stages, blood pressure, workouts with GPS routes, etc.
-- Reference: [health-auto-export-server](https://github.com/HealthyApps/health-auto-export-server), [payload schema](https://github.com/Lybron/health-auto-export)
-
-**Bulk Historical Import (XML Export)**
-- `POST /api/health/import-xml` — accepts Apple Health export ZIP upload
-- Stream-parse `export.xml` using `xml-stream` (files can be 500MB+), extract records into same `data/health/YYYY-MM-DD.json` format
-- Progress reporting via WebSocket during import
-- Reference: [apple-health-parser](https://github.com/cvyl/apple-health-parser)
-
-**MeatSpace Dashboard Integration**
-- New dashboard cards for key Apple Health metrics (steps, heart rate, sleep, HRV trends)
-- Correlate with existing MeatSpace data (alcohol intake vs. HRV/sleep, blood work trends vs. activity)
-- Time-series charts with configurable date ranges
-
-*Touches: server/routes/health.js, server/services/healthIngest.js, MeatSpace UI, data/health/*
-
 ### M45: Data Backup & Recovery
 
 All PortOS data lives in `./data/` as JSON files with no redundancy. A corrupted write, accidental deletion, or disk failure loses everything — brain captures, digital identity, health records, memory embeddings, agent state, and run history.
@@ -166,33 +98,6 @@ All PortOS data lives in `./data/` as JSON files with no redundancy. A corrupted
 - One-click manual backup trigger
 
 *Touches: new server/services/backup.js, server/routes/backup.js, Dashboard widget, settings.json, automation scheduler*
-
-### M46: Unified Search (Cmd+K)
-
-Global keyboard-driven search across all PortOS data sources from any page.
-
-**Search Sources**
-- Brain captures (ideas, projects, people, admin)
-- Semantic memory (vector + BM25 hybrid, already exists)
-- Command history and AI run history
-- Agent activity and task logs
-- Apps registry
-- Digital twin documents, autobiography, taste summaries
-- MeatSpace health entries
-
-**UI**
-- `Cmd+K` / `Ctrl+K` opens search overlay from any page
-- Type-ahead with categorized results (Brain, Memory, Apps, History, etc.)
-- Result cards with source icon, snippet, and timestamp
-- Click navigates to deep-linked location (e.g., specific brain capture, agent run, history entry)
-
-**Implementation**
-- Server-side `/api/search` endpoint that fans out to existing service search functions
-- Client-side `GlobalSearch` component mounted in Layout.jsx
-- Debounced input with 200ms delay
-- Results ranked by relevance with source-type boosting
-
-*Touches: new server/routes/search.js, new server/services/search.js, new client/src/components/GlobalSearch.jsx, Layout.jsx*
 
 ### M47: Push Notifications
 
@@ -263,23 +168,13 @@ Multi-provider email integration — Gmail via MCP, Outlook/Teams via CDP browse
 
 Always review before send — AI-generated drafts go to an outbox queue. The user reviews, edits, and approves each response before it's sent. No auto-send.
 
-**Completed:**
+**Completed:** P1-P6.5 (Email sync, AI triage, reply generation, thread capture, config, per-action models, prompt injection hardening, per-message re-fetch). See git history for details.
 
-- [x] **P1: Email Read & Sync** — Outlook CDP browser scraping with `[role='listbox'] [role='option']` selectors, Gmail MCP integration, account CRUD, Sync Unread / Full Sync modes with scrolling for virtualized lists, message caching with dedup
-- [x] **P2: AI Triage & Inbox Actions** — AI evaluation endpoint (`POST /messages/evaluate`) classifies messages as reply/archive/delete/review with priority, inbox shows action badges + priority dots + pin/flag indicators, 1-click "Draft" button generates AI reply and navigates to Drafts
-- [x] **P3: AI Reply Generation** — Real AI reply using configured provider/model and customizable prompt templates (reply + forward), `{{variable}}` substitution, settings persisted in `settings.json`
-- [x] **P3.5: Full Body & Thread Capture** — Outlook sync clicks into each conversation to extract full email body (not just 300-char preview). Conversation threads linked by `threadId`. `GET /messages/thread/:accountId/:threadId` endpoint. MessageDetail shows full conversation chain with "Preview only" indicator for uncaptured messages. Dedup preserves full body upgrades on re-sync.
-- [x] **P4: Config Page** — Unified Config tab with AI Provider & Model selector, prompt template editor, and email account management
+**Remaining:**
 
-**Remaining TODO:**
-
-- [x] **P5: Per-action model selection** — Separate provider/model configs for triage vs reply generation (different cost/capability tiers). Expand `settings.messages` to `{ triage: { providerId, model }, reply: { providerId, model } }`. Update ConfigTab with two `ProviderModelSelector` sections.
-- [x] **P6: Prompt injection hardening** — XML-fence untrusted email content in AI prompts to prevent injection. Add content sanitization layer (`sanitize()` escapes `<>`), `<emails>` XML fencing on eval prompt.
-- [x] **P6.5: Per-message re-fetch & detail fetch fixes** — Refresh button in MessageDetail re-clicks conversation and re-extracts full body (bypasses cache). Inbox-level "Fetch Full Content" button runs detail fetch for all preview-only messages. Clear Cache button per account in Config. Note: Outlook marks messages as read when opened for detail fetch (native behavior, documented as known limitation).
 - [ ] **P7: Digital Twin voice drafting** — Draft responses using Digital Twin voice/style (reads COMMUNICATION.md, PERSONALITY.md, VALUES.md + recent thread context)
 - [ ] **P8: CoS Automation & Rules** — Automated classification on new emails via CoS job, rule-based pre-filtering, email-to-task pipeline, priority email notifications
 - [ ] **P9: Auto-Send with AI Review Gate** — Remove human-in-the-loop for trusted accounts. Before auto-sending, a second LLM call reviews the draft against the original email for: prompt injection artifacts, off-topic content, tone/identity drift, leaked system instructions. Configurable per-account trust level (manual → review-assisted → auto-send). See [Messages Security](./docs/features/messages-security.md) for threat model.
-- [x] **Cleanup** — Delete unused `client/src/components/messages/AccountsTab.jsx` (replaced by ConfigTab)
 
 **Data:** `data/messages/accounts.json`, `data/messages/cache/{accountId}.json`, `data/messages/selectors.json`, `settings.json` (messages key for AI config + templates)
 
@@ -317,8 +212,6 @@ Check for new PortOS releases on GitHub and notify the user when an update is av
 
 - **Chronotype-Aware Scheduling** — Chronotype derivation exists (M42 P1) but isn't applied to task scheduling yet. Use peak-focus windows from genome sleep markers to schedule deep-work tasks during peak hours, routine tasks during low-energy. Display energy curve on Schedule tab. *Touches: taskSchedule.js, genome.js, CoS Schedule tab*
 - **Identity Context Injection** — Identity context is used for taste questions (M42 P2.5) but not yet injected as a system preamble for general AI calls. Build identity brief from EXISTENTIAL.md, taste, personality, autobiography; inject via toolkit. Per-task-type toggle. *Touches: portos-ai-toolkit, runner.js, CoS Config*
-- ~~**Mortality-Aware Goal Widget**~~ ✅ Shipped as M42 P3
-- ~~**Behavioral Feedback Loop**~~ ✅ Shipped as M34 P3
 
 ### Tier 2: Deeper Autonomy
 
@@ -336,7 +229,6 @@ Check for new PortOS releases on GitHub and notify the user when an update is av
 
 ### Tier 4: Developer Experience
 
-- ~~**Unified Search (Cmd+K)**~~ → Promoted to M46
 - **Dashboard Customization** — Drag-and-drop widget reordering, show/hide toggles, named layouts ("morning briefing", "deep work"). *Touches: Dashboard.jsx, settings.js, dnd-kit*
 - **Workspace Contexts** — Active project context that syncs shell, git, tasks, and browser to current project. Persists across navigation. *Touches: Settings state, Layout context, Shell/Git/Browser*
 - **Inline Code Review Annotations** — Surface self-improvement findings as inline annotations in a code viewer. One-click "fix this" spawns CoS task. *Touches: New code viewer, selfImprovement.js*
@@ -384,235 +276,66 @@ Check for new PortOS releases on GitHub and notify the user when an update is av
 
 ---
 
-## Security Hardening ✅
+## Code Audits
 
-All 10 audit items (S1–S10) from the 2025-02-19 security audit have been resolved. See [Security Audit](./docs/SECURITY_AUDIT.md) for details.
+See [Security Audit](./docs/SECURITY_AUDIT.md) for the 2025-02-19 security hardening (all 10 items resolved).
 
----
+### Outstanding Audit Findings (2026-03-05)
 
-## Better Audit - 2026-03-05
+Three audit passes identified remaining items across architecture, bugs, code quality, and test coverage. Resolved items from Passes 1-3 have been removed (fixed via PRs #67-72).
 
-Summary: 35 findings across 28 files. 0 shared utilities to extract (ensureDataDir removal is deletion, not extraction).
+**Known low-severity:** pm2 ReDoS (GHSA-x5gf-qvw8-r2rm) — no upstream fix, not exploitable via PortOS routes.
 
-### File Ownership Map
+#### Architecture & SOLID
+- [ ] **[CRITICAL]** `server/services/cos.js` (~3800 lines) — God file with 40+ exports. Needs decomposition.
+- [ ] **[CRITICAL]** `server/services/subAgentSpawner.js` (~3300 lines) — Mega service spanning model selection, spawning, worktrees, JIRA, git, memory.
+- [ ] **[CRITICAL]** Circular dependency: `cos.js` ↔ `subAgentSpawner.js` via dynamic imports.
+- [ ] **[HIGH]** `client/src/services/api.js` (1627 lines) — Monolithic API client mixing 20+ domains.
+- [ ] **[HIGH]** `server/services/digital-twin.js` (2823 lines) — Mixed CRUD, LLM testing, enrichment, export.
+- [ ] **[HIGH]** `server/routes/cos.js` (1253 lines) — Business logic mixed with HTTP handlers.
+- [ ] **[HIGH]** `server/routes/scaffold.js` (1270 lines) — God route file.
+- [ ] **[HIGH]** `server/routes/apps.js:68-77,126-135` — Duplicated app status computation.
+- [ ] **[HIGH]** `client/src/pages/ChiefOfStaff.jsx` (864 lines) — 24 useState hooks.
+- [ ] **[MEDIUM]** Inconsistent pagination patterns and error response envelope.
 
-| File | Primary Category | Reason |
-|------|-----------------|--------|
-| `server/lib/db.js` | Security | Hardcoded DB password |
-| `server/routes/cos.js` | Security | Mass assignment (HIGH) + string concat bug |
-| `server/services/backup.js` | Security | Hardcoded DB password in backup |
-| `server/lib/ports.js` | Code Quality | Hardcoded localhost |
-| `server/services/browserService.js` | Code Quality | Hardcoded 127.0.0.1 |
-| `server/services/instances.js` | Code Quality | Magic number + bare catch |
-| `server/services/worktreeManager.js` | Code Quality | Silent .catch blocks |
-| `client/src/pages/PromptManager.jsx` | Bugs & Perf | window.alert/confirm |
-| `server/lib/errorHandler.js` | Bugs & Perf | process.exit in library |
-| `server/services/socket.js` | Bugs & Perf | Socket cleanup for dropped clients |
-| `client/src/hooks/useCityData.js` | Stack-Specific | Incorrect socket.off() |
-| `client/src/pages/ChiefOfStaff.jsx` | Stack-Specific | Incorrect socket.off() |
-| `client/src/pages/Instances.jsx` | Stack-Specific | Incorrect socket.off() |
-| `client/src/pages/AIProviders.jsx` | Stack-Specific | Stale closure in useEffect |
-| `client/src/services/api.js` | Stack-Specific | Missing response.ok check |
-| `client/src/utils/fileUpload.js` | DRY | Duplicate formatFileSize |
-| `client/src/components/cos/TaskAddForm.jsx` | DRY | Import update for formatFileSize |
-| `server/services/cosEvolution.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/apps.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/missions.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/appActivity.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/productivity.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/autonomousJobs.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/history.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/memoryBM25.js` | DRY | ensureDataDir wrapper removal |
-| `server/services/autobiography.js` | DRY | ensureDataDir wrapper removal |
+#### Bugs & Performance
+- [ ] **[CRITICAL]** `server/services/cos.js` TOCTOU race: addTask/updateTask/deleteTask lack withStateLock mutex.
+- [ ] **[CRITICAL]** `server/services/cosRunnerClient.js` — 12 fetch calls missing timeouts.
+- [ ] **[HIGH]** `server/services/cosRunnerClient.js` — Socket.IO with infinite reconnection, no error handler.
+- [ ] **[HIGH]** `server/services/memory.js` — Data race: loadMemory() outside withMemoryLock.
+- [ ] **[HIGH]** `server/services/agentActionExecutor.js:137` — Unsafe array fallback may yield non-array.
+- [ ] **[HIGH]** `client/src/pages/PromptManager.jsx` — Fetch calls missing response.ok check.
+- [ ] **[MEDIUM]** `server/services/cos.js` — Migration rename fallback silently swallowed; agent index lazy-load race.
+- [ ] **[MEDIUM]** `server/services/memory.js` — Sort comparison not type-safe for dates.
 
-### Security & Secrets
-- [x] **[HIGH]** `server/lib/db.js:18` - Hardcoded default DB password 'portos' as fallback. *(Fixed: PR #71)*
-- [x] **[HIGH]** `server/routes/cos.js:77` - Mass assignment: `req.body` spread directly into config without Zod validation. *(Already had Zod `.strict()` validation)*
-- [x] **[HIGH]** `server/routes/cos.js:991` - String concatenation with potentially undefined value. *(Fixed: PR #71)*
-- [x] **[MEDIUM]** `server/services/backup.js:173` - Same hardcoded 'portos' password fallback. *(Fixed: PR #71)*
-- [x] **[HIGH]** npm audit: multer DoS vulnerability (GHSA-5528-5vmv-3xc2). *(Already resolved)*
-- [ ] **[LOW]** npm audit: pm2 ReDoS (GHSA-x5gf-qvw8-r2rm). No upstream fix available. (Tracked only)
+#### Code Quality
+- [ ] **[HIGH]** `server/services/memorySync.js:156` + `server/lib/db.js:85` — Unsafe `rows[0]` access without bounds check.
+- [ ] **[MEDIUM]** Hardcoded localhost in `server/services/lmStudioManager.js`, `server/services/memoryClassifier.js`.
+- [ ] **[MEDIUM]** Empty `.catch(() => {})` in 5 client files (`client/src/pages/Browser.jsx`, `Shell.jsx`, `client/src/components/cos/TaskAddForm.jsx`, `client/src/hooks/useAgentFeedbackToast.jsx`, `client/src/components/meatspace/HealthCategorySection.jsx`).
+- [ ] **[MEDIUM]** `client/src/pages/DevTools.jsx` — Stale closure risk.
+- [ ] **[MEDIUM]** Silent catch blocks in `client/src/hooks/useTheme.js`, `server/services/runner.js`, `server/lib/db.js`, `client/src/pages/Settings.jsx`.
 
-### Code Quality & Style
-- [x] **[HIGH]** `server/lib/ports.js:4` - Hardcoded `localhost`. *(Fixed: PR #67)*
-- [x] **[HIGH]** `server/services/browserService.js:26,66` - Hardcoded `127.0.0.1` for CDP. *(Fixed: PR #67)*
-- [x] **[HIGH]** `server/services/instances.js:384` - Magic number `2000`. *(Fixed: PR #67)*
-- [x] **[MEDIUM]** `server/services/instances.js:190,316` - Bare catch blocks. *(Fixed: PR #67)*
-- [x] **[MEDIUM]** `server/services/worktreeManager.js` - Silent `.catch(() => {})` blocks. *(Fixed: PR #67)*
+#### DRY
+- [ ] **[HIGH]** Duplicate `getDateString` in `server/services/agentActivity.js` + `server/services/productivity.js`.
+- [ ] **[HIGH]** Duplicate HOUR/DAY constants in `server/services/autonomousJobs.js` + `server/services/taskSchedule.js`.
+- [ ] **[HIGH]** Duplicate DATA_DIR/path constants in 8+ files.
+- [ ] **[MEDIUM]** Missing fetch timeouts in `server/integrations/moltworld/api.js` + `server/integrations/moltbook/api.js`.
+- [ ] **[MEDIUM]** 39 instances of `mkdir({recursive:true})` vs centralized `ensureDir()`.
 
-### DRY & YAGNI
-- [x] **[MEDIUM]** `client/src/utils/fileUpload.js:247` - Duplicate `formatFileSize`. *(Fixed: PR #68)*
-- [x] **[HIGH]** 9 files with redundant `ensureDataDir()` wrappers. *(Fixed: PR #68)*
-
-### Architecture & SOLID (tracked, not auto-remediated)
-- [ ] **[CRITICAL]** `server/services/cos.js` (3827 lines) - God file with 40+ exports, mixed concerns. Needs decomposition into cosOrchestrator, cosStateManager, taskGenerator, agentRegistry. (Complexity: Very Complex)
-- [ ] **[CRITICAL]** `server/services/subAgentSpawner.js` (3284 lines) - Mega service spanning model selection, spawning, worktrees, JIRA, git, memory. (Complexity: Very Complex)
-- [ ] **[HIGH]** `server/services/digital-twin.js:280-375` - Mixed API/CLI provider abstraction in single function. (Complexity: Medium)
-- [ ] **[MEDIUM]** `client/src/pages/ChiefOfStaff.jsx:43-150` - 14+ useState hooks, should extract custom hooks. (Complexity: Medium)
-- [ ] **[MEDIUM]** Inconsistent pagination patterns across routes. (Complexity: Medium)
-- [ ] **[MEDIUM]** Error response envelope not fully consistent. (Complexity: Simple)
-
-### Bugs, Performance & Error Handling
-- [x] **[HIGH]** `client/src/pages/PromptManager.jsx` - Uses `alert()` and `confirm()`. *(Fixed: PR #69)*
-- [x] **[MEDIUM]** `server/lib/errorHandler.js:224` - `process.exit(1)` in library code. *(Fixed: PR #69)*
-- [x] **[MEDIUM]** `server/services/socket.js` - Socket event handlers not cleaned up for dropped clients. *(Fixed: PR #72)*
-
-### Stack-Specific (Node/React)
-- [x] **[HIGH]** `client/src/hooks/useCityData.js` - Incorrect `socket.off()`. *(Fixed: PR #70)*
-- [x] **[HIGH]** `client/src/pages/ChiefOfStaff.jsx` - Incorrect `socket.off()`. *(Fixed: PR #70)*
-- [x] **[HIGH]** `client/src/pages/Instances.jsx` - Incorrect `socket.off()`. *(Fixed: PR #70)*
-- [x] **[HIGH]** `client/src/pages/AIProviders.jsx` - Stale closure. *(Fixed: PR #70)*
-- [x] **[MEDIUM]** `client/src/services/api.js` - Missing `response.ok` check. *(Fixed: PR #69)*
-
-### Test Coverage (tracked, not auto-remediated)
-- [ ] **[CRITICAL]** `server/services/cos.js` - No service tests for core 3827-line business logic
-- [ ] **[CRITICAL]** `server/services/subAgentSpawner.js` - Partial tests (657 lines), most spawn logic untested
-- [ ] **[HIGH]** `server/services/instances.js` - No tests for federation logic
-- [ ] **[HIGH]** `server/services/digital-twin.js` - No tests for 2823-line service
-- [ ] **[HIGH]** `server/services/memory.js` - No tests for CRUD and search
-- [ ] **[HIGH]** `server/services/brain.js` - No service tests (route tests only)
-- [ ] **[HIGH]** `server/services/pm2.js` - No tests for process management
-- [ ] **[HIGH]** `server/services/shell.js` - No tests for PTY sessions
-- [ ] Overall: 29.4% service coverage (35/119), 12.0% route coverage (6/50)
-
-## Better Audit - 2026-03-05 (Pass 2)
-
-Summary: 18 new findings across 16 files. 2 shared utilities to extract.
-
-### Foundation — Shared Utilities
-1. **dateUtils** — `getDateString(date)` → `date.toISOString().split('T')[0]`. Replaces duplicates in agentActivity.js, productivity.js. Add to `server/lib/fileUtils.js`.
-2. **timeConstants** — `HOUR`, `DAY` constants. Replaces duplicates in autonomousJobs.js, taskSchedule.js. Add to `server/lib/fileUtils.js`.
-
-### File Ownership Map
-
-| File | Primary Category | Reason |
-|------|-----------------|--------|
-| `server/services/cos.js` | Bugs & Perf | CRITICAL TOCTOU race condition |
-| `server/services/cosRunnerClient.js` | Bugs & Perf | Missing fetch timeout |
-| `client/src/pages/PromptManager.jsx` | Bugs & Perf | Missing fetch error handling |
-| `server/services/mediaService.js` | Code Quality | Class-based → functional |
-| `client/src/hooks/useTheme.js` | Code Quality | Empty catch blocks |
-| `server/services/runner.js` | Code Quality | Silent JSON parse catch |
-| `server/lib/db.js` | Code Quality | Silent health check error |
-| `client/src/pages/Settings.jsx` | Code Quality | Empty catch handlers |
-| `server/services/agentActivity.js` | DRY | Duplicate getDateString |
-| `server/services/productivity.js` | DRY | Duplicate getDateString |
-| `server/services/autonomousJobs.js` | DRY | Duplicate time constants |
-| `server/services/taskSchedule.js` | DRY | Duplicate time constants |
-| `server/lib/logger.js` | DRY | Unused module — DELETE |
-| `server/lib/logger.test.js` | DRY | Unused test — DELETE |
-| `server/lib/fileUtils.js` | DRY | Add shared getDateString + time constants |
-| `server/integrations/moltworld/api.js` | Stack-Specific | Missing fetch timeout |
-| `server/integrations/moltbook/api.js` | Stack-Specific | Missing fetch timeout |
-
-### Bugs, Performance & Error Handling
-- [ ] **[CRITICAL]** `server/services/cos.js:3103,3394,3454,3486,3526` - TOCTOU race condition: addTask, updateTask, deleteTask, reorderTasks, approveTask lack withStateLock mutex. Concurrent calls lose data. Fix: Wrap read-modify-write in withStateLock(). Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/cosRunnerClient.js:237-268` - executeCliRunViaRunner() fetch has no timeout. Fix: Add AbortController with 60s timeout. Complexity: Simple
-- [ ] **[HIGH]** `client/src/pages/PromptManager.jsx:85-91,95-100,112-127` - Multiple fetch calls missing response.ok check. Fix: Add error handling with toast notifications. Complexity: Simple
-
-### Code Quality & Style
-- [ ] **[HIGH]** `server/services/mediaService.js:4-186` - Class-based implementation violates functional programming convention. Fix: Convert to functional module with closures. Complexity: Medium
-- [ ] **[MEDIUM]** `client/src/hooks/useTheme.js:123,136` - Empty .catch(() => {}) swallows errors. Fix: Add console.log with warning. Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/runner.js:140` - Silent try/catch on JSON parse without logging. Fix: Add warning log. Complexity: Simple
-- [ ] **[MEDIUM]** `server/lib/db.js:87-89` - Health check error swallowed without logging. Fix: Add error log. Complexity: Simple
-- [ ] **[MEDIUM]** `client/src/pages/Settings.jsx:23,30` - Empty .catch(() => {}) handlers. Fix: Add toast.error() feedback. Complexity: Simple
-
-### DRY & YAGNI
-- [ ] **[HIGH]** `server/services/agentActivity.js:42` + `server/services/productivity.js:28` - Duplicate getDateString. Fix: Extract to fileUtils.js. Complexity: Simple
-- [ ] **[HIGH]** `server/services/autonomousJobs.js:5-6` + `server/services/taskSchedule.js:9-10` - Duplicate HOUR/DAY constants. Fix: Extract to fileUtils.js. Complexity: Simple
-- [ ] **[HIGH]** `server/lib/logger.js` - Unused 84-line module (0 imports). Fix: Delete file and its test. Complexity: Simple
-
-### Stack-Specific (Node/React)
-- [ ] **[MEDIUM]** `server/integrations/moltworld/api.js:41` + `server/integrations/moltbook/api.js:84` - Fetch calls without timeout. Fix: Add AbortController with 10s timeout. Complexity: Simple
-
-### Architecture & SOLID (tracked, not auto-remediated)
-- [ ] **[CRITICAL]** `server/services/cos.js` ↔ `server/services/subAgentSpawner.js` - Circular dependency via dynamic imports. (Complexity: Complex)
-- [ ] **[HIGH]** `server/routes/apps.js:68-77,126-135` - Duplicated app status computation logic. (Complexity: Simple)
-- [ ] **[HIGH]** `server/routes/scaffold.js` (1270 lines) - God route file mixing navigation, templates, scaffolding, GitHub. (Complexity: Medium)
-
-### Test Coverage (tracked, not auto-remediated)
-- Same gaps as Pass 1 — see above section.
-
----
-
-## Better Audit - 2026-03-05 (Pass 3)
-
-Summary: 22 new actionable findings across 16 files. 1 shared utility to extract (fetchWithTimeout).
-
-### Foundation — Shared Utilities
-1. **fetchWithTimeout** — `fetchWithTimeout(url, options, timeoutMs)` wraps fetch with AbortController timeout. Replaces 8+ duplicate patterns in cosRunnerClient.js, memoryClassifier.js, visionTest.js, lmStudioManager.js, etc. Create as `server/lib/fetchWithTimeout.js`.
-
-### File Ownership Map
-
-| File | Primary Category | Reason |
-|------|-----------------|--------|
-| `server/services/cosRunnerClient.js` | Bugs & Perf | CRITICAL: 12 fetch calls missing timeouts + socket config |
-| `server/services/memory.js` | Bugs & Perf | HIGH: data race in getMemory + MEDIUM: sorting type safety |
-| `server/services/agentActionExecutor.js` | Bugs & Perf | HIGH: unsafe array fallback |
-| `server/services/cos.js` | Bugs & Perf | MEDIUM: migration error + lazy-load race |
-| `server/services/memorySync.js` | Code Quality | HIGH: unsafe rows[0] access |
-| `server/lib/db.js` | Code Quality | HIGH: unsafe rows[0] destructuring |
-| `server/services/lmStudioManager.js` | Code Quality | MEDIUM: hardcoded localhost |
-| `server/services/memoryClassifier.js` | Code Quality | MEDIUM: hardcoded localhost |
-| `client/src/pages/Browser.jsx` | Code Quality | MEDIUM: empty catch |
-| `client/src/pages/Shell.jsx` | Code Quality | MEDIUM: empty catch |
-| `client/src/components/cos/TaskAddForm.jsx` | Code Quality | MEDIUM: empty catch |
-| `client/src/hooks/useAgentFeedbackToast.jsx` | Code Quality | MEDIUM: empty catch |
-| `client/src/components/meatspace/HealthCategorySection.jsx` | Code Quality | MEDIUM: empty catch |
-| `client/src/pages/DevTools.jsx` | Code Quality | MEDIUM: stale closure |
-| `server/services/contextUpgrader.js` | Code Quality | MEDIUM: unused 350-line module (DELETE) |
-| `server/lib/fetchWithTimeout.js` | Foundation | NEW: shared utility |
-
-### Bugs, Performance & Error Handling
-- [ ] **[CRITICAL]** `server/services/cosRunnerClient.js:91-313` - 12 fetch calls missing AbortController/timeout (only spawnAgentViaRunner and executeCliRunViaRunner have timeouts). Fix: Use fetchWithTimeout for all calls. Complexity: Simple
-- [ ] **[HIGH]** `server/services/cosRunnerClient.js:19-26` - Socket.IO with `reconnectionAttempts: Infinity` and no error handler. Fix: Cap at 10, add error handler. Complexity: Simple
-- [ ] **[HIGH]** `server/services/memory.js:203-214` - Data race: loadMemory() called outside withMemoryLock, then accessCount incremented inside lock. Fix: Move loadMemory inside lock. Complexity: Simple
-- [ ] **[HIGH]** `server/services/agentActionExecutor.js:137` - Unsafe fallback: `commentsResponse.comments || commentsResponse || []` may yield non-array. Fix: Use Array.isArray check. Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/cos.js:211-221` - Migration rename fallback: copy failure silently swallowed. Fix: Add error propagation in fallback path. Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/memory.js:220-265` - Sort comparison not type-safe for dates (ISO strings compared as numbers via `|| 0`). Fix: Add type-aware comparison. Complexity: Medium
-- [ ] **[MEDIUM]** `server/services/cos.js:83-101` - Agent index lazy-load race: concurrent calls both trigger migration. Fix: Use promise-based singleton pattern. Complexity: Medium
-
-### Code Quality & Style
-- [ ] **[HIGH]** `server/services/memorySync.js:156` - `result.rows[0].max_seq` without checking rows length. Fix: Add bounds check. Complexity: Simple
-- [ ] **[HIGH]** `server/lib/db.js:85` - Destructuring `result.rows[0]` without row existence check. Fix: Add bounds check. Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/lmStudioManager.js:12` - Hardcoded `http://localhost:1234`. Fix: Use `process.env.LM_STUDIO_URL` with fallback. Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/memoryClassifier.js:24` - Hardcoded `http://localhost:1234/v1/chat/completions`. Fix: Use env var with fallback. Complexity: Simple
-- [ ] **[MEDIUM]** `client/src/pages/Browser.jsx:87`, `client/src/pages/Shell.jsx:81`, `client/src/components/cos/TaskAddForm.jsx:106`, `client/src/hooks/useAgentFeedbackToast.jsx:43`, `client/src/components/meatspace/HealthCategorySection.jsx:48` - Empty `.catch(() => {})` swallowing errors. Fix: Replace with `console.warn`. Complexity: Simple
-- [ ] **[MEDIUM]** `client/src/pages/DevTools.jsx:21-40` - Stale closure risk: `loadData` depends on `filter` but not wrapped in useCallback. Fix: Wrap in useCallback with [filter] dep. Complexity: Simple
-- [ ] **[MEDIUM]** `server/services/contextUpgrader.js` - Unused 350-line module with 0 imports. Fix: DELETE file. Complexity: Simple
-
-### Architecture & SOLID (tracked, not auto-remediated)
-- [ ] **[CRITICAL]** `server/services/cos.js` (3837 lines) - God file with 40+ exports. evaluateTasks() is 346 lines with 5-level nesting. (Complexity: Very Complex)
-- [ ] **[CRITICAL]** `server/services/subAgentSpawner.js` (3284 lines) - 10 imports from cos.js, spawnDirectly/spawnViaRunner have 11/10 parameters. (Complexity: Very Complex)
-- [ ] **[HIGH]** `client/src/services/api.js` (1627 lines) - Monolithic API client mixing 20+ domains. (Complexity: Medium)
-- [ ] **[HIGH]** `server/services/digital-twin.js` (2823 lines) - Mixed CRUD, LLM testing, enrichment, export. (Complexity: Complex)
-- [ ] **[HIGH]** `server/routes/cos.js` (1253 lines) - Business logic mixed with HTTP handlers. (Complexity: Medium)
-- [ ] **[HIGH]** `client/src/pages/ChiefOfStaff.jsx` (864 lines) - 24 useState hooks. (Complexity: Medium)
-
-### DRY & YAGNI (tracked for future passes)
-- [ ] **[HIGH]** Duplicate DATA_DIR/path constants in 8+ files — should import from PATHS in fileUtils.js
-- [ ] **[MEDIUM]** 39 instances of `mkdir({recursive:true})` vs centralized `ensureDir()`
-- [ ] **[MEDIUM]** JSON read/write pattern variations (203 occurrences)
-
-### Test Coverage (tracked, not auto-remediated)
-- [ ] **[CRITICAL]** `server/services/cos.js` - No tests for 3837-line core service (45 test cases needed)
-- [ ] **[CRITICAL]** `server/services/cosRunnerClient.js` - No tests for 16 fetch functions (32 test cases needed)
-- [ ] **[CRITICAL]** `server/services/agentActionExecutor.js` - No tests for 661-line service (24 test cases needed)
-- [ ] **[CRITICAL]** `server/services/memorySync.js` - No tests for sync service (18 test cases needed)
-- [ ] **[HIGH]** `server/services/autoFixer.js` - No tests for 301-line service
-- [ ] **[HIGH]** `server/services/subAgentSpawner.test.js` - Tests use copy-pasted logic instead of importing real functions
-- [ ] **[HIGH]** `server/services/digital-twin.test.js` - runTests(), validateCompleteness(), getGapRecommendations() untested
+#### Test Coverage
+- Overall: ~29% service coverage, ~12% route coverage
+- Critical gaps: `server/services/cos.js`, `server/services/cosRunnerClient.js`, `server/services/agentActionExecutor.js`, `server/services/memorySync.js`
+- High gaps: `server/services/autoFixer.js`, `server/services/digital-twin.js`, `server/services/memory.js`, `server/services/brain.js`, `server/services/pm2.js`, `server/services/shell.js`, `server/services/instances.js`
 
 ---
 
 ## Next Actions
 
-1. **M44 P6**: Finish genome/epigenetic migration cleanup — update route comments, remove Genome card from IdentityTab or redirect to `/meatspace/genome`
-2. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights
-3. **M45**: Data Backup & Recovery — protect `./data/` from data loss
-4. **M44 P7**: Apple Health Integration — live sync + bulk XML import (spec above)
-5. **M46**: Unified Search (Cmd+K) — cross-cutting search across all data sources
-6. **M48 P1**: Google Calendar — OAuth2 foundation + calendar read
-7. **M49 P1**: Life Goals — Enhanced goal model with todos and progress tracking
-8. **M48 P2**: Google Calendar — Event CRUD and two-way sync
-9. **M52**: Update Detection — GitHub release polling and update notification
+1. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights
+2. **M45**: Data Backup & Recovery — protect `./data/` from data loss
+3. **M50 P7-P9**: Messages — Digital Twin voice drafting, CoS automation, auto-send with AI review gate
+4. **M34 P5-P7**: Digital Twin — Multi-modal capture, advanced testing, personas
+5. **M48 P1**: Google Calendar — OAuth2 foundation + calendar read
+6. **M49 P1**: Life Goals — Enhanced goal model with todos and progress tracking
+7. **M47**: Push Notifications — Discord/Telegram alerts for agent completions and errors
+8. **M52**: Update Detection — GitHub release polling and update notification

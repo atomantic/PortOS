@@ -263,7 +263,17 @@ export default function GitTab({ appId, appName, repoPath }) {
     if (result) {
       const parts = Object.entries(result.results || {}).map(([k, v]) => `${k}: ${v}`);
       toast.success(`Branch ${branchName} — ${parts.join(', ')}`);
-      await Promise.all([loadGitInfo(), loadRemoteBranches()]);
+      if (local) {
+        setBranches(prev => prev.filter(b => b.name !== branchName));
+      }
+      if (remote) {
+        setRemoteBranches(prev => prev.filter(b => b.name !== branchName));
+      }
+      if (local && !remote) {
+        setRemoteBranches(prev => prev.map(b =>
+          b.name === branchName ? { ...b, hasLocal: false } : b
+        ));
+      }
     }
   };
 
