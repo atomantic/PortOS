@@ -912,10 +912,10 @@ router.post('/jobs', asyncHandler(async (req, res) => {
 // PUT /api/cos/jobs/:id - Update a job
 router.put('/jobs/:id', asyncHandler(async (req, res) => {
   const { name, description, category, type, interval, intervalMs, scheduledTime,
-    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = req.body;
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly } = req.body;
   const job = await autonomousJobs.updateJob(req.params.id, {
     name, description, category, type, interval, intervalMs, scheduledTime,
-    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly
   });
   if (!job) {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
