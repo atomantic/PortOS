@@ -10,6 +10,7 @@ import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import * as taskSchedule from '../services/taskSchedule.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
+import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import * as productivity from '../services/productivity.js';
@@ -17,7 +18,7 @@ import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, sanitizeTaskMetadata } from '../lib/validation.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -62,7 +63,7 @@ const cosConfigSchema = z.object({
   }).optional()
 }).strict();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt'];
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt', 'taskMetadata'];
 
 /**
  * Pick only defined values from body for schedule settings updates
@@ -71,6 +72,22 @@ function pickScheduleSettings(body) {
   const settings = {};
   for (const key of SCHEDULE_FIELDS) {
     if (body[key] !== undefined) settings[key] = body[key];
+  }
+  if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
+    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.intervalMs !== undefined && settings.intervalMs !== null && (typeof settings.intervalMs !== 'number' || settings.intervalMs < 0)) {
+    throw new ServerError('intervalMs must be a non-negative number or null', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.taskMetadata !== undefined && settings.taskMetadata !== null) {
+    if (typeof settings.taskMetadata !== 'object' || Array.isArray(settings.taskMetadata)) {
+      throw new ServerError('taskMetadata must be an object or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const sanitized = sanitizeTaskMetadata(settings.taskMetadata);
+    if (sanitized === null) {
+      throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.taskMetadata = sanitized;
   }
   return settings;
 }
@@ -813,7 +830,8 @@ router.get('/schedule/interval-types', (req, res) => {
 router.get('/jobs', asyncHandler(async (req, res) => {
   const jobs = await autonomousJobs.getAllJobs();
   const stats = await autonomousJobs.getJobStats();
-  res.json({ jobs, stats });
+  const jobsWithGates = jobs.map(j => ({ ...j, hasGate: hasGate(j.id) }));
+  res.json({ jobs: jobsWithGates, stats, registeredGates: getRegisteredGates() });
 }));
 
 // GET /api/cos/jobs/due - Get jobs that are due to run
@@ -831,6 +849,29 @@ router.get('/jobs/intervals', (req, res) => {
 router.get('/jobs/allowed-commands', (req, res) => {
   res.json({ commands: autonomousJobs.getAllowedCommands() });
 });
+
+// GET /api/cos/jobs/gates - Get all registered LLM gates
+router.get('/jobs/gates', asyncHandler(async (req, res) => {
+  const gateIds = getRegisteredGates();
+  const settled = await Promise.allSettled(
+    gateIds.map(async (id) => {
+      const result = await checkJobGate(id);
+      return { jobId: id, ...result };
+    })
+  );
+  const results = settled.map((s, i) =>
+    s.status === 'fulfilled'
+      ? s.value
+      : { jobId: gateIds[i], shouldRun: true, reason: `Gate error (fail-open): ${s.reason?.message || s.reason}`, error: true }
+  );
+  res.json({ gates: results });
+}));
+
+// POST /api/cos/jobs/:id/gate-check - Check a job's LLM gate without running
+router.post('/jobs/:id/gate-check', asyncHandler(async (req, res) => {
+  const result = await checkJobGate(req.params.id);
+  res.json({ jobId: req.params.id, hasGate: hasGate(req.params.id), ...result });
+}));
 
 // GET /api/cos/jobs/:id - Get a single job
 router.get('/jobs/:id', asyncHandler(async (req, res) => {
@@ -870,7 +911,12 @@ router.post('/jobs', asyncHandler(async (req, res) => {
 
 // PUT /api/cos/jobs/:id - Update a job
 router.put('/jobs/:id', asyncHandler(async (req, res) => {
-  const job = await autonomousJobs.updateJob(req.params.id, req.body);
+  const { name, description, category, type, interval, intervalMs, scheduledTime,
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly } = req.body;
+  const job = await autonomousJobs.updateJob(req.params.id, {
+    name, description, category, type, interval, intervalMs, scheduledTime,
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly
+  });
   if (!job) {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -996,7 +1042,17 @@ router.post('/templates/:id/use', asyncHandler(async (req, res) => {
 
 // PUT /api/cos/templates/:id - Update a template
 router.put('/templates/:id', asyncHandler(async (req, res) => {
-  const result = await taskTemplates.updateTemplate(req.params.id, req.body);
+  const { name, icon, description, context, category, provider, model, app } = req.body;
+  const updates = {};
+  if (name !== undefined) updates.name = name;
+  if (icon !== undefined) updates.icon = icon;
+  if (description !== undefined) updates.description = description;
+  if (context !== undefined) updates.context = context;
+  if (category !== undefined) updates.category = category;
+  if (provider !== undefined) updates.provider = provider;
+  if (model !== undefined) updates.model = model;
+  if (app !== undefined) updates.app = app;
+  const result = await taskTemplates.updateTemplate(req.params.id, updates);
   if (result.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
@@ -1083,6 +1139,11 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   const blockedCount = blockedUser.length + blockedCos.length;
   if (blockedCount > 0) {
     const firstBlocked = blockedUser[0] || blockedCos[0];
+    const blockedTasks = [...blockedUser, ...blockedCos].map(t => ({
+      id: t.id,
+      description: t.description?.substring(0, 80) || 'Unknown task',
+      blocker: t.metadata?.blocker || null
+    }));
     insights.push({
       type: 'blocked',
       priority: 'high',
@@ -1090,7 +1151,8 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       title: `${blockedCount} blocked task${blockedCount > 1 ? 's' : ''}`,
       description: firstBlocked?.metadata?.blocker || firstBlocked?.description?.substring(0, 80) || 'Task is blocked',
       action: { label: 'Unblock', route: '/cos/tasks' },
-      count: blockedCount
+      count: blockedCount,
+      tasks: blockedTasks
     });
   }
 

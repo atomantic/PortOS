@@ -128,21 +128,34 @@ export function usePostSession() {
     const q = currentDrill.questions?.[currentQuestionIndex];
     if (!q) return;
     const responseMs = Date.now() - questionStartRef.current;
-    const numValue = value === null ? null : Number(value);
+    const hasFillBlankAnswers = Array.isArray(q.answers) && q.answers.length > 0;
+    const isTextAnswer = typeof q.expected === 'string' || hasFillBlankAnswers;
 
     // For estimation drills, check within tolerance
     let correct;
-    if (currentDrill.type === 'estimation') {
+    let answered;
+    if (hasFillBlankAnswers) {
+      answered = value;
+      const normalized = value !== null ? String(value).toLowerCase().trim() : '';
+      correct = q.answers.some(a => String(a).toLowerCase().trim() === normalized);
+    } else if (isTextAnswer) {
+      answered = value;
+      correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
+    } else if (currentDrill.type === 'estimation') {
+      const raw = (value === null || String(value).trim() === '') ? null : Number(value);
+      answered = (raw !== null && isNaN(raw)) ? null : raw;
       const tolerance = (currentDrill.config?.tolerancePct || 10) / 100;
-      correct = numValue !== null && Math.abs(numValue - q.expected) <= Math.abs(q.expected * tolerance);
+      correct = answered !== null && Math.abs(answered - q.expected) <= Math.abs(q.expected * tolerance);
     } else {
-      correct = numValue === q.expected;
+      const raw = (value === null || String(value).trim() === '') ? null : Number(value);
+      answered = (raw !== null && isNaN(raw)) ? null : raw;
+      correct = answered === q.expected;
     }
 
     const answer = {
       prompt: q.prompt,
       expected: q.expected,
-      answered: numValue,
+      answered,
       correct,
       responseMs
     };

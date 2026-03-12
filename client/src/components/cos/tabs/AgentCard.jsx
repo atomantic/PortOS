@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
+import MarkdownOutput from '../MarkdownOutput';
 import toast from 'react-hot-toast';
 
 // Extract task type from description (matches server-side extractTaskType)
@@ -38,6 +39,53 @@ function extractTaskType(description) {
   if (d.includes('investigate') || d.includes('debug')) return 'investigation';
   if (d.includes('self-improvement') || d.includes('improvement') || d.includes('feature idea')) return 'self-improvement';
   return 'feature';
+}
+
+// Pre-compiled regexes for normalizeDescriptionToMarkdown
+// Avoid lookbehind to support older Safari/iOS runtimes
+const RE_NUMBERED_LIST = /([.!?:]) (\d+)\. /g;
+const RE_DASH_LIST = /([.!?:]) - /g;
+const RE_SECTION_LABELS = / (Expected output|Steps|Success criteria|Actionable focus|Focus|Suggestions?|Notes?|Context|Requirements?|Constraints?|Result|Output|Summary|Details)([: ])/gi;
+
+// Normalize raw task description text into markdown for readable rendering.
+// Descriptions often arrive as a single long line with embedded numbered lists,
+// bullet points, and section headers. This splits them onto separate lines so
+// ReactMarkdown can format them properly.
+function normalizeDescriptionToMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(RE_NUMBERED_LIST, '$1\n$2. ')
+    .replace(RE_DASH_LIST, '$1\n- ')
+    .replace(RE_SECTION_LABELS, '\n\n**$1**$2')
+    .trim();
+}
+
+// Truncated, markdown-rendered task description with expand toggle
+function TaskDescription({ text }) {
+  const [descExpanded, setDescExpanded] = useState(false);
+  const md = useMemo(() => normalizeDescriptionToMarkdown(text), [text]);
+  const isLong = text?.length > 200;
+
+  if (!text) return null;
+
+  return (
+    <div className="mb-2">
+      <div className={`text-sm ${!descExpanded && isLong ? 'max-h-[3.5rem] overflow-hidden relative' : ''}`}>
+        <MarkdownOutput content={md} />
+        {!descExpanded && isLong && (
+          <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-port-card to-transparent" />
+        )}
+      </div>
+      {isLong && (
+        <button
+          onClick={() => setDescExpanded(v => !v)}
+          className="text-xs text-port-accent hover:text-white transition-colors mt-0.5"
+        >
+          {descExpanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function AgentCard({ agent, onKill, onDelete, onResume, completed, liveOutput, durations, onFeedbackChange, remote, peerName }) {
@@ -360,7 +408,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             </span>
           )}
         </div>
-        <p className="text-white text-sm mb-2">{agent.metadata?.taskDescription || agent.taskId}</p>
+        <TaskDescription text={agent.metadata?.taskDescription || agent.taskId} />
 
         {/* JIRA ticket info */}
         {agent.metadata?.jiraTicketId && (

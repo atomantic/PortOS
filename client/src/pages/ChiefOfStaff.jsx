@@ -323,6 +323,35 @@ export default function ChiefOfStaff() {
     setTimeout(() => setSpeaking(false), 2000);
   };
 
+  const handleTaskUnblocked = (taskId) => {
+    setTasks(prev => {
+      const unblockSlice = (slice) => {
+        if (!slice) return slice;
+        const blockedTask = slice.grouped?.blocked?.find(t => t.id === taskId);
+        if (!blockedTask && !slice.tasks?.some(t => t.id === taskId)) return slice;
+        const unblocked = blockedTask
+          ? { ...blockedTask, status: 'pending', metadata: { ...blockedTask.metadata, blocker: undefined } }
+          : null;
+        const currentPending = slice.grouped?.pending || [];
+        const alreadyPending = currentPending.some(t => t.id === taskId);
+        return {
+          ...slice,
+          tasks: slice.tasks?.map(t => t.id === taskId ? { ...t, status: 'pending', metadata: { ...t.metadata, blocker: undefined } } : t),
+          grouped: {
+            ...slice.grouped,
+            blocked: slice.grouped?.blocked?.filter(t => t.id !== taskId) || [],
+            pending: alreadyPending ? currentPending : [...currentPending, ...(unblocked ? [unblocked] : [])]
+          }
+        };
+      };
+      return {
+        ...prev,
+        user: unblockSlice(prev.user),
+        cos: unblockSlice(prev.cos)
+      };
+    });
+  };
+
   const handleHealthCheck = async () => {
     setAgentState('investigating');
     setStatusMessage("Running system health check...");
@@ -735,7 +764,7 @@ export default function ChiefOfStaff() {
         </div>
 
         {/* Actionable Insights - priority items requiring attention */}
-        {activeTab === 'tasks' && <ActionableInsightsBanner />}
+        {activeTab === 'tasks' && <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} />}
 
         {/* Quick Summary - at-a-glance stats on tasks tab only */}
         {activeTab === 'tasks' && <QuickSummary />}

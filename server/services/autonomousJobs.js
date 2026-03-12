@@ -856,6 +856,24 @@ async function recordJobExecution(jobId) {
 }
 
 /**
+ * Record a gate-skip: updates lastRun so the job reschedules at its normal interval,
+ * but does NOT increment runCount since the job didn't actually execute.
+ */
+async function recordJobGateSkip(jobId) {
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job) return null
+
+    job.lastRun = new Date().toISOString()
+    job.updatedAt = job.lastRun
+
+    await saveJobs(data)
+    return job
+  })
+}
+
+/**
  * Toggle a job's enabled state
  * @param {string} jobId
  * @returns {Promise<Object|null>}
@@ -1284,6 +1302,7 @@ export {
   updateJob,
   deleteJob,
   recordJobExecution,
+  recordJobGateSkip,
   toggleJob,
   generateTaskFromJob,
   getJobStats,

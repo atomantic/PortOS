@@ -332,7 +332,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
         </div>
@@ -344,8 +344,24 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   function renderFullFormFields() {
     return (
       <>
-        <div className="flex items-center gap-6 flex-wrap">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
+        {!compact && (
+          <div>
+            <label htmlFor="task-app" className="sr-only">Target application</label>
+            <select
+              id="task-app"
+              value={newTask.app}
+              onChange={e => setNewTask(t => ({ ...t, app: e.target.value }))}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            >
+              <option value="">PortOS (default)</option>
+              {apps?.map(app => (
+                <option key={app.id} value={app.id}>{app.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-x-4 gap-y-2 sm:gap-4 sm:flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none min-h-[44px]">
             <input
               type="checkbox"
               checked={enhancePrompt}
@@ -354,28 +370,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             />
             <span className="flex items-center gap-1.5 text-sm text-gray-400">
               <Sparkles size={14} className="text-yellow-500" />
-              Enhance with AI
+              Enhance
             </span>
           </label>
-        </div>
-        <div className="flex gap-3 items-center">
-          {!compact && (
-            <div className="flex-1">
-              <label htmlFor="task-app" className="sr-only">Target application</label>
-              <select
-                id="task-app"
-                value={newTask.app}
-                onChange={e => setNewTask(t => ({ ...t, app: e.target.value }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              >
-                <option value="">PortOS (default)</option>
-                {apps?.map(app => (
-                  <option key={app.id} value={app.id}>{app.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
             <input
               type="checkbox"
               checked={useWorktree}
@@ -387,7 +385,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Branch + PR
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
             <input
               type="checkbox"
               checked={simplify}
@@ -399,7 +397,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Simplify
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
             <input
               type="checkbox"
               checked={reviewLoop}
@@ -412,7 +410,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </span>
           </label>
           {appHasJira && (
-            <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap">
+            <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
               <input
                 type="checkbox"
                 checked={createJiraTicket}
@@ -421,19 +419,19 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               />
               <span className="flex items-center gap-1.5 text-sm text-gray-400">
                 <Ticket size={14} className="text-blue-400" />
-                Create JIRA ticket
+                JIRA ticket
               </span>
             </label>
           )}
         </div>
-        <div className="flex gap-3">
-          <div>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="sm:w-40">
             <label htmlFor="task-provider" className="sr-only">AI provider</label>
             <select
               id="task-provider"
               value={newTask.provider}
               onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '' }))}
-              className="w-40 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             >
               <option value="">Auto (default)</option>
               {enabledProviders.map(p => (
@@ -448,7 +446,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 id="task-model"
                 value={newTask.model}
                 onChange={e => setNewTask(t => ({ ...t, model: e.target.value }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
               >
                 <option value="">Select model...</option>
                 {availableModels.map(m => (
@@ -463,10 +461,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors"
+            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors min-h-[44px]"
           >
             <Image size={16} aria-hidden="true" />
-            Add Screenshot
+            Screenshot
           </button>
           <input
             ref={fileInputRef}
@@ -480,10 +478,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
           <button
             type="button"
             onClick={() => attachmentInputRef.current?.click()}
-            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors"
+            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors min-h-[44px]"
           >
             <Paperclip size={16} aria-hidden="true" />
-            Attach File
+            Attach
           </button>
           <input
             ref={attachmentInputRef}
@@ -564,45 +562,45 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               onChange={e => setTemplateNameInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && saveAsTemplate()}
               placeholder="Template name..."
-              className="flex-1 px-3 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              className="flex-1 px-3 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
               autoFocus
             />
             <button
               onClick={saveAsTemplate}
-              className="px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors"
+              className="px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors min-h-[44px]"
             >
               Save
             </button>
             <button
               onClick={() => { setShowTemplateSave(false); setTemplateNameInput(''); }}
-              className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-400 rounded-lg text-sm transition-colors"
+              className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-400 rounded-lg text-sm transition-colors min-h-[44px]"
             >
               Cancel
             </button>
           </div>
         )}
         {!compact && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-2 mr-auto">
               <label htmlFor="add-position" className="text-sm text-gray-400">Queue:</label>
               <button
                 id="add-position"
                 type="button"
                 onClick={() => setAddToTop(!addToTop)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors min-h-[44px] ${
                   addToTop
                     ? 'bg-port-accent/20 text-port-accent border border-port-accent/50'
                     : 'bg-port-bg text-gray-400 border border-port-border'
                 }`}
                 aria-pressed={addToTop}
               >
-                {addToTop ? 'Top of Queue' : 'Bottom of Queue'}
+                {addToTop ? 'Top' : 'Bottom'}
               </button>
             </div>
             <button
               onClick={saveAsTemplate}
               type="button"
-              className="flex items-center gap-1 px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-400 hover:text-white rounded-lg text-sm transition-colors min-h-[40px]"
+              className="flex items-center gap-1 px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-400 hover:text-white rounded-lg text-sm transition-colors min-h-[44px]"
               title="Save current form as a reusable template"
             >
               <Bookmark size={14} aria-hidden="true" />
@@ -611,7 +609,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}
-              className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[40px]"
+              className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
             >
               {(isSubmitting || isEnhancing) ? (
                 <>

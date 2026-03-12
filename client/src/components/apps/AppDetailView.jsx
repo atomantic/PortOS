@@ -73,10 +73,18 @@ export default function AppDetailView() {
 
   const handleBuild = async () => {
     setBuildLoading(true);
-    const result = await api.buildApp(appId).catch(() => null);
+    const isSelfBuild = appId === api.PORTOS_APP_ID;
+    const result = await api.buildApp(appId).catch(err => {
+      // Self-build may cause a socket hangup as the server restarts — that's expected
+      if (isSelfBuild) return { selfBuildTriggered: true };
+      toast.error(`Build failed: ${err.message}`);
+      return null;
+    });
     setBuildLoading(false);
     if (result?.success) {
       toast.success(`${app.name} production build complete`);
+    } else if (result?.selfBuildTriggered) {
+      toast.success(`${app.name} build triggered — server may restart`);
     }
   };
 

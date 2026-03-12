@@ -34,6 +34,18 @@ function formatTimeRemaining(ms) {
   return `${minutes}m`;
 }
 
+function toggleMetadataField(metadata, field) {
+  const current = metadata || {};
+  const newMeta = { ...current, [field]: !current[field] };
+  const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v));
+  return Object.keys(active).length ? active : null;
+}
+
+const AGENT_OPTIONS = [
+  { field: 'useWorktree', label: 'Use Worktree', shortLabel: 'WT', description: 'Run in isolated git worktree with branch + PR' },
+  { field: 'simplify', label: 'Run /simplify', shortLabel: '/s', description: 'Review code for reuse and quality before committing' }
+];
+
 function IntervalBadge({ type }) {
   return (
     <span className={`text-xs px-2 py-0.5 rounded ${
@@ -301,6 +313,35 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         )}
       </div>
 
+      <div>
+        <label className="text-sm text-gray-400 block mb-2">Agent Options</label>
+        <div className="space-y-2">
+          {AGENT_OPTIONS.map(({ field, label, description }) => {
+            const enabled = config.taskMetadata?.[field] ?? false;
+            return (
+              <div key={field} className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm text-white">{label}</span>
+                  <p className="text-xs text-gray-500">{description}</p>
+                </div>
+                <button
+                  onClick={() => onUpdate(taskType, { taskMetadata: toggleMetadataField(config.taskMetadata, field) })}
+                  disabled={updating}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    enabled ? 'bg-port-accent' : 'bg-gray-600'
+                  }`}
+                  aria-label={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    enabled ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex gap-2">
         {activeApps.length > 0 ? (
           <div className="relative" ref={appSelectorRef}>
@@ -425,7 +466,7 @@ function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category,
   );
 }
 
-function AppOverrideRow({ app, taskType, globalIntervalType, override, onUpdate }) {
+function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
   const isEnabled = override?.enabled !== false;
   const currentInterval = override?.interval || null;
@@ -440,6 +481,22 @@ function AppOverrideRow({ app, taskType, globalIntervalType, override, onUpdate 
     setUpdating(true);
     const interval = newInterval === '' ? null : newInterval;
     await onUpdate(app.id, taskType, { enabled: isEnabled, interval }).catch(() => {});
+    setUpdating(false);
+  };
+
+  const handleMetaToggle = async (field) => {
+    setUpdating(true);
+    const current = override?.taskMetadata || {};
+    const newMeta = { ...current };
+    if (newMeta[field] !== undefined) {
+      // Already overridden — remove override to inherit global
+      delete newMeta[field];
+    } else {
+      // Set override to opposite of effective value
+      const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
+      newMeta[field] = !effective;
+    }
+    await onUpdate(app.id, taskType, { taskMetadata: Object.keys(newMeta).length ? newMeta : null }).catch(() => {});
     setUpdating(false);
   };
 
@@ -463,6 +520,28 @@ function AppOverrideRow({ app, taskType, globalIntervalType, override, onUpdate 
         <option value="once">Once</option>
         <option value="on-demand">On Demand</option>
       </select>
+
+      {AGENT_OPTIONS.map(({ field, label, shortLabel }) => {
+        const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
+        const hasOverride = override?.taskMetadata?.[field] !== undefined;
+        return (
+          <button
+            key={field}
+            onClick={() => handleMetaToggle(field)}
+            disabled={updating}
+            aria-pressed={effective}
+            aria-label={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+            className={`text-xs px-1.5 py-0.5 rounded transition-colors shrink-0 ${
+              effective
+                ? hasOverride ? 'bg-port-accent/30 text-port-accent' : 'bg-port-accent/15 text-port-accent/60'
+                : hasOverride ? 'bg-gray-600/50 text-gray-400' : 'bg-gray-600/25 text-gray-500'
+            }`}
+            title={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+          >
+            {shortLabel}
+          </button>
+        );
+      })}
 
       <button
         onClick={handleToggle}
@@ -524,6 +603,7 @@ function PerAppOverrideList({ taskType, config, apps, onUpdateOverride, onBulkTo
             app={app}
             taskType={taskType}
             globalIntervalType={config.type}
+            globalTaskMetadata={config.taskMetadata}
             override={appOverrides[app.id]}
             onUpdate={onUpdateOverride}
           />
@@ -742,16 +822,10 @@ export default function ScheduleTab({ apps }) {
     }
   };
 
-  // Backward-compat aliases used in child components
-  const handleUpdateSelfImprovement = handleUpdateTask;
-  const handleUpdateAppImprovement = handleUpdateTask;
-  const handleTriggerSelfImprovement = (taskType) => handleTriggerTask(taskType);
   const handleTriggerAppImprovement = (taskType, appId) => handleTriggerTask(taskType, appId);
-  const handleResetSelfImprovement = handleResetTask;
-  const handleResetAppImprovement = handleResetTask;
 
-  const handleUpdateAppOverride = async (appId, taskType, { enabled, interval }) => {
-    const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled, interval }).catch(err => {
+  const handleUpdateAppOverride = async (appId, taskType, { enabled, interval, taskMetadata }) => {
+    const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled, interval, taskMetadata }).catch(err => {
       toast.error(err.message);
       return null;
     });
