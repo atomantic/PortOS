@@ -261,20 +261,23 @@ export default function GitTab({ appId, appName, repoPath }) {
     });
     setDeleting(null);
     if (result) {
-      const parts = Object.entries(result.results || {}).map(([k, v]) => `${k}: ${v}`);
+      const results = result.results || {};
+      const parts = Object.entries(results).map(([k, v]) => `${k}: ${v}`);
       toast.success(`Branch ${branchName} — ${parts.join(', ')}`);
-      if (local) {
+      const localDeleted = local && results.local === 'deleted';
+      const remoteDeleted = remote && results.remote === 'deleted';
+      if (localDeleted) {
         setBranches(prev => prev.filter(b => b.name !== branchName));
       }
-      if (remote) {
+      if (remoteDeleted) {
         setRemoteBranches(prev => prev.filter(b => b.name !== branchName));
       }
-      if (local && !remote) {
+      if (localDeleted && !remoteDeleted) {
         setRemoteBranches(prev => prev.map(b =>
           b.name === branchName ? { ...b, hasLocal: false } : b
         ));
       }
-      if (remote && !local) {
+      if (remoteDeleted && !localDeleted) {
         setBranches(prev => prev.map(b =>
           b.name === branchName
             ? { ...b, tracking: null, ahead: 0, behind: 0, hasRemote: false }

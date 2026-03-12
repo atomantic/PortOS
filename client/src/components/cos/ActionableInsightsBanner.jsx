@@ -109,7 +109,14 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
           if (insight.type !== 'blocked' || !insight.tasks) return insight;
           const remaining = insight.tasks.filter(t => t.id !== taskId);
           if (remaining.length === 0) return null;
-          return { ...insight, tasks: remaining, title: `${remaining.length} blocked task${remaining.length !== 1 ? 's' : ''} need attention` };
+          const firstTask = remaining[0];
+          return {
+            ...insight,
+            tasks: remaining,
+            count: remaining.length,
+            title: `${remaining.length} blocked task${remaining.length !== 1 ? 's' : ''} need attention`,
+            description: firstTask?.description || insight.description
+          };
         }).filter(Boolean)
       };
     });
