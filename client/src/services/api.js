@@ -1744,7 +1744,7 @@ export const apiDiscoverCalendars = (accountId) => request(`/calendar/sync/${acc
 export const startGoogleAutoConfig = () => request('/calendar/google/auto-configure/start', { method: 'POST' });
 export const navigateGoogleAutoConfig = (step) => request('/calendar/google/auto-configure/navigate', { method: 'POST', body: JSON.stringify({ step }) });
 export const captureGoogleCredentials = () => request('/calendar/google/auto-configure/capture', { method: 'POST' });
-export const runGoogleAutoConfig = () => request('/calendar/google/auto-configure/run', { method: 'POST' });
+export const runGoogleAutoConfig = (email) => request('/calendar/google/auto-configure/run', { method: 'POST', body: JSON.stringify({ email }) });
 export const getDailyReview = (date) => request(`/calendar/review/${date}`);
 export const confirmDailyReviewEvent = (date, data) => request(`/calendar/review/${date}/confirm`, { method: 'POST', body: JSON.stringify(data) });
 export const getDailyReviewHistory = (params = {}) => {

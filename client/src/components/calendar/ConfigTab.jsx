@@ -80,7 +80,10 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleAutoConfigContinue = async () => {
     setAutoConfigBusy(true);
     setAutoConfigStep('running');
-    const result = await api.runGoogleAutoConfig().catch(() => null);
+    // Find the google account's email to pass as test user
+    const googleAccount = accounts.find(a => a.type === 'google-calendar');
+    const email = googleAccount?.email || '';
+    const result = await api.runGoogleAutoConfig(email).catch(() => null);
     setAutoConfigBusy(false);
     if (!result || result.status === 'error') {
       setAutoConfigStep('login');

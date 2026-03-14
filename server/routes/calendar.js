@@ -283,7 +283,8 @@ router.post('/google/auto-configure/capture', asyncHandler(async (req, res) => {
 
 router.post('/google/auto-configure/run', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
-  const result = await googleOAuthAutoConfig.runAutomatedSetup(io);
+  const email = req.body?.email || '';
+  const result = await googleOAuthAutoConfig.runAutomatedSetup(email, io);
   if (result.status === 'error') return res.status(500).json(result);
   res.json(result);
 }));
