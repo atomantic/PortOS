@@ -37,7 +37,8 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
   const [activities, setActivities] = useState([]);
   const [selectedActivity, setSelectedActivity] = useState('');
   const [showProgressForm, setShowProgressForm] = useState(false);
-  const [progressForm, setProgressForm] = useState({ date: new Date().toISOString().slice(0, 10), note: '', durationMinutes: '' });
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const [progressForm, setProgressForm] = useState({ date: todayISO, note: '', durationMinutes: '' });
 
   useEffect(() => {
     api.getActivities().then(setActivities).catch(() => {});
@@ -111,9 +112,14 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
       note: progressForm.note,
       ...(progressForm.durationMinutes ? { durationMinutes: parseInt(progressForm.durationMinutes, 10) } : {})
     });
-    setProgressForm({ date: new Date().toISOString().slice(0, 10), note: '', durationMinutes: '' });
+    setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
     setShowProgressForm(false);
     onRefresh();
+  };
+
+  const resetProgressForm = () => {
+    setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
+    setShowProgressForm(false);
   };
 
   const handleDeleteProgress = async (entryId) => {
@@ -450,7 +456,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
                     Log
                   </button>
                   <button
-                    onClick={() => setShowProgressForm(false)}
+                    onClick={resetProgressForm}
                     className="px-2 py-1 text-xs rounded bg-port-border text-gray-300"
                   >
                     Cancel
