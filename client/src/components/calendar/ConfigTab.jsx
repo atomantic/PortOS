@@ -136,11 +136,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
     const subcalendars = (account.subcalendars || []).map(sc =>
       sc.calendarId === calendarId ? { ...sc, [field]: value } : sc
     );
+    // Update local state immediately for visual feedback
+    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
     setSavingSubcals(account.id);
     const result = await api.updateSubcalendars(account.id, { subcalendars }).catch(() => null);
     setSavingSubcals(null);
     if (!result) return toast.error('Failed to update subcalendars');
-    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
   };
 
   const handleDiscoverCalendars = async (account) => {
@@ -492,9 +493,15 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
-                            {sc.color && (
-                              <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: sc.color }} />
-                            )}
+                            <label className="relative w-4 h-4 shrink-0 cursor-pointer" title="Change color">
+                              <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: sc.color || '#3b82f6' }} />
+                              <input
+                                type="color"
+                                value={sc.color || '#3b82f6'}
+                                onChange={(e) => handleSubcalendarToggle(account, sc.calendarId, 'color', e.target.value)}
+                                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                              />
+                            </label>
                             <div className="min-w-0">
                               <div className={`text-xs font-medium truncate ${sc.dormant ? 'text-gray-500' : 'text-gray-300'}`}>
                                 {sc.name}
