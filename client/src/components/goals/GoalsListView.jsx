@@ -46,6 +46,21 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
 
         <span className="text-sm text-white truncate flex-1">{goal.title}</span>
 
+        {/* Progress pill */}
+        {(goal.progress > 0 || goal.todos?.length > 0) && (
+          <span className="shrink-0 flex items-center gap-1 text-xs text-gray-500">
+            <div className="w-12 h-1.5 rounded-full bg-gray-700 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  goal.progress >= 100 ? 'bg-port-success' : goal.progress >= 50 ? 'bg-port-accent' : 'bg-port-warning'
+                }`}
+                style={{ width: `${goal.progress ?? 0}%` }}
+              />
+            </div>
+            <span className="w-7 text-right">{goal.progress ?? 0}%</span>
+          </span>
+        )}
+
         <span className="text-xs text-gray-500 shrink-0 px-1.5 py-0.5 rounded bg-gray-800">
           {HORIZON_OPTIONS.find(h => h.value === goal.horizon)?.label}
         </span>

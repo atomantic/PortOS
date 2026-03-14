@@ -1757,6 +1757,12 @@ export const getGoalCalendarEvents = (goalId, params = {}) => {
   return request(`/digital-twin/identity/goals/${goalId}/calendar-events${str ? `?${str}` : ''}`);
 };
 
+// Goal Progress & Todos
+export const updateGoalProgress = (goalId, value) => request(`/digital-twin/identity/goals/${goalId}/progress`, { method: 'PUT', body: JSON.stringify({ value }) });
+export const addGoalTodo = (goalId, data) => request(`/digital-twin/identity/goals/${goalId}/todos`, { method: 'POST', body: JSON.stringify(data) });
+export const updateGoalTodo = (goalId, todoId, data) => request(`/digital-twin/identity/goals/${goalId}/todos/${todoId}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteGoalTodo = (goalId, todoId) => request(`/digital-twin/identity/goals/${goalId}/todos/${todoId}`, { method: 'DELETE' });
+
 // Default export for simplified imports
 export default {
   get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),

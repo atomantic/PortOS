@@ -80,6 +80,30 @@ export const addProgressEntrySchema = z.object({
   durationMinutes: z.number().int().min(1).max(1440).optional()
 });
 
+// --- Goal Todo Schemas ---
+
+export const todoPriorityEnum = z.enum(['low', 'medium', 'high']);
+export const todoStatusEnum = z.enum(['pending', 'in-progress', 'done']);
+
+export const addTodoInputSchema = z.object({
+  title: z.string().min(1).max(200),
+  priority: todoPriorityEnum.optional().default('medium'),
+  estimateMinutes: z.number().int().min(1).max(14400).optional()
+});
+
+export const updateTodoInputSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  status: todoStatusEnum.optional(),
+  priority: todoPriorityEnum.optional(),
+  estimateMinutes: z.number().int().min(1).max(14400).nullable().optional()
+});
+
+// --- Goal Progress Percentage Schema ---
+
+export const updateProgressSchema = z.object({
+  value: z.number().min(0).max(100)
+});
+
 // --- Goal-Activity Link Schemas ---
 
 export const linkActivityInputSchema = z.object({

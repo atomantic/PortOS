@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import {
   Target, X, Check, Trash2, Milestone, Calendar, CalendarDays, Clock,
   Heart, DollarSign, Lightbulb, Users, Flame, AlertTriangle, Tag,
-  Link2, Unlink, Activity, Plus, NotebookPen
+  Link2, Unlink, Activity, Plus, NotebookPen, ListTodo, TrendingUp,
+  TrendingDown, Minus, CircleDot
 } from 'lucide-react';
 import * as api from '../../services/api';
 
@@ -29,6 +30,65 @@ const MAX_TAG_LENGTH = 50;
 
 export { CATEGORY_CONFIG, HORIZON_OPTIONS };
 
+function ProgressSlider({ goal, onCommit }) {
+  const [draft, setDraft] = useState(goal.progress ?? 0);
+  const [dragging, setDragging] = useState(false);
+
+  // Sync draft when goal changes externally (not during drag)
+  useEffect(() => {
+    if (!dragging) setDraft(goal.progress ?? 0);
+  }, [goal.progress, dragging]);
+
+  const commit = () => {
+    setDragging(false);
+    if (draft !== (goal.progress ?? 0)) onCommit(draft);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs font-medium text-gray-400">Progress</span>
+        <span className="text-xs text-gray-300 font-mono">{draft}%</span>
+      </div>
+      <input
+        type="range"
+        min="0"
+        max="100"
+        value={draft}
+        onChange={e => { setDragging(true); setDraft(parseInt(e.target.value, 10)); }}
+        onMouseUp={commit}
+        onTouchEnd={commit}
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-port-border accent-port-accent"
+      />
+      {goal.velocity && (
+        <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500">
+          <div className="flex items-center gap-1">
+            {goal.velocity.trend === 'increasing' && <TrendingUp className="w-3 h-3 text-green-400" />}
+            {goal.velocity.trend === 'decreasing' && <TrendingDown className="w-3 h-3 text-red-400" />}
+            {goal.velocity.trend === 'stable' && <Minus className="w-3 h-3 text-gray-400" />}
+            <span>{goal.velocity.percentPerMonth}%/mo</span>
+          </div>
+          {goal.velocity.projectedCompletion && (
+            <span className="text-gray-600">
+              ETA {new Date(goal.velocity.projectedCompletion + 'T00:00:00').toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      )}
+      {goal.timeTracking?.totalMinutes > 0 && (
+        <div className="flex items-center gap-1 mt-1 text-xs text-gray-600">
+          <Clock className="w-3 h-3" />
+          {goal.timeTracking.totalMinutes >= 60
+            ? `${Math.floor(goal.timeTracking.totalMinutes / 60)}h${goal.timeTracking.totalMinutes % 60 ? ` ${goal.timeTracking.totalMinutes % 60}m` : ''}`
+            : `${goal.timeTracking.totalMinutes}m`}
+          {' total'}
+          {goal.timeTracking.weeklyAverage > 0 && ` · ${goal.timeTracking.weeklyAverage}m/wk`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
@@ -42,6 +102,9 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
   const [subcalendars, setSubcalendars] = useState([]);
   const [selectedCalendar, setSelectedCalendar] = useState('');
   const [calendarMatchPattern, setCalendarMatchPattern] = useState('');
+  const [newTodoTitle, setNewTodoTitle] = useState('');
+  const [newTodoPriority, setNewTodoPriority] = useState('medium');
+  const [newTodoEstimate, setNewTodoEstimate] = useState('');
 
   useEffect(() => {
     api.getActivities().then(setActivities).catch(() => {});
@@ -165,6 +228,35 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
 
   const handleUnlinkCalendar = async (subcalendarId) => {
     await api.unlinkGoalCalendar(goal.id, subcalendarId);
+    onRefresh();
+  };
+
+  const handleProgressChange = async (value) => {
+    await api.updateGoalProgress(goal.id, value);
+    onRefresh();
+  };
+
+  const handleAddTodo = async () => {
+    if (!newTodoTitle.trim()) return;
+    await api.addGoalTodo(goal.id, {
+      title: newTodoTitle,
+      priority: newTodoPriority,
+      ...(newTodoEstimate ? { estimateMinutes: parseInt(newTodoEstimate, 10) } : {})
+    });
+    setNewTodoTitle('');
+    setNewTodoPriority('medium');
+    setNewTodoEstimate('');
+    onRefresh();
+  };
+
+  const handleToggleTodo = async (todo) => {
+    const nextStatus = todo.status === 'done' ? 'pending' : 'done';
+    await api.updateGoalTodo(goal.id, todo.id, { status: nextStatus });
+    onRefresh();
+  };
+
+  const handleDeleteTodo = async (todoId) => {
+    await api.deleteGoalTodo(goal.id, todoId);
     onRefresh();
   };
 
@@ -329,6 +421,100 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             <span className="px-2 py-0.5 rounded bg-gray-700 text-gray-400">
               {goal.status}
             </span>
+          </div>
+
+          {/* Progress Bar */}
+          <ProgressSlider goal={goal} onCommit={handleProgressChange} />
+
+          {/* Todos */}
+          <div>
+            <div className="flex items-center gap-1 mb-2">
+              <ListTodo className="w-3.5 h-3.5 text-gray-500" />
+              <span className="text-xs font-medium text-gray-400">
+                Todos ({goal.todos?.filter(t => t.status === 'done').length || 0}/{goal.todos?.length || 0})
+              </span>
+            </div>
+            {goal.todos?.length > 0 && (
+              <div className="space-y-1 mb-2">
+                {goal.todos.map(todo => (
+                  <div key={todo.id} className="flex items-center gap-2 text-xs group">
+                    <button
+                      onClick={() => handleToggleTodo(todo)}
+                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                        todo.status === 'done'
+                          ? 'bg-green-500/20 border-green-500 text-green-400'
+                          : todo.status === 'in-progress'
+                            ? 'bg-port-accent/20 border-port-accent text-port-accent'
+                            : 'border-gray-600 hover:border-port-accent'
+                      }`}
+                    >
+                      {todo.status === 'done' && <Check className="w-3 h-3" />}
+                      {todo.status === 'in-progress' && <CircleDot className="w-2.5 h-2.5" />}
+                    </button>
+                    <span className={`flex-1 ${todo.status === 'done' ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
+                      {todo.title}
+                    </span>
+                    <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${
+                      todo.priority === 'high' ? 'bg-red-500/20 text-red-400' :
+                      todo.priority === 'low' ? 'bg-gray-700 text-gray-500' :
+                      'bg-yellow-500/20 text-yellow-400'
+                    }`}>
+                      {todo.priority}
+                    </span>
+                    {todo.estimateMinutes && (
+                      <span className="shrink-0 text-gray-600">{todo.estimateMinutes}m</span>
+                    )}
+                    <button
+                      onClick={() => handleDeleteTodo(todo.id)}
+                      className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="space-y-1">
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  value={newTodoTitle}
+                  onChange={e => setNewTodoTitle(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddTodo()}
+                  placeholder="Add todo..."
+                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
+                />
+                <button
+                  onClick={handleAddTodo}
+                  disabled={!newTodoTitle.trim()}
+                  className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+              {newTodoTitle.trim() && (
+                <div className="flex gap-1">
+                  <select
+                    value={newTodoPriority}
+                    onChange={e => setNewTodoPriority(e.target.value)}
+                    className="bg-port-bg border border-port-border rounded px-1.5 py-0.5 text-xs text-white"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={newTodoEstimate}
+                    onChange={e => setNewTodoEstimate(e.target.value)}
+                    placeholder="Est. min"
+                    min="1"
+                    className="w-20 bg-port-bg border border-port-border rounded px-1.5 py-0.5 text-xs text-white"
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Feasibility */}

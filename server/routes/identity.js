@@ -10,7 +10,10 @@ import {
   addMilestoneInputSchema,
   addProgressEntrySchema,
   linkActivityInputSchema,
-  linkCalendarInputSchema
+  linkCalendarInputSchema,
+  addTodoInputSchema,
+  updateTodoInputSchema,
+  updateProgressSchema
 } from '../lib/identityValidation.js';
 
 const router = Router();
@@ -194,6 +197,45 @@ router.get('/goals/:id/calendar-events', asyncHandler(async (req, res) => {
   const { startDate, endDate } = req.query;
   const events = await identityService.getGoalCalendarEvents(req.params.id, startDate, endDate);
   res.json(events);
+}));
+
+// PUT /api/digital-twin/identity/goals/:id/progress — Update progress percentage
+router.put('/goals/:id/progress', asyncHandler(async (req, res) => {
+  const { value } = validateRequest(updateProgressSchema, req.body);
+  const goal = await identityService.updateGoalProgress(req.params.id, value);
+  if (!goal) {
+    throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(goal);
+}));
+
+// POST /api/digital-twin/identity/goals/:id/todos — Add todo
+router.post('/goals/:id/todos', asyncHandler(async (req, res) => {
+  const data = validateRequest(addTodoInputSchema, req.body);
+  const todo = await identityService.addTodo(req.params.id, data);
+  if (!todo) {
+    throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.status(201).json(todo);
+}));
+
+// PUT /api/digital-twin/identity/goals/:id/todos/:todoId — Update todo
+router.put('/goals/:id/todos/:todoId', asyncHandler(async (req, res) => {
+  const data = validateRequest(updateTodoInputSchema, req.body);
+  const todo = await identityService.updateTodo(req.params.id, req.params.todoId, data);
+  if (!todo) {
+    throw new ServerError('Goal or todo not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(todo);
+}));
+
+// DELETE /api/digital-twin/identity/goals/:id/todos/:todoId — Delete todo
+router.delete('/goals/:id/todos/:todoId', asyncHandler(async (req, res) => {
+  const result = await identityService.deleteTodo(req.params.id, req.params.todoId);
+  if (!result) {
+    throw new ServerError('Goal or todo not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
 }));
 
 export default router;

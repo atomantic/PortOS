@@ -60,13 +60,13 @@ See [GOALS.md](./GOALS.md) for project goals and direction.
 - [x] **GSD Tab**: Smart State Detection, One-Click Agent Spawn, Actionable Dashboard
 - [x] **M55**: POST Enhancement — Memory builder, imagination drills, training mode, 5-min balanced sessions. See [POST](./docs/features/post.md)
 - [x] **M54**: MeatSpace Life Calendar — "4000 Weeks" mortality-aware time mapping with responsive grid, goal-activity linking, and time feasibility analysis
+- [x] **M45**: Data Backup & Recovery - Rsync-based incremental backup with SHA-256 manifests, PostgreSQL pg_dump, configurable cron schedule, restore with dry-run preview and selective subdirectory restore, Dashboard widget with health status
 
 ### Planned
 
 - [ ] **M50 P1-P4**: Email Management - Gmail + Outlook integration, AI categorization and priority extraction, Digital Twin voice drafting, review-before-send outbox, Brain knowledge capture
 - [ ] **M34 P5-P7**: Digital Twin - Multi-modal capture, advanced testing, personas
 - [ ] **M42 P5**: Unified Digital Twin Identity System - Cross-Insights Engine. See [Identity System](./docs/features/identity-system.md)
-- [ ] **M45**: Data Backup & Recovery - Scheduled backup of `./data/` to external drive or NAS. All persistence is JSON files with zero redundancy — one bad write or disk failure loses brain, identity, health, and memory data. Incremental backup with restore verification.
 - [ ] **M47**: Push Notifications - Webhook-based alerts when agents complete tasks, critical errors occur, or goals stall. Discord/Telegram integration for mobile awareness without needing the dashboard open.
 - [x] **M48 P1-P5**: Google Calendar Integration - MCP push sync, subcalendar management, goal-calendar linking, daily review with auto-progress-logging, dormancy support
 - [x] **M48 P6**: Calendar Consolidation - Moved Life Calendar from MeatSpace to Calendar > Lifetime tab with accuracy improvement tips
@@ -74,35 +74,13 @@ See [GOALS.md](./GOALS.md) for project goals and direction.
 - [x] **M48 P8**: Direct Google Calendar API Sync - `googleapis` npm with OAuth2, sync method selector, token auto-refresh
 - [x] **M48 P9**: Auto-Configure Google OAuth via CDP - one-click browser setup with Playwright-derived selectors
 - [x] **M48 P10**: Calendar UI Polish - subcalendar color coding in Day/Week/Month views with configurable colors, 15-min blocks in Week view, side-by-side overlap layout, declined/cancelled event filtering
-- [ ] **M49 P1-P4**: Life Goals & Todo Planning - Enhanced goal model with todos and milestones, calendar time-blocking, AI-powered periodic check-ins, mortality-aware progress dashboard
+- [x] **M49 P1**: Life Goals — Enhanced goal model with todos, progress percentage, velocity tracking, projected completion, time tracking aggregates
+- [ ] **M49 P2-P4**: Life Goals — Calendar time-blocking, AI-powered periodic check-ins, mortality-aware progress dashboard
 - [ ] **M52**: Update Detection - Poll GitHub releases for new version tags, compare against local `package.json` version, surface update availability in dashboard and settings
 
 ---
 
 ## Planned Feature Details
-
-### M45: Data Backup & Recovery
-
-All PortOS data lives in `./data/` as JSON files with no redundancy. A corrupted write, accidental deletion, or disk failure loses everything — brain captures, digital identity, health records, memory embeddings, agent state, and run history.
-
-**Scheduled Backup**
-- Configurable backup target (external drive path, NAS mount, or rsync destination)
-- Incremental backups using file modification timestamps — only copy changed files
-- Configurable schedule (daily default) via existing automation scheduler
-- Retention policy: keep N daily + N weekly snapshots, prune older
-- Backup manifest with file checksums for integrity verification
-
-**Restore**
-- `POST /api/backup/restore` — restore from a named snapshot
-- Dry-run mode that shows what would change before applying
-- Per-directory selective restore (e.g., restore only `data/brain/` without touching `data/cos/`)
-
-**Dashboard Widget**
-- Last backup time, next scheduled backup, total backup size
-- Backup health status (green/yellow/red based on age and integrity)
-- One-click manual backup trigger
-
-*Touches: new server/services/backup.js, server/routes/backup.js, Dashboard widget, settings.json, automation scheduler*
 
 ### M47: Push Notifications
 
@@ -139,7 +117,7 @@ Extends the existing goal system in `server/services/identity.js` and `data/digi
 
 **Phases:**
 
-- **P1: Enhanced Goal Model & Todos** — Extend goal schema with: progress percentage + history, velocity (percent/month + trend), projected completion date, todo sub-tasks with status/priority/time estimates, time tracking (total minutes, weekly average). Dedicated Goals page with goal list and detail view
+- **P1: Enhanced Goal Model & Todos** *(Complete)* — Added `progress` (0-100), `progressHistory[]`, `todos[]` with priority/estimate/status to goal schema. Velocity (percent/month + trend) and projected completion computed at query time. Time tracking aggregated from progressLog. Progress bars in list view, todo CRUD in detail panel.
 - **P2: Calendar Time-Blocking** (depends on M48 P2) — Schedule recurring goal work sessions on calendar, link calendar events to goals/todos via IDs, track actual time spent from calendar event durations, per-goal calendar config (preferred days, time slot preference, session duration)
 - **P3: Check-in & Evaluation** — Periodic check-in prompts (weekly/monthly configurable per goal), AI evaluator uses Digital Twin + progress data to assess trajectory, timeline adjustment recommendations when behind schedule, CoS autonomous job `job-goal-check-in` for weekly evaluations, check-in history with mood/notes
 - **P4: Dashboard & Visualization** — Goal progress dashboard widget with urgency badges, burn-down / progress timeline charts, integration with existing mortality-aware urgency scoring (M42 P3), "on track" / "behind" / "at risk" status indicators
@@ -321,10 +299,9 @@ Three audit passes identified remaining items across architecture, bugs, code qu
 
 ## Next Actions
 
-1. **M45**: Data Backup & Recovery — protect `./data/` from data loss (highest safety priority)
-2. **M49 P1**: Life Goals — Enhanced goal model with todos, calendar time-blocking, progress tracking
-3. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights
-4. **M50 P7-P9**: Messages — Digital Twin voice drafting, CoS automation, auto-send with AI review gate
-5. **M34 P5-P7**: Digital Twin — Multi-modal capture, advanced testing, personas
-6. **M47**: Push Notifications — Discord/Telegram alerts for agent completions and errors
-7. **M52**: Update Detection — GitHub release polling and update notification
+1. **M49 P1**: Life Goals — Enhanced goal model with todos, calendar time-blocking, progress tracking
+2. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights
+3. **M50 P7-P9**: Messages — Digital Twin voice drafting, CoS automation, auto-send with AI review gate
+4. **M34 P5-P7**: Digital Twin — Multi-modal capture, advanced testing, personas
+5. **M47**: Push Notifications — Discord/Telegram alerts for agent completions and errors
+6. **M52**: Update Detection — GitHub release polling and update notification
