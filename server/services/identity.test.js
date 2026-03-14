@@ -1418,3 +1418,168 @@ describe('Integration: Goal Tree', () => {
     expect(tree.tagIndex).toEqual({});
   });
 });
+
+describe('Integration: Progress Log', () => {
+  let createGoal, addProgressEntry, deleteProgressEntry;
+
+  beforeEach(async () => {
+    vi.resetModules();
+
+    vi.doMock('fs/promises', () => {
+      const store = {};
+      return {
+        readFile: vi.fn(async (path) => {
+          if (store[path]) return store[path];
+          throw new Error('ENOENT');
+        }),
+        writeFile: vi.fn(async (path, data) => {
+          store[path] = data;
+        }),
+        mkdir: vi.fn(async () => {})
+      };
+    });
+
+    vi.doMock('./genome.js', () => ({
+      getGenomeSummary: vi.fn(async () => ({
+        uploaded: true, markerCount: 0, uploadedAt: '2025-01-01T00:00:00.000Z', savedMarkers: {}
+      }))
+    }));
+
+    vi.doMock('./taste-questionnaire.js', () => ({
+      getTasteProfile: vi.fn(async () => ({
+        completedCount: 0, totalSections: 5, overallPercentage: 0, lastSessionAt: null
+      }))
+    }));
+
+    const mod = await import('./identity.js');
+    createGoal = mod.createGoal;
+    addProgressEntry = mod.addProgressEntry;
+    deleteProgressEntry = mod.deleteProgressEntry;
+  });
+
+  it('should add a progress entry to a goal', async () => {
+    const goal = await createGoal({ title: 'Meditate' });
+    const entry = await addProgressEntry(goal.id, { date: '2025-06-01', note: '10 min session', durationMinutes: 10 });
+
+    expect(entry).toBeDefined();
+    expect(entry.id).toMatch(/^prog-/);
+    expect(entry.note).toBe('10 min session');
+    expect(entry.durationMinutes).toBe(10);
+    expect(entry.date).toBe('2025-06-01');
+  });
+
+  it('should return null for non-existent goal', async () => {
+    const result = await addProgressEntry('nonexistent', { date: '2025-06-01', note: 'test' });
+    expect(result).toBeNull();
+  });
+
+  it('should delete a progress entry', async () => {
+    const goal = await createGoal({ title: 'Meditate' });
+    const entry = await addProgressEntry(goal.id, { date: '2025-06-01', note: 'session' });
+    const result = await deleteProgressEntry(goal.id, entry.id);
+    expect(result).toEqual({ deleted: true });
+  });
+
+  it('should return null when deleting non-existent entry', async () => {
+    const goal = await createGoal({ title: 'Meditate' });
+    const result = await deleteProgressEntry(goal.id, 'nonexistent');
+    expect(result).toBeNull();
+  });
+
+  it('should return null when deleting from non-existent goal', async () => {
+    const result = await deleteProgressEntry('nonexistent', 'entry-id');
+    expect(result).toBeNull();
+  });
+});
+
+describe('Integration: Calendar Linking', () => {
+  let createGoal, linkCalendarToGoal, unlinkCalendarFromGoal, getGoals;
+
+  beforeEach(async () => {
+    vi.resetModules();
+
+    vi.doMock('fs/promises', () => {
+      const store = {};
+      return {
+        readFile: vi.fn(async (path) => {
+          if (store[path]) return store[path];
+          throw new Error('ENOENT');
+        }),
+        writeFile: vi.fn(async (path, data) => {
+          store[path] = data;
+        }),
+        mkdir: vi.fn(async () => {})
+      };
+    });
+
+    vi.doMock('./genome.js', () => ({
+      getGenomeSummary: vi.fn(async () => ({
+        uploaded: true, markerCount: 0, uploadedAt: '2025-01-01T00:00:00.000Z', savedMarkers: {}
+      }))
+    }));
+
+    vi.doMock('./taste-questionnaire.js', () => ({
+      getTasteProfile: vi.fn(async () => ({
+        completedCount: 0, totalSections: 5, overallPercentage: 0, lastSessionAt: null
+      }))
+    }));
+
+    const mod = await import('./identity.js');
+    createGoal = mod.createGoal;
+    linkCalendarToGoal = mod.linkCalendarToGoal;
+    unlinkCalendarFromGoal = mod.unlinkCalendarFromGoal;
+    getGoals = mod.getGoals;
+  });
+
+  it('should link a calendar to a goal', async () => {
+    const goal = await createGoal({ title: 'Exercise' });
+    const updated = await linkCalendarToGoal(goal.id, {
+      subcalendarId: 'cal-123', subcalendarName: 'Gym', matchPattern: 'workout'
+    });
+
+    expect(updated.linkedCalendars).toHaveLength(1);
+    expect(updated.linkedCalendars[0].subcalendarId).toBe('cal-123');
+    expect(updated.linkedCalendars[0].subcalendarName).toBe('Gym');
+    expect(updated.linkedCalendars[0].matchPattern).toBe('workout');
+  });
+
+  it('should update existing link on duplicate subcalendarId', async () => {
+    const goal = await createGoal({ title: 'Exercise' });
+    await linkCalendarToGoal(goal.id, {
+      subcalendarId: 'cal-123', subcalendarName: 'Gym', matchPattern: 'workout'
+    });
+    const updated = await linkCalendarToGoal(goal.id, {
+      subcalendarId: 'cal-123', subcalendarName: 'Gym Updated', matchPattern: 'lifting'
+    });
+
+    expect(updated.linkedCalendars).toHaveLength(1);
+    expect(updated.linkedCalendars[0].subcalendarName).toBe('Gym Updated');
+    expect(updated.linkedCalendars[0].matchPattern).toBe('lifting');
+  });
+
+  it('should return null when linking to non-existent goal', async () => {
+    const result = await linkCalendarToGoal('nonexistent', { subcalendarId: 'cal-123', subcalendarName: 'Gym' });
+    expect(result).toBeNull();
+  });
+
+  it('should unlink a calendar from a goal', async () => {
+    const goal = await createGoal({ title: 'Exercise' });
+    await linkCalendarToGoal(goal.id, {
+      subcalendarId: 'cal-123', subcalendarName: 'Gym'
+    });
+    const updated = await unlinkCalendarFromGoal(goal.id, 'cal-123');
+
+    expect(updated.linkedCalendars).toHaveLength(0);
+  });
+
+  it('should return goal unchanged when unlinking non-existent calendar', async () => {
+    const goal = await createGoal({ title: 'Exercise' });
+    const updated = await unlinkCalendarFromGoal(goal.id, 'nonexistent');
+    expect(updated).toBeDefined();
+  });
+
+  it('should return null when unlinking from non-existent goal', async () => {
+    const result = await unlinkCalendarFromGoal('nonexistent', 'cal-123');
+    expect(result).toBeNull();
+  });
+});
