@@ -52,12 +52,23 @@ export async function saveCache(accountId, cache) {
   await writeFile(filePath, JSON.stringify(cache, null, 2));
 }
 
+function filterByEnabledSubcalendars(events, account) {
+  if (!account?.subcalendars?.length) return events;
+  const enabledIds = new Set(
+    account.subcalendars.filter(sc => sc.enabled && !sc.dormant).map(sc => sc.calendarId)
+  );
+  // Only filter events that have a subcalendarId (google-calendar events)
+  return events.filter(e => !e.subcalendarId || enabledIds.has(e.subcalendarId));
+}
+
 export async function getEvents(options = {}) {
   const { accountId, search, startDate, endDate, limit = 50, offset = 0 } = options;
 
   if (accountId) {
     const cache = await loadCache(accountId);
+    const account = await getAccount(accountId);
     let events = cache.events.map(e => ({ ...e, accountId: e.accountId || accountId }));
+    events = filterByEnabledSubcalendars(events, account);
     events = filterBySearch(events, search);
     events = filterByDateRange(events, startDate, endDate);
     return {
@@ -69,13 +80,19 @@ export async function getEvents(options = {}) {
   // Aggregate across all account caches
   await ensureDir(CACHE_DIR);
   const files = await readdir(CACHE_DIR).catch(() => []);
+  const { listAccounts } = await import('./calendarAccounts.js');
+  const accounts = await listAccounts();
+  const accountMap = new Map(accounts.map(a => [a.id, a]));
+
   let allEvents = [];
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
     const fileAccountId = file.replace('.json', '');
     if (!UUID_RE.test(fileAccountId)) continue;
     const cache = await loadCache(fileAccountId);
-    allEvents.push(...cache.events.map(e => ({ ...e, accountId: e.accountId || fileAccountId })));
+    let events = cache.events.map(e => ({ ...e, accountId: e.accountId || fileAccountId }));
+    events = filterByEnabledSubcalendars(events, accountMap.get(fileAccountId));
+    allEvents.push(...events);
   }
   allEvents = filterBySearch(allEvents, search);
   allEvents = filterByDateRange(allEvents, startDate, endDate);
@@ -84,6 +101,24 @@ export async function getEvents(options = {}) {
     events: allEvents.slice(offset, offset + limit),
     total: allEvents.length
   };
+}
+
+export async function purgeDisabledSubcalendars(accountId) {
+  const account = await getAccount(accountId);
+  if (!account?.subcalendars?.length) return { purged: 0 };
+
+  const enabledIds = new Set(
+    account.subcalendars.filter(sc => sc.enabled && !sc.dormant).map(sc => sc.calendarId)
+  );
+  const cache = await loadCache(accountId);
+  const before = cache.events.length;
+  cache.events = cache.events.filter(e => !e.subcalendarId || enabledIds.has(e.subcalendarId));
+  const purged = before - cache.events.length;
+  if (purged > 0) {
+    await saveCache(accountId, cache);
+    console.log(`🧹 Purged ${purged} events from disabled subcalendars for account ${accountId}`);
+  }
+  return { purged, remaining: cache.events.length };
 }
 
 export async function getEvent(accountId, eventId) {

@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { loadCache, saveCache } from './calendarSync.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 function md5(str) {
   return createHash('md5').update(str).digest('hex').slice(0, 12);
@@ -122,8 +123,8 @@ export async function mcpSyncAccount(accountId, io) {
   console.log(`📅 Starting MCP sync for ${account.name} (${enabledCalendars.length} calendars)`);
 
   const { pastDate, futureDate } = getSyncDateRange();
-  const timeMin = pastDate.toISOString().slice(0, 19);
-  const timeMax = futureDate.toISOString().slice(0, 19);
+  const timeMin = pastDate.toISOString();
+  const timeMax = futureDate.toISOString();
 
   const calendarList = enabledCalendars.map(sc => `- Calendar: "${sc.name}", ID: "${sc.calendarId}"`).join('\n');
 
@@ -187,11 +188,11 @@ function parseCalendarJson(output) {
   // Look for {"calendars":...} pattern
   const jsonMatch = output.match(/\{[\s\S]*"calendars"\s*:\s*\[[\s\S]*\]\s*\}/);
   if (jsonMatch) {
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = safeJSONParse(jsonMatch[0], null);
     if (parsed?.calendars) return parsed;
   }
   // Try parsing the entire output as JSON
-  const parsed = JSON.parse(output);
+  const parsed = safeJSONParse(output, null);
   if (parsed?.calendars) return parsed;
   return null;
 }
@@ -229,7 +230,7 @@ Output NOTHING else — just the JSON array.`;
   const match = result.output.match(/\[[\s\S]*\]/);
   if (!match) return { error: 'Failed to parse calendar list from Claude response', status: 502 };
 
-  const calendars = JSON.parse(match[0]);
+  const calendars = safeJSONParse(match[0], null);
   if (!Array.isArray(calendars)) return { error: 'Invalid calendar list format', status: 502 };
 
   // Merge with existing subcalendars (preserve enabled/dormant state)

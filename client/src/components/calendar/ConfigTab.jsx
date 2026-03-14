@@ -211,18 +211,16 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 <option value="google-calendar">Google Calendar (MCP Push)</option>
               </select>
             </div>
-            {form.type === 'outlook-calendar' && (
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))}
-                  placeholder="user@example.com"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-                />
-              </div>
-            )}
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Email{form.type === 'google-calendar' ? ' (used as OAuth test user)' : ''}</label>
+              <input
+                type="email"
+                value={form.email}
+                onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))}
+                placeholder="user@example.com"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+              />
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={handleCreate}

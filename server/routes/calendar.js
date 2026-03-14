@@ -183,6 +183,8 @@ router.put('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
   const { subcalendars } = validateRequest(updateSubcalendarsSchema, req.body);
   const account = await calendarAccounts.updateSubcalendars(req.params.id, subcalendars);
   if (!account) throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
+  // Auto-purge cached events for disabled subcalendars
+  await calendarSync.purgeDisabledSubcalendars(req.params.id);
   req.app.get('io')?.emit('calendar:changed', {});
   res.json(account);
 }));
@@ -265,15 +267,6 @@ router.post('/google/auto-configure/start', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.post('/google/auto-configure/navigate', asyncHandler(async (req, res) => {
-  const { step } = req.body;
-  if (!step) throw new ServerError('Step is required', { status: 400, code: 'VALIDATION_ERROR' });
-  const io = req.app.get('io');
-  const result = await googleOAuthAutoConfig.navigateToStep(step, io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
-  res.json(result);
-}));
-
 router.post('/google/auto-configure/capture', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const result = await googleOAuthAutoConfig.captureCredentials(io);
@@ -285,7 +278,7 @@ router.post('/google/auto-configure/run', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const email = req.body?.email || '';
   const result = await googleOAuthAutoConfig.runAutomatedSetup(email, io);
-  if (result.status === 'error') return res.status(500).json(result);
+  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   res.json(result);
 }));
 

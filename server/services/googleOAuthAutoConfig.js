@@ -81,19 +81,23 @@ async function clickByText(page, texts, maxWait = 10000) {
  * Fill a textbox found by its accessible name.
  */
 async function fillByName(page, name, value) {
+  const safeName = JSON.stringify(name.toLowerCase());
+  const safeValue = JSON.stringify(value);
   return evaluateOnPage(page, `
     (function() {
+      const nameToMatch = ${safeName};
+      const valueToSet = ${safeValue};
       const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
       for (const input of inputs) {
         const label = input.getAttribute('aria-label') || '';
         const placeholder = input.getAttribute('placeholder') || '';
         const id = input.id || '';
         const formLabel = input.closest('[class*="form"]')?.querySelector('label')?.textContent || '';
-        if ([label, placeholder, formLabel].some(t => t.toLowerCase().includes('${name.toLowerCase()}'))) {
+        if ([label, placeholder, formLabel].some(t => t.toLowerCase().includes(nameToMatch))) {
           input.focus();
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-          if (setter) { setter.call(input, '${value}'); }
-          else { input.value = '${value}'; }
+          if (setter) { setter.call(input, valueToSet); }
+          else { input.value = valueToSet; }
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
           return true;

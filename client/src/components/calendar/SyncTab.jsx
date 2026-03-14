@@ -8,7 +8,7 @@ export default function SyncTab({ accounts, onRefresh }) {
   const [syncing, setSyncing] = useState({});
   const [tokenStatus, setTokenStatus] = useState(null);
   const [tokenLoading, setTokenLoading] = useState(true);
-  const [mcpProgress, setMcpProgress] = useState(null);
+  const [mcpProgress, setMcpProgress] = useState({});
 
   const fetchTokenStatus = useCallback(async () => {
     const data = await api.getCalendarTokenStatus().catch(() => null);
@@ -24,6 +24,7 @@ export default function SyncTab({ accounts, onRefresh }) {
     };
     const onSyncCompleted = ({ accountId, newEvents }) => {
       setSyncing(prev => ({ ...prev, [accountId]: null }));
+      setMcpProgress(prev => { const next = {...prev}; delete next[accountId]; return next; });
       toast.success(`Calendar sync complete: ${newEvents ?? 0} events`);
       onRefresh();
     };
@@ -33,7 +34,7 @@ export default function SyncTab({ accounts, onRefresh }) {
     };
 
     const onSyncProgress = ({ accountId, message }) => {
-      setMcpProgress(message);
+      setMcpProgress(prev => ({ ...prev, [accountId]: message }));
     };
 
     socket.on('calendar:sync:started', onSyncStarted);
@@ -58,14 +59,14 @@ export default function SyncTab({ accounts, onRefresh }) {
 
   const handleGoogleSync = async (account) => {
     setSyncing(prev => ({ ...prev, [account.id]: 'syncing' }));
-    setMcpProgress('Starting Google Calendar sync...');
+    setMcpProgress(prev => ({ ...prev, [account.id]: 'Starting Google Calendar sync...' }));
 
     const useApi = account.syncMethod === 'google-api';
     const result = useApi
       ? await api.apiSyncGoogleCalendar(account.id).catch(() => null)
       : await api.mcpSyncGoogleCalendar(account.id).catch(() => null);
 
-    setMcpProgress(null);
+    setMcpProgress(prev => { const next = {...prev}; delete next[account.id]; return next; });
     if (!result || result.error) {
       setSyncing(prev => ({ ...prev, [account.id]: null }));
       if (result?.error?.includes('spawn Claude')) {
@@ -124,8 +125,8 @@ export default function SyncTab({ accounts, onRefresh }) {
                 {syncing[account.id] === 'syncing' ? (
                   <div className="flex items-center gap-2">
                     <RefreshCw size={16} className="text-port-accent animate-spin" />
-                    {mcpProgress && account.type === 'google-calendar' && (
-                      <span className="text-xs text-gray-500">{mcpProgress}</span>
+                    {mcpProgress[account.id] && account.type === 'google-calendar' && (
+                      <span className="text-xs text-gray-500">{mcpProgress[account.id]}</span>
                     )}
                   </div>
                 ) : account.type === 'google-calendar' ? (

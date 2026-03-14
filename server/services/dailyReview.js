@@ -1,6 +1,5 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import * as calendarSync from './calendarSync.js';
 import * as calendarAccounts from './calendarAccounts.js';
