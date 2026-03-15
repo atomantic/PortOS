@@ -326,34 +326,35 @@ Use Playwright MCP to test the app at different viewport sizes:
 
   'feature-ideas': `[Improvement: {appName}] Implement Next Planned Feature
 
-You are working in a git worktree on a feature branch. Your goal is to implement the next planned item from PLAN.md.
+You are working in a git worktree on a feature branch. Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
 
 Repository: {repoPath}
 
 ## Phase 1 — Find the Next Task
 
 1. Read PLAN.md from {repoPath}
-2. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
-3. If no unchecked items exist, stop and report: "PLAN.md has no remaining items."
+2. If PLAN.md does not exist, is empty, or has no unchecked items (\`- [ ]\`), go to **Phase 4 — Brainstorm**.
+3. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
+4. If all unchecked items have \`<!-- NEEDS_INPUT -->\`, go to **Phase 4 — Brainstorm**.
 
 ## Phase 2 — Evaluate Feasibility
 
-4. Read relevant source files to understand the scope of the item
-5. Determine: can this be implemented without user clarification?
+5. Read relevant source files to understand the scope of the item
+6. Determine: can this be implemented without user clarification?
    - Consider: are requirements clear? Are there ambiguous design choices? Does it depend on external decisions?
 
 ## Phase 3a — Implement (if feasible)
 
-6. Implement the feature:
+7. Implement the feature:
    - Write clean, tested code following existing patterns
    - Run tests to ensure nothing is broken
-7. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
-8. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`
-9. Commit with a clear description referencing the PLAN.md item
+8. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+9. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`
+10. Commit with a clear description referencing the PLAN.md item
 
 ## Phase 3b — Request Clarification (if not feasible)
 
-6. Create a file named \`.plan-questions.md\` in the repository root with this format:
+7. Create a file named \`.plan-questions.md\` in the repository root with this format:
    \`\`\`
    # Plan Question: <short title summarizing the PLAN.md item>
 
@@ -364,9 +365,31 @@ Repository: {repoPath}
    - <question 1>
    - <question 2>
    \`\`\`
-7. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line
-8. Commit both changes with message "chore: flag PLAN.md item needing user input"
-9. Do NOT open a PR — stop here`,
+8. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line
+9. Commit both changes with message "chore: flag PLAN.md item needing user input"
+10. Do NOT open a PR — stop here
+
+## Phase 4 — Brainstorm a New Feature
+
+When PLAN.md is missing, empty, or fully completed, brainstorm and implement a new feature:
+
+1. Read GOALS.md from {repoPath} for context on the app's goals and priorities.
+   If no GOALS.md exists, focus on general improvements.
+2. Review the codebase structure, recent git log, and any README or docs to understand the app
+3. Identify ONE small, high-impact feature that:
+   - Aligns with GOALS.md priorities (if available)
+   - Saves user time, improves UX, or makes the app more useful
+   - Is self-contained and completable in one session
+   - Does NOT duplicate existing functionality
+4. Implement the feature:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+5. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+6. Add the feature as a checked item in PLAN.md (create the file if needed):
+   \`\`\`
+   - [x] <description of the feature you implemented>
+   \`\`\`
+7. Commit with a clear description of the feature and rationale`,
 
   'error-handling': `[Improvement: {appName}] Improve Error Handling
 
@@ -561,7 +584,7 @@ Repository: {repoPath}
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
-  'feature-ideas': 3   // v3: implement next PLAN.md item, flag items needing user input
+  'feature-ideas': 4   // v4: brainstorm new feature when PLAN.md is missing/empty/done
 };
 
 // Known previous default prompts for legacy migration.
@@ -633,7 +656,51 @@ Repository: {repoPath}
 
 8. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
 
-9. Commit with a clear description of the feature and rationale`
+9. Commit with a clear description of the feature and rationale`,
+    // v3 default prompt
+    `[Improvement: {appName}] Implement Next Planned Feature
+
+You are working in a git worktree on a feature branch. Your goal is to implement the next planned item from PLAN.md.
+
+Repository: {repoPath}
+
+## Phase 1 — Find the Next Task
+
+1. Read PLAN.md from {repoPath}
+2. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
+3. If no unchecked items exist, stop and report: "PLAN.md has no remaining items."
+
+## Phase 2 — Evaluate Feasibility
+
+4. Read relevant source files to understand the scope of the item
+5. Determine: can this be implemented without user clarification?
+   - Consider: are requirements clear? Are there ambiguous design choices? Does it depend on external decisions?
+
+## Phase 3a — Implement (if feasible)
+
+6. Implement the feature:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+7. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+8. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`
+9. Commit with a clear description referencing the PLAN.md item
+
+## Phase 3b — Request Clarification (if not feasible)
+
+6. Create a file named \`.plan-questions.md\` in the repository root with this format:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+7. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line
+8. Commit both changes with message "chore: flag PLAN.md item needing user input"
+9. Do NOT open a PR — stop here`
   ]
 };
 
@@ -1436,7 +1503,7 @@ function getTaskTypeDescription(taskType) {
     'performance': 'Performance optimization',
     'test-coverage': 'Improve test coverage',
     'documentation': 'Update documentation',
-    'feature-ideas': 'Implement next planned feature',
+    'feature-ideas': 'Implement next planned feature or brainstorm new one',
     'accessibility': 'Accessibility audit',
     'dependency-updates': 'Update dependencies',
     'release-check': 'Check dev for release readiness',
