@@ -249,7 +249,7 @@ export default function MemoryTab({ apps = [] }) {
                       {((memory.confidence || 0) * 100).toFixed(0)}% confidence
                     </span>
                   </div>
-                  <p className="text-white text-sm">{memory.summary || memory.content?.substring(0, 200)}</p>
+                  <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
                   {memory.tags?.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
                       {memory.tags.map(tag => (
@@ -385,7 +385,7 @@ export default function MemoryTab({ apps = [] }) {
                         <span className="text-xs text-port-accent">{(memory.similarity * 100).toFixed(0)}% match</span>
                       )}
                     </div>
-                    <p className="text-white text-sm">{memory.summary || memory.content?.substring(0, 200)}</p>
+                    <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
                     {memory.tags?.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {memory.tags.map(tag => (

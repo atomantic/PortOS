@@ -265,7 +265,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
       memories: pendingMemories.map(m => ({
         id: m.id,
         type: m.type,
-        content: m.content.substring(0, 200),
+        content: m.content,
         confidence: m.confidence
       }))
     });
@@ -281,7 +281,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
         await notifications.addNotification({
           type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
           title: `Memory needs approval`,
-          description: mem.summary || mem.content.substring(0, 100),
+          description: mem.summary || mem.content,
           priority: notifications.PRIORITY_LEVELS.MEDIUM,
           link: '/cos/memory',
           metadata: {
