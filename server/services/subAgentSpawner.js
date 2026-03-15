@@ -2706,12 +2706,12 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${pla
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${task.metadata?.app ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
+${task.metadata?.app && worktreeInfo ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. If there are uncommitted changes from a previous agent or manual work, **stash or discard them** before proceeding — do NOT commit someone else's changes.
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
-- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.
+${worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
 - If the working tree is dirty with changes unrelated to your task, run \`git stash\` to set them aside before starting.
 
 ## Working Directory
