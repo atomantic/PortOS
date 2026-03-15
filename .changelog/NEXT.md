@@ -14,6 +14,8 @@
 
 ## Fixed
 
+- **Self-build crash** — Fixed PortOS build button killing the server mid-build. `npm install` in `server/` triggered PM2's file watcher restart (SIGINT) which killed the build child process. Self-builds now skip server install (already running) and use `shell: true` for proper PATH resolution. Build error messages now include exit code, signal, and stdout/stderr output.
+
 - **Apps page crash** — Fixed `Cannot access 'isNonPm2' before initialization` error caused by self-referencing variable declaration in Apps.jsx
 - **Memory display truncation** — Show full memory text in CoS Memory tab and Telegram notifications instead of truncating to 100-200 characters
 - **CoS task form clarity** — Renamed "Branch + PR" to "Worktree + PR" across task form, schedule tab, and app settings with descriptive tooltips explaining that unchecked means commits go directly to the default branch

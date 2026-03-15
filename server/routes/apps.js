@@ -455,34 +455,41 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
   console.log(`🔨 Building ${app.name}: ${buildCommand}`);
 
   // Install dependencies before building (root + common subdirs) - skip for non-Node apps
+  // For self-builds, skip server/ install to avoid triggering PM2 watch restart
   const isNodeApp = ['npm', 'npx'].includes(cmd);
-  for (const sub of isNodeApp ? ['', 'client', 'server', 'admin'] : []) {
+  const isSelfBuild = app.id === 'portos-default';
+  const installDirs = isNodeApp ? ['', 'client', ...(isSelfBuild ? [] : ['server']), 'admin'] : [];
+  for (const sub of installDirs) {
     const subDir = sub ? join(app.repoPath, sub) : app.repoPath;
     if (existsSync(join(subDir, 'package.json'))) {
       const label = sub || 'root';
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
       const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
-        const child = spawn('npm', ['install'], { cwd: subDir, shell: false, windowsHide: true });
+        const child = spawn('npm', ['install'], { cwd: subDir, shell: true, windowsHide: true });
+        let stdout = '';
         let stderr = '';
         let settled = false;
+        const MAX = 16 * 1024;
         const timer = setTimeout(() => {
-          if (!settled) { settled = true; child.kill('SIGTERM'); resolve({ success: false, stderr: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
+          if (!settled) { settled = true; child.kill('SIGTERM'); resolve({ success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
         }, INSTALL_TIMEOUT_MS);
-        child.stderr.on('data', d => { stderr += d; });
-        child.on('close', code => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: code === 0, stderr: stderr.trim() }); } });
-        child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, stderr: err.message }); } });
+        child.stdout.on('data', d => { if (stdout.length < MAX) stdout += d; });
+        child.stderr.on('data', d => { if (stderr.length < MAX) stderr += d; });
+        child.on('close', exitCode => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: exitCode === 0, exitCode, output: (stderr.trim() || stdout.trim()).slice(0, 1024) }); } });
+        child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, exitCode: -1, output: err.message }); } });
       });
       if (!installResult.success) {
+        console.log(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(0, 300)}`);
         await logAction('build', app.id, app.name, { buildCommand, step: `npm install (${label})` }, false);
-        throw new ServerError(`npm install failed (${label}): ${installResult.stderr}`, { status: 500, code: 'INSTALL_FAILED' });
+        throw new ServerError(`npm install failed (${label}) exit=${installResult.exitCode}: ${installResult.output}`, { status: 500, code: 'INSTALL_FAILED' });
       }
     }
   }
 
   const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const result = await new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: app.repoPath, shell: false, windowsHide: true });
+    const child = spawn(cmd, args, { cwd: app.repoPath, shell: true, windowsHide: true });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -502,18 +509,19 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
       stderr += d;
       if (stderr.length > MAX) stderr = stderr.slice(-MAX);
     });
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code });
+        const output = (stderr.trim() || stdout.trim()).slice(0, 1024);
+        resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code, signal, output });
       }
     });
     child.on('error', err => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        resolve({ success: false, stderr: err.message, code: -1 });
+        resolve({ success: false, stderr: err.message, code: -1, signal: null, output: err.message });
       }
     });
   });
@@ -522,7 +530,8 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
   console.log(`${result.success ? '✅' : '❌'} Build ${result.success ? 'complete' : 'failed'} for ${app.name}`);
 
   if (!result.success) {
-    throw new ServerError(`Build failed: ${result.stderr || `exit code ${result.code}`}`, { status: 500, code: 'BUILD_FAILED' });
+    const detail = result.signal ? `killed by ${result.signal}` : result.output || `exit code ${result.code}`;
+    throw new ServerError(`Build failed: ${detail}`, { status: 500, code: 'BUILD_FAILED' });
   }
 
   res.json({ success: true, output: result.stdout });

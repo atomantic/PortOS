@@ -42,7 +42,7 @@ module.exports = {
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
       watch: ['server'],
-      ignore_watch: ['node_modules', '**/*.test.js', '**/package-lock.json'],
+      ignore_watch: ['**/node_modules', '**/*.test.js', '**/*package-lock*'],
       max_memory_restart: '2G'
     },
     {
