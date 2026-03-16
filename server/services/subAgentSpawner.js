@@ -972,6 +972,21 @@ Review the error, fix the configuration or code issue, and retry the original ta
   return investigationTask;
 }
 
+// Error categories where the LLM API itself is unavailable — spawning an
+// investigation agent would fail for the same reason, so skip it.
+const API_ACCESS_ERROR_CATEGORIES = new Set([
+  'auth-error',
+  'forbidden',
+  'usage-limit',
+]);
+
+async function maybeCreateInvestigationTask(agentId, task, analysis) {
+  if (API_ACCESS_ERROR_CATEGORIES.has(analysis?.category)) return;
+  await createInvestigationTask(agentId, task, analysis).catch(err => {
+    emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
+  });
+}
+
 /**
  * Handle task status update after agent failure.
  * Tracks retry count and blocks the task after MAX_TASK_RETRIES,
@@ -985,9 +1000,7 @@ async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
     emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
       taskId: task.id, category: errorAnalysis.category
     });
-    await createInvestigationTask(agentId, task, errorAnalysis).catch(err => {
-      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-    });
+    await maybeCreateInvestigationTask(agentId, task, errorAnalysis);
     return {
       status: 'blocked',
       metadata: {
@@ -1013,9 +1026,7 @@ async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
       suggestedFix: `Task has failed ${failureCount} consecutive times with ${lastErrorCategory} errors. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
       category: lastErrorCategory
     };
-    await createInvestigationTask(agentId, task, blockedAnalysis).catch(err => {
-      emitLog('warn', `Failed to create investigation task: ${err.message}`, { agentId });
-    });
+    await maybeCreateInvestigationTask(agentId, task, blockedAnalysis);
     return {
       status: 'blocked',
       metadata: {
