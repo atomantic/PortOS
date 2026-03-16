@@ -12,7 +12,7 @@ services:
     container_name: portos-db
     restart: unless-stopped
     ports:
-      - "5561:5432"
+      - "${PGPORT_DOCKER:-5561}:5432"
     environment:
       POSTGRES_DB: portos
       POSTGRES_USER: portos

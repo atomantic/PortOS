@@ -155,7 +155,7 @@ export async function dumpPostgres(outputPath) {
   }
 
   const pgHost = process.env.PGHOST || 'localhost';
-  const pgPort = process.env.PGPORT || '5561';
+  const pgPort = process.env.PGPORT || '5432';
   const pgDb = process.env.PGDATABASE || 'portos';
   const pgUser = process.env.PGUSER || 'portos';
 

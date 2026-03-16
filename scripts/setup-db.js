@@ -3,9 +3,8 @@
 /**
  * Database Setup Script
  *
- * Ensures PostgreSQL + pgvector is running via Docker Compose.
- * Gracefully skips if Docker is not available — the memory system
- * falls back to file-based JSON storage automatically.
+ * Ensures PostgreSQL is available — either via Docker Compose (docker mode)
+ * or the system PostgreSQL (native mode).
  *
  * Called by: npm run setup, npm run update, npm start, npm run dev
  */
@@ -14,9 +13,21 @@ import { execFileSync } from 'child_process';
 import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
+
+// Read PGMODE from .env
+function getMode() {
+  try {
+    const env = readFileSync(join(rootDir, '.env'), 'utf8');
+    const match = env.match(/^PGMODE=(\w+)/m);
+    return match?.[1] || 'docker';
+  } catch {
+    return 'docker';
+  }
+}
 
 // Check if Docker is available
 function hasDocker() {
@@ -56,6 +67,16 @@ function isContainerRunning() {
       cwd: rootDir
     }).toString();
     return output.includes('"running"') || output.includes('"Running"');
+  } catch {
+    return false;
+  }
+}
+
+// Check if native PostgreSQL is accepting connections
+function isNativeReady(port = 5432) {
+  try {
+    execFileSync('pg_isready', ['-h', 'localhost', '-p', String(port)], { stdio: 'pipe' });
+    return true;
   } catch {
     return false;
   }
@@ -134,8 +155,34 @@ async function handleDockerUnavailable(message, issue) {
   }
 }
 
-console.log('🗄️  Setting up PostgreSQL + pgvector...');
+const mode = getMode();
+console.log(`🗄️  Setting up PostgreSQL (mode: ${mode})...`);
 
+if (mode === 'native') {
+  // Native mode: check if system PostgreSQL is running
+  if (isNativeReady()) {
+    console.log('✅ System PostgreSQL ready on port 5432');
+    process.exit(0);
+  }
+
+  // Try to start via Homebrew
+  if (process.platform === 'darwin') {
+    try {
+      console.log('🍺 Starting PostgreSQL via Homebrew...');
+      execFileSync('brew', ['services', 'start', 'postgresql@17'], { stdio: 'pipe' });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+      if (isNativeReady()) {
+        console.log('✅ System PostgreSQL ready on port 5432');
+        process.exit(0);
+      }
+    } catch { /* fall through */ }
+  }
+
+  console.warn('⚠️  Native PostgreSQL not running — run: scripts/db.sh setup-native');
+  process.exit(0);
+}
+
+// Docker mode
 if (!hasDocker()) {
   await handleDockerUnavailable('Docker not found — skipping database setup', 'not_installed');
 }

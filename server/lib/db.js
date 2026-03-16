@@ -13,10 +13,10 @@ if (!process.env.PGPASSWORD) {
   console.warn('⚠️ PGPASSWORD not set — using default. Set PGPASSWORD env var for production.');
 }
 
-// Connection config from environment or defaults matching docker-compose.yml
+// Connection config from environment or defaults
 const pool = new Pool({
   host: process.env.PGHOST || 'localhost',
-  port: parseInt(process.env.PGPORT || '5561', 10),
+  port: parseInt(process.env.PGPORT || '5432', 10),
   database: process.env.PGDATABASE || 'portos',
   user: process.env.PGUSER || 'portos',
   password: process.env.PGPASSWORD || 'portos',

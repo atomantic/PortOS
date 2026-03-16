@@ -19,6 +19,8 @@
 
 ## Changed
 
+- **Native PostgreSQL uses system pg** — Native mode now reuses the existing system PostgreSQL on port 5432 (e.g., Homebrew service) instead of running a separate instance on port 5561. `setup-native` detects an already-running pg, creates the portos user/database, and applies the schema. No dedicated data directory or manual startup needed. Docker mode unchanged on port 5561. Sync between backends is zero-downtime since they run on different ports simultaneously.
+
 - **CoS feature-ideas task** — Agents now implement the next unchecked PLAN.md item instead of inventing features. When user clarification is needed, agents create a `.plan-questions.md` marker and a `plan_question` notification linking to the Documents tab. Added `{appId}` template variable for prompt linking.
 - **CoS task prompt enhancement** — Enhance prompt now instructs the LLM to research the codebase (find relevant files, patterns, conventions), plan the approach, and produce a codebase-grounded prompt with specific file paths and implementation steps instead of generic advice
 

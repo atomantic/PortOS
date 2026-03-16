@@ -8,7 +8,6 @@ import { checkHealth, query } from '../lib/db.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..', '..');
 const dbScript = join(rootDir, 'scripts', 'db.sh');
-const nativeDataDir = join(rootDir, 'data', 'pgdata');
 
 const router = Router();
 
@@ -128,12 +127,15 @@ async function getNativeStats() {
 }
 
 /**
- * Get native data directory disk usage.
+ * Get native PostgreSQL database size via SQL query.
  */
 async function getNativeDiskUsage() {
-  const result = await runCmd('du', ['-sh', nativeDataDir], 5_000);
+  const nativePort = process.env.PGPORT || '5432';
+  const result = await runCmd('bash', ['-c',
+    `PGPASSWORD=${pgPassword} psql -h localhost -p ${nativePort} -U ${pgUser} -d ${pgDb} -tAc "SELECT pg_size_pretty(pg_database_size(current_database()))"`
+  ], 5_000);
   if (result.exitCode !== 0) return null;
-  return result.stdout.trim().split('\t')[0] || null;
+  return result.stdout.trim() || null;
 }
 
 // GET /api/database/status — current mode, connectivity, row counts, resource stats
@@ -158,8 +160,8 @@ router.get('/status', asyncHandler(async (req, res) => {
 
   // Parse native status
   const nativeInstalled = !/Native PostgreSQL not installed/.test(scriptResult.stdout);
-  const nativeRunning = /Native PostgreSQL is running/.test(scriptResult.stdout);
-  const nativeConfigured = nativeInstalled && !/not configured for PortOS/.test(scriptResult.stdout);
+  const nativeRunning = /System PostgreSQL is running/.test(scriptResult.stdout);
+  const nativeConfigured = nativeInstalled && /PortOS database exists/.test(scriptResult.stdout);
 
   // Parse row count
   const rowMatch = scriptResult.stdout.match(/Memories table has (\d+|N\/A) rows/);
@@ -246,64 +248,17 @@ router.post('/switch', asyncHandler(async (req, res) => {
   res.json({ success: true, output: switchResult.stdout + '\n' + startResult.stdout });
 }));
 
-const SYNC_PORT = '5562';
-const pgPort = process.env.PGPORT || '5561';
 const pgUser = process.env.PGUSER || 'portos';
 const pgDb = process.env.PGDATABASE || 'portos';
 const pgPassword = process.env.PGPASSWORD || 'portos';
 
-/**
- * Start the target backend on a temporary port for sync import.
- * Returns a cleanup function to stop the temporary backend.
- * The active backend stays running on the main port untouched.
- */
-async function startTargetOnTempPort(targetMode) {
-  if (targetMode === 'native') {
-    // Start native pg on temp port — won't conflict with active backend on main port
-    const pgCtl = process.env.PG_BIN ? join(process.env.PG_BIN, 'pg_ctl') : 'pg_ctl';
-    const result = await runCmd(pgCtl, [
-      '-D', nativeDataDir, '-l', join(nativeDataDir, 'server.log'),
-      '-o', `-p ${SYNC_PORT}`, 'start'
-    ], 30_000);
-    if (result.exitCode !== 0) return { ok: false, details: result.stderr || result.stdout };
-    // Wait for ready
-    for (let i = 0; i < 15; i++) {
-      const ready = await runCmd('bash', ['-c',
-        `PGPASSWORD=${pgPassword} pg_isready -h localhost -p ${SYNC_PORT} -U ${pgUser}`
-      ], 3_000);
-      if (ready.exitCode === 0) break;
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    return {
-      ok: true,
-      cleanup: () => runCmd(pgCtl, ['-D', nativeDataDir, 'stop', '-m', 'fast'], 15_000)
-    };
-  }
-
-  // Docker: start a temporary container on the temp port using the same volume
-  const syncContainer = 'portos-db-sync';
-  await runCmd('docker', ['rm', '-f', syncContainer], 5_000);
-  const result = await runCmd('docker', [
-    'compose', 'run', '-d', '--no-deps', '--name', syncContainer,
-    '-p', `${SYNC_PORT}:5432`, 'db'
-  ], 60_000);
-  if (result.exitCode !== 0) return { ok: false, details: result.stderr || result.stdout };
-  // Wait for ready
-  for (let i = 0; i < 30; i++) {
-    const ready = await runCmd('bash', ['-c',
-      `PGPASSWORD=${pgPassword} pg_isready -h localhost -p ${SYNC_PORT} -U ${pgUser}`
-    ], 3_000);
-    if (ready.exitCode === 0) break;
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  return {
-    ok: true,
-    cleanup: () => runCmd('docker', ['rm', '-f', syncContainer], 15_000)
-  };
-}
+// Native (5432) and Docker (5561) use different ports, so both can run simultaneously.
+const NATIVE_PORT = '5432';
+const DOCKER_PORT = '5561';
 
 // POST /api/database/sync — copy data from active to non-active backend
-// Uses a temporary port for the target so the active backend never goes down.
+// Since native (5432) and Docker (5561) use different ports, both can be
+// running simultaneously. No need to stop the active backend.
 router.post('/sync', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const emit = (event, data) => io?.emit('database:progress', { event, ...data });
@@ -311,6 +266,8 @@ router.post('/sync', asyncHandler(async (req, res) => {
   const statusResult = await runDbScript(['status']);
   const currentMode = parseDbMode(statusResult.stdout);
   const targetMode = currentMode === 'docker' ? 'native' : 'docker';
+  const sourcePort = currentMode === 'docker' ? DOCKER_PORT : NATIVE_PORT;
+  const targetPort = targetMode === 'docker' ? DOCKER_PORT : NATIVE_PORT;
 
   // Step 1: Export from active database (stays running)
   emit('start', { message: 'Exporting from active database...' });
@@ -323,22 +280,21 @@ router.post('/sync', asyncHandler(async (req, res) => {
   const dumpFile = exportLines[exportLines.length - 1]?.trim();
   console.log(`🗄️ Sync: exported to ${dumpFile}`);
 
-  // Step 2: Start target on temporary port (active backend untouched)
-  emit('start', { message: `Starting ${targetMode} for import...` });
-  const target = await startTargetOnTempPort(targetMode);
-  if (!target.ok) {
-    emit('error', { message: `Failed to start ${targetMode}` });
-    return res.status(500).json({ error: `Failed to start ${targetMode}`, details: target.details });
+  // Step 2: Ensure target is running
+  emit('start', { message: `Checking ${targetMode} is running...` });
+  const readyResult = await runCmd('bash', ['-c',
+    `PGPASSWORD=${pgPassword} pg_isready -h localhost -p ${targetPort} -U ${pgUser}`
+  ], 5_000);
+  if (readyResult.exitCode !== 0) {
+    emit('error', { message: `${targetMode} database not running on port ${targetPort}. Start it first.` });
+    return res.status(400).json({ error: `${targetMode} database not running on port ${targetPort}. Start it first.` });
   }
 
-  // Step 3: Import into target via temp port
-  emit('start', { message: `Importing into ${targetMode}...` });
+  // Step 3: Import into target (active backend untouched — different port)
+  emit('start', { message: `Importing into ${targetMode} (port ${targetPort})...` });
   const importResult = await runCmd('bash', ['-c',
-    `PGPASSWORD=${pgPassword} psql -h localhost -p ${SYNC_PORT} -U ${pgUser} -d ${pgDb} -v ON_ERROR_STOP=1 --single-transaction < "${dumpFile}"`
+    `PGPASSWORD=${pgPassword} psql -h localhost -p ${targetPort} -U ${pgUser} -d ${pgDb} -v ON_ERROR_STOP=1 --single-transaction < "${dumpFile}"`
   ], 120_000);
-
-  // Step 4: Stop temp target regardless of import result
-  await target.cleanup();
 
   if (importResult.exitCode !== 0) {
     emit('error', { message: `Import into ${targetMode} failed` });
@@ -361,14 +317,8 @@ router.post('/start', asyncHandler(async (req, res) => {
     return res.json({ success: result.exitCode === 0, output: result.stdout });
   }
 
-  // Native: use pg_ctl directly
-  const pgBin = process.env.PG_BIN || '';
-  const pgCtl = pgBin ? join(pgBin, 'pg_ctl') : 'pg_ctl';
-  const pgPort = process.env.PGPORT || '5561';
-  const result = await runCmd(pgCtl, [
-    '-D', nativeDataDir, '-l', join(nativeDataDir, 'server.log'),
-    '-o', `-p ${pgPort}`, 'start'
-  ], 30_000);
+  // Native: use db.sh which handles brew services / pg_ctl
+  const result = await runCmd('bash', [dbScript, 'start'], 30_000);
   res.json({ success: result.exitCode === 0, output: result.stdout });
 }));
 
@@ -413,10 +363,13 @@ router.post('/destroy', asyncHandler(async (req, res) => {
     return res.json({ success: true, output: result.stdout });
   }
 
-  // Native: stop and remove data directory
-  await runCmd('bash', [dbScript, 'stop'], 15_000);
-  const result = await runCmd('rm', ['-rf', nativeDataDir], 10_000);
-  res.json({ success: result.exitCode === 0 });
+  // Native: drop the portos database (system pg stays running)
+  const sysUser = process.env.USER || 'portos';
+  const nativePort = process.env.PGPORT || '5432';
+  const result = await runCmd('bash', ['-c',
+    `psql -h localhost -p ${nativePort} -U ${sysUser} -d postgres -c "DROP DATABASE IF EXISTS ${pgDb}"`
+  ], 15_000);
+  res.json({ success: result.exitCode === 0, output: result.stdout });
 }));
 
 // POST /api/database/setup-native — install and configure native PostgreSQL

@@ -11,6 +11,16 @@ const BASE_ENV = {
   TZ: 'UTC'  // All log timestamps and Date operations in UTC
 };
 
+// Read PGMODE from .env to determine PostgreSQL port
+const fs = require('fs');
+const envFile = path.join(__dirname, '.env');
+let pgMode = 'docker';
+try {
+  const envContent = fs.readFileSync(envFile, 'utf8');
+  const modeMatch = envContent.match(/^PGMODE=(\w+)/m);
+  if (modeMatch) pgMode = modeMatch[1];
+} catch { /* no .env file — default to docker */ }
+
 const PORTS = {
   API: 5555,           // Express API server
   UI: 5554,            // Vite dev server (client)
@@ -19,7 +29,8 @@ const PORTS = {
   COS: 5558,           // Chief of Staff agent runner
   AUTOFIXER: 5559,     // Autofixer API
   AUTOFIXER_UI: 5560,  // Autofixer UI
-  POSTGRES: 5561       // PostgreSQL + pgvector (Docker, memory system)
+  POSTGRES_DOCKER: 5561, // PostgreSQL Docker container (host port mapping)
+  POSTGRES: pgMode === 'native' ? 5432 : 5561 // Active PostgreSQL port
 };
 
 module.exports = {

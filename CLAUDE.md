@@ -36,7 +36,7 @@ PortOS is a monorepo with Express.js server (port 5555) and React/Vite client (p
 
 ### Port Allocation
 
-PortOS uses ports 5554-5560. Define all ports in `ecosystem.config.cjs` using the `ports` object:
+PortOS uses ports 5554-5561. In native mode, PostgreSQL uses the system pg on port 5432; in Docker mode, port 5561. Define all ports in `ecosystem.config.cjs` using the `ports` object:
 
 ```javascript
 ports: { api: 5555, health: 5554 }  // labeled ports for documentation
