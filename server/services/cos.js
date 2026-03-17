@@ -1314,7 +1314,7 @@ function getSelfImprovementTaskDescription(taskType) {
     'performance': 'Profile and optimize slow components, queries, and renders',
     'test-coverage': 'Add missing tests for uncovered code paths',
     'documentation': 'Update documentation, comments, and README files',
-    'feature-ideas': 'Implement a feature idea aligned with GOALS.md (worktree+PR)',
+    'feature-ideas': 'Implement a feature idea aligned with GOALS.md and PLAN.md (worktree+PR)',
     'accessibility': 'Audit and fix accessibility issues (ARIA, keyboard nav, contrast)',
     'dependency-updates': 'Check for and safely update outdated dependencies',
     'error-handling': 'Improve error handling patterns and recovery logic',
@@ -1342,7 +1342,7 @@ function getAppImprovementTaskDescription(taskType, app) {
     'typing': `Add/fix TypeScript types in ${app.name}`,
     'ui-bugs': `Review UI for visual bugs in ${app.name}`,
     'mobile-responsive': `Check mobile responsiveness of ${app.name}`,
-    'feature-ideas': `Implement a feature idea for ${app.name} aligned with GOALS.md (worktree+PR)`,
+    'feature-ideas': `Implement a feature idea for ${app.name} aligned with GOALS.md and PLAN.md (worktree+PR)`,
     'release-check': `Verify release readiness for ${app.name}`,
     'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${app.name} (worktree+PR)`
   };
@@ -1752,10 +1752,10 @@ Use model: claude-opus-4-5-20251101 for comprehensive test design`,
 
 Review and improve PortOS documentation:
 
-1. Update PLAN.md:
-   - Mark completed milestones
-   - Add any new features implemented
-   - Document architectural decisions
+1. Update PLAN.md and DONE.md:
+   - Move completed milestones from PLAN.md to DONE.md
+   - Add any new features implemented to DONE.md
+   - Keep PLAN.md focused on next actions and future work
 
 2. Check docs/ folder:
    - Are all features documented?
@@ -1788,18 +1788,20 @@ You are working in a git worktree on a feature branch. Your goal is to implement
 ## Research Phase
 
 1. Read GOALS.md for context on user goals and priorities
-2. Read PLAN.md for the current roadmap and planned work
-3. Search for existing feature idea documents:
+2. Read PLAN.md for the current roadmap and planned work (next actions, audit findings, future ideas)
+3. Read DONE.md to understand what has already been implemented (avoid re-implementing existing features)
+4. Search for existing feature idea documents:
    - Check .planning/research/FEATURES.md for planned features
    - Check .planning/ directory for any feature specs or research docs
    - Check data/COS-GOALS.md for CoS-specific goals
-4. Review recent completed tasks to understand what's already been done
-5. Review recent git log to see what's been implemented recently
+5. Review recent completed tasks to understand what's already been done
+6. Review recent git log to see what's been implemented recently
 
 ## Selection Phase
 
-6. Choose ONE feature to implement that:
+7. Choose ONE feature to implement that:
    - Aligns with GOALS.md priorities
+   - Is NOT already completed in DONE.md (avoid re-implementing shipped features)
    - Is NOT already planned in PLAN.md (avoid duplicating roadmap work)
    - Is NOT already documented in existing feature idea files
    - Is a small, self-contained improvement (completable in one session)
@@ -1807,14 +1809,14 @@ You are working in a git worktree on a feature branch. Your goal is to implement
 
 ## Implementation Phase
 
-7. Implement the feature:
+8. Implement the feature:
    - Write clean, tested code
    - Follow existing patterns in the codebase
    - Run tests to ensure nothing is broken
 
-8. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+9. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
 
-9. Commit with a clear description of the feature and rationale
+10. Commit with a clear description of the feature and rationale
 
 Use model: claude-opus-4-5-20251101 for creative feature development`,
 

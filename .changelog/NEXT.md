@@ -9,6 +9,8 @@
 
 - **App Icon Detection** — Apps can now display their actual project icon (favicon, Xcode AppIcon, etc.) instead of generic SVG icons. Auto-detects icons from well-known paths during app import and config refresh. Supports Xcode/iOS AppIcon.appiconset, web favicons, logos, and common icon locations. Icon served via `GET /api/apps/:id/icon` with fallback to SVG icons. Bulk "Detect Icons" button on Apps page. Apps sorted alphabetically on both Dashboard and Apps pages. App icons shown in Apps list rows.
 
+- **POST Wordplay Training** — New training module with 4 game modes: Compound Chain, Bridge Word, Double Meaning, and Idiom Twist. Trains creative language pattern recognition and wordplay skills.
+
 - **Review Briefing Fullscreen** — Daily Briefing section in Review Hub now has a fullscreen toggle button and increased default content height for better readability
 
 - **Database Management UI** — Switch between Docker and native PostgreSQL from Settings > Database. Shows live status of both backends with connection health, memory count, database size, and table count. Migrate data between backends with one click. Per-backend Backup buttons export SQL dumps from either Docker or native independently. Install/setup native PostgreSQL and fix stale PID files — all from the UI with real-time progress via WebSocket
@@ -24,7 +26,7 @@
 
 - **Native PostgreSQL uses system pg** — Native mode now reuses the existing system PostgreSQL on port 5432 (e.g., Homebrew service) instead of running a separate instance on port 5561. `setup-native` detects an already-running pg, creates the portos user/database, and applies the schema. No dedicated data directory or manual startup needed. Docker mode unchanged on port 5561. Sync between backends is zero-downtime since they run on different ports simultaneously.
 
-- **CoS feature-ideas task** — Agents now implement the next unchecked PLAN.md item instead of inventing features. When user clarification is needed, agents create a `.plan-questions.md` marker and a `plan_question` notification linking to the Documents tab. Added `{appId}` template variable for prompt linking.
+- **CoS feature-ideas task** — Agents now implement the next unchecked PLAN.md item instead of inventing features. When user clarification is needed, agents create a `.plan-questions.md` marker and a `plan_question` notification linking to the Documents tab. Added `{appId}` template variable for prompt linking. Feature-ideas and documentation tasks now read DONE.md alongside PLAN.md to understand what's already been implemented and avoid re-implementing shipped features.
 - **CoS task prompt enhancement** — Enhance prompt now instructs the LLM to research the codebase (find relevant files, patterns, conventions), plan the approach, and produce a codebase-grounded prompt with specific file paths and implementation steps instead of generic advice
 
 ## Fixed
