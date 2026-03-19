@@ -196,8 +196,8 @@ export default function CitySky({ settings }) {
   const currentHourRef = useRef(initialPreset.hour ?? 18);
 
   const skyMaterial = useMemo(() => {
-    const initialTheme = settings?.skyTheme ?? 'cyberpunk';
-    const initialTod = settings?.timeOfDay ?? 'sunset';
+    const initialTheme = skyThemeRef.current;
+    const initialTod = timeOfDayRef.current;
     const initialHour = getTimeOfDayPreset(initialTod, initialTheme).hour ?? 18;
     const preset = getPresetColors(initialTod, initialTheme);
     const initPos = getArcPosition(initialHour);

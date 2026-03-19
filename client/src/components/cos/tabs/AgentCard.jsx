@@ -151,7 +151,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     fetchStats();
     const interval = setInterval(fetchStats, 5000); // Update every 5 seconds
     return () => clearInterval(interval);
-  }, [completed, agent.id]);
+  }, [completed, agent.id, remote]);
 
   const handleKill = async () => {
     if (!onKill) return;
@@ -174,7 +174,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         })
         .finally(() => setLoadingOutput(false));
     }
-  }, [expanded, completed, agent.id, fullOutput, loadingOutput, agent.output]);
+  }, [expanded, completed, agent.id, fullOutput, loadingOutput, remote, agent.output]);
 
   const duration = agent.completedAt
     ? new Date(agent.completedAt) - new Date(agent.startedAt)
@@ -235,9 +235,11 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   }, [duration, durationEstimate, completed]);
 
   // For running agents, use live output; for completed, use fetched full output or stored
-  const output = completed
-    ? (fullOutput || agent.output || [])
-    : (liveOutput || agent.output || []);
+  const output = useMemo(() => (
+    completed
+      ? (fullOutput || agent.output || [])
+      : (liveOutput || agent.output || [])
+  ), [completed, fullOutput, liveOutput, agent.output]);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
   // Extract recent tool activity (last few tool lines) for live display

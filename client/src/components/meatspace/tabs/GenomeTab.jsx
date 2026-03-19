@@ -248,7 +248,7 @@ export default function GenomeTab() {
   const handleClinvarSync = useCallback(async () => {
     setClinvarSyncing(true);
     setClinvarProgress('Starting ClinVar sync...');
-    const result = await api.syncClinvar().catch((err) => {
+    const result = await api.syncClinvar().catch(() => {
       setClinvarProgress('');
       return null;
     });

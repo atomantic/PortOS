@@ -5,7 +5,6 @@ import {
   Sparkles,
   Download,
   Upload,
-  Settings,
   BookOpen,
   Film,
   Music,

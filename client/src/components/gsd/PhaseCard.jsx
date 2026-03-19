@@ -37,7 +37,6 @@ export default function PhaseCard({ phase, pendingAction, appId, expanded, onTog
 
   const status = getPhaseStatus(phase, pendingAction);
   const statusCfg = STATUS_CONFIG[status] || STATUS_CONFIG.unplanned;
-  const StatusIcon = statusCfg.icon;
   const { num, name } = formatPhaseName(phase.id);
   const actionCfg = pendingAction ? ACTION_CONFIG[pendingAction.nextAction] : null;
   const progressPct = phase.totalTasks > 0 ? (phase.completedTasks / phase.totalTasks) * 100 : 0;

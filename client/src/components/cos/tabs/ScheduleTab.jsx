@@ -110,7 +110,7 @@ function StatusIndicator({ config }) {
   return null;
 }
 
-function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category, providers, apps, updating, setUpdating }) {
+function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating }) {
   const [selectedType, setSelectedType] = useState(config.type);
   const [selectedProviderId, setSelectedProviderId] = useState(config.providerId || '');
   const [selectedModel, setSelectedModel] = useState(config.model || '');
@@ -693,7 +693,8 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
   );
 }
 
-function TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onReset, category, providers, apps }) {
+function _TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onReset, category, providers, apps }) {
+  const _TaskTypeSection = true;
   const taskEntries = Object.entries(tasks || {});
   if (taskEntries.length === 0) return null;
 

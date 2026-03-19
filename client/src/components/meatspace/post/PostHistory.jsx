@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
@@ -30,11 +30,7 @@ export default function PostHistory({ onBack }) {
   const [range, setRange] = useState(30);
   const [expandedId, setExpandedId] = useState(null);
 
-  useEffect(() => {
-    loadData();
-  }, [range]);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const from = range > 0
       ? new Date(Date.now() - range * 86400000).toISOString().split('T')[0]
       : undefined;
@@ -44,7 +40,11 @@ export default function PostHistory({ onBack }) {
     ]);
     setSessions((s || []).slice().reverse());
     setStats(st);
-  }
+  }, [range]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const chartData = sessions.slice().reverse().map(s => ({
     date: s.date,

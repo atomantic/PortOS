@@ -315,16 +315,16 @@ export function RunsHistoryPage() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  useEffect(() => {
-    loadRuns();
-  }, [sourceFilter]);
-
-  const loadRuns = async () => {
+  const loadRuns = useCallback(async () => {
     setLoading(true);
     const data = await api.getRuns(100, 0, sourceFilter).catch(() => ({ runs: [] }));
     setRuns(data.runs || []);
     setLoading(false);
-  };
+  }, [sourceFilter]);
+
+  useEffect(() => {
+    loadRuns();
+  }, [loadRuns]);
 
   // Filter runs by source and status
   const filteredRuns = runs.filter(run => {

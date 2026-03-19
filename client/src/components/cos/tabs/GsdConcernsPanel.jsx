@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Bug, Shield, Zap, Package, ChevronDown, ChevronUp, Plus } from 'lucide-react';
+import { Bug, Shield, Zap, Package, ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 

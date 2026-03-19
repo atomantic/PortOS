@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
@@ -78,15 +78,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setQuestion(null);
   }, [gapKey]);
 
-  // Load a question for the active gap's category (only for Q&A categories)
-  useEffect(() => {
-    if (activeCategory && !isListBased) {
-      setSkippedIndices([]);
-      loadQuestion(activeCategory);
-    }
-  }, [activeCategory, isListBased]);
-
-  const loadQuestion = async (category, skipList = []) => {
+  const loadQuestion = useCallback(async (category, skipList = []) => {
     setLoading(true);
     const q = await api.getSoulEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
     if (!q) {
@@ -105,7 +97,15 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setAnswer('');
     setScaleValue(null);
     setLoading(false);
-  };
+  }, [gaps]);
+
+  // Load a question for the active gap's category (only for Q&A categories)
+  useEffect(() => {
+    if (activeCategory && !isListBased) {
+      setSkippedIndices([]);
+      loadQuestion(activeCategory);
+    }
+  }, [activeCategory, isListBased, loadQuestion]);
 
   const handleSubmit = async () => {
     if (!question) return;

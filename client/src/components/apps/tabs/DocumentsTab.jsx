@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, FileText, Pencil, Save, X, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -16,7 +16,16 @@ export default function DocumentsTab({ appId, repoPath }) {
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const fetchDocuments = async () => {
+  const loadDocument = useCallback(async (filename) => {
+    setSelectedDoc(filename);
+    setEditing(false);
+    setLoadingDoc(true);
+    const data = await api.getAppDocument(appId, filename).catch(() => null);
+    setDocContent(data?.content || null);
+    setLoadingDoc(false);
+  }, [appId]);
+
+  const fetchDocuments = useCallback(async () => {
     setLoading(true);
     const data = await api.getAppDocuments(appId).catch(() => ({ documents: [], hasPlanning: false }));
     setDocuments(data.documents || []);
@@ -28,16 +37,7 @@ export default function DocumentsTab({ appId, repoPath }) {
     if (firstExisting && !selectedDoc) {
       loadDocument(firstExisting.filename);
     }
-  };
-
-  const loadDocument = async (filename) => {
-    setSelectedDoc(filename);
-    setEditing(false);
-    setLoadingDoc(true);
-    const data = await api.getAppDocument(appId, filename).catch(() => null);
-    setDocContent(data?.content || null);
-    setLoadingDoc(false);
-  };
+  }, [appId, selectedDoc, loadDocument]);
 
   const enterEditMode = () => {
     setEditContent(docContent || '');
@@ -80,7 +80,7 @@ export default function DocumentsTab({ appId, repoPath }) {
 
   useEffect(() => {
     fetchDocuments();
-  }, [appId]);
+  }, [fetchDocuments]);
 
   if (loading) {
     return <BrailleSpinner text="Loading documents" />;

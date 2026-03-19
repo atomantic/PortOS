@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, AlertTriangle, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, ExternalLink } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -54,6 +54,18 @@ export default function ConfigTab({ accounts, setAccounts }) {
   // Separate provider/model selectors for triage and reply
   const triage = useProviderModels();
   const reply = useProviderModels();
+  const {
+    selectedProviderId: triageSelectedProviderId,
+    selectedModel: triageSelectedModel,
+    setSelectedProviderId: setTriageSelectedProviderId,
+    setSelectedModel: setTriageSelectedModel
+  } = triage;
+  const {
+    selectedProviderId: replySelectedProviderId,
+    selectedModel: replySelectedModel,
+    setSelectedProviderId: setReplySelectedProviderId,
+    setSelectedModel: setReplySelectedModel
+  } = reply;
 
   const loadConfig = useCallback(async () => {
     const settings = await api.getSettings().catch(() => ({}));
@@ -69,12 +81,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
     const triageModel = triageConfig.model || msgConfig.model;
     const replyProviderId = replyConfig.providerId || msgConfig.providerId;
     const replyModel = replyConfig.model || msgConfig.model;
-    if (triageProviderId) triage.setSelectedProviderId(triageProviderId);
-    if (triageModel) triage.setSelectedModel(triageModel);
-    if (replyProviderId) reply.setSelectedProviderId(replyProviderId);
-    if (replyModel) reply.setSelectedModel(replyModel);
+    if (triageProviderId) setTriageSelectedProviderId(triageProviderId);
+    if (triageModel) setTriageSelectedModel(triageModel);
+    if (replyProviderId) setReplySelectedProviderId(replyProviderId);
+    if (replyModel) setReplySelectedModel(replyModel);
     setConfigLoading(false);
-  }, [triage.setSelectedProviderId, triage.setSelectedModel, reply.setSelectedProviderId, reply.setSelectedModel]);
+  }, [setReplySelectedModel, setReplySelectedProviderId, setTriageSelectedModel, setTriageSelectedProviderId]);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
@@ -104,12 +116,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
     const patch = {
       messages: {
         triage: {
-          providerId: triage.selectedProviderId,
-          model: triage.selectedModel
+          providerId: triageSelectedProviderId,
+          model: triageSelectedModel
         },
         reply: {
-          providerId: reply.selectedProviderId,
-          model: reply.selectedModel
+          providerId: replySelectedProviderId,
+          model: replySelectedModel
         },
         replyTemplate: config.replyTemplate,
         forwardTemplate: config.forwardTemplate

@@ -39,7 +39,6 @@ export const computeCityLayout = (apps) => {
   // Warehouse district (archived apps) offset along +Z
   if (archived.length > 0) {
     const archiveCols = Math.max(1, Math.ceil(Math.sqrt(archived.length)));
-    const archiveRows = Math.ceil(archived.length / archiveCols);
     const archiveOffsetX = ((archiveCols - 1) * spacing) / 2;
     const warehouseZ = activeRows * spacing / 2 + DISTRICT_PARAMS.gap;
 

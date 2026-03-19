@@ -4,7 +4,6 @@ import {
   RefreshCw,
   Shield,
   ChevronDown,
-  ChevronRight,
   Eye,
   Settings
 } from 'lucide-react';

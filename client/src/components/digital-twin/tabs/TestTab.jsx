@@ -10,7 +10,6 @@ import {
   RefreshCw,
   History,
   Wand2,
-  Plus,
   ThumbsUp,
   ThumbsDown,
   Minus,

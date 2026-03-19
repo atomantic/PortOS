@@ -5,7 +5,6 @@ import { CITY_COLORS, BUILDING_PARAMS } from './cityConstants';
 
 // Animated road with flowing light pulses
 function RoadSegment({ start, end, color, offset = 0 }) {
-  const lineRef = useRef();
   const pulseRef = useRef();
 
   const length = useMemo(() => {

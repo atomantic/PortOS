@@ -62,7 +62,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     if (!formData) return;
     setTopicsText(formData.personality.topics.join(', '));
     setQuirksText(formData.personality.quirks.join(', '));
-  }, [formData?.personality?.topics, formData?.personality?.quirks]);
+  }, [formData]);
 
   const fetchAccounts = useCallback(async () => {
     const data = await api.getPlatformAccounts(agentId);

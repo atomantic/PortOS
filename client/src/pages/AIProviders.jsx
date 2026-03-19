@@ -34,7 +34,7 @@ export default function AIProviders() {
       setRunOutput(prev => prev + data);
     };
 
-    const handleComplete = (metadata) => {
+    const handleComplete = (_metadata) => {
       setActiveRun(null);
       loadRuns();
     };
@@ -46,7 +46,7 @@ export default function AIProviders() {
       socket.off(`run:${activeRun}:data`, handleData);
       socket.off(`run:${activeRun}:complete`, handleComplete);
     };
-  }, [activeRun]);
+  }, [activeRun, loadRuns]);
 
   const loadData = async () => {
     setLoading(true);

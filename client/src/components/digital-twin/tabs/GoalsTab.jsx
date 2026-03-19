@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Target, Plus, Trash2, Check, ChevronDown, ChevronUp,
-  Calendar, Heart, DollarSign, Lightbulb, Users, Flame,
+  Heart, DollarSign, Lightbulb, Users, Flame,
   Clock, AlertTriangle, Activity, RefreshCw, Milestone
 } from 'lucide-react';
 import * as api from '../../../services/api';

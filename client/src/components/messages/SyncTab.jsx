@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Play, AlertCircle, Settings, Globe, Mail, MailOpen } from 'lucide-react';
+import { RefreshCw, AlertCircle, Settings, Globe, Mail, MailOpen } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../services/api';
 import socket from '../../services/socket';

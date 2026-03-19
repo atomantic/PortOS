@@ -48,7 +48,7 @@ export default function HealthCategorySection({ category, from, to, expanded, on
     });
 
     return () => { cancelled = true; };
-  }, [expanded, rangeKey]);
+  }, [activeMetrics, expanded, from, metricData, rangeKey, to]);
 
   return (
     <div className="border border-port-border rounded-xl overflow-hidden">

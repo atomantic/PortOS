@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Folder, ChevronRight, Home, ArrowUp, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 
@@ -10,12 +10,7 @@ export default function DirectoryPicker({ value, onChange, label = 'Select Direc
   const [error, setError] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
 
-  useEffect(() => {
-    // Load directories and auto-set value if none provided
-    loadDirectories(value || null, !value);
-  }, [value]);
-
-  const loadDirectories = async (path = null, setAsValue = false) => {
+  const loadDirectories = useCallback(async (path = null, setAsValue = false) => {
     setLoading(true);
     setError(null);
 
@@ -35,7 +30,12 @@ export default function DirectoryPicker({ value, onChange, label = 'Select Direc
     }
 
     setLoading(false);
-  };
+  }, [onChange]);
+
+  useEffect(() => {
+    // Load directories and auto-set value if none provided
+    loadDirectories(value || null, !value);
+  }, [loadDirectories, value]);
 
   const handleSelectDirectory = (dirPath) => {
     onChange(dirPath);

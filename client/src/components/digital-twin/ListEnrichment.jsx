@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft,
   Plus,
@@ -49,12 +49,7 @@ export default function ListEnrichment({
   const [showPatterns, setShowPatterns] = useState(true);
   const [showInsights, setShowInsights] = useState(true);
 
-  // Load existing items on mount
-  useEffect(() => {
-    loadExistingItems();
-  }, [categoryId]);
-
-  const loadExistingItems = async () => {
+  const loadExistingItems = useCallback(async () => {
     setLoadingItems(true);
     const existingItems = await api.getEnrichmentListItems(categoryId).catch(() => []);
     if (existingItems && existingItems.length > 0) {
@@ -63,7 +58,11 @@ export default function ListEnrichment({
       setItems([{ title: '', note: '' }]);
     }
     setLoadingItems(false);
-  };
+  }, [categoryId]);
+
+  useEffect(() => {
+    loadExistingItems();
+  }, [loadExistingItems]);
 
   const addItem = () => {
     setItems([...items, { title: '', note: '' }]);

@@ -68,7 +68,7 @@ export default function TasteTab({ onRefresh }) {
   const [loadingReview, setLoadingReview] = useState(false);
 
   // Personalized question state
-  const [personalizedQuestion, setPersonalizedQuestion] = useState(null);
+  const [_personalizedQuestion, setPersonalizedQuestion] = useState(null);
   const [loadingPersonalized, setLoadingPersonalized] = useState(false);
 
   // Behavioral feedback
@@ -746,3 +746,4 @@ export default function TasteTab({ onRefresh }) {
     </div>
   );
 }
+

@@ -33,7 +33,7 @@ export function useAppOperation({ onComplete } = {}) {
     });
   }, []);
 
-  const finish = useCallback((opType) => {
+  const finish = useCallback((_opType) => {
     setIsOperating(false);
     setCompleted(true);
     clearTimerRef.current = setTimeout(() => {

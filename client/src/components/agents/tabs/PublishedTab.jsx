@@ -26,8 +26,8 @@ export default function PublishedTab({ agentId }) {
     const active = data.filter(a => a.status === 'active');
     setAccounts(active);
     // Auto-select first account
-    if (active.length > 0 && !selectedAccountId) {
-      setSelectedAccountId(active[0].id);
+    if (active.length > 0) {
+      setSelectedAccountId(prev => prev || active[0].id);
     }
     setLoading(false);
   }, [agentId]);

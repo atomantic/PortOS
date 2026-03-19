@@ -152,6 +152,7 @@ export default function BrainGraph() {
 
   const graph = useMemo(() => {
     if (!filteredData?.nodes?.length) return null;
+    void layoutKey;
     const g = buildGraph(filteredData.nodes, filteredData.edges);
     graphRef.current = g;
     return g;
@@ -190,7 +191,7 @@ export default function BrainGraph() {
       if (!cancelled) setFullRecord(null);
     });
     return () => { cancelled = true; };
-  }, [selectedNode?.id, selectedNode?.brainType]);
+  }, [selectedNode]);
 
   const handleSelect = useCallback((node) => {
     setSelectedNode(prev => prev?.id === node.id ? null : node);

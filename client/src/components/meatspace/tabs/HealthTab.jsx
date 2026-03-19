@@ -44,7 +44,7 @@ export default function HealthTab() {
         setInitialized(true);
       })
       .catch(() => setInitialized(true));
-  }, []);
+  }, [sectionParam]);
 
   // Scroll to section if specified in URL
   useEffect(() => {

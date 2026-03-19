@@ -35,7 +35,7 @@ const TRIAGE_TABS = [
 
 export default function InboxTab({ accounts }) {
   const [messages, setMessages] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [_total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -322,8 +322,6 @@ export default function InboxTab({ accounts }) {
       <div className="space-y-1">
         {messages.filter((TRIAGE_TABS.find(t => t.key === activeTab) || TRIAGE_TABS[0]).filter).map((msg) => {
           const ev = msg.evaluation;
-          const actionCfg = ev ? ACTION_CONFIG[ev.action] : null;
-          const ActionIcon = actionCfg?.icon;
           return (
             <div
               key={msg.id}
@@ -408,3 +406,4 @@ export default function InboxTab({ accounts }) {
     </div>
   );
 }
+

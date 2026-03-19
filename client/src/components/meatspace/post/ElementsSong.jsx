@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { ChevronLeft, Play, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3 } from 'lucide-react';
+import { ChevronLeft, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3 } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem } from '../../../services/api';
 
 // Standard periodic table layout: [row][col] = symbol or null
@@ -86,7 +86,7 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount }
 }
 
 function ElementsSongMain({ item, mastery, setMode, onBack }) {
-  const elementMap = item.content?.elementMap || {};
+  const elementMap = useMemo(() => item.content?.elementMap ?? {}, [item]);
   const songElements = useMemo(() => {
     const s = new Set();
     for (const line of item.content?.lines || []) {

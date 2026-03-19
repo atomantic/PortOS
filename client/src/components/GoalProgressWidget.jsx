@@ -36,18 +36,6 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
     return intensityMap[engagement]?.[color] || 'bg-gray-500/30';
   };
 
-  const getTextColorClass = (color) => {
-    const colorMap = {
-      emerald: 'text-emerald-400',
-      purple: 'text-purple-400',
-      blue: 'text-blue-400',
-      pink: 'text-pink-400',
-      green: 'text-green-400',
-      gray: 'text-gray-400'
-    };
-    return colorMap[color] || 'text-gray-400';
-  };
-
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
       {/* Header */}

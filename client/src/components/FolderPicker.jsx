@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Folder, FolderOpen, ChevronUp, HardDrive, Home, X, Check, AlertCircle } from 'lucide-react';
 import * as api from '../services/api';
 
@@ -13,7 +13,7 @@ export default function FolderPicker({ value, onChange }) {
   const modalRef = useRef(null);
 
   // Load directory contents
-  const loadDirectory = async (path = null) => {
+  const loadDirectory = useCallback(async (path = null) => {
     setLoading(true);
     setError(null);
     const result = await api.getDirectories(path).catch((err) => {
@@ -27,14 +27,14 @@ export default function FolderPicker({ value, onChange }) {
       setDrives(result.drives ?? null);
     }
     setLoading(false);
-  };
+  }, []);
 
   // Load initial directory when opened
   useEffect(() => {
     if (isOpen) {
       loadDirectory(value || null);
     }
-  }, [isOpen]);
+  }, [isOpen, loadDirectory, value]);
 
   // Close on click outside
   useEffect(() => {

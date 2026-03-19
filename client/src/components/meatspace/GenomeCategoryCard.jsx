@@ -48,7 +48,7 @@ const COLOR_MAP = {
   zinc: 'border-zinc-500/40 bg-zinc-950/40'
 };
 
-export default function GenomeCategoryCard({ category, label, emoji, color, markers, onEditNotes, onDeleteMarker }) {
+export default function GenomeCategoryCard({ category: _category, label, emoji, color, markers, onEditNotes, onDeleteMarker }) {
   const [expanded, setExpanded] = useState(true);
   const [expandedMarker, setExpandedMarker] = useState(null);
 

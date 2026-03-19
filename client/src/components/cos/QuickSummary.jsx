@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
   CheckCircle,
-  Clock,
   Flame,
   ListTodo,
   Zap,

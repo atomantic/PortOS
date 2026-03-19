@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ArrowLeft, Reply, Sparkles, Send, MessageSquare, RefreshCw, Archive, Trash2 } from 'lucide-react';
+import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../services/api';
 

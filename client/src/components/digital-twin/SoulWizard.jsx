@@ -151,7 +151,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
 
       toast.success('Soul document created!');
       onComplete();
-    } catch (error) {
+    } catch {
       toast.error('Failed to create soul document. Please try again.');
     } finally {
       setSaving(false);

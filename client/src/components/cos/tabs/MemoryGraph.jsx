@@ -128,6 +128,7 @@ export default function MemoryGraph() {
 
   const graph = useMemo(() => {
     if (!graphData?.nodes?.length) return null;
+    void layoutKey;
     const g = buildGraph(graphData.nodes, graphData.edges);
     graphRef.current = g;
     return g;
@@ -164,7 +165,7 @@ export default function MemoryGraph() {
       if (!cancelled) setFullMemory(null);
     });
     return () => { cancelled = true; };
-  }, [selectedNode?.id]);
+  }, [selectedNode]);
 
   const handleSelect = useCallback((node) => {
     setSelectedNode(prev => prev?.id === node.id ? null : node);

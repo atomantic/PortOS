@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, X, Eye, EyeOff, Trash2, Send, Database, Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play } from 'lucide-react';
+import { Save, Plus, X, Eye, EyeOff, Trash2, Send, Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { formatBytes } from '../utils/formatters';

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Play } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -19,7 +19,7 @@ export default function AutomationTab({ appId, appName }) {
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(null);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     const [taskTypesData, scheduleData] = await Promise.all([
       api.getAppTaskTypes(appId).catch(() => ({ taskTypeOverrides: {} })),
       api.getCosSchedule().catch(() => null)
@@ -27,11 +27,11 @@ export default function AutomationTab({ appId, appName }) {
     setOverrides(taskTypesData.taskTypeOverrides || {});
     setSchedule(scheduleData);
     setLoading(false);
-  };
+  }, [appId]);
 
   useEffect(() => {
     fetchData();
-  }, [appId]);
+  }, [fetchData]);
 
   const handleToggle = async (taskType, currentEnabled) => {
     const newEnabled = currentEnabled === false;

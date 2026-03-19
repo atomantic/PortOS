@@ -90,7 +90,7 @@ export default function GapRecommendations({ gaps, maxDisplay = 3 }) {
       </p>
 
       <div className="space-y-3">
-        {displayGaps.map((gap, index) => {
+        {displayGaps.map((gap) => {
           const urgency = getUrgencyLabel(gap.confidence);
           const dimensionLabel = DIMENSION_LABELS[gap.dimension] || gap.dimension;
           const categoryLabel = CATEGORY_LABELS[gap.suggestedCategory] || gap.suggestedCategory;

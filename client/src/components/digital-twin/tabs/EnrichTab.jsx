@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -22,7 +22,7 @@ import ScaleInput from '../ScaleInput';
 
 export default function EnrichTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [categories, setCategories] = useState([]);
+  const [_categories, _setCategories] = useState([]);
   const [progress, setProgress] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -44,40 +44,29 @@ export default function EnrichTab({ onRefresh }) {
   const [selectedProvider, setSelectedProvider] = useState(null);
   const [savingWritingStyle, setSavingWritingStyle] = useState(false);
 
-  useEffect(() => {
-    loadData();
-    loadProviders();
-  }, []);
-
-  // Auto-select category from query param
-  useEffect(() => {
-    const categoryParam = searchParams.get('category');
-    if (categoryParam && ENRICHMENT_CATEGORIES[categoryParam] && !loading) {
-      startCategory(categoryParam);
-      // Clear the param so back navigation works cleanly
-      setSearchParams({}, { replace: true });
-    }
-  }, [loading, searchParams]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
-    const [categoriesData, progressData] = await Promise.all([
+    const [_categoriesData, progressData] = await Promise.all([
       api.getSoulEnrichCategories().catch(() => []),
       api.getSoulEnrichProgress().catch(() => null)
     ]);
-    setCategories(categoriesData);
     setProgress(progressData);
     setLoading(false);
-  };
+  }, []);
 
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async () => {
     const data = await api.getProviders().catch(() => ({ providers: [] }));
     const enabled = (data.providers || []).filter(p => p.enabled);
     setProviders(enabled);
     if (enabled.length > 0) {
       setSelectedProvider({ providerId: enabled[0].id, model: enabled[0].defaultModel });
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadData();
+    loadProviders();
+  }, [loadData, loadProviders]);
 
   const addWritingSample = () => {
     setWritingSamples([...writingSamples, '']);
@@ -149,23 +138,33 @@ export default function EnrichTab({ onRefresh }) {
     onRefresh();
   };
 
-  const startCategory = async (categoryId) => {
-    const config = ENRICHMENT_CATEGORIES[categoryId];
-    setActiveCategory(categoryId);
-    // Only load question for non-list-based categories
-    if (!config?.listBased) {
-      await loadQuestion(categoryId);
-    }
-  };
-
-  const loadQuestion = async (categoryId, skipList = []) => {
+  const loadQuestion = useCallback(async (categoryId, skipList = []) => {
     setLoadingQuestion(true);
     const question = await api.getSoulEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined);
     setCurrentQuestion(question);
     setAnswer('');
     setScaleValue(null);
     setLoadingQuestion(false);
-  };
+  }, []);
+
+  const startCategory = useCallback(async (categoryId) => {
+    const config = ENRICHMENT_CATEGORIES[categoryId];
+    setActiveCategory(categoryId);
+    // Only load question for non-list-based categories
+    if (!config?.listBased) {
+      await loadQuestion(categoryId);
+    }
+  }, [loadQuestion]);
+
+  // Auto-select category from query param
+  useEffect(() => {
+    const categoryParam = searchParams.get('category');
+    if (categoryParam && ENRICHMENT_CATEGORIES[categoryParam] && !loading) {
+      startCategory(categoryParam);
+      // Clear the param so back navigation works cleanly
+      setSearchParams({}, { replace: true });
+    }
+  }, [loading, searchParams, setSearchParams, startCategory]);
 
   const submitAnswer = async () => {
     const isScale = currentQuestion?.questionType === 'scale';

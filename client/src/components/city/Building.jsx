@@ -167,7 +167,7 @@ const createWindowTexture = (accentColor, width, height, seed) => {
 };
 
 // Rooftop antenna component
-function RooftopAntenna({ height, color, accentColor, seed, width }) {
+function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
   const antennaRef = useRef();
   const blinkRef = useRef();
   const type = seed % 4;

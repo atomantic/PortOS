@@ -189,7 +189,6 @@ export default function WordplayTrainer({ onBack, config }) {
   }
 
   const modeInfo = GAME_MODES.find(m => m.id === selectedMode);
-  const ModeIcon = modeInfo?.icon || Link;
 
   // Loading state
   if (loading) {

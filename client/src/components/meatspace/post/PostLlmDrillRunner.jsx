@@ -27,6 +27,31 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   const totalPrompts = prompts.length;
   const currentPrompt = prompts[questionIndex];
 
+  const finishDrill = useCallback((finalResponses) => {
+    clearInterval(timerRef.current);
+    const totalMs = Date.now() - drillStartRef.current;
+    onComplete({
+      module: 'llm-drills',
+      type: drillType,
+      config: drill.config,
+      drillData: drill,
+      responses: finalResponses,
+      totalMs
+    });
+  }, [drill, drillType, onComplete]);
+
+  const handleTimeExpired = useCallback(() => {
+    // Submit whatever we have so far (use refs to avoid stale closures in interval callback)
+    const currentResponses = responsesRef.current;
+    const currentIndex = questionIndexRef.current;
+    const remaining = prompts.slice(currentIndex).map(() => ({
+      response: '',
+      responseMs: 0
+    }));
+    const finalResponses = [...currentResponses, ...remaining];
+    finishDrill(finalResponses);
+  }, [finishDrill, prompts]);
+
   useEffect(() => {
     drillStartRef.current = Date.now();
     questionStartRef.current = Date.now();
@@ -53,7 +78,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     }, 100);
 
     return () => clearInterval(timerRef.current);
-  }, [drill, isTraining]);
+  }, [drill, drillType, handleTimeExpired, isTraining, timeLimitMs]);
 
   // Keep refs in sync with state for use in interval callbacks
   useEffect(() => { responsesRef.current = responses; }, [responses]);
@@ -64,31 +89,6 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     setItems([]);
     inputRef.current?.focus();
   }, [questionIndex, phase]);
-
-  function handleTimeExpired() {
-    // Submit whatever we have so far (use refs to avoid stale closures in interval callback)
-    const currentResponses = responsesRef.current;
-    const currentIndex = questionIndexRef.current;
-    const remaining = prompts.slice(currentIndex).map(() => ({
-      response: '',
-      responseMs: 0
-    }));
-    const finalResponses = [...currentResponses, ...remaining];
-    finishDrill(finalResponses);
-  }
-
-  function finishDrill(finalResponses) {
-    clearInterval(timerRef.current);
-    const totalMs = Date.now() - drillStartRef.current;
-    onComplete({
-      module: 'llm-drills',
-      type: drillType,
-      config: drill.config,
-      drillData: drill,
-      responses: finalResponses,
-      totalMs
-    });
-  }
 
   const handleSubmit = useCallback(async (e) => {
     e?.preventDefault();
@@ -141,7 +141,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         setItems([]);
       }
     }
-  }, [inputValue, items, responses, questionIndex, totalPrompts, drillType, currentPrompt, isTraining, drill, timeLimitMs, providerId, model]);
+  }, [drill, drillType, currentPrompt, finishDrill, inputValue, isTraining, items, model, providerId, questionIndex, responses, timeLimitMs, totalPrompts]);
 
   // Training mode: advance after acknowledging feedback
   const acknowledgeTrainingFeedback = useCallback(() => {
@@ -156,7 +156,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         setItems([]);
       }
     }
-  }, [questionIndex, totalPrompts, responses, drillType]);
+  }, [drillType, finishDrill, questionIndex, responses, totalPrompts]);
 
   // Story recall: transition from reading to answering
   function handleStartRecall() {

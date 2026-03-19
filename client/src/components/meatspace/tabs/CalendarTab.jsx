@@ -2,7 +2,7 @@ import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import {
   Calendar, Coffee, Droplets, Utensils, Dumbbell, BookOpen, Scissors,
   Cake, Plane, Plus, Trash2, Circle, Sun, Moon, TreePine, Snowflake,
-  Flower2, CloudSun, X, ChevronDown, Eye, EyeOff, Save
+  Flower2, CloudSun, ChevronDown, Eye, EyeOff
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -34,11 +34,6 @@ function computeEventWeeks(birthDate, grid, stats, lifeEvents) {
   if (!birthDate) return events;
 
   const birth = new Date(birthDate);
-  const birthMonth = birth.getMonth();
-  const birthDay = birth.getDate();
-  const currentAge = Math.floor(stats.age.years);
-  const now = new Date();
-
   // Helper: compute week offset within an age-year (server uses birth time as yearStart)
   const weekInAgeYear = (eventDate, yearStart) => {
     const ms = eventDate.getTime() - yearStart.getTime();
@@ -553,7 +548,7 @@ function WeekGridView({ grid, stats, birthDate, cellCfg, weekLayout, hideSpent, 
       result.push({ label: firstAge, weeks: slice });
     }
     return result;
-  }, [filteredGrid, allWeeks, weekLayout, layoutCfg, effectiveWeeksPerRow, hideSpent]);
+  }, [filteredGrid, allWeeks, weekLayout, layoutCfg, effectiveWeeksPerRow]);
 
   const shouldLabel = (age) => age != null && age % 10 === 0;
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { RefreshCw, Compass, CheckCircle, ArrowRight, FolderSearch, FileText, Map, Play, Terminal } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -249,7 +249,7 @@ export default function GsdTab({ appId, repoPath }) {
     }, { replace: true });
   };
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
 
     // Fetch GSD status from documents endpoint (silent, no toast)
@@ -278,11 +278,11 @@ export default function GsdTab({ appId, repoPath }) {
     }
 
     setLoading(false);
-  };
+  }, [appId]);
 
   useEffect(() => {
     fetchData();
-  }, [appId]);
+  }, [fetchData]);
 
   if (loading) {
     return <BrailleSpinner text="Loading GSD project" />;
@@ -335,3 +335,4 @@ export default function GsdTab({ appId, repoPath }) {
     </div>
   );
 }
+

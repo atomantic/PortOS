@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { RefreshCw, Clock, Activity } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -40,12 +40,12 @@ export default function TasksTab({ appId }) {
   const [providers, setProviders] = useState([]);
   const [apps, setApps] = useState([]);
 
-  const fetchAgents = async () => {
+  const fetchAgents = useCallback(async () => {
     setLoading(true);
     const result = await api.getAppAgents(appId).catch(() => ({ agents: [], summary: {} }));
     setData(result);
     setLoading(false);
-  };
+  }, [appId]);
 
   useEffect(() => {
     fetchAgents();
@@ -54,7 +54,7 @@ export default function TasksTab({ appId }) {
       .then(d => setProviders(d.providers || []));
     api.getApps().catch(() => [])
       .then(a => setApps((a || []).filter(app => app.id !== 'portos-autofixer')));
-  }, [appId]);
+  }, [appId, fetchAgents]);
 
   if (loading) {
     return <BrailleSpinner text="Loading agent history" />;

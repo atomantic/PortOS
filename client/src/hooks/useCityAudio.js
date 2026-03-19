@@ -8,6 +8,9 @@ export default function useCityAudio(settings) {
   const initedRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const musicEnabled = settings?.musicEnabled;
+  const musicVolume = settings?.musicVolume;
+  const sfxVolume = settings?.sfxVolume;
 
   // Init AudioContext on first user gesture
   useEffect(() => {
@@ -36,26 +39,26 @@ export default function useCityAudio(settings) {
 
   // Toggle music on/off based on settings
   useEffect(() => {
-    if (!isAudioReady || !settings) return;
-    if (settings.musicEnabled) {
+    if (!isAudioReady || settings == null) return;
+    if (musicEnabled) {
       startMusic();
-      setMusicVolume(settings.musicVolume);
+      setMusicVolume(musicVolume);
     } else {
       stopMusic();
     }
-  }, [isAudioReady, settings?.musicEnabled]);
+  }, [isAudioReady, musicEnabled, musicVolume, settings]);
 
   // Update music volume
   useEffect(() => {
-    if (!isAudioReady || !settings?.musicEnabled) return;
-    setMusicVolume(settings.musicVolume);
-  }, [isAudioReady, settings?.musicVolume]);
+    if (!isAudioReady || !musicEnabled) return;
+    setMusicVolume(musicVolume);
+  }, [isAudioReady, musicEnabled, musicVolume]);
 
   // Update SFX volume
   useEffect(() => {
-    if (!isAudioReady || !settings) return;
-    setSfxVolume(settings.sfxVolume);
-  }, [isAudioReady, settings?.sfxVolume]);
+    if (!isAudioReady || settings == null) return;
+    setSfxVolume(sfxVolume);
+  }, [isAudioReady, settings, sfxVolume]);
 
   // Cleanup on unmount
   useEffect(() => {

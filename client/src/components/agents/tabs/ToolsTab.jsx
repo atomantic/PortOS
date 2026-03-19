@@ -137,14 +137,6 @@ export default function ToolsTab({ agentId, agent }) {
     setReplyToId(null);
   };
 
-  const handleUpvote = async (postId) => {
-    await api.publishAgentComment(agentId, selectedAccountId, postId, '').catch(() => {});
-    toast.success('Upvoted');
-    if (selectedAccountId) {
-      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
-    }
-  };
-
   // Post generation (auto-saves as draft)
   const handleGeneratePost = async () => {
     if (!agentId || !selectedAccountId) return;

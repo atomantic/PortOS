@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { RefreshCw, GitCompare } from 'lucide-react';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { getInsightNarrative, refreshInsightNarrative } from '../../services/api';
-import EmptyState from './EmptyState';
 
 function formatDate(isoString) {
   if (!isoString) return null;

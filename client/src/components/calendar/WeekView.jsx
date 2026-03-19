@@ -114,16 +114,18 @@ export default function WeekView({ accounts }) {
   const weekDays = getWeekDays(weekStart);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
+  const weekStartIso = weekStart.toISOString();
+  const weekEndIso = weekEnd.toISOString();
 
   const fetchEvents = useCallback(async () => {
     const data = await api.getCalendarEvents({
-      startDate: weekStart.toISOString(),
-      endDate: weekEnd.toISOString(),
+      startDate: weekStartIso,
+      endDate: weekEndIso,
       limit: 200
     }).catch(() => ({ events: [] }));
     setEvents(data?.events || []);
     setLoading(false);
-  }, [weekStart.getTime()]);
+  }, [weekEndIso, weekStartIso]);
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
   useEffect(() => {
@@ -148,20 +150,20 @@ export default function WeekView({ accounts }) {
   const colorMap = useMemo(() => buildSubcalendarColorMap(accounts), [accounts]);
 
   // Group events by day
-  const eventsByDay = weekDays.map(day => {
+  const eventsByDay = useMemo(() => weekDays.map(day => {
     const dayStr = day.toDateString();
     return events.filter(e => !e.isAllDay && new Date(e.startTime).toDateString() === dayStr);
-  });
+  }), [events, weekDays]);
 
-  const allDayByDay = weekDays.map(day => {
+  const allDayByDay = useMemo(() => weekDays.map(day => {
     const dayStr = day.toDateString();
     return events.filter(e => e.isAllDay && new Date(e.startTime).toDateString() === dayStr);
-  });
+  }), [events, weekDays]);
 
   // Memoize layouts per day
   const layoutsByDay = useMemo(
     () => eventsByDay.map(dayEvents => layoutEvents(dayEvents)),
-    [events, weekStart.getTime()]
+    [eventsByDay]
   );
 
   const now = new Date();
