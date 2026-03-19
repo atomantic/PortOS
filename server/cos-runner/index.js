@@ -11,21 +11,19 @@
 import express from 'express';
 import { spawn } from 'child_process';
 import { join, dirname, basename } from 'path';
-import { fileURLToPath } from 'url';
-import { writeFile, mkdir, readFile, rename } from 'fs/promises';
+import { writeFile, readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const ROOT_DIR = join(__dirname, '../../');
-const STATE_FILE = join(ROOT_DIR, 'data/cos/runner-state.json');
-const AGENTS_DIR = join(ROOT_DIR, 'data/cos/agents');
+const ROOT_DIR = PATHS.root;
+const STATE_FILE = join(PATHS.cos, 'runner-state.json');
+const AGENTS_DIR = PATHS.cosAgents;
 
 const PORT = process.env.PORT || 5558;
 const HOST = process.env.HOST || '127.0.0.1';
-const RUNS_DIR = join(ROOT_DIR, 'data/runs');
+const RUNS_DIR = PATHS.runs;
 
 // Allowlist of permitted CLI commands to prevent arbitrary code execution.
 // Only commands in this list can be spawned by the runner.
@@ -252,7 +250,7 @@ async function loadState() {
 function saveState(state) {
   stateLock = stateLock.then(async () => {
     const dir = dirname(STATE_FILE);
-    if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+    if (!existsSync(dir)) await ensureDir(dir);
     await atomicWrite(STATE_FILE, JSON.stringify(state, null, 2));
   });
   return stateLock;
@@ -271,7 +269,7 @@ function emitToServer(event, data) {
  */
 async function ensureRunsDir() {
   if (!existsSync(RUNS_DIR)) {
-    await mkdir(RUNS_DIR, { recursive: true });
+    await ensureDir(RUNS_DIR);
   }
 }
 
@@ -525,7 +523,7 @@ app.post('/spawn', async (req, res) => {
     // Save output to agent directory
     const agentDir = join(AGENTS_DIR, agentId);
     if (!existsSync(agentDir)) {
-      await mkdir(agentDir, { recursive: true });
+      await ensureDir(agentDir);
     }
     await writeFile(join(agentDir, 'output.txt'), output).catch(() => {});
 
@@ -764,7 +762,7 @@ app.post('/run', async (req, res) => {
     // Save output to run directory
     const runDir = join(RUNS_DIR, runId);
     if (!existsSync(runDir)) {
-      await mkdir(runDir, { recursive: true });
+      await ensureDir(runDir);
     }
     await writeFile(join(runDir, 'output.txt'), output).catch(() => {});
 
@@ -953,7 +951,7 @@ server.listen(PORT, HOST, async () => {
 
   // Ensure agents directory exists
   if (!existsSync(AGENTS_DIR)) {
-    await mkdir(AGENTS_DIR, { recursive: true });
+    await ensureDir(AGENTS_DIR);
   }
 
   // Delay orphan cleanup to allow socket connections to establish

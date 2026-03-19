@@ -17,9 +17,9 @@ import {
   deserializeIndex,
   getIndexStats
 } from '../lib/bm25.js'
-import { ensureDir } from '../lib/fileUtils.js'
+import { ensureDir, PATHS } from '../lib/fileUtils.js'
 
-const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'memory')
+const DATA_DIR = PATHS.memory
 const INDEX_FILE = path.join(DATA_DIR, 'bm25-index.json')
 
 // In-memory cache of the index

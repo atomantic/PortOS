@@ -3,8 +3,9 @@
  * Re-exports toolkit runner service functions with local overrides
  */
 import { spawn } from 'child_process';
-import { writeFile, readFile, mkdir } from 'fs/promises';
+import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
+import { ensureDir } from '../lib/fileUtils.js';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
@@ -57,7 +58,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
   const runDir = join(runsPath, runId);
-  await mkdir(runDir, { recursive: true });
+  await ensureDir(runDir);
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
 

@@ -23,12 +23,14 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const fsPromises = await import('fs/promises');
   const fs = await import('fs');
   return {
+    ensureDir: vi.fn(),
     readJSONFile: vi.fn(async (filePath, defaultValue) => {
       if (!fs.existsSync(filePath)) return defaultValue;
       const content = await fsPromises.readFile(filePath, 'utf-8');
       if (!content || !content.trim()) return defaultValue;
       return JSON.parse(content);
-    })
+    }),
+    PATHS: { cos: '/tmp/test/cos' }
   };
 });
 

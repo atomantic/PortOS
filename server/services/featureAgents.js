@@ -7,17 +7,13 @@
  */
 
 import { writeFile, readFile, rename, readdir, rm } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getAppById } from './apps.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 const DATA_DIR = PATHS.cos;
 const FA_FILE = join(DATA_DIR, 'feature-agents.json');
 const FA_DIR = join(DATA_DIR, 'feature-agents');
@@ -457,7 +453,7 @@ export async function buildFeatureAgentPrompt(agent) {
   const worktreeDir = join(FA_DIR, agent.id, 'worktree');
 
   // Load skill template if exists
-  const skillPath = join(dirname(__dirname), '../data/prompts/skills/feature-agent.md');
+  const skillPath = join(PATHS.promptSkills, 'feature-agent.md');
   const skillTemplate = existsSync(skillPath)
     ? await readFile(skillPath, 'utf-8').catch(() => '')
     : '';

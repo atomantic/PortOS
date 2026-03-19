@@ -7,13 +7,11 @@
 
 import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve, extname } from 'path';
-import { fileURLToPath } from 'url';
+import { join, extname } from 'path';
 import { getProviderById } from './providers.js';
+import { PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const SCREENSHOTS_DIR = resolve(__dirname, '../../data/screenshots');
+const SCREENSHOTS_DIR = PATHS.screenshots;
 
 /**
  * Get MIME type from file extension

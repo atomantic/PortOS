@@ -6,16 +6,11 @@
  */
 
 import { createProviderStatusService } from 'portos-ai-toolkit/server';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data');
+import { PATHS } from '../lib/fileUtils.js';
 
 // Create the provider status service from ai-toolkit
 const providerStatusService = createProviderStatusService({
-  dataDir: DATA_DIR,
+  dataDir: PATHS.data,
   statusFile: 'provider-status.json',
   defaultFallbackPriority: ['claude-code', 'codex', 'lmstudio', 'local-lm-studio', 'ollama', 'gemini-cli'],
   onStatusChange: (eventData) => {

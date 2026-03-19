@@ -4,7 +4,6 @@ import EventEmitter from 'events';
 // Mock fs/promises
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
-  mkdir: vi.fn().mockResolvedValue(undefined),
   readdir: vi.fn().mockResolvedValue([]),
   rm: vi.fn().mockResolvedValue(undefined)
 }));
@@ -38,7 +37,10 @@ vi.mock('./notifications.js', () => ({
 
 // Mock fileUtils
 vi.mock('../lib/fileUtils.js', () => ({
-  readJSONFile: vi.fn()
+  ensureDir: vi.fn(),
+  ensureDirs: vi.fn(),
+  readJSONFile: vi.fn(),
+  PATHS: { memory: '/tmp/test/memory' }
 }));
 
 // Mock memoryBM25
@@ -70,9 +72,9 @@ vi.mock('./memoryConfig.js', () => ({
   decrementAgentPendingApproval: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { writeFile, mkdir, rm } from 'fs/promises';
+import { writeFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, readJSONFile } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -145,7 +147,7 @@ describe('memory service', () => {
       const data = { type: 'fact', content: 'new dir test' };
       await createMemory(data);
 
-      expect(mkdir).toHaveBeenCalledWith(expect.any(String), { recursive: true });
+      expect(ensureDirs).toHaveBeenCalled();
     });
 
     it('should use provided fields when given', async () => {

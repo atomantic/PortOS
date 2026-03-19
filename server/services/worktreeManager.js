@@ -11,13 +11,11 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { mkdir, rm } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { rm } from 'fs/promises';
+import { join } from 'path';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const WORKTREES_DIR = join(__dirname, '../../data/cos/worktrees');
+const WORKTREES_DIR = PATHS.worktrees;
 
 /**
  * Execute a git command and return stdout
@@ -58,7 +56,7 @@ function execGit(args, cwd) {
  */
 export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
   if (!existsSync(WORKTREES_DIR)) {
-    await mkdir(WORKTREES_DIR, { recursive: true });
+    await ensureDir(WORKTREES_DIR);
   }
 
   const branchName = `cos/${taskId}/${agentId}`;
@@ -169,7 +167,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
 export async function createPersistentWorktree(featureAgentId, sourceWorkspace, branchName, baseBranch = 'main') {
   const FA_WORKTREES = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
 
-  await mkdir(join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId), { recursive: true });
+  await ensureDir(join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId));
 
   await execGit(['fetch', 'origin'], sourceWorkspace).catch(err => {
     console.log(`⚠️ Persistent worktree fetch failed: ${err.message}`);

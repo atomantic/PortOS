@@ -6,7 +6,7 @@
 import axios from 'axios';
 import fs from 'fs/promises';
 import path from 'path';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
 
@@ -33,7 +33,7 @@ export async function getInstances() {
  * Save DataDog instances configuration
  */
 export async function saveInstances(config) {
-  await fs.mkdir(path.dirname(DATADOG_CONFIG_FILE), { recursive: true });
+  await ensureDir(path.dirname(DATADOG_CONFIG_FILE));
   await fs.writeFile(
     DATADOG_CONFIG_FILE,
     JSON.stringify(config, null, 2),

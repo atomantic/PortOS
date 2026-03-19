@@ -6,16 +6,12 @@
  */
 
 import { spawn } from 'child_process';
-import { mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { join } from 'path';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
 // Default directory for cloned repos (can be configured in settings)
-const DEFAULT_CLONE_DIR = join(__dirname, '../../data/repos');
+const DEFAULT_CLONE_DIR = PATHS.repos;
 
 /**
  * Parse GitHub URL to extract owner and repo name
@@ -74,7 +70,7 @@ export function getCloneDir(customDir) {
 export async function ensureCloneDir(cloneDir) {
   const dir = getCloneDir(cloneDir);
   if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
+    await ensureDir(dir);
     console.log(`📁 Created repos directory: ${dir}`);
   }
   return dir;
@@ -108,7 +104,7 @@ export async function cloneRepo(url, options = {}) {
   // Ensure owner directory exists
   const ownerDir = join(cloneDir, owner);
   if (!existsSync(ownerDir)) {
-    await mkdir(ownerDir, { recursive: true });
+    await ensureDir(ownerDir);
   }
 
   // Build clone command with shallow clone for space efficiency

@@ -15,9 +15,11 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => async (fn) => fn()
 }));
 vi.mock('../lib/fileUtils.js', () => ({
+  ensureDir: vi.fn(),
   safeJSONParse: (str, fallback) => {
     try { return JSON.parse(str); } catch { return fallback; }
-  }
+  },
+  PATHS: { brain: '/tmp/test/brain' }
 }));
 
 import { readFile, writeFile, appendFile, mkdir, rename } from 'fs/promises';

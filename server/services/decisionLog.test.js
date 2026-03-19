@@ -15,6 +15,8 @@ vi.mock('./cosEvents.js', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+  ensureDir: vi.fn(),
+  PATHS: { cos: '/mock/data/cos' },
   readJSONFile: vi.fn()
 }));
 
@@ -67,6 +69,8 @@ describe('decisionLog.js', () => {
       cosEvents: { emit: vi.fn(), on: vi.fn() }
     }));
     vi.doMock('../lib/fileUtils.js', () => ({
+      ensureDir: vi.fn(),
+      PATHS: { cos: '/mock/data/cos' },
       readJSONFile: vi.fn()
     }));
 

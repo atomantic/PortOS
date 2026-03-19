@@ -7,9 +7,8 @@
  */
 
 import { spawn, execSync } from 'child_process';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { writeFile, mkdir, readFile, readdir, rm, stat } from 'fs/promises';
+import { join } from 'path';
+import { writeFile, mkdir, readFile, readdir, rm, stat } from 'fs/promises'; // mkdir kept for non-recursive use
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
@@ -25,7 +24,7 @@ import { getMemorySection } from './memoryRetriever.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { suggestModelTier } from './taskLearning.js';
-import { readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, updateExecution, completeExecution, errorExecution, getExecution, getStats as getToolStats } from './toolStateMachine.js';
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
@@ -36,11 +35,9 @@ import * as jiraService from './jira.js';
 import * as git from './git.js';
 import { executeApiRun, executeCliRun, createRun } from './runner.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const ROOT_DIR = join(__dirname, '../../');
-const AGENTS_DIR = join(__dirname, '../../data/cos/agents');
-const RUNS_DIR = join(__dirname, '../../data/runs');
+const ROOT_DIR = PATHS.root;
+const AGENTS_DIR = PATHS.cosAgents;
+const RUNS_DIR = PATHS.runs;
 
 /**
  * Extract task type key for learning lookup
@@ -263,7 +260,7 @@ async function createAgentRun(agentId, task, model, provider, workspacePath, app
   const runDir = join(RUNS_DIR, runId);
 
   if (!existsSync(RUNS_DIR)) {
-    await mkdir(RUNS_DIR, { recursive: true });
+    await ensureDir(RUNS_DIR);
   }
   await mkdir(runDir);
 
@@ -1568,7 +1565,7 @@ export async function spawnAgentForTask(task) {
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
   if (!existsSync(agentDir)) {
-    await mkdir(agentDir, { recursive: true });
+    await ensureDir(agentDir);
   }
 
   // Save prompt to file

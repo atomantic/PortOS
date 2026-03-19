@@ -31,7 +31,22 @@ export const PATHS = {
   agentPersonalities: join(__lib_dirname, '../../data/agents'),
   meatspace: join(__lib_dirname, '../../data/meatspace'),
   calendar: join(__lib_dirname, '../../data/calendar'),
-  messages: join(__lib_dirname, '../../data/messages')
+  messages: join(__lib_dirname, '../../data/messages'),
+  screenshots: join(__lib_dirname, '../../data/screenshots'),
+  uploads: join(__lib_dirname, '../../data/uploads'),
+  cosAttachments: join(__lib_dirname, '../../data/cos/attachments'),
+  worktrees: join(__lib_dirname, '../../data/cos/worktrees'),
+  repos: join(__lib_dirname, '../../data/repos'),
+  browserProfile: join(__lib_dirname, '../../data/browser-profile'),
+  digests: join(__lib_dirname, '../../data/cos/digests'),
+  promptSkills: join(__lib_dirname, '../../data/prompts/skills'),
+  promptSkillsJobs: join(__lib_dirname, '../../data/prompts/skills/jobs'),
+  cosEvolution: join(__lib_dirname, '../../data/cos/evolution'),
+  decisions: join(__lib_dirname, '../../data/cos/decisions'),
+  telegram: join(__lib_dirname, '../../data/telegram'),
+  templates: join(__lib_dirname, '../../data/prompts/templates'),
+  settings: join(__lib_dirname, '../../data/settings'),
+  missions: join(__lib_dirname, '../../data/cos/missions')
 };
 
 /**

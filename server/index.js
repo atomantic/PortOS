@@ -4,6 +4,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { PATHS } from './lib/fileUtils.js';
 import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 
@@ -106,8 +107,8 @@ const io = new Server(httpServer, {
 // Initialize socket handlers
 initSocket(io);
 
-// Build absolute paths from __dirname to ensure consistency regardless of cwd
-const DATA_DIR = join(__dirname, '..', 'data');
+// Build absolute paths - use centralized PATHS for data, __dirname for non-data paths
+const DATA_DIR = PATHS.data;
 const DATA_SAMPLE_DIR = join(__dirname, '..', 'data.sample');
 
 // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
@@ -267,7 +268,7 @@ startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init fai
 // Initialize Telegram bot (if configured)
 telegram.init().catch(err => console.error(`❌ Telegram init failed: ${err.message}`));
 // Check for update completion marker from a previous update cycle
-const updateMarkerPath = join(__dirname, '..', 'data', 'update-complete.json');
+const updateMarkerPath = join(PATHS.data, 'update-complete.json');
 const removeMarker = () => unlink(updateMarkerPath).catch(e => {
   if (e?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${e.message}`);
 });

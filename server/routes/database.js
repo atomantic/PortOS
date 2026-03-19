@@ -1,13 +1,12 @@
 import { Router } from 'express';
 import { execFile, execFileSync } from 'child_process';
 import { existsSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
+import { PATHS } from '../lib/fileUtils.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..', '..');
+const rootDir = PATHS.root;
 const dbScript = join(rootDir, 'scripts', 'db.sh');
 
 const router = Router();

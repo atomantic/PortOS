@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { mkdir, writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
+import { writeFile, readdir, copyFile, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -8,7 +8,7 @@ import { promisify } from 'util';
 import { homedir, platform } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, safeJSONParse } from '../lib/fileUtils.js';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -251,7 +251,7 @@ async function scaffoldApp(req, res) {
   };
 
   // Create directory
-  await mkdir(repoPath, { recursive: true });
+  await ensureDir(repoPath);
   addStep('Create directory', 'done');
 
   // Generate project files based on template
@@ -292,7 +292,7 @@ async function scaffoldApp(req, res) {
     // Add Express server if vite-express template
     if (template === 'vite-express') {
       const serverDir = join(repoPath, 'server');
-      await mkdir(serverDir, { recursive: true });
+      await ensureDir(serverDir);
 
       await writeFile(join(serverDir, 'index.js'), `import express from 'express';
 import cors from 'cors';
@@ -430,9 +430,7 @@ targets:
     const previewDir = join(srcDir, 'Preview Content');
     const testsDir = join(repoPath, `${targetName}Tests`);
 
-    await mkdir(srcDir, { recursive: true });
-    await mkdir(previewDir, { recursive: true });
-    await mkdir(testsDir, { recursive: true });
+    await ensureDirs([srcDir, previewDir, testsDir]);
 
     // Info.plist
     await writeFile(join(srcDir, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
@@ -485,7 +483,7 @@ struct ContentView: View {
 `);
 
     // Assets.xcassets
-    await mkdir(join(srcDir, 'Assets.xcassets', 'AppIcon.appiconset'), { recursive: true });
+    await ensureDir(join(srcDir, 'Assets.xcassets', 'AppIcon.appiconset'));
     await writeFile(join(srcDir, 'Assets.xcassets', 'Contents.json'), '{"info":{"version":1,"author":"xcode"}}');
     await writeFile(join(srcDir, 'Assets.xcassets', 'AppIcon.appiconset', 'Contents.json'), `{
   "images": [{"idiom": "universal", "platform": "ios", "size": "1024x1024"}],
@@ -493,7 +491,7 @@ struct ContentView: View {
 }`);
 
     // Preview Assets
-    await mkdir(join(previewDir, 'PreviewAssets.xcassets'), { recursive: true });
+    await ensureDir(join(previewDir, 'PreviewAssets.xcassets'));
     await writeFile(join(previewDir, 'PreviewAssets.xcassets', 'Contents.json'), '{"info":{"version":1,"author":"xcode"}}');
 
     // Unit test
@@ -726,9 +724,7 @@ Requires \`.env\` file with App Store Connect API credentials (see \`.env.exampl
     const serverDir = join(repoPath, 'server');
     const workflowsDir = join(repoPath, '.github/workflows');
 
-    await mkdir(clientDir, { recursive: true });
-    await mkdir(serverDir, { recursive: true });
-    await mkdir(workflowsDir, { recursive: true });
+    await ensureDirs([clientDir, serverDir, workflowsDir]);
 
     // === Root package.json ===
     const rootPkg = {
@@ -856,7 +852,7 @@ export default {
 
     // === Client src files ===
     const clientSrcDir = join(clientDir, 'src');
-    await mkdir(clientSrcDir, { recursive: true });
+    await ensureDir(clientSrcDir);
 
     await writeFile(join(clientSrcDir, 'main.jsx'), `import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -954,7 +950,7 @@ body {
 
     // === Client pages ===
     const pagesDir = join(clientSrcDir, 'pages');
-    await mkdir(pagesDir, { recursive: true });
+    await ensureDir(pagesDir);
 
     // AIProviders page - uses shared component from ai-toolkit
     await writeFile(join(pagesDir, 'AIProviders.jsx'), `import { AIProviders } from 'portos-ai-toolkit/client';
@@ -1051,7 +1047,7 @@ export default defineConfig({
     // === Default Data (providers, etc.) ===
     // Data dir at project root (server runs with cwd at project root)
     const dataDir = join(repoPath, 'data');
-    await mkdir(dataDir, { recursive: true });
+    await ensureDir(dataDir);
 
     const defaultProviders = {
       activeProvider: 'claude-code',

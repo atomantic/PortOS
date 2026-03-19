@@ -14,12 +14,7 @@
  * Records that already have a bridge mapping are skipped.
  */
 
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import { syncAllBrainData } from '../services/brainMemoryBridge.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 const args = process.argv.slice(2);
 const execute = args.includes('--execute');

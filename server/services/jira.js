@@ -7,10 +7,9 @@ import axios from 'axios';
 import https from 'https';
 import fs from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const JIRA_CONFIG_FILE = path.join(__dirname, '../../data/jira.json');
+const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
 
 /**
  * Get JIRA instances configuration
@@ -34,7 +33,7 @@ export async function getInstances() {
  * Save JIRA instances configuration
  */
 export async function saveInstances(config) {
-  await fs.mkdir(path.dirname(JIRA_CONFIG_FILE), { recursive: true });
+  await ensureDir(path.dirname(JIRA_CONFIG_FILE));
   await fs.writeFile(
     JIRA_CONFIG_FILE,
     JSON.stringify(config, null, 2),

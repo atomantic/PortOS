@@ -4,16 +4,14 @@
  */
 
 import { Router } from 'express';
-import { writeFile, mkdir, unlink, readdir, stat } from 'fs/promises';
+import { writeFile, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve, basename, extname } from 'path';
-import { fileURLToPath } from 'url';
+import { join, basename, extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const UPLOADS_DIR = resolve(__dirname, '../../data/uploads');
+const UPLOADS_DIR = PATHS.uploads;
 
 const router = Router();
 
@@ -133,7 +131,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   // Ensure uploads directory exists
   if (!existsSync(UPLOADS_DIR)) {
-    await mkdir(UPLOADS_DIR, { recursive: true });
+    await ensureDir(UPLOADS_DIR);
   }
 
   const id = uuidv4();

@@ -38,7 +38,7 @@ export async function loadConfig() {
 }
 
 export async function saveConfig(config) {
-  await ensureDir(DATA_DIR);
+  await ensureDir(PATHS.data);
   cachedConfig = { ...DEFAULT_CONFIG, ...config };
   await writeFile(CONFIG_FILE, JSON.stringify(cachedConfig, null, 2));
   browserEvents.emit('config:changed', cachedConfig);

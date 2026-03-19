@@ -9,18 +9,16 @@
  * tagged with sourceAppId='brain'.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { brainEvents } from './brainStorage.js';
 import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const BRIDGE_MAP_PATH = join(__dirname, '../../data/brain/memory-bridge-map.json');
+const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
 
 // brainType → { memoryType, category }
 const TYPE_MAP = {
@@ -56,7 +54,7 @@ export async function loadBridgeMap() {
 
 async function saveBridgeMap() {
   const dir = dirname(BRIDGE_MAP_PATH);
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  if (!existsSync(dir)) await ensureDir(dir);
   await writeFile(BRIDGE_MAP_PATH, JSON.stringify(bridgeMap, null, 2));
 }
 

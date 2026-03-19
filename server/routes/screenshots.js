@@ -1,14 +1,12 @@
 import { Router } from 'express';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve, basename } from 'path';
-import { fileURLToPath } from 'url';
+import { join, basename } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const SCREENSHOTS_DIR = resolve(__dirname, '../../data/screenshots');
+const SCREENSHOTS_DIR = PATHS.screenshots;
 
 const router = Router();
 
@@ -84,7 +82,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   // Ensure screenshots directory exists
   if (!existsSync(SCREENSHOTS_DIR)) {
-    await mkdir(SCREENSHOTS_DIR, { recursive: true });
+    await ensureDir(SCREENSHOTS_DIR);
   }
 
   const id = uuidv4();

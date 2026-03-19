@@ -1,10 +1,8 @@
 import { readFile, writeFile } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { join } from 'path';
+import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SETTINGS_FILE = join(__dirname, '..', '..', 'data', 'settings.json');
+const SETTINGS_FILE = join(PATHS.data, 'settings.json');
 
 const load = async () => {
   const raw = await readFile(SETTINGS_FILE, 'utf-8').catch(() => '{}');

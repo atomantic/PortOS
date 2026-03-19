@@ -40,11 +40,13 @@ vi.mock('../lib/digitalTwinValidation.js', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+  ensureDir: vi.fn(),
   safeJSONParse: vi.fn((str, defaultValue) => {
     if (!str || !str.trim()) return defaultValue;
     const parsed = JSON.parse(str);
     return parsed;
-  })
+  }),
+  PATHS: { digitalTwin: '/tmp/test/digital-twin' }
 }));
 
 // ============================================================================

@@ -7,15 +7,11 @@
 
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const CONFIG_DIR = join(__dirname, '../../data');
-const MEMORY_CONFIG_FILE = join(CONFIG_DIR, 'memory-classifier-config.json');
+const MEMORY_CONFIG_FILE = join(PATHS.data, 'memory-classifier-config.json');
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -64,13 +60,14 @@ export async function getConfig() {
  * Update configuration
  */
 export async function updateConfig(updates) {
-  const { writeFile, mkdir } = await import('fs/promises');
+  const { writeFile } = await import('fs/promises');
+  const { ensureDir } = await import('../lib/fileUtils.js');
 
   const config = await loadConfig();
   const newConfig = { ...config, ...updates };
 
-  if (!existsSync(CONFIG_DIR)) {
-    await mkdir(CONFIG_DIR, { recursive: true });
+  if (!existsSync(PATHS.data)) {
+    await ensureDir(PATHS.data);
   }
 
   await writeFile(MEMORY_CONFIG_FILE, JSON.stringify(newConfig, null, 2));

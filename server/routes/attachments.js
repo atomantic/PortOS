@@ -4,16 +4,14 @@
  */
 
 import { Router } from 'express';
-import { writeFile, mkdir, unlink, readdir, stat } from 'fs/promises';
+import { writeFile, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, resolve, basename, extname } from 'path';
-import { fileURLToPath } from 'url';
+import { join, basename, extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const ATTACHMENTS_DIR = resolve(__dirname, '../../data/cos/attachments');
+const ATTACHMENTS_DIR = PATHS.cosAttachments;
 
 const router = Router();
 
@@ -113,7 +111,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   // Ensure attachments directory exists
   if (!existsSync(ATTACHMENTS_DIR)) {
-    await mkdir(ATTACHMENTS_DIR, { recursive: true });
+    await ensureDir(ATTACHMENTS_DIR);
   }
 
   const id = uuidv4();

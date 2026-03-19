@@ -9,9 +9,9 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { cosEvents } from './cosEvents.js'
-import { safeJSONParse, ensureDir } from '../lib/fileUtils.js'
+import { safeJSONParse, ensureDir, PATHS } from '../lib/fileUtils.js'
 
-const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'missions')
+const DATA_DIR = PATHS.missions
 
 // In-memory cache
 let missionsCache = null

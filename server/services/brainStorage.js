@@ -7,22 +7,19 @@
  * - In-memory caching with TTL for performance
  */
 
-import { readFile, writeFile, appendFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, appendFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { readJSONFile, safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getInstanceId } from './instances.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
 const withRemoteLock = createMutex();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data/brain');
+const DATA_DIR = PATHS.brain;
 
 // File paths
 const FILES = {
@@ -75,7 +72,7 @@ const DEFAULT_META = {
  */
 export async function ensureBrainDir() {
   if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
+    await ensureDir(DATA_DIR);
     console.log(`🧠 Created brain data directory: ${DATA_DIR}`);
   }
 }

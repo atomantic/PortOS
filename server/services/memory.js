@@ -5,25 +5,21 @@
  * Stores facts, learnings, observations, decisions, preferences, and context.
  */
 
-import { writeFile, mkdir, readdir, rm } from 'fs/promises';
+import { writeFile, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { cosEvents } from './cos.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 
 export { DEFAULT_MEMORY_CONFIG };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data');
-const MEMORY_DIR = join(DATA_DIR, 'cos/memory');
+const MEMORY_DIR = PATHS.memory;
 const INDEX_FILE = join(MEMORY_DIR, 'index.json');
 const EMBEDDINGS_FILE = join(MEMORY_DIR, 'embeddings.json');
 const MEMORIES_DIR = join(MEMORY_DIR, 'memories');
@@ -39,12 +35,7 @@ const withMemoryLock = createMutex();
  * Ensure memory directories exist
  */
 async function ensureDirectories() {
-  const dirs = [MEMORY_DIR, MEMORIES_DIR];
-  for (const dir of dirs) {
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
-  }
+  await ensureDirs([MEMORY_DIR, MEMORIES_DIR]);
 }
 
 /**
@@ -106,7 +97,7 @@ async function loadMemory(id) {
 async function saveMemory(memory) {
   const memoryDir = join(MEMORIES_DIR, memory.id);
   if (!existsSync(memoryDir)) {
-    await mkdir(memoryDir, { recursive: true });
+    await ensureDir(memoryDir);
   }
   await writeFile(join(memoryDir, 'memory.json'), JSON.stringify(memory, null, 2));
 }

@@ -110,11 +110,9 @@ const SCRIPT_HANDLERS = {
   'goal-check-in': runGoalCheckIn
 }
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
 const DATA_DIR = PATHS.cos
 const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
-const JOBS_SKILLS_DIR = join(__dirname, '../../data/prompts/skills/jobs')
+const JOBS_SKILLS_DIR = PATHS.promptSkillsJobs
 const withLock = createMutex()
 
 /**
@@ -1126,7 +1124,7 @@ async function executeShellJob(job) {
   return new Promise((resolve, reject) => {
     let killed = false
     const child = spawn(validation.baseCommand, validation.args || [], {
-      cwd: join(__dirname, '../../'),
+      cwd: PATHS.root,
       shell: false,
       windowsHide: true
     })

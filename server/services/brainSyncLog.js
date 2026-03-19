@@ -5,24 +5,21 @@
  * Used for peer-to-peer brain sync protocol.
  */
 
-import { readFile, writeFile, appendFile, mkdir, rename } from 'fs/promises';
+import { readFile, writeFile, appendFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { createMutex } from '../lib/asyncMutex.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data/brain');
+const DATA_DIR = PATHS.brain;
 const SYNC_LOG_FILE = join(DATA_DIR, 'sync_log.jsonl');
 
 const withLock = createMutex();
 let currentSeq = 0;
 
-async function ensureDir() {
+async function ensureBrainDir() {
   if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
+    await ensureDir(DATA_DIR);
   }
 }
 
@@ -30,7 +27,7 @@ async function ensureDir() {
  * Load the last sequence number from the JSONL file at startup
  */
 export async function initSyncLog() {
-  await ensureDir();
+  await ensureBrainDir();
   if (!existsSync(SYNC_LOG_FILE)) {
     currentSeq = 0;
     console.log(`🔄 Sync log initialized at seq 0`);
@@ -62,7 +59,7 @@ export function getCurrentSeq() {
  */
 export async function appendChange(op, type, id, record, originInstanceId) {
   return withLock(async () => {
-    await ensureDir();
+    await ensureBrainDir();
     currentSeq++;
     const entry = {
       seq: currentSeq,
@@ -84,7 +81,7 @@ export async function appendChange(op, type, id, record, originInstanceId) {
 export async function appendChanges(entries) {
   if (!entries?.length) return [];
   return withLock(async () => {
-    await ensureDir();
+    await ensureBrainDir();
     const startSeq = currentSeq;
     const results = [];
     const lines = [];
@@ -110,7 +107,7 @@ export async function appendChanges(entries) {
 // Bounded by periodic compactLog() in syncOrchestrator.
 export async function getChangesSince(sinceSeq, limit = 100) {
   return withLock(async () => {
-    await ensureDir();
+    await ensureBrainDir();
     if (!existsSync(SYNC_LOG_FILE)) {
       return { changes: [], maxSeq: currentSeq, hasMore: false };
     }
@@ -139,7 +136,7 @@ export async function getChangesSince(sinceSeq, limit = 100) {
  */
 export async function compactLog(minSeq) {
   return withLock(async () => {
-    await ensureDir();
+    await ensureBrainDir();
     if (!existsSync(SYNC_LOG_FILE)) return 0;
 
     const content = await readFile(SYNC_LOG_FILE, 'utf-8');

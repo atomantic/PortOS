@@ -18,14 +18,11 @@
 
 import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { query, close } from '../lib/db.js';
+import { PATHS } from '../lib/fileUtils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '../../data');
-const MEMORY_DIR = join(DATA_DIR, 'cos/memory');
+const MEMORY_DIR = PATHS.memory;
 const INDEX_FILE = join(MEMORY_DIR, 'index.json');
 const EMBEDDINGS_FILE = join(MEMORY_DIR, 'embeddings.json');
 const MEMORIES_DIR = join(MEMORY_DIR, 'memories');
