@@ -90,8 +90,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         positions={positions}
         apps={apps}
         cosStatus={cosStatus}
+        reviewCounts={reviewCounts}
+        instances={instances}
         productivityData={productivityData}
       />
+      <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} />
       <CityVolumetricLights positions={positions} />
       <CityNeonSigns positions={positions} />
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />

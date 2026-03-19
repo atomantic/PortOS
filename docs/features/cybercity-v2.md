@@ -99,7 +99,7 @@ Planned work:
 - define district model beyond active vs archive
 - add explicit status-to-visual mappings
 - introduce review/alert pressure indicators
-- make void machine / remote instance presence visible
+- make remote instance presence visible through data-driven landmarks and signals
 - refine HUD so it reflects domain health, not just generic counts
 
 ### Phase 2 — Navigation

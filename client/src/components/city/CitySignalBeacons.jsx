@@ -111,7 +111,7 @@ export default function CitySignalBeacons({ positions, reviewCounts, instances }
         id: 'void-beacon',
         position: [maxX + 8, 0, maxZ + 8],
         color: onlinePeers > 0 ? '#8b5cf6' : '#64748b',
-        label: 'VOID / INSTANCES',
+        label: 'INSTANCE MESH',
         sublabel: `${onlinePeers}/${totalNodes} nodes linked`,
         intensity: onlinePeers > 0 ? 1.2 : 0.65,
       }

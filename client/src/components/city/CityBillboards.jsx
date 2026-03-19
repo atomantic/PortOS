@@ -56,7 +56,7 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
     const t = clock.getElapsedTime();
 
     // Gentle bob
-    groupRef.current.position.y = position[1] + Math.sin(t * 0.5 + position[0]) * 0.15;
+    groupRef.current.position.y = position[1] + Math.sin(t * (0.42 + speed) + position[0]) * 0.15;
 
     // Border pulse
     if (borderRef.current) {
@@ -253,7 +253,7 @@ export default function CityBillboards({ positions, apps, cosStatus, reviewCount
     const activityMessages = [
       { label: 'CYBERCITY', text: 'DIGITAL INFRASTRUCTURE' },
       { label: 'PORTOS', text: 'PERSONAL OPERATING SYSTEM' },
-      { label: 'VOID / INSTANCES', text: `${onlinePeers}/${nodeCount} NODES LINKED` },
+      { label: 'INSTANCE MESH', text: `${onlinePeers}/${nodeCount} NODES LINKED` },
     ];
 
     if (productivityData) {
