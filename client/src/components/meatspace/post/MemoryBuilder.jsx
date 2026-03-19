@@ -92,7 +92,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
     return (
       <MemoryPractice
         item={selectedItem}
-        onBack={() => { setView('list'); setSelectedItem(null); }}
+        onBack={() => { loadItems(); setView('list'); setSelectedItem(null); }}
       />
     );
   }

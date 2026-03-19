@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { getBuildingHeight, getAccentColor, BOROUGH_PARAMS } from './cityConstants';
+import { getBuildingHeight, BOROUGH_PARAMS } from './cityConstants';
 import Building from './Building';
 import AgentEntity from './AgentEntity';
 import ProcessBuilding from './ProcessBuilding';
@@ -17,8 +17,6 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
   const agentData = agentMap.get(app.id);
   const agents = agentData?.agents || [];
   const height = getBuildingHeight(app);
-  const accentColor = getAccentColor(app);
-
   // Get processes to render in ring (skip for archived apps)
   const processes = useMemo(() => {
     if (app.archived) return [];
@@ -64,7 +62,6 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
           process={proc}
           pm2Status={pm2Status[proc.name]}
           position={[position.x + x, 0, position.z + z, rotation]}
-          accentColor={accentColor}
           seed={seed}
         />
       ))}
