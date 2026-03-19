@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Home,
   Package,
@@ -232,6 +232,7 @@ const SIDEBAR_KEY = 'portos-sidebar-collapsed';
 
 export default function Layout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => {
     const saved = localStorage.getItem(SIDEBAR_KEY);
     return saved === 'true';
@@ -420,7 +421,7 @@ export default function Layout() {
             if (collapsed) {
               // When collapsed, navigate to first child
               if (item.children && item.children.length > 0) {
-                window.location.href = item.children[0].to;
+                navigate(item.children[0].to);
               }
             } else {
               toggleSection(item.label);

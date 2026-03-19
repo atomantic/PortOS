@@ -143,9 +143,10 @@ router.post('/port', asyncHandler(async (req, res) => {
   };
 
   // Use lsof on macOS/Linux to find process
+  const safePort = parseInt(port, 10);
   const command = process.platform === 'darwin'
-    ? `lsof -i :${port} -P -n | grep LISTEN`
-    : `ss -lntp | grep :${port}`;
+    ? `lsof -i :${safePort} -P -n | grep LISTEN`
+    : `ss -lntp | grep :${safePort}`;
 
   const { stdout } = await execAsync(command, { windowsHide: true }).catch(() => ({ stdout: '' }));
 

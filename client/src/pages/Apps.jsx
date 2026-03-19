@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, ChevronDown, ChevronUp, Ticket, GitBranch, Download, Hammer, Smartphone, Image } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Image } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AppIcon from '../components/AppIcon';
 import BrailleSpinner from '../components/BrailleSpinner';

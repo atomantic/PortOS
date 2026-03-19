@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, AlertTriangle, Crown, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, Crown, CheckCircle2 } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { execFile, execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { asyncHandler } from '../lib/errorHandler.js';

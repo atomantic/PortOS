@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon } from 'lucide-react';
+import * as api from '../services/api';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
 const MAX_SESSIONS = 5;
@@ -71,8 +72,7 @@ export default function Shell() {
 
   // Fetch app folders from the managed apps list
   useEffect(() => {
-    fetch('/api/apps')
-      .then(res => res.ok ? res.json() : Promise.reject(new Error(`${res.status} ${res.statusText}`)))
+    api.getApps()
       .then(apps => setAppFolders(
         (apps || [])
           .filter(a => a.repoPath)

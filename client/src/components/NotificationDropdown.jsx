@@ -157,7 +157,7 @@ export default function NotificationDropdown({
                     role="menuitem"
                     tabIndex={0}
                     className={`
-                      px-4 py-3 border-b border-port-border last:border-b-0 cursor-pointer
+                      group px-4 py-3 border-b border-port-border last:border-b-0 cursor-pointer
                       hover:bg-port-border/50 transition-colors focus:outline-hidden focus:bg-port-border/50
                       ${!notification.read ? 'bg-port-border/30' : ''}
                       border-l-2 ${PRIORITY_COLORS[notification.priority] || PRIORITY_COLORS.medium}
