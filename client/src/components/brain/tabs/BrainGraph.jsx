@@ -152,10 +152,10 @@ export default function BrainGraph() {
 
   const graph = useMemo(() => {
     if (!filteredData?.nodes?.length) return null;
-    void layoutKey;
     const g = buildGraph(filteredData.nodes, filteredData.edges);
     graphRef.current = g;
     return g;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- layoutKey intentionally triggers rebuild on re-layout
   }, [filteredData, layoutKey]);
 
   const adjacentIds = useMemo(() => {

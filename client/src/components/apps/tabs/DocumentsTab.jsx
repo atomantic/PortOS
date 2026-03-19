@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, FileText, Pencil, Save, X, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -10,6 +10,8 @@ export default function DocumentsTab({ appId, repoPath }) {
   const [hasPlanning, setHasPlanning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const selectedDocRef = useRef(selectedDoc);
+  selectedDocRef.current = selectedDoc;
   const [docContent, setDocContent] = useState(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -34,10 +36,9 @@ export default function DocumentsTab({ appId, repoPath }) {
 
     // Auto-select first existing document
     const firstExisting = (data.documents || []).find(d => d.exists);
-    if (firstExisting && !selectedDoc) {
+    if (firstExisting && !selectedDocRef.current) {
       loadDocument(firstExisting.filename);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appId, loadDocument]);
 
   const enterEditMode = () => {

@@ -10,7 +10,7 @@ const MODES = [
   { id: 'spaced', label: 'Spaced Repetition', desc: 'Focus on your weakest chunks with graduated hints' },
 ];
 
-export default function MemoryPractice({ item, onBack, onComplete: _onComplete }) {
+export default function MemoryPractice({ item, onBack }) {
   const [mode, setMode] = useState(null);
   const [results, setResults] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);

@@ -51,12 +51,6 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
     setItems(prev => prev.filter(i => i.id !== id));
   }
 
-  function handlePracticeComplete() {
-    loadItems();
-    setView('list');
-    setSelectedItem(null);
-  }
-
   function resetCreateForm() {
     setNewTitle('');
     setNewType('text');
@@ -99,7 +93,6 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
       <MemoryPractice
         item={selectedItem}
         onBack={() => { setView('list'); setSelectedItem(null); }}
-        onComplete={handlePracticeComplete}
       />
     );
   }
