@@ -121,9 +121,8 @@ export async function getAuthenticatedClient() {
 export function needsScopeUpgrade(tokens) {
   if (!tokens?.scope) return true;
   const scopes = tokens.scope.split(' ');
-  // Has readonly but not full calendar scope
-  return scopes.includes('https://www.googleapis.com/auth/calendar.readonly') &&
-    !scopes.includes('https://www.googleapis.com/auth/calendar');
+  // Check all required scopes are present
+  return !SCOPES.every(s => scopes.includes(s));
 }
 
 export async function getAuthStatus() {
@@ -133,6 +132,6 @@ export async function getAuthStatus() {
     hasCredentials: !!credentials?.clientId,
     hasTokens: !!tokens?.access_token,
     expiryDate: tokens?.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
-    needsCalendarScopeUpgrade: needsScopeUpgrade(tokens)
+    needsScopeUpgrade: needsScopeUpgrade(tokens)
   };
 }
