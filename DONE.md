@@ -16,6 +16,9 @@ Archive of completed work. For active roadmap, see [PLAN.md](./PLAN.md). For pro
 - Resolved empty `.catch(() => {})` in client files — `request()` in api.js already shows `toast.error()` centrally; catches just prevent unhandled rejection warnings
 - Resolved silent catches in runner.js — intentional best-effort writes during error handling
 - Resolved Settings.jsx:366 catch — error toast already fires via centralized `request()` handler
+- DRY: Extended PATHS object with 15 new centralized path constants in fileUtils.js
+- DRY: Migrated 36 files from local `__dirname`/`process.cwd()` path definitions to centralized PATHS
+- DRY: Replaced 57 `mkdir({recursive:true})` calls across 26 files with `ensureDir()`/`ensureDirs()`
 
 ---
 
