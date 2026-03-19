@@ -22,7 +22,6 @@ import ScaleInput from '../ScaleInput';
 
 export default function EnrichTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [_categories, _setCategories] = useState([]);
   const [progress, setProgress] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -46,10 +45,7 @@ export default function EnrichTab({ onRefresh }) {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [_categoriesData, progressData] = await Promise.all([
-      api.getSoulEnrichCategories().catch(() => []),
-      api.getSoulEnrichProgress().catch(() => null)
-    ]);
+    const progressData = await api.getSoulEnrichProgress().catch(() => null);
     setProgress(progressData);
     setLoading(false);
   }, []);

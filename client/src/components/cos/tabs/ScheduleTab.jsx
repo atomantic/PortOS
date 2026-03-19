@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Clock, Play, RotateCcw, ChevronDown, ChevronRight, CheckCircle, XCircle, AlertCircle, RefreshCw, Package } from 'lucide-react';
+import { Play, RotateCcw, ChevronDown, ChevronRight, AlertCircle, RefreshCw, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
@@ -21,18 +21,6 @@ const INTERVAL_DESCRIPTIONS = {
   'on-demand': 'Only runs when manually triggered',
   custom: 'Custom interval'
 };
-
-function formatTimeRemaining(ms) {
-  if (!ms || ms <= 0) return 'now';
-  const hours = Math.floor(ms / (60 * 60 * 1000));
-  const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
-  if (hours > 24) {
-    const days = Math.floor(hours / 24);
-    return `${days}d ${hours % 24}h`;
-  }
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
 
 function toggleMetadataField(metadata, field) {
   const current = metadata || {};
@@ -58,56 +46,6 @@ function IntervalBadge({ type }) {
       {INTERVAL_LABELS[type]}
     </span>
   );
-}
-
-function StatusIndicator({ config }) {
-  const status = config.status || {};
-  const isEligible = status.shouldRun;
-  const nextRunText = status.nextRunAt
-    ? formatTimeRemaining(new Date(status.nextRunAt).getTime() - Date.now())
-    : null;
-
-  if (isEligible) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-port-success">
-        <CheckCircle size={12} />
-        Ready
-      </span>
-    );
-  }
-  if (status.reason === 'disabled') {
-    return (
-      <span className="flex items-center gap-1 text-xs text-gray-500">
-        <XCircle size={12} />
-        Disabled
-      </span>
-    );
-  }
-  if (status.reason === 'on-demand-only') {
-    return (
-      <span className="flex items-center gap-1 text-xs text-port-accent">
-        <Clock size={12} />
-        On Demand
-      </span>
-    );
-  }
-  if (status.reason === 'once-completed') {
-    return (
-      <span className="flex items-center gap-1 text-xs text-port-warning">
-        <CheckCircle size={12} />
-        Completed
-      </span>
-    );
-  }
-  if (nextRunText) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-gray-400">
-        <Clock size={12} />
-        {nextRunText}
-      </span>
-    );
-  }
-  return null;
 }
 
 function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating }) {
@@ -408,64 +346,6 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
   );
 }
 
-function TaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, category, providers, apps }) {
-  const [expanded, setExpanded] = useState(false);
-  const [updating, setUpdating] = useState(false);
-
-  return (
-    <div className="border border-port-border rounded-lg">
-      <div
-        className={`flex items-center gap-3 p-3 bg-port-card hover:bg-port-card/80 cursor-pointer ${expanded ? 'rounded-t-lg' : 'rounded-lg'}`}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <button
-          className="text-gray-500 hover:text-white"
-          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-          aria-label={expanded ? 'Collapse' : 'Expand'}
-        >
-          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-        </button>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm text-white">{taskType}</span>
-            {!config.enabled && (
-              <span className="text-xs px-2 py-0.5 bg-gray-600/50 text-gray-400 rounded">Disabled</span>
-            )}
-          </div>
-          {config.lastRun && (
-            <div className="text-xs text-gray-500">
-              Last run: {new Date(config.lastRun).toLocaleDateString()} ({config.runCount || 0} total)
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <StatusIndicator config={config} />
-          <IntervalBadge type={config.type} />
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="p-4 border-t border-port-border bg-port-bg/50">
-          <GlobalConfigControls
-            taskType={taskType}
-            config={config}
-            onUpdate={onUpdate}
-            onTrigger={onTrigger}
-            onReset={onReset}
-            category={category}
-            providers={providers}
-            apps={apps}
-            updating={updating}
-            setUpdating={setUpdating}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
   const isEnabled = override?.enabled !== false;
@@ -689,42 +569,6 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
           />
         </div>
       )}
-    </div>
-  );
-}
-
-function _TaskTypeSection({ title, description, tasks, onUpdate, onTrigger, onReset, category, providers, apps }) {
-  const _TaskTypeSection = true;
-  const taskEntries = Object.entries(tasks || {});
-  if (taskEntries.length === 0) return null;
-
-  const enabledCount = taskEntries.filter(([, config]) => config.enabled).length;
-  const readyCount = taskEntries.filter(([, config]) => config.status?.shouldRun).length;
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <h3 className="text-lg font-semibold text-white">{title}</h3>
-        <span className="text-xs text-gray-500">
-          {enabledCount} enabled, {readyCount} ready
-        </span>
-      </div>
-      {description && <p className="text-sm text-gray-400">{description}</p>}
-      <div className="space-y-2">
-        {taskEntries.map(([taskType, config]) => (
-          <TaskTypeRow
-            key={taskType}
-            taskType={taskType}
-            config={config}
-            onUpdate={onUpdate}
-            onTrigger={onTrigger}
-            onReset={onReset}
-            category={category}
-            providers={providers}
-            apps={apps}
-          />
-        ))}
-      </div>
     </div>
   );
 }

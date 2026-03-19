@@ -39,14 +39,14 @@ export default function useCityAudio(settings) {
 
   // Toggle music on/off based on settings
   useEffect(() => {
-    if (!isAudioReady || settings == null) return;
+    if (!isAudioReady || musicEnabled == null) return;
     if (musicEnabled) {
       startMusic();
       setMusicVolume(musicVolume);
     } else {
       stopMusic();
     }
-  }, [isAudioReady, musicEnabled, musicVolume, settings]);
+  }, [isAudioReady, musicEnabled, musicVolume]);
 
   // Update music volume
   useEffect(() => {
@@ -56,9 +56,9 @@ export default function useCityAudio(settings) {
 
   // Update SFX volume
   useEffect(() => {
-    if (!isAudioReady || settings == null) return;
+    if (!isAudioReady || sfxVolume == null) return;
     setSfxVolume(sfxVolume);
-  }, [isAudioReady, settings, sfxVolume]);
+  }, [isAudioReady, sfxVolume]);
 
   // Cleanup on unmount
   useEffect(() => {

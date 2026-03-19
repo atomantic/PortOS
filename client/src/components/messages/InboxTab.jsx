@@ -35,7 +35,6 @@ const TRIAGE_TABS = [
 
 export default function InboxTab({ accounts }) {
   const [messages, setMessages] = useState([]);
-  const [_total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -62,7 +61,6 @@ export default function InboxTab({ accounts }) {
     if (debouncedSearch) params.search = debouncedSearch;
     const result = await api.getMessageInbox(params).catch(() => ({ messages: [], total: 0 }));
     setMessages(result.messages || []);
-    setTotal(result.total || 0);
     setLoading(false);
   }, [selectedAccount, debouncedSearch]);
 
@@ -175,7 +173,6 @@ export default function InboxTab({ accounts }) {
     if (result?.success) {
       toast.success(`Message ${action === 'archive' ? 'archived' : 'deleted'}`);
       setMessages(prev => prev.filter(m => m.id !== msg.id));
-      setTotal(prev => Math.max(0, prev - 1));
     }
   };
 

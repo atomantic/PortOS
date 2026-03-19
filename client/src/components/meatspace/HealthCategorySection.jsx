@@ -48,7 +48,8 @@ export default function HealthCategorySection({ category, from, to, expanded, on
     });
 
     return () => { cancelled = true; };
-  }, [activeMetrics, expanded, from, metricData, rangeKey, to]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, rangeKey]);
 
   return (
     <div className="border border-port-border rounded-xl overflow-hidden">

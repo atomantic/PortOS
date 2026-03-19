@@ -37,7 +37,8 @@ export default function DocumentsTab({ appId, repoPath }) {
     if (firstExisting && !selectedDoc) {
       loadDocument(firstExisting.filename);
     }
-  }, [appId, selectedDoc, loadDocument]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId, loadDocument]);
 
   const enterEditMode = () => {
     setEditContent(docContent || '');
