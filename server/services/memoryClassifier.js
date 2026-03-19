@@ -5,7 +5,7 @@
  * Falls back to pattern-based extraction if LLM is unavailable.
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
@@ -60,9 +60,6 @@ export async function getConfig() {
  * Update configuration
  */
 export async function updateConfig(updates) {
-  const { writeFile } = await import('fs/promises');
-  const { ensureDir } = await import('../lib/fileUtils.js');
-
   const config = await loadConfig();
   const newConfig = { ...config, ...updates };
 
