@@ -68,6 +68,8 @@ function CyberCityInner() {
         agentMap={agentMap}
         onBuildingClick={handleBuildingClick}
         cosStatus={cosStatus}
+        reviewCounts={reviewCounts}
+        instances={instances}
         productivityData={productivityData}
         settings={settings}
         playSfx={playSfx}

@@ -28,6 +28,8 @@ export const useCityData = () => {
     setRunningAgents(agents);
     setCosAgents(cosAgentsData);
     setCosStatus(status);
+    setReviewCounts(reviewData);
+    setInstances(instanceData);
     setLoading(false);
   }, []);
 
@@ -118,6 +120,8 @@ export const useCityData = () => {
     runningAgents,
     eventLogs,
     agentMap,
+    reviewCounts,
+    instances,
     loading,
     connected: socket.connected,
   };

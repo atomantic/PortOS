@@ -136,7 +136,7 @@ function HealthBar({ value, max, color }) {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, productivityData, onToggleExploration, explorationMode }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, onToggleExploration, explorationMode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [time, setTime] = useState(new Date());
@@ -156,6 +156,11 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
 
   const onlineRatio = totalApps > 0 ? activeApps / totalApps : 1;
   const weather = useMemo(() => getWeatherStatus(onlineRatio), [onlineRatio]);
+  const pendingReview = reviewCounts?.total || 0;
+  const alertCount = reviewCounts?.alert || 0;
+  const peers = instances?.peers || [];
+  const onlinePeers = peers.filter(peer => peer.online).length;
+  const totalNodes = 1 + peers.length;
 
   const activeAgentCount = (cosAgents || []).filter(a =>
     a.status === 'running' || a.state === 'coding' || a.state === 'thinking' || a.state === 'investigating'
@@ -242,6 +247,24 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
               <span className="font-pixel text-[11px] text-gray-500">{archivedApps}</span>
             </div>
           )}
+
+          {/* Review pressure */}
+          {(pendingReview > 0 || alertCount > 0) && (
+            <div className="flex items-center justify-between gap-6">
+              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">REVIEW</span>
+              <span className={`font-pixel text-[11px] ${alertCount > 0 ? 'text-orange-400' : 'text-cyan-400'}`}>
+                {pendingReview} PENDING{alertCount > 0 ? ` · ${alertCount} ALERT${alertCount === 1 ? '' : 'S'}` : ''}
+              </span>
+            </div>
+          )}
+
+          {/* Instance mesh */}
+          <div className="flex items-center justify-between gap-6">
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">NODES</span>
+            <span className={`font-pixel text-[11px] ${onlinePeers > 0 ? 'text-violet-400' : 'text-gray-500'}`}>
+              {onlinePeers}/{totalNodes} LINKED
+            </span>
+          </div>
 
           {/* Productivity - today's tasks */}
           {productivityData?.todaySucceeded > 0 && (

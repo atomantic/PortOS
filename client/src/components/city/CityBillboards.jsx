@@ -197,7 +197,7 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
   );
 }
 
-export default function CityBillboards({ positions, apps, cosStatus, productivityData }) {
+export default function CityBillboards({ positions, apps, cosStatus, reviewCounts, instances, productivityData }) {
   // Build billboard messages from real system data
   const billboardConfig = useMemo(() => {
     if (!positions || positions.size < 2) return [];
@@ -206,6 +206,11 @@ export default function CityBillboards({ positions, apps, cosStatus, productivit
     const stoppedApps = apps.filter(a => !a.archived && a.overallStatus === 'stopped');
     const totalActive = apps.filter(a => !a.archived).length;
     const colors = CITY_COLORS.neonAccents;
+    const pendingReview = reviewCounts?.total || 0;
+    const alertCount = reviewCounts?.alert || 0;
+    const peers = instances?.peers || [];
+    const onlinePeers = peers.filter(peer => peer.online).length;
+    const nodeCount = 1 + peers.length;
 
     // Find downtown bounding box for billboard placement
     const entries = [];
@@ -238,10 +243,17 @@ export default function CityBillboards({ positions, apps, cosStatus, productivit
         text: `${stoppedApps.length} SYSTEM${stoppedApps.length > 1 ? 'S' : ''} STOPPED`,
       });
     }
+    if (pendingReview > 0) {
+      systemMessages.push({
+        label: alertCount > 0 ? 'REVIEW ALERTS' : 'REVIEW HUB',
+        text: `${pendingReview} PENDING · ${alertCount} ALERT${alertCount === 1 ? '' : 'S'}`,
+      });
+    }
 
     const activityMessages = [
       { label: 'CYBERCITY', text: 'DIGITAL INFRASTRUCTURE' },
       { label: 'PORTOS', text: 'PERSONAL OPERATING SYSTEM' },
+      { label: 'VOID / INSTANCES', text: `${onlinePeers}/${nodeCount} NODES LINKED` },
     ];
 
     if (productivityData) {
@@ -298,7 +310,7 @@ export default function CityBillboards({ positions, apps, cosStatus, productivit
     }
 
     return billboards;
-  }, [positions, apps, cosStatus, productivityData]);
+  }, [positions, apps, cosStatus, reviewCounts, instances, productivityData]);
 
   if (billboardConfig.length === 0) return null;
 
