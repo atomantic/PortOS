@@ -229,12 +229,15 @@ export async function getBriefing() {
  * Bridge CoS events into review items
  */
 cosEvents.on('memory:approval-needed', (data) => {
-  createItem({
-    type: 'alert',
-    title: `Memory approval: ${data?.title ?? 'New memory entry'}`,
-    description: data?.content ?? '',
-    metadata: { referenceId: data?.id, category: 'memory-approval' }
-  }).catch(err => console.error(`❌ Failed to create review alert: ${err.message}`));
+  const memories = data?.memories ?? [];
+  for (const mem of memories) {
+    createItem({
+      type: 'alert',
+      title: `Memory approval: ${mem.content?.slice(0, 80) || 'New memory entry'}`,
+      description: `Type: ${mem.type ?? 'unknown'} | Confidence: ${mem.confidence ?? 'N/A'}`,
+      metadata: { referenceId: mem.id, category: 'memory-approval', agentId: data?.agentId, taskId: data?.taskId }
+    }).catch(err => console.error(`❌ Failed to create review alert: ${err.message}`));
+  }
 });
 
 cosEvents.on('task:ready', (data) => {
