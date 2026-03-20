@@ -11,10 +11,13 @@ export default function HealthCategorySection({ category, from, to, expanded, on
   const lastRangeRef = useRef(null);
 
   // Filter to only metrics that have data — stabilize the key list for deps
-  const activeMetrics = category.metrics.filter(m => availableMetrics.has(m.key));
   const activeMetricKeys = useMemo(
-    () => activeMetrics.map(m => m.key).join(','),
-    [activeMetrics]
+    () => category.metrics.filter(m => availableMetrics.has(m.key)).map(m => m.key).join(','),
+    [category.metrics, availableMetrics]
+  );
+  const activeMetrics = useMemo(
+    () => category.metrics.filter(m => availableMetrics.has(m.key)),
+    [category.metrics, availableMetrics]
   );
   const rangeKey = `${from}|${to}`;
 
