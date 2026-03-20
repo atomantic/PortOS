@@ -10,7 +10,7 @@ export default function PeerAppsList({ apps, peerAddress }) {
       <div className="space-y-1">
         {apps.map(app => (
           <div key={app.id} className="flex items-center gap-2 text-xs">
-            <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={14} className="text-gray-400 shrink-0" />
+            <AppIcon icon={app.icon || 'package'} size={14} className="text-gray-400 shrink-0" />
             {app.uiPort && app.overallStatus === 'online' ? (
               <a
                 href={`http://${peerAddress}:${app.uiPort}`}

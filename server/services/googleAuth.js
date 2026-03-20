@@ -10,7 +10,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/gmail.modify'
 ];
-export const OAUTH_REDIRECT_URI = `http://${process.env.HOST || 'localhost'}:${process.env.PORT || 5555}/api/calendar/google/oauth/callback`;
+export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || 5555}/api/calendar/google/oauth/callback`;
 
 let oAuth2Client = null;
 

@@ -1,7 +1,7 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 
@@ -113,6 +113,7 @@ export async function runGoalCheckIn() {
   }
 
   goals.updatedAt = now;
+  await ensureDir(PATHS.digitalTwin);
   await writeFile(GOALS_FILE, JSON.stringify(goals, null, 2));
 
   // Send Telegram notification

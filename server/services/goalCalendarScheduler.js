@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { writeFile } from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'path';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient, needsScopeUpgrade, getTokens } from './googleAuth.js';
 
@@ -33,6 +33,7 @@ async function loadGoals() {
 }
 
 async function saveGoals(data) {
+  await ensureDir(PATHS.digitalTwin);
   await writeFile(GOALS_FILE, JSON.stringify(data, null, 2));
 }
 

@@ -1,6 +1,7 @@
 import { existsSync } from 'fs';
 import { readFile, readdir } from 'fs/promises';
 import { join, extname } from 'path';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 /**
  * Well-known icon paths to check, ordered by priority.
@@ -98,7 +99,7 @@ async function findXcodeAppIcon(repoPath) {
       if (existsSync(contentsPath)) {
         const contents = await readFile(contentsPath, 'utf-8').catch(() => null);
         if (contents) {
-          const parsed = JSON.parse(contents).images || [];
+          const parsed = safeJSONParse(contents, {})?.images || [];
           // Find the largest icon by parsing size (prefer 1024x1024, then smaller)
           let bestIcon = null;
           let bestSize = 0;
