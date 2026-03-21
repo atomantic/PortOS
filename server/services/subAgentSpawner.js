@@ -63,6 +63,16 @@ function extractTaskTypeKey(task) {
   return 'unknown';
 }
 
+/**
+ * Remove BTW.md from agent workspace after completion.
+ * Prevents ephemeral context files from being committed to git.
+ */
+async function cleanupBtwFile(workspacePath) {
+  if (!workspacePath) return;
+  const btwPath = join(workspacePath, 'BTW.md');
+  await rm(btwPath).catch(() => {});
+}
+
 const SKILLS_DIR = join(ROOT_DIR, 'data/prompts/skills');
 
 /**
@@ -1942,6 +1952,9 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     }
   }
 
+  // Clean up ephemeral BTW.md before worktree removal
+  await cleanupBtwFile(agentState?.metadata?.workspacePath);
+
   // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
   if (!jiraBranch) {
     const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
@@ -2248,6 +2261,9 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
     // Process memory extraction and app cooldown
     await processAgentCompletion(agentId, task, success, outputBuffer);
+
+    // Clean up ephemeral BTW.md before worktree removal
+    await cleanupBtwFile(workspacePath);
 
     // Clean up worktree if agent was using one
     await cleanupAgentWorktree(agentId, success, {

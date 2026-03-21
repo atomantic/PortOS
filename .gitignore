@@ -41,6 +41,9 @@ Thumbs.db
 .claude/worktrees/
 .claude/settings.local.json
 
+# BTW messages (ephemeral agent context, cleaned up after ingestion)
+BTW.md
+
 # Browser service node_modules (code is committed)
 browser/node_modules/
 
