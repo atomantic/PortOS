@@ -1986,9 +1986,10 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
     if (pushResult) {
       const targetBranch = branchInfo.devBranch || branchInfo.baseBranch || 'main';
       const taskDesc = description || 'CoS automated task';
+      const prTitle = taskDesc.replace(/[\r\n]+/g, ' ').trim().substring(0, 100);
 
       const prResult = await git.createPR(worktreePath, {
-        title: taskDesc.substring(0, 100),
+        title: prTitle,
         body: `Automated PR created by PortOS Chief of Staff.\n\n**Task:** ${taskDesc}`,
         base: targetBranch,
         head: worktreeBranch

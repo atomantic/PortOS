@@ -1870,7 +1870,6 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
 // openPR is applied first since it implies useWorktree — this prevents defaultUseWorktree: false
 // from blocking defaultOpenPR: true when both are app-level defaults.
 export function applyAppWorktreeDefault(metadata, app) {
-  const useWorktreeWasSetByTaskType = metadata.useWorktree !== undefined;
   const taskTypeDisabledWorktree = metadata.useWorktree === false || metadata.useWorktree === 'false';
 
   // Apply defaultOpenPR first (since openPR implies useWorktree)
