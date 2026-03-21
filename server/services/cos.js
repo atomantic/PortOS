@@ -1866,12 +1866,19 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
-// When an app explicitly sets defaultUseWorktree, override per-task-type metadata
+// When an app explicitly sets defaultUseWorktree/defaultOpenPR, override per-task-type metadata
 function applyAppWorktreeDefault(metadata, app) {
   if (app.defaultUseWorktree === true) {
     metadata.useWorktree = true;
   } else if (app.defaultUseWorktree === false) {
     metadata.useWorktree = false;
+    metadata.openPR = false;
+  }
+  if (app.defaultOpenPR === true && metadata.useWorktree !== false) {
+    metadata.openPR = true;
+    metadata.useWorktree = true; // openPR implies useWorktree
+  } else if (app.defaultOpenPR === false) {
+    metadata.openPR = false;
   }
 }
 
@@ -3191,6 +3198,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     if (taskData.app) metadata.app = taskData.app;
     if (taskData.createJiraTicket) metadata.createJiraTicket = true;
     if (taskData.useWorktree) metadata.useWorktree = true;
+    if (taskData.openPR) metadata.openPR = true;
     if (taskData.simplify) metadata.simplify = true;
     if (taskData.reviewLoop) metadata.reviewLoop = true;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;

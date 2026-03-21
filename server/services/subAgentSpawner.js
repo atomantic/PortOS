@@ -39,6 +39,9 @@ const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 const RUNS_DIR = PATHS.runs;
 
+// Metadata booleans may arrive as true or 'true' (from JSON vs form/URL params)
+const isTruthyMeta = (value) => value === true || value === 'true';
+
 /**
  * Extract task type key for learning lookup
  * Matches the format used in taskLearning.js for consistency
@@ -1470,12 +1473,13 @@ export async function spawnAgentForTask(task) {
     }
   }
 
-  // Determine worktree usage: explicit user flag takes priority, then conflict-based auto-detection.
-  // The useWorktree metadata flag is set from the task creation UI checkbox.
-  // When true, always create a worktree (branch + PR). When not set, only create a
-  // worktree if conflict is detected with other running agents.
+  // Determine worktree usage: explicit user flags take priority, then conflict-based auto-detection.
+  // useWorktree: work in an isolated worktree branch
+  // openPR: open a PR to default branch (implies useWorktree)
+  // When neither is set, only create a worktree if conflict is detected with other running agents.
   let worktreeInfo = null;
-  const explicitWorktree = task.metadata?.useWorktree === 'true' || task.metadata?.useWorktree === true;
+  const explicitOpenPR = isTruthyMeta(task.metadata?.openPR);
+  const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR;
 
   // Feature agent tasks: use persistent worktree instead of creating a new one
   if (task.metadata?.featureAgentRun && task.metadata?.featureAgentId) {
@@ -1939,7 +1943,8 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 
   // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
   if (!jiraBranch) {
-    await cleanupAgentWorktree(agentId, success);
+    const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
+    await cleanupAgentWorktree(agentId, success, { openPR: taskOpenPR, description: task?.description });
   }
 
   runnerAgents.delete(agentId);
@@ -1948,9 +1953,10 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 /**
  * Clean up a worktree for a completed agent.
  * Reads worktree metadata from the agent's registered state and removes the worktree.
- * On success, merges the worktree branch back to the source branch.
+ * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
+ * Otherwise, merges the worktree branch back to the source branch on success.
  */
-async function cleanupAgentWorktree(agentId, success) {
+async function cleanupAgentWorktree(agentId, success, { openPR = false, description = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return;
@@ -1960,6 +1966,49 @@ async function cleanupAgentWorktree(agentId, success) {
   const { sourceWorkspace, worktreeBranch } = agentState.metadata;
   if (!sourceWorkspace || !worktreeBranch) return;
 
+  // When openPR is set and task succeeded, push branch and create PR instead of auto-merging
+  if (openPR && success) {
+    emitLog('info', `🌳 Opening PR for worktree agent ${agentId} branch ${worktreeBranch}`, { agentId, branchName: worktreeBranch });
+
+    const worktreePath = agentState.metadata.workspacePath || join(PATHS.worktrees, agentId);
+
+    // Push branch and resolve target branch in parallel
+    const [pushResult, branchInfo] = await Promise.all([
+      git.push(worktreePath, worktreeBranch).then(() => true).catch(err => {
+        emitLog('warn', `🌳 Failed to push worktree branch ${worktreeBranch}: ${err.message}`, { agentId });
+        return false;
+      }),
+      git.getRepoBranches(sourceWorkspace).catch(() => ({ baseBranch: null, devBranch: null }))
+    ]);
+
+    // Only create PR if push succeeded
+    if (pushResult) {
+      const targetBranch = branchInfo.devBranch || branchInfo.baseBranch || 'main';
+      const taskDesc = description || 'CoS automated task';
+
+      const prResult = await git.createPR(worktreePath, {
+        title: taskDesc.substring(0, 100),
+        body: `Automated PR created by PortOS Chief of Staff.\n\n**Task:** ${taskDesc}`,
+        base: targetBranch,
+        head: worktreeBranch
+      }).catch(err => {
+        emitLog('warn', `🌳 Failed to create PR for ${worktreeBranch}: ${err.message}`, { agentId });
+        return null;
+      });
+
+      if (prResult?.success) {
+        emitLog('success', `🌳 Created PR: ${prResult.url}`, { agentId, branchName: worktreeBranch });
+      }
+    }
+
+    // Remove worktree without merging (PR handles merge)
+    await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+      emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
+    });
+    return;
+  }
+
+  // Default: auto-merge on success, just cleanup on failure
   emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${success})`, {
     agentId, branchName: worktreeBranch, merge: success
   });
@@ -2620,6 +2669,7 @@ async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null)
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
 
   // Build worktree context section if applicable
+  const willOpenPR = isTruthyMeta(task.metadata?.openPR);
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
 You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
@@ -2627,7 +2677,7 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: Commit your changes to this branch. Your commits will be automatically merged back to the main development branch when your task completes. Do NOT manually switch branches or modify the worktree configuration.
+**Important**: Commit your changes to this branch.${willOpenPR ? ' Your commits will be submitted as a pull request to the default branch when your task completes.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'} Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
   // Build simplify section if enabled
@@ -2739,7 +2789,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${pla
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${task.metadata?.app && worktreeInfo ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
+${task.metadata?.app && worktreeInfo && willOpenPR ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : task.metadata?.app && worktreeInfo ? `- Commit code after each feature or bug fix using the git tools or /cam skill. Your worktree branch will be automatically merged back to the default branch when your task completes — do NOT open a PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. If there are uncommitted changes from a previous agent or manual work, **stash or discard them** before proceeding — do NOT commit someone else's changes.

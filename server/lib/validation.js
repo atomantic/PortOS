@@ -198,6 +198,7 @@ export const appSchema = z.object({
     interval: z.string().nullable().optional()
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
   defaultUseWorktree: z.boolean().optional().default(false),
+  defaultOpenPR: z.boolean().optional().default(false),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable()
 });
@@ -542,7 +543,7 @@ export function validateRequest(schema, data) {
 // TASK METADATA SANITIZATION
 // =============================================================================
 
-const ALLOWED_TASK_METADATA_KEYS = ['useWorktree', 'simplify', 'reviewLoop'];
+const ALLOWED_TASK_METADATA_KEYS = ['useWorktree', 'openPR', 'simplify', 'reviewLoop'];
 
 /**
  * Sanitize taskMetadata to only allowed agent-option keys with boolean values.

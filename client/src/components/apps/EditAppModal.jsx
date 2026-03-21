@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronUp, GitBranch } from 'lucide-react';
+import { ChevronDown, ChevronUp, GitBranch, GitPullRequest } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 
@@ -17,6 +17,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
     editorCommand: app.editorCommand || 'code .',
     defaultUseWorktree: app.defaultUseWorktree || false,
+    defaultOpenPR: app.defaultOpenPR || false,
     jiraEnabled: app.jira?.enabled || false,
     jiraInstanceId: app.jira?.instanceId || '',
     jiraProjectKey: app.jira?.projectKey || '',
@@ -91,6 +92,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
         : undefined,
       editorCommand: formData.editorCommand || undefined,
       defaultUseWorktree: formData.defaultUseWorktree,
+      defaultOpenPR: formData.defaultOpenPR,
       jira: formData.jiraEnabled ? {
         enabled: true,
         instanceId: formData.jiraInstanceId || undefined,
@@ -242,11 +244,26 @@ export default function EditAppModal({ app, onClose, onSave }) {
             <input
               type="checkbox"
               checked={formData.defaultUseWorktree}
-              onChange={e => setFormData({ ...formData, defaultUseWorktree: e.target.checked })}
+              onChange={e => {
+                const updates = { defaultUseWorktree: e.target.checked };
+                if (!e.target.checked) updates.defaultOpenPR = false;
+                setFormData(prev => ({ ...prev, ...updates }));
+              }}
               className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
             />
             <GitBranch size={14} className="text-emerald-400" />
-            <span className="text-sm text-white" title="When checked, new tasks default to working in an isolated git worktree on a feature branch, then opening a PR. When unchecked, agents commit directly to the default branch.">Default to Worktree + PR for new tasks</span>
+            <span className="text-sm text-white" title="When checked, new tasks default to working in an isolated git worktree on a feature branch. When unchecked, agents commit directly to the default branch.">Default to Worktree for new tasks</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer ml-6">
+            <input
+              type="checkbox"
+              checked={formData.defaultOpenPR}
+              disabled={!formData.defaultUseWorktree}
+              onChange={e => setFormData(prev => ({ ...prev, defaultOpenPR: e.target.checked }))}
+              className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent disabled:opacity-40"
+            />
+            <GitPullRequest size={14} className="text-blue-400" />
+            <span className={`text-sm ${formData.defaultUseWorktree ? 'text-white' : 'text-gray-600'}`} title="When checked, agents open a PR to the default branch. When unchecked with worktree enabled, agents auto-merge to the default branch on completion.">Default to Open PR for new tasks</span>
           </label>
 
           {/* JIRA Integration Section */}
