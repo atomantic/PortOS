@@ -6,9 +6,8 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
-1. **M50 P8**: Messages — Digital Twin voice drafting for email responses (reads COMMUNICATION.md, PERSONALITY.md, VALUES.md + thread context)
-2. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights. See [Identity System](./docs/features/identity-system.md)
-3. **M34 P5-P7**: Digital Twin — Multi-modal capture, advanced testing, personas
+1. **M42 P5**: Cross-Insights Engine — connect genome + taste + personality + goals into derived insights. See [Identity System](./docs/features/identity-system.md)
+2. **M34 P5-P7**: Digital Twin — Multi-modal capture, advanced testing, personas
 
 ## Backlog
 
