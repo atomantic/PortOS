@@ -23,9 +23,18 @@ const INTERVAL_DESCRIPTIONS = {
   custom: 'Custom interval'
 };
 
+// Toggle a global taskMetadata field, enforcing the openPR→useWorktree invariant.
 function toggleMetadataField(metadata, field) {
   const current = metadata || {};
   const newMeta = { ...current, [field]: !current[field] };
+  // openPR requires useWorktree
+  if (newMeta.openPR && !newMeta.useWorktree) {
+    newMeta.useWorktree = true;
+  }
+  // useWorktree off means openPR must be off
+  if (newMeta.useWorktree === false && newMeta.openPR) {
+    newMeta.openPR = false;
+  }
   const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v));
   return Object.keys(active).length ? active : null;
 }

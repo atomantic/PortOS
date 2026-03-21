@@ -59,6 +59,8 @@ export const AGENT_OPTIONS = [
 
 // Compute new taskMetadata after toggling a field in a per-app override.
 // Returns null when all overrides are cleared (inherit everything).
+// Enforces invariant: openPR implies useWorktree (turning on openPR forces
+// useWorktree on; turning off useWorktree forces openPR off).
 export function toggleAppMetadataOverride(overrideMetadata, globalMetadata, field) {
   const current = overrideMetadata || {};
   const newMeta = { ...current };
@@ -67,6 +69,24 @@ export function toggleAppMetadataOverride(overrideMetadata, globalMetadata, fiel
   } else {
     const effective = overrideMetadata?.[field] ?? globalMetadata?.[field] ?? false;
     newMeta[field] = !effective;
+  }
+
+  const resolve = (f) => newMeta[f] ?? globalMetadata?.[f] ?? false;
+
+  // openPR requires useWorktree
+  if (resolve('openPR') && !resolve('useWorktree')) {
+    newMeta.useWorktree = true;
+  }
+  // useWorktree off means openPR must be off
+  if (!resolve('useWorktree') && resolve('openPR')) {
+    newMeta.openPR = false;
+  }
+
+  // Clean entries that match the global value (revert to inherit)
+  for (const key of Object.keys(newMeta)) {
+    if (newMeta[key] === (globalMetadata?.[key] ?? false)) {
+      delete newMeta[key];
+    }
   }
   return Object.keys(newMeta).length ? newMeta : null;
 }

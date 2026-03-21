@@ -1957,7 +1957,7 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
  * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-async function cleanupAgentWorktree(agentId, success, { openPR = false, description = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, description = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return;

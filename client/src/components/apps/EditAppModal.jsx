@@ -16,8 +16,8 @@ export default function EditAppModal({ app, onClose, onSave }) {
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
     editorCommand: app.editorCommand || 'code .',
-    defaultUseWorktree: app.defaultUseWorktree || false,
     defaultOpenPR: app.defaultOpenPR || false,
+    defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     jiraEnabled: app.jira?.enabled || false,
     jiraInstanceId: app.jira?.instanceId || '',
     jiraProjectKey: app.jira?.projectKey || '',
@@ -91,7 +91,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
         ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
         : undefined,
       editorCommand: formData.editorCommand || undefined,
-      defaultUseWorktree: formData.defaultUseWorktree,
+      defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
       jira: formData.jiraEnabled ? {
         enabled: true,
