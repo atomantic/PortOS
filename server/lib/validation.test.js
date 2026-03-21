@@ -453,6 +453,14 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ useWorktree: true, simplify: false })).toEqual({ useWorktree: true, simplify: false });
     });
 
+    it('should accept openPR as an allowed metadata key', () => {
+      expect(sanitizeTaskMetadata({ openPR: true })).toEqual({ openPR: true });
+      expect(sanitizeTaskMetadata({ openPR: false })).toEqual({ openPR: false });
+      expect(sanitizeTaskMetadata({ useWorktree: true, openPR: true })).toEqual({ useWorktree: true, openPR: true });
+      expect(sanitizeTaskMetadata({ useWorktree: true, openPR: true, simplify: true, reviewLoop: false }))
+        .toEqual({ useWorktree: true, openPR: true, simplify: true, reviewLoop: false });
+    });
+
     it('should drop non-boolean values for allowed keys', () => {
       expect(sanitizeTaskMetadata({ useWorktree: 'yes' })).toBeNull();
       expect(sanitizeTaskMetadata({ simplify: 1 })).toBeNull();

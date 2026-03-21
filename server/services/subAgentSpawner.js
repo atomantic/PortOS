@@ -1981,7 +1981,7 @@ async function cleanupAgentWorktree(agentId, success, { openPR = false, descript
       git.getRepoBranches(sourceWorkspace).catch(() => ({ baseBranch: null, devBranch: null }))
     ]);
 
-    // Only create PR if push succeeded
+    // Only create PR if push succeeded; fall back to auto-merge if push fails
     if (pushResult) {
       const targetBranch = branchInfo.devBranch || branchInfo.baseBranch || 'main';
       const taskDesc = description || 'CoS automated task';
@@ -1999,10 +1999,17 @@ async function cleanupAgentWorktree(agentId, success, { openPR = false, descript
       if (prResult?.success) {
         emitLog('success', `🌳 Created PR: ${prResult.url}`, { agentId, branchName: worktreeBranch });
       }
+
+      // Remove worktree without merging (PR handles merge)
+      await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+        emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
+      });
+      return;
     }
 
-    // Remove worktree without merging (PR handles merge)
-    await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+    // Push failed — fall back to auto-merge so commits aren't lost
+    emitLog('warn', `🌳 Push failed for ${worktreeBranch}, falling back to auto-merge`, { agentId });
+    await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: true }).catch(err => {
       emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
     });
     return;
@@ -2789,7 +2796,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${pla
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${task.metadata?.app && worktreeInfo && willOpenPR ? `- **When done, create a pull request to the repo's default branch** (main/master) instead of committing directly to dev. Use the /pr skill or gh CLI to open the PR.` : task.metadata?.app && worktreeInfo ? `- Commit code after each feature or bug fix using the git tools or /cam skill. Your worktree branch will be automatically merged back to the default branch when your task completes — do NOT open a PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
+${task.metadata?.app && worktreeInfo && willOpenPR ? `- Commit code after each feature or bug fix using the git tools or /cam skill. A pull request will be automatically created when your task completes — do NOT open a PR manually.` : task.metadata?.app && worktreeInfo ? `- Commit code after each feature or bug fix using the git tools or /cam skill. Your worktree branch will be automatically merged back to the default branch when your task completes — do NOT open a PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. If there are uncommitted changes from a previous agent or manual work, **stash or discard them** before proceeding — do NOT commit someone else's changes.

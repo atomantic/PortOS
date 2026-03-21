@@ -49,9 +49,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Auto-toggle JIRA, worktree, and PR checkboxes when app selection changes
   useEffect(() => {
     const app = apps?.find(a => a.id === newTask.app);
+    const defaultOpenPR = !!app?.defaultOpenPR;
+    const defaultUseWorktree = !!app?.defaultUseWorktree || defaultOpenPR;
     setCreateJiraTicket(!!app?.jira?.enabled);
-    setUseWorktree(!!app?.defaultUseWorktree);
-    setOpenPR(!!app?.defaultOpenPR);
+    setUseWorktree(defaultUseWorktree);
+    setOpenPR(defaultOpenPR);
   }, [newTask.app, apps]);
 
   // Get models for selected provider

@@ -1866,18 +1866,25 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
-// When an app explicitly sets defaultUseWorktree/defaultOpenPR, override per-task-type metadata
+// Apply app-level worktree/PR defaults only when not already set by task-type metadata
 function applyAppWorktreeDefault(metadata, app) {
-  if (app.defaultUseWorktree === true) {
-    metadata.useWorktree = true;
-  } else if (app.defaultUseWorktree === false) {
-    metadata.useWorktree = false;
-    metadata.openPR = false;
+  if (metadata.useWorktree === undefined) {
+    if (app.defaultUseWorktree === true) {
+      metadata.useWorktree = true;
+    } else if (app.defaultUseWorktree === false) {
+      metadata.useWorktree = false;
+    }
   }
-  if (app.defaultOpenPR === true && metadata.useWorktree !== false) {
-    metadata.openPR = true;
-    metadata.useWorktree = true; // openPR implies useWorktree
-  } else if (app.defaultOpenPR === false) {
+  if (metadata.openPR === undefined && metadata.useWorktree !== false) {
+    if (app.defaultOpenPR === true) {
+      metadata.openPR = true;
+      metadata.useWorktree = true; // openPR implies useWorktree
+    } else if (app.defaultOpenPR === false) {
+      metadata.openPR = false;
+    }
+  }
+  // Ensure openPR=false when useWorktree=false (invariant: openPR implies useWorktree)
+  if (metadata.useWorktree === false) {
     metadata.openPR = false;
   }
 }

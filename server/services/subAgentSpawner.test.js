@@ -671,4 +671,141 @@ describe('Task Failure Retry Logic', () => {
     });
   });
 
+  // --- isTruthyMeta helper (inline copy for testing) ---
+  describe('isTruthyMeta', () => {
+    const isTruthyMeta = (value) => value === true || value === 'true';
+
+    it('should return true for boolean true', () => {
+      expect(isTruthyMeta(true)).toBe(true);
+    });
+
+    it('should return true for string "true"', () => {
+      expect(isTruthyMeta('true')).toBe(true);
+    });
+
+    it('should return false for false', () => {
+      expect(isTruthyMeta(false)).toBe(false);
+    });
+
+    it('should return false for undefined/null/other values', () => {
+      expect(isTruthyMeta(undefined)).toBe(false);
+      expect(isTruthyMeta(null)).toBe(false);
+      expect(isTruthyMeta('false')).toBe(false);
+      expect(isTruthyMeta(1)).toBe(false);
+      expect(isTruthyMeta('')).toBe(false);
+    });
+  });
+
+  // --- openPR worktree decision logic ---
+  describe('openPR/useWorktree decision logic', () => {
+    function resolveWorktreeFlags(metadata) {
+      const isTruthyMeta = (v) => v === true || v === 'true';
+      const explicitOpenPR = isTruthyMeta(metadata?.openPR);
+      const explicitWorktree = isTruthyMeta(metadata?.useWorktree) || explicitOpenPR;
+      return { explicitOpenPR, explicitWorktree };
+    }
+
+    it('should not use worktree or PR when neither is set', () => {
+      const result = resolveWorktreeFlags({});
+      expect(result.explicitWorktree).toBe(false);
+      expect(result.explicitOpenPR).toBe(false);
+    });
+
+    it('should use worktree but not PR when only useWorktree is set', () => {
+      const result = resolveWorktreeFlags({ useWorktree: true });
+      expect(result.explicitWorktree).toBe(true);
+      expect(result.explicitOpenPR).toBe(false);
+    });
+
+    it('should imply worktree when openPR is set', () => {
+      const result = resolveWorktreeFlags({ openPR: true });
+      expect(result.explicitWorktree).toBe(true);
+      expect(result.explicitOpenPR).toBe(true);
+    });
+
+    it('should use both when both are set', () => {
+      const result = resolveWorktreeFlags({ useWorktree: true, openPR: true });
+      expect(result.explicitWorktree).toBe(true);
+      expect(result.explicitOpenPR).toBe(true);
+    });
+
+    it('should handle string "true" values from form/URL params', () => {
+      const result = resolveWorktreeFlags({ useWorktree: 'true', openPR: 'true' });
+      expect(result.explicitWorktree).toBe(true);
+      expect(result.explicitOpenPR).toBe(true);
+    });
+
+    it('should not use worktree when useWorktree is false and openPR is false', () => {
+      const result = resolveWorktreeFlags({ useWorktree: false, openPR: false });
+      expect(result.explicitWorktree).toBe(false);
+      expect(result.explicitOpenPR).toBe(false);
+    });
+  });
+
+  // --- applyAppWorktreeDefault logic ---
+  describe('applyAppWorktreeDefault', () => {
+    function applyAppWorktreeDefault(metadata, app) {
+      if (metadata.useWorktree === undefined) {
+        if (app.defaultUseWorktree === true) {
+          metadata.useWorktree = true;
+        } else if (app.defaultUseWorktree === false) {
+          metadata.useWorktree = false;
+        }
+      }
+      if (metadata.openPR === undefined && metadata.useWorktree !== false) {
+        if (app.defaultOpenPR === true) {
+          metadata.openPR = true;
+          metadata.useWorktree = true;
+        } else if (app.defaultOpenPR === false) {
+          metadata.openPR = false;
+        }
+      }
+      if (metadata.useWorktree === false) {
+        metadata.openPR = false;
+      }
+    }
+
+    it('should fill defaults when metadata has no worktree/openPR fields', () => {
+      const metadata = {};
+      applyAppWorktreeDefault(metadata, { defaultUseWorktree: true, defaultOpenPR: true });
+      expect(metadata.useWorktree).toBe(true);
+      expect(metadata.openPR).toBe(true);
+    });
+
+    it('should not override task-type metadata that is already set', () => {
+      const metadata = { useWorktree: false, openPR: false };
+      applyAppWorktreeDefault(metadata, { defaultUseWorktree: true, defaultOpenPR: true });
+      expect(metadata.useWorktree).toBe(false);
+      expect(metadata.openPR).toBe(false);
+    });
+
+    it('should enforce openPR=false when useWorktree=false', () => {
+      const metadata = { useWorktree: false };
+      applyAppWorktreeDefault(metadata, { defaultOpenPR: true });
+      expect(metadata.openPR).toBe(false);
+    });
+
+    it('should imply useWorktree when defaultOpenPR is true', () => {
+      const metadata = {};
+      applyAppWorktreeDefault(metadata, { defaultOpenPR: true });
+      expect(metadata.useWorktree).toBe(true);
+      expect(metadata.openPR).toBe(true);
+    });
+
+    it('should apply defaultUseWorktree without affecting already-set openPR', () => {
+      const metadata = { openPR: true };
+      applyAppWorktreeDefault(metadata, { defaultUseWorktree: false });
+      // useWorktree was unset, gets filled with false; invariant enforces openPR=false
+      expect(metadata.useWorktree).toBe(false);
+      expect(metadata.openPR).toBe(false);
+    });
+
+    it('should leave metadata unchanged when app has no defaults', () => {
+      const metadata = { useWorktree: true, openPR: true };
+      applyAppWorktreeDefault(metadata, {});
+      expect(metadata.useWorktree).toBe(true);
+      expect(metadata.openPR).toBe(true);
+    });
+  });
+
 });
