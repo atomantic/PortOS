@@ -628,6 +628,19 @@ export async function start() {
 
   cosEvents.emit('status', { running: true });
   emitLog('success', 'CoS daemon started successfully');
+
+  // Queue due improvement tasks shortly after startup (not during initial eval
+  // to avoid overwhelming fresh installs, but soon enough to not stall)
+  setTimeout(() => {
+    if (!daemonRunning) return;
+    loadState().then(async (state) => {
+      if (!state.config.idleReviewEnabled) return;
+      const cosTaskData = await getCosTasks();
+      await queueEligibleImprovementTasks(state, cosTaskData);
+      setImmediate(() => dequeueNextTask());
+    }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
+  }, 30000);
+
   return { success: true };
 }
 
@@ -3854,6 +3867,7 @@ async function scheduleNextImprovementCheck() {
       if (state.config.idleReviewEnabled) {
         const cosTaskData = await getCosTasks();
         await queueEligibleImprovementTasks(state, cosTaskData);
+        setImmediate(() => dequeueNextTask());
       }
 
       await scheduleNextImprovementCheck();
@@ -3894,7 +3908,11 @@ async function init() {
     );
   });
 
-  // Event-driven triggers: file watcher changes → dequeueNextTask
+  // Event-driven triggers: task/file changes → dequeueNextTask
+  cosEvents.on('tasks:changed', (data) => {
+    if (daemonRunning && data?.action === 'added') setImmediate(() => dequeueNextTask());
+  });
+
   cosEvents.on('tasks:user:added', () => {
     if (daemonRunning) setImmediate(() => dequeueNextTask());
   });

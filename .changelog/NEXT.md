@@ -1,6 +1,8 @@
 # Unreleased Changes
 
 ## Added
+- Agent options (Worktree+PR, /simplify, Review Loop) configurable per-app on both the Automation tab and CoS Schedule per-app overrides
+- Review Loop agent option: runs PR review feedback loop after opening a PR until checks pass
 - Nicotine tracking tab in MeatSpace with consumption logging, daily totals, rolling averages, custom product quick-add buttons, inline editing, and entry history
 - Nicotine chart (7d/30d/90d bar chart) and nicotine vs heart rate correlation visualization
 - Nicotine data integrated into health correlation endpoint (HR, resting HR alongside nicotine mg)
@@ -23,6 +25,8 @@
 - Alcohol page summary compressed into a single compact stat bar row to maximize above-the-fold content
 
 ## Fixed
+- CoS scheduled improvement tasks (feature-ideas, etc.) never spawning: event listener mismatch (`tasks:user:added`/`tasks:cos:added` vs actual `tasks:changed` event), missing dequeue trigger after improvement check timer, and no improvement queuing after daemon restart until timer fires
+- App icons in CoS schedule per-app override list rendering at natural image size instead of respecting the `size` prop
 - Calendar day view current-time red line now updates every 60 seconds instead of only on page load
 - Stokes Pick default nicotine amount corrected from 3mg to 5mg
 - UTC timezone shift showing tomorrow's date in alcohol/nicotine forms — replaced `toISOString()` with local `localDateStr()` utility

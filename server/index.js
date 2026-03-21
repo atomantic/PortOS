@@ -60,6 +60,7 @@ import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
 import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
+import loopsRoutes from './routes/loops.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
 import { backfillOriginInstanceId } from './services/brainStorage.js';
@@ -78,6 +79,7 @@ import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
 import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
+import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
@@ -254,6 +256,7 @@ app.use('/api/github', githubRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/update', updateRoutes);
+app.use('/api/loops', loopsRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
@@ -321,6 +324,9 @@ clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recove
 
 // Start periodic update checker (checks GitHub releases every 30 min)
 startUpdateScheduler();
+
+// Restore any active loops from previous session
+restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.message}`));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');

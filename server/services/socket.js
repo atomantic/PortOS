@@ -17,6 +17,7 @@ import { moltworldWsEvents } from './moltworldWs.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { reviewEvents } from './review.js';
+import { loopEvents } from './loops.js';
 import * as shellService from './shell.js';
 import {
   validateSocketData,
@@ -46,6 +47,8 @@ const notificationSubscribers = new Set();
 const agentSubscribers = new Set();
 // Store instance subscribers
 const instanceSubscribers = new Set();
+// Store loop subscribers
+const loopSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -257,6 +260,17 @@ export function initSocket(io) {
       socket.emit('instances:unsubscribed');
     });
 
+    // Loop subscriptions
+    socket.on('loops:subscribe', () => {
+      loopSubscribers.add(socket);
+      socket.emit('loops:subscribed');
+    });
+
+    socket.on('loops:unsubscribe', () => {
+      loopSubscribers.delete(socket);
+      socket.emit('loops:unsubscribed');
+    });
+
     // Handle error recovery requests (can trigger auto-fix agents)
     socket.on('error:recover', async (rawData) => {
       const data = validateSocketData(errorRecoverSchema, rawData, socket, 'error:recover');
@@ -431,6 +445,7 @@ export function initSocket(io) {
       notificationSubscribers.delete(socket);
       agentSubscribers.delete(socket);
       instanceSubscribers.delete(socket);
+      loopSubscribers.delete(socket);
       const detached = shellService.detachSocketSessions(socket);
       if (detached > 0) {
         console.log(`🐚 Detached ${detached} shell session(s) (still running)`);
@@ -481,6 +496,9 @@ export function initSocket(io) {
 
   // Set up update event forwarding
   setupUpdateEventForwarding();
+
+  // Set up loop event forwarding
+  setupLoopEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -712,4 +730,28 @@ function setupUpdateEventForwarding() {
       ioInstance.emit('portos:update:checked', data);
     }
   });
+}
+
+// Broadcast to loop subscribers only
+function broadcastToLoops(event, data) {
+  for (const socket of loopSubscribers) {
+    if (!socket.connected) { loopSubscribers.delete(socket); continue; }
+    socket.emit(event, data);
+  }
+}
+
+// Set up loop event forwarding (idempotent)
+let loopForwardingSetup = false;
+function setupLoopEventForwarding() {
+  if (loopForwardingSetup) return;
+  loopForwardingSetup = true;
+  loopEvents.on('created', (data) => broadcastToLoops('loop:created', data));
+  loopEvents.on('stopped', (data) => broadcastToLoops('loop:stopped', data));
+  loopEvents.on('resumed', (data) => broadcastToLoops('loop:resumed', data));
+  loopEvents.on('deleted', (data) => broadcastToLoops('loop:deleted', data));
+  loopEvents.on('updated', (data) => broadcastToLoops('loop:updated', data));
+  loopEvents.on('iteration:start', (data) => broadcastToLoops('loop:iteration:start', data));
+  loopEvents.on('iteration:complete', (data) => broadcastToLoops('loop:iteration:complete', data));
+  loopEvents.on('iteration:error', (data) => broadcastToLoops('loop:iteration:error', data));
+  loopEvents.on('output', (data) => broadcastToLoops('loop:output', data));
 }

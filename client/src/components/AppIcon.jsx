@@ -184,8 +184,8 @@ export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className 
   const [imgError, setImgError] = useState(false);
 
   // Show real app icon image if the app has one detected
-  // Image fills its parent container completely (parent controls size)
   if (hasAppIcon && appId && !imgError) {
+    const sizeStyle = { width: size, height: size, minWidth: size, minHeight: size };
     const imgEl = (
       <img
         src={getAppIconUrl(appId)}
@@ -196,9 +196,9 @@ export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className 
     );
 
     if (ariaLabel) {
-      return <span role="img" aria-label={ariaLabel}>{imgEl}</span>;
+      return <span role="img" aria-label={ariaLabel} className="inline-block" style={sizeStyle}>{imgEl}</span>;
     }
-    return <span aria-hidden="true">{imgEl}</span>;
+    return <span aria-hidden="true" className="inline-block" style={sizeStyle}>{imgEl}</span>;
   }
 
   // Fall back to SVG icon

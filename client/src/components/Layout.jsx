@@ -177,6 +177,7 @@ const navItems = [
   { to: '/goals/tree', label: 'Goals', icon: Target, single: true },
   { to: '/insights/overview', label: 'Insights', icon: Lightbulb, single: true },
   { to: '/instances', label: 'Instances', icon: Network, single: true },
+  { to: '/loops', label: 'Loops', icon: RefreshCw, single: true },
   {
     label: 'MeatSpace',
     icon: Skull,

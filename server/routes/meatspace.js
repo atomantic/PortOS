@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { PATHS, readJSONFile } from '../lib/fileUtils.js';
 import {
   configUpdateSchema,
   lifestyleUpdateSchema,
@@ -841,6 +843,135 @@ router.delete('/life-events/:id', asyncHandler(async (req, res) => {
   const events = await calendarService.removeLifeEvent(req.params.id);
   if (!events) throw new ServerError('Life event not found', { status: 404, code: 'NOT_FOUND' });
   res.json(events);
+}));
+
+/**
+ * GET /api/meatspace/export/mortalloom
+ * Export all health data in MortalLoom-compatible JSON format.
+ * Transforms PortOS daily-log + files into MortalLoom AppData schema.
+ */
+router.get('/export/mortalloom', asyncHandler(async (req, res) => {
+  const config = await meatspaceService.getConfig();
+  const bloodData = await healthService.getBloodTests();
+  const epiData = await healthService.getEpigeneticTests();
+  const eyeData = await healthService.getEyeExams();
+  const bodyHistory = await healthService.getBodyHistory();
+  const dailyLog = await readJSONFile(join(PATHS.meatspace, 'daily-log.json'), { entries: [] });
+
+  // Profile
+  const profile = {
+    birthDate: config.birthDate || null,
+    biologicalSex: config.sex || null,
+    lifestyle: {
+      smokingStatus: config.lifestyle?.smokingStatus ?? 'never',
+      exerciseMinutesPerWeek: config.lifestyle?.exerciseMinutesPerWeek ?? 150,
+      sleepHoursPerNight: config.lifestyle?.sleepHoursPerNight ?? 7.5,
+      dietQuality: config.lifestyle?.dietQuality ?? 'good',
+      stressLevel: config.lifestyle?.stressLevel ?? 'moderate',
+      bmi: config.lifestyle?.bmi ?? null,
+    },
+  };
+
+  // Alcohol drinks - flatten daily log entries into individual drinks
+  const alcoholDrinks = [];
+  for (const entry of (dailyLog?.entries || [])) {
+    if (!entry.alcohol?.drinks) continue;
+    for (const drink of entry.alcohol.drinks) {
+      alcoholDrinks.push({
+        id: crypto.randomUUID(),
+        name: drink.name,
+        oz: drink.oz,
+        abv: drink.abv,
+        count: drink.count || 1,
+        date: entry.date,
+      });
+    }
+  }
+
+  // Nicotine entries - flatten daily log
+  const nicotineEntries = [];
+  for (const entry of (dailyLog?.entries || [])) {
+    if (!entry.nicotine?.items) continue;
+    for (const item of entry.nicotine.items) {
+      nicotineEntries.push({
+        id: crypto.randomUUID(),
+        product: item.product,
+        mgPerUnit: item.mgPerUnit,
+        count: item.count || 1,
+        date: entry.date,
+      });
+    }
+  }
+
+  // Blood tests - PortOS stores markers flat on test object, MortalLoom nests under `markers`
+  const bloodTests = (bloodData?.tests || []).map(test => {
+    const { date, ...markers } = test;
+    return {
+      id: crypto.randomUUID(),
+      date,
+      markers,
+    };
+  });
+
+  // Body entries from daily log
+  const bodyEntries = bodyHistory.map(entry => ({
+    id: crypto.randomUUID(),
+    date: entry.date,
+    weightLbs: entry.weightLbs ?? null,
+    bodyFatPct: entry.fatPct ?? null,
+  }));
+
+  // Epigenetic tests
+  const epigeneticTests = (epiData?.tests || []).map(test => ({
+    id: crypto.randomUUID(),
+    date: test.date,
+    chronologicalAge: test.chronologicalAge,
+    biologicalAge: test.biologicalAge,
+    paceOfAging: test.paceOfAging ?? null,
+    organScores: test.organScores ?? null,
+  }));
+
+  // Eye exams
+  const eyeExams = (eyeData?.exams || []).map(exam => ({
+    id: crypto.randomUUID(),
+    date: exam.date,
+    leftSphere: exam.leftSphere ?? null,
+    leftCylinder: exam.leftCylinder ?? null,
+    leftAxis: exam.leftAxis ?? null,
+    rightSphere: exam.rightSphere ?? null,
+    rightCylinder: exam.rightCylinder ?? null,
+    rightAxis: exam.rightAxis ?? null,
+  }));
+
+  // Default alcohol presets (match MortalLoom defaults)
+  const alcoholPresets = [
+    { id: crypto.randomUUID(), name: 'Modelo Especial (12oz)', oz: 12, abv: 4.4 },
+    { id: crypto.randomUUID(), name: 'Nitro Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
+    { id: crypto.randomUUID(), name: 'Old Fashioned (2oz)', oz: 2, abv: 40 },
+    { id: crypto.randomUUID(), name: 'Guinness 0 (14.9oz)', oz: 14.9, abv: 0.4 },
+    { id: crypto.randomUUID(), name: 'N/A Beer (12oz)', oz: 12, abv: 0.4 },
+  ];
+
+  // Nicotine presets
+  const nicotinePresets = [
+    { id: crypto.randomUUID(), name: 'Stokes Pick (5mg)', mgPerUnit: 5 },
+  ];
+
+  const exportData = {
+    profile,
+    alcoholDrinks,
+    alcoholPresets,
+    nicotineEntries,
+    nicotinePresets,
+    bloodTests,
+    eyeExams,
+    epigeneticTests,
+    bodyEntries,
+  };
+
+  res.setHeader('Content-Disposition', 'attachment; filename="MortalLoom-export.json"');
+  res.setHeader('Content-Type', 'application/json');
+  res.json(exportData);
 }));
 
 export default router;

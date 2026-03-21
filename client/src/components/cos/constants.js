@@ -49,6 +49,27 @@ export const STATE_MESSAGES = {
   ideating: "Analyzing options...",
 };
 
+// Agent option toggles for task metadata (useWorktree, simplify, reviewLoop)
+export const AGENT_OPTIONS = [
+  { field: 'useWorktree', label: 'Worktree + PR', shortLabel: 'WT', description: 'Work in an isolated git worktree on a feature branch, then open a PR. If unchecked, commits directly to the default branch.' },
+  { field: 'simplify', label: 'Run /simplify', shortLabel: '/s', description: 'Review code for reuse and quality before committing' },
+  { field: 'reviewLoop', label: 'Review Loop', shortLabel: 'RL', description: 'After opening a PR, run review feedback loop until checks pass and PR is approved' }
+];
+
+// Compute new taskMetadata after toggling a field in a per-app override.
+// Returns null when all overrides are cleared (inherit everything).
+export function toggleAppMetadataOverride(overrideMetadata, globalMetadata, field) {
+  const current = overrideMetadata || {};
+  const newMeta = { ...current };
+  if (newMeta[field] !== undefined) {
+    delete newMeta[field];
+  } else {
+    const effective = overrideMetadata?.[field] ?? globalMetadata?.[field] ?? false;
+    newMeta[field] = !effective;
+  }
+  return Object.keys(newMeta).length ? newMeta : null;
+}
+
 export const MEMORY_TYPES = ['fact', 'learning', 'observation', 'decision', 'preference', 'context'];
 
 export const MEMORY_TYPE_COLORS = {

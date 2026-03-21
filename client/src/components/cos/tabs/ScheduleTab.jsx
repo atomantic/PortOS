@@ -3,6 +3,7 @@ import { Play, RotateCcw, ChevronDown, ChevronRight, AlertCircle, RefreshCw, Pac
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
+import { AGENT_OPTIONS, toggleAppMetadataOverride } from '../constants';
 
 const INTERVAL_LABELS = {
   rotation: 'Rotation',
@@ -29,10 +30,6 @@ function toggleMetadataField(metadata, field) {
   return Object.keys(active).length ? active : null;
 }
 
-const AGENT_OPTIONS = [
-  { field: 'useWorktree', label: 'Worktree + PR', shortLabel: 'WT', description: 'Work in an isolated git worktree on a feature branch, then open a PR. If unchecked, commits directly to the default branch.' },
-  { field: 'simplify', label: 'Run /simplify', shortLabel: '/s', description: 'Review code for reuse and quality before committing' }
-];
 
 function IntervalBadge({ type }) {
   return (
@@ -366,17 +363,8 @@ function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata,
 
   const handleMetaToggle = async (field) => {
     setUpdating(true);
-    const current = override?.taskMetadata || {};
-    const newMeta = { ...current };
-    if (newMeta[field] !== undefined) {
-      // Already overridden — remove override to inherit global
-      delete newMeta[field];
-    } else {
-      // Set override to opposite of effective value
-      const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
-      newMeta[field] = !effective;
-    }
-    await onUpdate(app.id, taskType, { taskMetadata: Object.keys(newMeta).length ? newMeta : null }).catch(() => {});
+    const taskMetadata = toggleAppMetadataOverride(override?.taskMetadata, globalTaskMetadata, field);
+    await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
     setUpdating(false);
   };
 
