@@ -98,16 +98,34 @@ describe('Task Parser', () => {
 
 ## Pending
 - [ ] #task-001 | HIGH | Fix the bug
-  - context: User reported issue
-  - app: my-app
-  - model: claude-sonnet`;
+  - Context: User reported issue
+  - App: my-app
+  - Model: claude-sonnet`;
 
       const tasks = parseTasksMarkdown(markdown);
 
       expect(tasks).toHaveLength(1);
+      // Legacy Title-Case keys are normalized to camelCase (Context→context)
       expect(tasks[0].metadata.context).toBe('User reported issue');
       expect(tasks[0].metadata.app).toBe('my-app');
       expect(tasks[0].metadata.model).toBe('claude-sonnet');
+    });
+
+    it('should preserve camelCase metadata keys', () => {
+      const markdown = `# Tasks
+
+## Pending
+- [ ] #task-001 | HIGH | Fix the bug
+  - openPR: true
+  - useWorktree: true
+  - reviewLoop: false`;
+
+      const tasks = parseTasksMarkdown(markdown);
+
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].metadata.openPR).toBe('true');
+      expect(tasks[0].metadata.useWorktree).toBe('true');
+      expect(tasks[0].metadata.reviewLoop).toBe('false');
     });
 
     it('should handle empty content', () => {
