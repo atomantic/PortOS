@@ -73,13 +73,13 @@ export function toggleAppMetadataOverride(overrideMetadata, globalMetadata, fiel
 
   const resolve = (f) => newMeta[f] ?? globalMetadata?.[f] ?? false;
 
-  // openPR requires useWorktree
-  if (resolve('openPR') && !resolve('useWorktree')) {
-    newMeta.useWorktree = true;
-  }
-  // useWorktree off means openPR must be off
-  if (!resolve('useWorktree') && resolve('openPR')) {
+  // Apply useWorktree-off rule first (based on the toggled field's new value)
+  if (field === 'useWorktree' && !newMeta.useWorktree && newMeta.useWorktree !== undefined) {
+    // User explicitly toggled worktree off — force openPR off
     newMeta.openPR = false;
+  } else if (field === 'openPR' && resolve('openPR') && !resolve('useWorktree')) {
+    // User toggled openPR on — force useWorktree on
+    newMeta.useWorktree = true;
   }
 
   // Clean entries that match the global value (revert to inherit)

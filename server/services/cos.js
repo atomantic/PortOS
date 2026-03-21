@@ -1895,8 +1895,13 @@ export function applyAppWorktreeDefault(metadata, app) {
     }
   }
 
-  // Final invariant: openPR=false when useWorktree=false
-  if (metadata.useWorktree === false || metadata.useWorktree === 'false') {
+  // Final invariant: openPR implies useWorktree (normalize in both directions)
+  const finalOpenPR = metadata.openPR === true || metadata.openPR === 'true';
+  const finalWorktreeOff = metadata.useWorktree === false || metadata.useWorktree === 'false';
+  if (finalOpenPR && finalWorktreeOff) {
+    // openPR wins — force useWorktree on
+    metadata.useWorktree = true;
+  } else if (finalWorktreeOff) {
     metadata.openPR = false;
   }
 }

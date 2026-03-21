@@ -2247,7 +2247,10 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
     await processAgentCompletion(agentId, task, success, outputBuffer);
 
     // Clean up worktree if agent was using one
-    await cleanupAgentWorktree(agentId, success);
+    await cleanupAgentWorktree(agentId, success, {
+      openPR: isTruthyMeta(task.metadata?.openPR),
+      description: task.description
+    });
 
     unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
     activeAgents.delete(agentId);
