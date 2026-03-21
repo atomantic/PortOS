@@ -684,6 +684,10 @@ export const submitCosAgentFeedback = (id, feedback) => request(`/cos/agents/${i
   method: 'POST',
   body: JSON.stringify(feedback)
 });
+export const sendCosAgentBtw = (id, message) => request(`/cos/agents/${id}/btw`, {
+  method: 'POST',
+  body: JSON.stringify({ message })
+});
 export const getCosFeedbackStats = () => request('/cos/feedback/stats');
 export const getCosReports = () => request('/cos/reports');
 export const getCosTodayReport = () => request('/cos/reports/today');

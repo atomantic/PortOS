@@ -549,6 +549,7 @@ function setupCosEventForwarding() {
   cosEvents.on('agent:updated', (data) => broadcastToCos('cos:agent:updated', data));
   cosEvents.on('agent:completed', (data) => broadcastToCos('cos:agent:completed', data));
   cosEvents.on('agent:output', (data) => broadcastToCos('cos:agent:output', data));
+  cosEvents.on('agent:btw', (data) => broadcastToCos('cos:agent:btw', data));
 
   // Memory events
   cosEvents.on('memory:created', (data) => broadcastToCos('cos:memory:created', data));

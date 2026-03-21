@@ -13,7 +13,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   MessageSquare,
-  ExternalLink
+  ExternalLink,
+  Send
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
@@ -96,11 +97,19 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   const [processStats, setProcessStats] = useState(null);
   const [killing, setKilling] = useState(false);
   const [feedbackState, setFeedbackState] = useState(agent.feedback?.rating || null);
+  const [btwInput, setBtwInput] = useState('');
+  const [sendingBtw, setSendingBtw] = useState(false);
+  const [btwMessages, setBtwMessages] = useState(agent.btwMessages || []);
 
   // Sync feedback state when parent refreshes agent data
   useEffect(() => {
     if (agent.feedback?.rating) setFeedbackState(agent.feedback.rating);
   }, [agent.feedback?.rating]);
+
+  // Sync btw messages from parent when agent data refreshes
+  useEffect(() => {
+    if (agent.btwMessages?.length) setBtwMessages(agent.btwMessages);
+  }, [agent.btwMessages]);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [showFeedbackComment, setShowFeedbackComment] = useState(false);
   const [feedbackComment, setFeedbackComment] = useState('');
@@ -131,6 +140,25 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
       onFeedbackChange?.();
     }
   }, [agent.id, feedbackComment, submittingFeedback, onFeedbackChange]);
+
+  // Send BTW message to running agent
+  const sendBtw = useCallback(async () => {
+    if (sendingBtw || !btwInput.trim()) return;
+    setSendingBtw(true);
+
+    const result = await api.sendCosAgentBtw(agent.id, btwInput.trim()).catch(err => {
+      toast.error(`Failed to send: ${err.message}`);
+      return null;
+    });
+
+    setSendingBtw(false);
+
+    if (result?.success) {
+      setBtwMessages(prev => [...prev, { message: btwInput.trim(), timestamp: new Date().toISOString() }]);
+      setBtwInput('');
+      toast.success('BTW message sent to agent');
+    }
+  }, [agent.id, btwInput, sendingBtw]);
 
   // Update duration display for running agents
   useEffect(() => {
@@ -454,6 +482,46 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
         {!completed && recentActivity.length === 0 && lastOutput && (
           <div className="text-xs text-gray-500 font-mono truncate bg-port-bg/50 px-2 py-1 rounded">
             {lastOutput.substring(0, 100)}
+          </div>
+        )}
+
+        {/* BTW messages sent to this agent */}
+        {btwMessages.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {btwMessages.map((btw, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs bg-yellow-500/10 border border-yellow-500/20 rounded px-2 py-1.5">
+                <MessageSquare size={12} className="text-yellow-400 shrink-0 mt-0.5" aria-hidden="true" />
+                <div className="min-w-0">
+                  <span className="text-yellow-400">BTW:</span>{' '}
+                  <span className="text-gray-300">{btw.message}</span>
+                  <span className="text-gray-600 ml-2">{new Date(btw.timestamp).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!completed && !remote && (
+          <div className="mt-2 flex gap-2">
+            <input
+              type="text"
+              value={btwInput}
+              onChange={(e) => setBtwInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendBtw()}
+              placeholder="Send additional context to agent..."
+              className="flex-1 px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white placeholder-gray-600 focus:outline-hidden focus:border-yellow-500/50 min-h-[32px]"
+              maxLength={5000}
+              disabled={sendingBtw}
+            />
+            <button
+              onClick={sendBtw}
+              disabled={sendingBtw || !btwInput.trim()}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded transition-colors disabled:opacity-50 min-h-[32px]"
+              title="Send BTW message to agent"
+            >
+              {sendingBtw ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Send size={12} aria-hidden="true" />}
+              BTW
+            </button>
           </div>
         )}
 

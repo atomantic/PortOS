@@ -684,6 +684,45 @@ app.post('/terminate-all', async (req, res) => {
 });
 
 /**
+ * Send a BTW (additional context) message to a running agent.
+ * Writes the message to a BTW.md file in the agent's workspace so the
+ * agent can discover it during file operations.
+ */
+app.post('/btw/:agentId', async (req, res) => {
+  const { agentId } = req.params;
+  const { message, workspacePath } = req.body;
+  const agent = activeAgents.get(agentId);
+
+  if (!agent) {
+    return res.status(404).json({ error: 'Agent not found or not running' });
+  }
+
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid message' });
+  }
+
+  if (!workspacePath || typeof workspacePath !== 'string') {
+    return res.status(400).json({ error: 'Missing workspacePath' });
+  }
+
+  const timestamp = new Date().toISOString();
+  const entry = `\n---\n**[${timestamp}]** ${message}\n`;
+  const btwPath = join(workspacePath, 'BTW.md');
+
+  // Append to BTW.md (create if first message)
+  const existing = await readFile(btwPath, 'utf-8').catch(() => '');
+  const header = existing ? '' : '# Additional Context from User\n\nThe user has sent you additional context while you are working. Read and incorporate this information.\n';
+  await writeFile(btwPath, header + existing + entry);
+
+  console.log(`💬 BTW message delivered to agent ${agentId}: ${message.substring(0, 80)}`);
+
+  // Emit the btw event so the main server can track it
+  emitToServer('agent:btw', { agentId, message, timestamp });
+
+  res.json({ success: true, agentId, btwPath });
+});
+
+/**
  * Get agent output
  */
 app.get('/agents/:agentId/output', (req, res) => {

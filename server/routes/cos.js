@@ -378,6 +378,29 @@ router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// POST /api/cos/agents/:id/btw - Send additional context to a running agent
+router.post('/agents/:id/btw', asyncHandler(async (req, res) => {
+  const { message } = req.body;
+
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    throw new ServerError('message is required and must be a non-empty string', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  if (message.length > 5000) {
+    throw new ServerError('message must be 5000 characters or less', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const result = await cos.sendBtwToAgent(req.params.id, message.trim());
+  if (result?.error) {
+    const isNotFound = result.error === 'Agent not found';
+    throw new ServerError(result.error, {
+      status: isNotFound ? 404 : 400,
+      code: isNotFound ? 'NOT_FOUND' : 'INVALID_STATE'
+    });
+  }
+  res.json(result);
+}));
+
 // GET /api/cos/feedback/stats - Get feedback statistics
 router.get('/feedback/stats', asyncHandler(async (req, res) => {
   const stats = await cos.getFeedbackStats();
