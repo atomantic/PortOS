@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
+import { isTruthyMeta } from './subAgentSpawner.js';
+import { applyAppWorktreeDefault } from './cos.js';
 
 /**
  * Tests for the subAgentSpawner service
  *
- * Note: We test the pure functions directly by extracting their logic.
- * The spawner has complex dependencies (process spawning, file system, etc.)
- * so we focus on the decision-making logic that can be unit tested.
+ * Note: We test the pure functions directly by importing them from production.
+ * For functions with complex dependencies (process spawning, file system, etc.)
+ * we focus on the decision-making logic that can be unit tested.
  */
 
 // Test model selection logic
@@ -671,10 +673,8 @@ describe('Task Failure Retry Logic', () => {
     });
   });
 
-  // --- isTruthyMeta helper (inline copy for testing) ---
+  // --- isTruthyMeta helper (imported from production) ---
   describe('isTruthyMeta', () => {
-    const isTruthyMeta = (value) => value === true || value === 'true';
-
     it('should return true for boolean true', () => {
       expect(isTruthyMeta(true)).toBe(true);
     });
@@ -696,10 +696,9 @@ describe('Task Failure Retry Logic', () => {
     });
   });
 
-  // --- openPR worktree decision logic ---
+  // --- openPR worktree decision logic (uses imported isTruthyMeta) ---
   describe('openPR/useWorktree decision logic', () => {
     function resolveWorktreeFlags(metadata) {
-      const isTruthyMeta = (v) => v === true || v === 'true';
       const explicitOpenPR = isTruthyMeta(metadata?.openPR);
       const explicitWorktree = isTruthyMeta(metadata?.useWorktree) || explicitOpenPR;
       return { explicitOpenPR, explicitWorktree };
@@ -742,29 +741,8 @@ describe('Task Failure Retry Logic', () => {
     });
   });
 
-  // --- applyAppWorktreeDefault logic ---
+  // --- applyAppWorktreeDefault logic (imported from production cos.js) ---
   describe('applyAppWorktreeDefault', () => {
-    function applyAppWorktreeDefault(metadata, app) {
-      if (metadata.useWorktree === undefined) {
-        if (app.defaultUseWorktree === true) {
-          metadata.useWorktree = true;
-        } else if (app.defaultUseWorktree === false) {
-          metadata.useWorktree = false;
-        }
-      }
-      if (metadata.openPR === undefined && metadata.useWorktree !== false) {
-        if (app.defaultOpenPR === true) {
-          metadata.openPR = true;
-          metadata.useWorktree = true;
-        } else if (app.defaultOpenPR === false) {
-          metadata.openPR = false;
-        }
-      }
-      if (metadata.useWorktree === false) {
-        metadata.openPR = false;
-      }
-    }
-
     it('should fill defaults when metadata has no worktree/openPR fields', () => {
       const metadata = {};
       applyAppWorktreeDefault(metadata, { defaultUseWorktree: true, defaultOpenPR: true });

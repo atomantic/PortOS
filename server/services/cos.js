@@ -1867,7 +1867,7 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
  * @returns {Object} Generated task
  */
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata
-function applyAppWorktreeDefault(metadata, app) {
+export function applyAppWorktreeDefault(metadata, app) {
   if (metadata.useWorktree === undefined) {
     if (app.defaultUseWorktree === true) {
       metadata.useWorktree = true;

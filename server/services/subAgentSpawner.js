@@ -40,7 +40,7 @@ const AGENTS_DIR = PATHS.cosAgents;
 const RUNS_DIR = PATHS.runs;
 
 // Metadata booleans may arrive as true or 'true' (from JSON vs form/URL params)
-const isTruthyMeta = (value) => value === true || value === 'true';
+export const isTruthyMeta = (value) => value === true || value === 'true';
 
 /**
  * Extract task type key for learning lookup
@@ -2693,8 +2693,8 @@ ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (lat
 After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found before committing.
 ` : '';
 
-  // Build review loop section if enabled
-  const reviewLoopSection = task.metadata?.reviewLoop ? `
+  // Build review loop section if enabled (only when the agent creates the PR itself, not when openPR auto-creates it post-exit)
+  const reviewLoopSection = (task.metadata?.reviewLoop && !willOpenPR) ? `
 ## Review Loop
 After opening the PR, run \`/do:rpr\` to resolve PR review feedback and complete the merge validation. Continue running the review loop until all checks pass and the PR is approved.
 ` : '';

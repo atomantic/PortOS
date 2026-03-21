@@ -17,6 +17,7 @@
 - Personal Goals dashboard widget: shows top-level goals with progress bars, category icons, horizon labels, and stall detection (14+ days idle) — replaces broken CoS task-based goal widget that never rendered
 
 ## Changed
+- Exported `isTruthyMeta` from `subAgentSpawner.js` and `applyAppWorktreeDefault` from `cos.js`; tests now import production helpers instead of duplicating their logic inline
 - Consolidated 5 duplicate `timeAgo`/`formatTimeAgo` implementations into a single `timeAgo()` in `utils/formatters.js`
 - Deduplicated `stripCodeFences` from insightsService — now imports from shared `lib/aiProvider.js`
 - Added `MINUTE` time constant to `lib/fileUtils.js` alongside existing `HOUR`/`DAY`
