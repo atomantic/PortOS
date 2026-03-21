@@ -2007,11 +2007,8 @@ async function cleanupAgentWorktree(agentId, success, { openPR = false, descript
       return;
     }
 
-    // Push failed — fall back to auto-merge so commits aren't lost
-    emitLog('warn', `🌳 Push failed for ${worktreeBranch}, falling back to auto-merge`, { agentId });
-    await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: true }).catch(err => {
-      emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
-    });
+    // Push failed — preserve worktree/branch for manual intervention (do NOT auto-merge in openPR mode)
+    emitLog('warn', `🌳 Push failed for ${worktreeBranch} — worktree preserved at ${worktreePath} for manual retry`, { agentId, branchName: worktreeBranch });
     return;
   }
 
