@@ -191,6 +191,15 @@ describe('validation.js', () => {
       const result = appUpdateSchema.safeParse(update);
       expect(result.success).toBe(false);
     });
+
+    it('should not inject default values for omitted boolean fields', () => {
+      const update = { name: 'Updated Name' };
+      const result = appUpdateSchema.safeParse(update);
+      expect(result.success).toBe(true);
+      expect(result.data).not.toHaveProperty('archived');
+      expect(result.data).not.toHaveProperty('defaultUseWorktree');
+      expect(result.data).not.toHaveProperty('defaultOpenPR');
+    });
   });
 
   describe('providerSchema', () => {

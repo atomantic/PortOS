@@ -190,15 +190,15 @@ export const appSchema = z.object({
   appIconPath: z.string().nullable().optional(), // Absolute path to detected app icon image
   editorCommand: z.string().optional(),
   description: z.string().optional(),
-  archived: z.boolean().optional().default(false),
+  archived: z.boolean().optional(),
   pm2Home: z.string().optional(), // Custom PM2_HOME path for apps that run in their own PM2 instance
   disabledTaskTypes: z.array(z.string()).optional(), // Legacy: migrated to taskTypeOverrides
   taskTypeOverrides: z.record(z.object({
     enabled: z.boolean().optional(),
     interval: z.string().nullable().optional()
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
-  defaultUseWorktree: z.boolean().optional().default(false),
-  defaultOpenPR: z.boolean().optional().default(false),
+  defaultUseWorktree: z.boolean().optional(),
+  defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable()
 });
