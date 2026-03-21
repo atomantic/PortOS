@@ -1866,6 +1866,15 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
+// When an app explicitly sets defaultUseWorktree, override per-task-type metadata
+function applyAppWorktreeDefault(metadata, app) {
+  if (app.defaultUseWorktree === true) {
+    metadata.useWorktree = true;
+  } else if (app.defaultUseWorktree === false) {
+    metadata.useWorktree = false;
+  }
+}
+
 async function generateManagedAppImprovementTask(app, state) {
   const { getAppActivityById, updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -1944,6 +1953,8 @@ async function generateManagedAppImprovementTask(app, state) {
     Object.assign(metadata, sanitizedAppMeta);
   }
 
+  applyAppWorktreeDefault(metadata, app);
+
   // Use configured model/provider if specified, otherwise use default
   if (interval.providerId) {
     metadata.providerId = interval.providerId;
@@ -2021,6 +2032,8 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
   if (sanitizedAppMeta) {
     Object.assign(metadata, sanitizedAppMeta);
   }
+
+  applyAppWorktreeDefault(metadata, app);
 
   // Use configured model/provider if specified, otherwise use default
   if (interval.providerId) {

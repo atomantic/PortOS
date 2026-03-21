@@ -1525,8 +1525,8 @@ export async function spawnAgentForTask(task) {
         agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
       });
     }
-  } else if (!jiraBranchName) {
-    // No explicit worktree requested: use worktree only when conflict is detected
+  } else if (!jiraBranchName && task.metadata?.useWorktree !== false) {
+    // No explicit worktree requested and not explicitly disabled: use worktree only when conflict is detected
     const { getAgents } = await import('./cos.js');
     const allAgents = await getAgents();
     const runningAgents = allAgents.filter(a => a.status === 'running');
