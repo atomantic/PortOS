@@ -1997,15 +1997,14 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
         return null;
       });
 
-      if (prResult?.success === false) {
-        emitLog('error', `🌳 PR creation failed for ${worktreeBranch}: ${prResult.error}`, { agentId, branchName: worktreeBranch });
+      if (!prResult?.success) {
+        const reason = prResult?.error || 'unknown error (createPR returned null or threw)';
+        emitLog('error', `🌳 PR creation failed for ${worktreeBranch}: ${reason}`, { agentId, branchName: worktreeBranch });
         // Preserve worktree/branch for manual PR creation
         return;
       }
 
-      if (prResult?.success) {
-        emitLog('success', `🌳 Created PR: ${prResult.url}`, { agentId, branchName: worktreeBranch });
-      }
+      emitLog('success', `🌳 Created PR: ${prResult.url}`, { agentId, branchName: worktreeBranch });
 
       // Remove worktree without merging (PR handles merge)
       await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {

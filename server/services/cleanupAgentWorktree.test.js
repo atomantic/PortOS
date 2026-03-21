@@ -296,15 +296,14 @@ describe('cleanupAgentWorktree - openPR path', () => {
     }));
   });
 
-  it('should still remove worktree when createPR throws (null result)', async () => {
+  it('should preserve worktree when createPR throws', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockRejectedValue(new Error('network error'));
 
     await cleanupAgentWorktree('agent-1', true, { openPR: true, description: 'Test' });
 
-    // createPR catches the error and returns null; null?.success is undefined (not false),
-    // so it proceeds to removeWorktree
-    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    // PR creation failed — worktree preserved for manual intervention
+    expect(removeWorktree).not.toHaveBeenCalled();
   });
 
   it('should truncate long descriptions to 100 chars for PR title', async () => {

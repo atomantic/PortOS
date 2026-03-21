@@ -35,7 +35,7 @@ function toggleMetadataField(metadata, field) {
   if (newMeta.useWorktree === false && newMeta.openPR) {
     newMeta.openPR = false;
   }
-  const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v));
+  const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v !== undefined && v !== null));
   return Object.keys(active).length ? active : null;
 }
 
