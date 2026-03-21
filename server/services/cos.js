@@ -1869,7 +1869,11 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata
 export function applyAppWorktreeDefault(metadata, app) {
   if (metadata.useWorktree === undefined) {
-    if (app.defaultUseWorktree === true) {
+    // openPR implies useWorktree — don't let app default override explicit openPR: true
+    const explicitOpenPR = metadata.openPR === true || metadata.openPR === 'true';
+    if (explicitOpenPR) {
+      metadata.useWorktree = true;
+    } else if (app.defaultUseWorktree === true) {
       metadata.useWorktree = true;
     } else if (app.defaultUseWorktree === false) {
       metadata.useWorktree = false;

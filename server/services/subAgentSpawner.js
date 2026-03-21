@@ -1997,6 +1997,12 @@ async function cleanupAgentWorktree(agentId, success, { openPR = false, descript
         return null;
       });
 
+      if (prResult?.success === false) {
+        emitLog('error', `🌳 PR creation failed for ${worktreeBranch}: ${prResult.error}`, { agentId, branchName: worktreeBranch });
+        // Preserve worktree/branch for manual PR creation
+        return;
+      }
+
       if (prResult?.success) {
         emitLog('success', `🌳 Created PR: ${prResult.url}`, { agentId, branchName: worktreeBranch });
       }

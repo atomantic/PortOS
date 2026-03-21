@@ -793,12 +793,19 @@ describe('Task Failure Retry Logic', () => {
       expect(metadata.openPR).toBe(true);
     });
 
-    it('should apply defaultUseWorktree without affecting already-set openPR', () => {
+    it('should not let defaultUseWorktree:false override explicit openPR:true', () => {
       const metadata = { openPR: true };
       applyAppWorktreeDefault(metadata, { defaultUseWorktree: false });
-      // useWorktree was unset, gets filled with false; invariant enforces openPR=false
-      expect(metadata.useWorktree).toBe(false);
-      expect(metadata.openPR).toBe(false);
+      // openPR implies useWorktree — app default must not override explicit openPR
+      expect(metadata.useWorktree).toBe(true);
+      expect(metadata.openPR).toBe(true);
+    });
+
+    it('should handle openPR:"true" string the same as boolean true', () => {
+      const metadata = { openPR: 'true' };
+      applyAppWorktreeDefault(metadata, { defaultUseWorktree: false });
+      expect(metadata.useWorktree).toBe(true);
+      expect(metadata.openPR).toBe('true');
     });
 
     it('should leave metadata unchanged when app has no defaults', () => {
