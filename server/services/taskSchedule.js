@@ -17,7 +17,7 @@ import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cos.js';
-import { DAY, ensureDir, HOUR, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { PORTOS_UI_URL } from '../lib/ports.js';
@@ -1175,6 +1175,34 @@ export async function getExecutionHistory(taskType) {
 }
 
 /**
+ * Check if all runAfter dependencies have completed since this task's last run.
+ * Returns { satisfied, pending } where pending lists unfinished dependency task types.
+ */
+function checkRunAfterDeps(schedule, taskType, appId = null) {
+  const interval = schedule.tasks[taskType];
+  const deps = interval?.runAfter;
+  if (!deps || deps.length === 0) return { satisfied: true, pending: [] };
+
+  const key = `task:${taskType}`;
+  const execution = schedule.executions[key] || { lastRun: null, perApp: {} };
+  const ownLastRun = safeDate(appId ? execution.perApp[appId]?.lastRun : execution.lastRun);
+
+  const pending = [];
+  for (const dep of deps) {
+    const depKey = `task:${dep}`;
+    const depExec = schedule.executions[depKey] || { lastRun: null, perApp: {} };
+    const depLastRun = safeDate(appId ? depExec.perApp[appId]?.lastRun : depExec.lastRun);
+
+    // Dependency must have run after this task's last run (i.e., within the current cycle)
+    if (depLastRun <= ownLastRun) {
+      pending.push(dep);
+    }
+  }
+
+  return { satisfied: pending.length === 0, pending };
+}
+
+/**
  * Check if a task type should run for a specific app (or globally)
  */
 export async function shouldRunTask(taskType, appId = null) {
@@ -1227,71 +1255,82 @@ export async function shouldRunTask(taskType, appId = null) {
     return result;
   };
 
+  let result;
+
   switch (effectiveType) {
     case INTERVAL_TYPES.ROTATION:
-      return { shouldRun: true, reason: 'rotation' };
+      result = { shouldRun: true, reason: 'rotation' };
+      break;
 
     case INTERVAL_TYPES.DAILY: {
       const learningAdjustment = await getPerformanceAdjustedInterval(taskType, DAY);
       const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-
       if (timeSinceLastRun >= adjustedInterval) {
-        return buildResult(true, learningAdjustment.adjusted ? 'daily-due-adjusted' : 'daily-due', DAY, { learningAdjustment });
+        result = buildResult(true, learningAdjustment.adjusted ? 'daily-due-adjusted' : 'daily-due', DAY, { learningAdjustment });
+      } else {
+        result = buildResult(false, learningAdjustment.adjusted ? 'daily-cooldown-adjusted' : 'daily-cooldown', DAY, {
+          learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
+          nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+          baseIntervalMs: DAY, adjustedIntervalMs: adjustedInterval
+        });
       }
-      return buildResult(false, learningAdjustment.adjusted ? 'daily-cooldown-adjusted' : 'daily-cooldown', DAY, {
-        learningAdjustment,
-        nextRunIn: adjustedInterval - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-        baseIntervalMs: DAY,
-        adjustedIntervalMs: adjustedInterval
-      });
+      break;
     }
 
     case INTERVAL_TYPES.WEEKLY: {
       const learningAdjustment = await getPerformanceAdjustedInterval(taskType, WEEK);
       const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-
       if (timeSinceLastRun >= adjustedInterval) {
-        return buildResult(true, learningAdjustment.adjusted ? 'weekly-due-adjusted' : 'weekly-due', WEEK, { learningAdjustment });
+        result = buildResult(true, learningAdjustment.adjusted ? 'weekly-due-adjusted' : 'weekly-due', WEEK, { learningAdjustment });
+      } else {
+        result = buildResult(false, learningAdjustment.adjusted ? 'weekly-cooldown-adjusted' : 'weekly-cooldown', WEEK, {
+          learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
+          nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+          baseIntervalMs: WEEK, adjustedIntervalMs: adjustedInterval
+        });
       }
-      return buildResult(false, learningAdjustment.adjusted ? 'weekly-cooldown-adjusted' : 'weekly-cooldown', WEEK, {
-        learningAdjustment,
-        nextRunIn: adjustedInterval - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-        baseIntervalMs: WEEK,
-        adjustedIntervalMs: adjustedInterval
-      });
+      break;
     }
 
     case INTERVAL_TYPES.ONCE:
-      if (appExecution.count === 0) {
-        return { shouldRun: true, reason: 'once-first-run' };
-      }
-      return { shouldRun: false, reason: 'once-completed', completedAt: appExecution.lastRun };
+      result = appExecution.count === 0
+        ? { shouldRun: true, reason: 'once-first-run' }
+        : { shouldRun: false, reason: 'once-completed', completedAt: appExecution.lastRun };
+      break;
 
     case INTERVAL_TYPES.ON_DEMAND:
-      return { shouldRun: false, reason: 'on-demand-only' };
+      result = { shouldRun: false, reason: 'on-demand-only' };
+      break;
 
     case INTERVAL_TYPES.CUSTOM: {
       const baseInterval = interval.intervalMs || DAY;
       const learningAdjustment = await getPerformanceAdjustedInterval(taskType, baseInterval);
       const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-
       if (timeSinceLastRun >= adjustedInterval) {
-        return buildResult(true, learningAdjustment.adjusted ? 'custom-due-adjusted' : 'custom-due', baseInterval, { learningAdjustment });
+        result = buildResult(true, learningAdjustment.adjusted ? 'custom-due-adjusted' : 'custom-due', baseInterval, { learningAdjustment });
+      } else {
+        result = buildResult(false, learningAdjustment.adjusted ? 'custom-cooldown-adjusted' : 'custom-cooldown', baseInterval, {
+          learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
+          nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+          baseIntervalMs: baseInterval, adjustedIntervalMs: adjustedInterval
+        });
       }
-      return buildResult(false, learningAdjustment.adjusted ? 'custom-cooldown-adjusted' : 'custom-cooldown', baseInterval, {
-        learningAdjustment,
-        nextRunIn: adjustedInterval - timeSinceLastRun,
-        nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-        baseIntervalMs: baseInterval,
-        adjustedIntervalMs: adjustedInterval
-      });
+      break;
     }
 
     default:
-      return { shouldRun: true, reason: 'unknown-default-rotation' };
+      result = { shouldRun: true, reason: 'unknown-default-rotation' };
   }
+
+  // If the task would run, check runAfter dependencies — blocked until all deps have run since our last run
+  if (result.shouldRun && interval.runAfter?.length > 0) {
+    const depCheck = checkRunAfterDeps(schedule, taskType, appId);
+    if (!depCheck.satisfied) {
+      return { shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: depCheck.pending };
+    }
+  }
+
+  return result;
 }
 
 /**

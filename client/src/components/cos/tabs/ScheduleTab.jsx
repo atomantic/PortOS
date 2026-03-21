@@ -57,7 +57,7 @@ function IntervalBadge({ type }) {
   );
 }
 
-function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating }) {
+function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes }) {
   const [selectedType, setSelectedType] = useState(config.type);
   const [selectedProviderId, setSelectedProviderId] = useState(config.providerId || '');
   const [selectedModel, setSelectedModel] = useState(config.model || '');
@@ -289,6 +289,38 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         </div>
       </div>
 
+      {allTaskTypes?.length > 1 && (
+        <div>
+          <label className="text-sm text-gray-400 block mb-2">Run After (dependencies)</label>
+          <div className="flex flex-wrap gap-2">
+            {allTaskTypes.filter(t => t !== taskType).map(dep => {
+              const isSelected = (config.runAfter || []).includes(dep);
+              return (
+                <button
+                  key={dep}
+                  onClick={() => {
+                    const current = config.runAfter || [];
+                    const updated = isSelected
+                      ? current.filter(d => d !== dep)
+                      : [...current, dep];
+                    onUpdate(taskType, { runAfter: updated.length > 0 ? updated : null });
+                  }}
+                  disabled={updating}
+                  className={`text-xs px-2 py-1 rounded border transition-colors ${
+                    isSelected
+                      ? 'bg-port-accent/20 border-port-accent/50 text-port-accent'
+                      : 'bg-port-card border-port-border text-gray-400 hover:border-gray-500'
+                  }`}
+                >
+                  {dep}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">This task will wait for selected tasks to complete first within the same cycle</p>
+        </div>
+      )}
+
       <div className="flex gap-2">
         {activeApps.length > 0 ? (
           <div className="relative" ref={appSelectorRef}>
@@ -493,7 +525,7 @@ function PerAppOverrideList({ taskType, config, apps, onUpdateOverride, onBulkTo
   );
 }
 
-function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride }) {
+function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, allTaskTypes }) {
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
 
@@ -520,12 +552,20 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
             {!config.enabled && (
               <span className="text-xs px-2 py-0.5 bg-gray-600/50 text-gray-400 rounded">Disabled</span>
             )}
+            {config.status?.reason === 'waiting-on-dependencies' && (
+              <span className="text-xs px-2 py-0.5 bg-port-warning/20 text-port-warning rounded" title={`Waiting for: ${config.status.pendingDeps?.join(', ')}`}>
+                Waiting on deps
+              </span>
+            )}
           </div>
-          {config.globalLastRun && (
-            <div className="text-xs text-gray-500">
-              Last run: {new Date(config.globalLastRun).toLocaleDateString()} ({config.globalRunCount || 0} total)
-            </div>
-          )}
+          <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+            {config.globalLastRun && (
+              <span>Last run: {new Date(config.globalLastRun).toLocaleDateString()} ({config.globalRunCount || 0} total)</span>
+            )}
+            {config.runAfter?.length > 0 && (
+              <span className="text-gray-500">after: {config.runAfter.join(', ')}</span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -557,6 +597,7 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
               apps={apps}
               updating={updating}
               setUpdating={setUpdating}
+              allTaskTypes={allTaskTypes}
             />
           </div>
 
@@ -578,6 +619,7 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
   if (taskEntries.length === 0) return null;
 
   const enabledCount = taskEntries.filter(([, config]) => config.enabled).length;
+  const allTaskTypes = taskEntries.map(([taskType]) => taskType);
 
   return (
     <div className="space-y-3">
@@ -603,6 +645,7 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
             apps={apps}
             onUpdateOverride={onUpdateOverride}
             onBulkToggleOverride={onBulkToggleOverride}
+            allTaskTypes={allTaskTypes}
           />
         ))}
       </div>

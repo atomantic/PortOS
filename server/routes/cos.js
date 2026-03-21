@@ -63,7 +63,7 @@ const cosConfigSchema = z.object({
   }).optional()
 }).strict();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt', 'taskMetadata'];
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'providerId', 'model', 'prompt', 'taskMetadata', 'runAfter'];
 
 /**
  * Pick only defined values from body for schedule settings updates
@@ -88,6 +88,17 @@ function pickScheduleSettings(body) {
       throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
     }
     settings.taskMetadata = sanitized;
+  }
+  if (settings.runAfter !== undefined && settings.runAfter !== null) {
+    if (!Array.isArray(settings.runAfter)) {
+      throw new ServerError('runAfter must be an array of task type strings or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (!settings.runAfter.every(v => typeof v === 'string')) {
+      throw new ServerError('runAfter entries must be strings', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (settings.runAfter.length === 0) {
+      settings.runAfter = null;
+    }
   }
   return settings;
 }
@@ -691,7 +702,13 @@ router.get('/schedule/task/:taskType', asyncHandler(async (req, res) => {
 // PUT /api/cos/schedule/task/:taskType - Update interval for a task type (unified)
 router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const result = await taskSchedule.updateTaskInterval(taskType, pickScheduleSettings(req.body));
+  const settings = pickScheduleSettings(req.body);
+  // Filter self-references from runAfter to prevent permanent blocking
+  if (Array.isArray(settings.runAfter)) {
+    settings.runAfter = settings.runAfter.filter(dep => dep !== taskType);
+    if (settings.runAfter.length === 0) settings.runAfter = null;
+  }
+  const result = await taskSchedule.updateTaskInterval(taskType, settings);
   res.json({ success: true, taskType, interval: result });
 }));
 
