@@ -34,6 +34,28 @@ export function formatRuntime(ms) {
 }
 
 /**
+ * Format a timestamp as relative time (e.g., "just now", "5m ago", "2d ago")
+ * Handles null/missing values with configurable fallback.
+ * @param {string|Date|null} dateStr - ISO timestamp, Date object, or null
+ * @param {string} fallback - Text to show for null/missing dates (default: 'never')
+ * @returns {string} Relative time string
+ */
+export function timeAgo(dateStr, fallback = 'never') {
+  if (!dateStr) return fallback;
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (seconds < 0) return 'just now';
+  if (seconds < 60) return seconds < 10 ? 'just now' : `${seconds}s ago`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
+
+/**
  * Format bytes as a human-readable string
  * @param {number} bytes - Size in bytes
  * @param {number} decimals - Number of decimal places

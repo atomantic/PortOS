@@ -15,6 +15,7 @@ import {
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
+import { timeAgo } from '../utils/formatters';
 
 const STATUS_COLORS = {
   online: 'text-port-success',
@@ -27,18 +28,6 @@ const STATUS_ICONS = {
   offline: WifiOff,
   unknown: CircleDot
 };
-
-function timeAgo(iso) {
-  if (!iso) return 'Never';
-  const diff = Date.now() - new Date(iso).getTime();
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
 
 function timeUntil(iso) {
   if (!iso) return null;

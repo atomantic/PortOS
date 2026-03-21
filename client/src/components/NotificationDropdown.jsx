@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle } from 'lucide-react';
+import { timeAgo } from '../utils/formatters';
 
 const NOTIFICATION_TYPE_CONFIG = {
   memory_approval: {
@@ -36,17 +37,6 @@ const PRIORITY_COLORS = {
   high: 'border-orange-500/50',
   critical: 'border-red-500/50'
 };
-
-function formatTimeAgo(timestamp) {
-  const now = new Date();
-  const date = new Date(timestamp);
-  const seconds = Math.floor((now - date) / 1000);
-
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
 
 export default function NotificationDropdown({
   notifications,
@@ -192,7 +182,7 @@ export default function NotificationDropdown({
                         )}
                         <div className="flex items-center gap-2 mt-1">
                           <span className="text-[10px] text-gray-600">
-                            {formatTimeAgo(notification.timestamp)}
+                            {timeAgo(notification.timestamp)}
                           </span>
                           {!notification.read && (
                             <button

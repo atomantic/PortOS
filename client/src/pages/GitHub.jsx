@@ -10,19 +10,9 @@ import {
   archiveGitHubRepo,
   unarchiveGitHubRepo
 } from '../services/api';
+import { timeAgo } from '../utils/formatters';
 
 const FILTERS = ['all', 'npm', 'secrets', 'archived'];
-
-function timeAgo(dateStr) {
-  if (!dateStr) return 'never';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const days = Math.floor(diff / 86400000);
-  if (days === 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 30) return `${days}d ago`;
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
-  return `${Math.floor(days / 365)}y ago`;
-}
 
 export default function GitHub() {
   const [repos, setRepos] = useState({});

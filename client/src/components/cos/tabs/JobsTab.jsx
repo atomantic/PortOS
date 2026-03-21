@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
+import { timeAgo } from '../../../utils/formatters';
 
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour' },
@@ -37,17 +38,6 @@ const JOB_TYPE_OPTIONS = [
   { value: 'agent', label: 'AI Agent' },
   { value: 'shell', label: 'Shell Command' }
 ];
-
-function formatTimeAgo(dateStr) {
-  if (!dateStr) return 'Never';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(hours / 24);
-  if (days > 0) return `${days}d ago`;
-  if (hours > 0) return `${hours}h ago`;
-  const mins = Math.floor(diff / 60000);
-  return mins > 0 ? `${mins}m ago` : 'Just now';
-}
 
 function formatNextDue(lastRun, intervalMs, scheduledTime) {
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
@@ -162,7 +152,7 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
               {INTERVAL_OPTIONS.find(i => i.value === job.interval)?.label || job.interval}
               {job.scheduledTime && ` at ${job.scheduledTime}`}
             </span>
-            <span>Last: {formatTimeAgo(job.lastRun)}</span>
+            <span>Last: {timeAgo(job.lastRun, 'Never')}</span>
             {job.enabled && (
               <span className={isDue ? 'text-port-warning' : 'text-gray-500'}>
                 Next: {formatNextDue(job.lastRun, job.intervalMs, job.scheduledTime)}
