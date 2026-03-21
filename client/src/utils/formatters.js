@@ -51,6 +51,15 @@ export function formatDateFull(date) {
 }
 
 /**
+ * Format a Date as a clock time string with seconds (e.g., "02:30:45 PM")
+ * @param {Date} date - Date object
+ * @returns {string} Formatted clock time
+ */
+export function formatClockTime(date) {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+/**
  * Format a duration in milliseconds as a human-readable string
  * @param {number} ms - Duration in milliseconds
  * @returns {string|null} Formatted duration (e.g., "500ms", "1.5s", "2.0m")

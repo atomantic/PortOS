@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import BrailleSpinner from './components/BrailleSpinner';
 import Dashboard from './pages/Dashboard';
+import Ambient from './pages/Ambient';
 import Apps from './pages/Apps';
 import CreateApp from './pages/CreateApp';
 import Templates from './pages/Templates';
@@ -76,6 +77,7 @@ export default function App() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Routes>
+        <Route path="/ambient" element={<Ambient />} />
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />

@@ -1,6 +1,7 @@
 # Unreleased Changes
 
 ## Added
+- Ambient Dashboard Mode: fullscreen live status board at `/ambient` for wall-mounted displays — shows real-time clock, death clock countdown, today's calendar events, goal progress, and agent activity with auto-refresh, auto-hiding controls, and fullscreen toggle
 - Agent options (Worktree+PR, /simplify, Review Loop) configurable per-app on both the Automation tab and CoS Schedule per-app overrides
 - Review Loop agent option: runs PR review feedback loop after opening a PR until checks pass
 - Nicotine tracking tab in MeatSpace with consumption logging, daily totals, rolling averages, custom product quick-add buttons, inline editing, and entry history

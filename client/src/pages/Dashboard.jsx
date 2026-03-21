@@ -12,6 +12,7 @@ import DeathClockWidget from '../components/DeathClockWidget';
 import QuickBrainCapture from '../components/QuickBrainCapture';
 import QuickTaskWidget from '../components/QuickTaskWidget';
 import ReviewHubCard from '../components/ReviewHubCard';
+import { Monitor } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -85,11 +86,21 @@ export default function Dashboard() {
             {activeApps.length} app{activeApps.length !== 1 ? 's' : ''} registered{apps.length !== activeApps.length ? ` (${apps.length - activeApps.length} archived)` : ''}
           </p>
         </div>
-        {health && (
-          <div className="text-sm text-gray-500">
-            Server: <span className="text-port-success">Online</span>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {health && (
+            <div className="text-sm text-gray-500">
+              Server: <span className="text-port-success">Online</span>
+            </div>
+          )}
+          <Link
+            to="/ambient"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
+            title="Ambient display mode"
+          >
+            <Monitor size={14} />
+            <span className="hidden sm:inline">Ambient</span>
+          </Link>
+        </div>
       </div>
 
       {/* Error */}

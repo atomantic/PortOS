@@ -45,6 +45,7 @@ import {
   Ticket,
   Network,
   Flame,
+  Monitor,
   Cigarette,
   Skull,
   HeartPulse,
@@ -83,6 +84,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
   { to: '/city', label: 'CyberCity', icon: Building2, single: true },
   { separator: true },
+  { to: '/ambient', label: 'Ambient', icon: Monitor, single: true },
   {
     label: 'AI Config',
     icon: Bot,

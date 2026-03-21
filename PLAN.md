@@ -38,5 +38,5 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - **Major Dependency Upgrades** — React 19, Zod 4, PM2 6, Vite 8
 - **Voice Capture for Brain** — Microphone + Web Speech API transcription
 - **RSS/Feed Ingestion** — Passive feed ingestion classified by interests
-- **Ambient Dashboard Mode** — Live status board for wall-mounted displays
+- [x] **Ambient Dashboard Mode** — Live status board for wall-mounted displays
 - **Dynamic Skill Marketplace** — Self-generating skill templates from task patterns
