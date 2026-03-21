@@ -144,7 +144,7 @@ function parseMetadataLine(line) {
   if (!match) return null;
 
   return {
-    key: match[1].toLowerCase(),
+    key: match[1],
     value: unescapeNewlines(match[2].trim())
   };
 }
@@ -255,9 +255,8 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
 
       // Add metadata (escape newlines in values for single-line storage)
       for (const [key, value] of Object.entries(task.metadata)) {
-        const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
         const escapedValue = escapeNewlines(String(value));
-        lines.push(`  - ${capitalizedKey}: ${escapedValue}`);
+        lines.push(`  - ${key}: ${escapedValue}`);
       }
     }
 

@@ -98,9 +98,9 @@ describe('Task Parser', () => {
 
 ## Pending
 - [ ] #task-001 | HIGH | Fix the bug
-  - Context: User reported issue
-  - App: my-app
-  - Model: claude-sonnet`;
+  - context: User reported issue
+  - app: my-app
+  - model: claude-sonnet`;
 
       const tasks = parseTasksMarkdown(markdown);
 
@@ -261,8 +261,8 @@ describe('Task Parser', () => {
 
       const markdown = generateTasksMarkdown(tasks);
 
-      expect(markdown).toContain('- Context: Some context');
-      expect(markdown).toContain('- App: my-app');
+      expect(markdown).toContain('- context: Some context');
+      expect(markdown).toContain('- app: my-app');
     });
 
     it('should escape newlines in metadata values for round-trip preservation', () => {
