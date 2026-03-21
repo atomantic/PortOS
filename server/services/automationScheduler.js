@@ -5,65 +5,25 @@
  * Uses the eventScheduler pattern for reliable cron/interval/random scheduling.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import * as eventScheduler from './eventScheduler.js';
 import * as agentActivity from './agentActivity.js';
 
-const AGENTS_DIR = PATHS.agentPersonalities;
-const SCHEDULES_FILE = join(AGENTS_DIR, 'schedules.json');
+const SCHEDULES_FILE = join(PATHS.agentPersonalities, 'schedules.json');
+const store = createCachedStore(SCHEDULES_FILE, { schedules: {} }, { context: 'automation schedules' });
+const loadSchedules = store.load;
+const saveSchedules = store.save;
 
 // Event emitter for schedule changes
 export const scheduleEvents = new EventEmitter();
 
-// In-memory cache
-let cache = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 2000;
-
 // Track active scheduled events
 const activeSchedules = new Map();
 
-async function ensureSchedulesDir() {
-  await ensureDir(AGENTS_DIR);
-}
-
-async function loadSchedules() {
-  const now = Date.now();
-
-  if (cache && (now - cacheTimestamp) < CACHE_TTL_MS) {
-    return cache;
-  }
-
-  await ensureSchedulesDir();
-
-  if (!existsSync(SCHEDULES_FILE)) {
-    cache = { schedules: {} };
-    cacheTimestamp = now;
-    return cache;
-  }
-
-  const content = await readFile(SCHEDULES_FILE, 'utf-8');
-  cache = safeJSONParse(content, { schedules: {} }, { logError: true, context: 'automation schedules' });
-  cacheTimestamp = now;
-  return cache;
-}
-
-async function saveSchedules(data) {
-  await ensureSchedulesDir();
-  await writeFile(SCHEDULES_FILE, JSON.stringify(data, null, 2));
-  cache = data;
-  cacheTimestamp = Date.now();
-}
-
-export function invalidateCache() {
-  cache = null;
-  cacheTimestamp = 0;
-}
+export const invalidateCache = store.invalidateCache;
 
 export function notifyChanged(action = 'update', scheduleId = null) {
   scheduleEvents.emit('changed', { action, scheduleId, timestamp: Date.now() });

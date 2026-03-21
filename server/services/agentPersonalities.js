@@ -6,60 +6,19 @@
  * how they interact on social platforms.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 
-const AGENTS_DIR = PATHS.agentPersonalities;
-const AGENTS_FILE = join(AGENTS_DIR, 'agents.json');
+const AGENTS_FILE = join(PATHS.agentPersonalities, 'agents.json');
+const store = createCachedStore(AGENTS_FILE, { agents: {} }, { context: 'agentPersonalities' });
+const loadAgents = store.load;
+const saveAgents = store.save;
 
 // Event emitter for agent personality changes
 export const agentPersonalityEvents = new EventEmitter();
-
-// In-memory cache
-let cache = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 2000;
-
-async function ensureAgentsDir() {
-  await ensureDir(AGENTS_DIR);
-}
-
-async function loadAgents() {
-  const now = Date.now();
-
-  if (cache && (now - cacheTimestamp) < CACHE_TTL_MS) {
-    return cache;
-  }
-
-  await ensureAgentsDir();
-
-  if (!existsSync(AGENTS_FILE)) {
-    cache = { agents: {} };
-    cacheTimestamp = now;
-    return cache;
-  }
-
-  const content = await readFile(AGENTS_FILE, 'utf-8');
-  cache = safeJSONParse(content, { agents: {} }, { context: 'agentPersonalities' });
-  cacheTimestamp = now;
-  return cache;
-}
-
-async function saveAgents(data) {
-  await ensureAgentsDir();
-  await writeFile(AGENTS_FILE, JSON.stringify(data, null, 2));
-  cache = data;
-  cacheTimestamp = Date.now();
-}
-
-export function invalidateCache() {
-  cache = null;
-  cacheTimestamp = 0;
-}
+export const invalidateCache = store.invalidateCache;
 
 export function notifyChanged(action = 'update', agentId = null) {
   agentPersonalityEvents.emit('changed', { action, agentId, timestamp: Date.now() });

@@ -4,7 +4,8 @@
  * Shared utilities for file operations used across services.
  */
 
-import { mkdir, readFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -299,6 +300,52 @@ export async function readJSONLFile(filePath, { logErrors = false } = {}) {
  * Time constants in milliseconds.
  * Single source of truth — import these instead of declaring inline.
  */
+/**
+ * Create a cached JSON file store with TTL-based invalidation.
+ * Eliminates the repeated cache/load/save/invalidate pattern across services.
+ *
+ * @param {string} filePath - Path to the JSON file
+ * @param {*} defaultValue - Default value when file doesn't exist
+ * @param {Object} options
+ * @param {number} [options.ttl=2000] - Cache TTL in milliseconds
+ * @param {string} [options.context=''] - Context label for error logging
+ * @returns {{ load, save, invalidateCache }}
+ */
+export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '' } = {}) {
+  let cache = null;
+  let cacheTimestamp = 0;
+  const dir = dirname(filePath);
+
+  const load = async () => {
+    const now = Date.now();
+    if (cache && (now - cacheTimestamp) < ttl) return cache;
+    await ensureDir(dir);
+    if (!existsSync(filePath)) {
+      cache = structuredClone(defaultValue);
+      cacheTimestamp = now;
+      return cache;
+    }
+    const content = await readFile(filePath, 'utf-8');
+    cache = safeJSONParse(content, structuredClone(defaultValue), { context });
+    cacheTimestamp = now;
+    return cache;
+  };
+
+  const save = async (data) => {
+    await ensureDir(dir);
+    await writeFile(filePath, JSON.stringify(data, null, 2));
+    cache = data;
+    cacheTimestamp = Date.now();
+  };
+
+  const invalidateCache = () => {
+    cache = null;
+    cacheTimestamp = 0;
+  };
+
+  return { load, save, invalidateCache };
+}
+
 export const HOUR = 60 * 60 * 1000;
 export const DAY = 24 * HOUR;
 

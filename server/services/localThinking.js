@@ -306,34 +306,11 @@ function resetStats() {
   stats.localFailures = 0
 }
 
-/**
- * Pre-analyze a batch of tasks
- * @param {Array} tasks - Tasks to analyze
- * @returns {Promise<Array>} - Analysis results
- */
-async function analyzeTaskBatch(tasks) {
-  const results = []
-
-  for (const task of tasks) {
-    const analysis = await analyzeTask(task)
-    results.push({
-      taskId: task.id,
-      description: task.description?.substring(0, 50),
-      ...analysis
-    })
-  }
-
-  return results
-}
-
 export {
   analyzeTask,
-  estimateComplexityFromKeywords,
-  shouldEscalateToCloud,
   classifyMemory,
   quickCompletion,
   getStats,
   resetStats,
-  analyzeTaskBatch,
   COMPLEXITY_THRESHOLDS
 }

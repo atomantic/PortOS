@@ -6,60 +6,19 @@
  * credentials and status tracking.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 
-const AGENTS_DIR = PATHS.agentPersonalities;
-const ACCOUNTS_FILE = join(AGENTS_DIR, 'accounts.json');
+const ACCOUNTS_FILE = join(PATHS.agentPersonalities, 'accounts.json');
+const store = createCachedStore(ACCOUNTS_FILE, { accounts: {} }, { context: 'platformAccounts' });
+const loadAccounts = store.load;
+const saveAccounts = store.save;
 
 // Event emitter for account changes
 export const platformAccountEvents = new EventEmitter();
-
-// In-memory cache
-let cache = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 2000;
-
-async function ensureAccountsDir() {
-  await ensureDir(AGENTS_DIR);
-}
-
-async function loadAccounts() {
-  const now = Date.now();
-
-  if (cache && (now - cacheTimestamp) < CACHE_TTL_MS) {
-    return cache;
-  }
-
-  await ensureAccountsDir();
-
-  if (!existsSync(ACCOUNTS_FILE)) {
-    cache = { accounts: {} };
-    cacheTimestamp = now;
-    return cache;
-  }
-
-  const content = await readFile(ACCOUNTS_FILE, 'utf-8');
-  cache = safeJSONParse(content, { accounts: {} }, { context: 'platformAccounts' });
-  cacheTimestamp = now;
-  return cache;
-}
-
-async function saveAccounts(data) {
-  await ensureAccountsDir();
-  await writeFile(ACCOUNTS_FILE, JSON.stringify(data, null, 2));
-  cache = data;
-  cacheTimestamp = Date.now();
-}
-
-export function invalidateCache() {
-  cache = null;
-  cacheTimestamp = 0;
-}
+export const invalidateCache = store.invalidateCache;
 
 export function notifyChanged(action = 'update', accountId = null) {
   platformAccountEvents.emit('changed', { action, accountId, timestamp: Date.now() });

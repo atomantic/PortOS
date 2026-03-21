@@ -9,20 +9,15 @@
  * - Future account management automation
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import EventEmitter from 'events';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 
 const DATA_FILE = join(PATHS.digitalTwin, 'social-accounts.json');
+const store = createCachedStore(DATA_FILE, { accounts: {} }, { context: 'socialAccounts' });
 
 export const socialAccountEvents = new EventEmitter();
-
-// In-memory cache
-let cache = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 2000;
 
 // Supported platform definitions
 export const PLATFORMS = {
@@ -126,30 +121,9 @@ export const PLATFORMS = {
   }
 };
 
-async function loadAccounts() {
-  const now = Date.now();
-  if (cache && (now - cacheTimestamp) < CACHE_TTL_MS) {
-    return cache;
-  }
-
-  await ensureDir(PATHS.digitalTwin);
-
-  cache = await readJSONFile(DATA_FILE, { accounts: {} });
-  cacheTimestamp = now;
-  return cache;
-}
-
-async function saveAccounts(data) {
-  await ensureDir(PATHS.digitalTwin);
-  await writeFile(DATA_FILE, JSON.stringify(data, null, 2));
-  cache = data;
-  cacheTimestamp = Date.now();
-}
-
-export function invalidateCache() {
-  cache = null;
-  cacheTimestamp = 0;
-}
+const loadAccounts = store.load;
+const saveAccounts = store.save;
+export const invalidateCache = store.invalidateCache;
 
 export function notifyChanged(action = 'update', accountId = null) {
   socialAccountEvents.emit('changed', { action, accountId, timestamp: Date.now() });
