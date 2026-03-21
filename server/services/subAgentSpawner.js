@@ -2691,13 +2691,13 @@ ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (lat
 ` : '';
 
   // Build simplify section if enabled
-  const simplifySection = task.metadata?.simplify ? `
+  const simplifySection = isTruthyMeta(task.metadata?.simplify) ? `
 ## Simplify Step
 After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found before committing.
 ` : '';
 
   // Build review loop section if enabled (only when the agent creates the PR itself, not when openPR auto-creates it post-exit)
-  const reviewLoopSection = (task.metadata?.reviewLoop && !willOpenPR) ? `
+  const reviewLoopSection = (isTruthyMeta(task.metadata?.reviewLoop) && !willOpenPR) ? `
 ## Review Loop
 After opening the PR, run \`/do:rpr\` to resolve PR review feedback and complete the merge validation. Continue running the review loop until all checks pass and the PR is approved.
 ` : '';

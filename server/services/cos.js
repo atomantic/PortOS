@@ -1866,8 +1866,24 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
-// Apply app-level worktree/PR defaults only when not already set by task-type metadata
+// Apply app-level worktree/PR defaults only when not already set by task-type metadata.
+// openPR is applied first since it implies useWorktree — this prevents defaultUseWorktree: false
+// from blocking defaultOpenPR: true when both are app-level defaults.
 export function applyAppWorktreeDefault(metadata, app) {
+  const useWorktreeWasSetByTaskType = metadata.useWorktree !== undefined;
+  const taskTypeDisabledWorktree = metadata.useWorktree === false || metadata.useWorktree === 'false';
+
+  // Apply defaultOpenPR first (since openPR implies useWorktree)
+  if (metadata.openPR === undefined) {
+    if (app.defaultOpenPR === true && !taskTypeDisabledWorktree) {
+      metadata.openPR = true;
+      metadata.useWorktree = true; // openPR implies useWorktree
+    } else if (app.defaultOpenPR === false || taskTypeDisabledWorktree) {
+      metadata.openPR = false;
+    }
+  }
+
+  // Apply defaultUseWorktree (only if not already set by task-type or openPR above)
   if (metadata.useWorktree === undefined) {
     // openPR implies useWorktree — don't let app default override explicit openPR: true
     const explicitOpenPR = metadata.openPR === true || metadata.openPR === 'true';
@@ -1879,15 +1895,8 @@ export function applyAppWorktreeDefault(metadata, app) {
       metadata.useWorktree = false;
     }
   }
-  if (metadata.openPR === undefined && metadata.useWorktree !== false && metadata.useWorktree !== 'false') {
-    if (app.defaultOpenPR === true) {
-      metadata.openPR = true;
-      metadata.useWorktree = true; // openPR implies useWorktree
-    } else if (app.defaultOpenPR === false) {
-      metadata.openPR = false;
-    }
-  }
-  // Ensure openPR=false when useWorktree=false (invariant: openPR implies useWorktree)
+
+  // Final invariant: openPR=false when useWorktree=false
   if (metadata.useWorktree === false || metadata.useWorktree === 'false') {
     metadata.openPR = false;
   }
