@@ -14,6 +14,8 @@
 - Settings toggle to switch between Manual Bot and Claude MCP Bridge integration methods
 - Interactive storage backend chooser during setup: Docker PostgreSQL, Native PostgreSQL, or file-based JSON (deprecated) when Docker is unavailable
 
+- Personal Goals dashboard widget: shows top-level goals with progress bars, category icons, horizon labels, and stall detection (14+ days idle) — replaces broken CoS task-based goal widget that never rendered
+
 ## Changed
 - Consolidated 5 duplicate `timeAgo`/`formatTimeAgo` implementations into a single `timeAgo()` in `utils/formatters.js`
 - Deduplicated `stripCodeFences` from insightsService — now imports from shared `lib/aiProvider.js`

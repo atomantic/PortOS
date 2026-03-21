@@ -1362,7 +1362,7 @@ export const updateChronotypeBehavioral = (data) => request('/digital-twin/ident
 });
 export const getLongevity = () => request('/digital-twin/identity/longevity');
 export const deriveLongevity = () => request('/digital-twin/identity/longevity/derive', { method: 'POST' });
-export const getGoals = () => request('/digital-twin/identity/goals');
+export const getGoals = (options) => request('/digital-twin/identity/goals', options);
 export const setBirthDate = (birthDate) => request('/digital-twin/identity/goals/birth-date', {
   method: 'PUT',
   body: JSON.stringify({ birthDate })

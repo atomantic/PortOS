@@ -1,130 +1,118 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  Target,
-  ChevronRight,
-  TrendingUp,
-  AlertTriangle
-} from 'lucide-react';
+import { ChevronRight, AlertTriangle, Target } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { CATEGORY_CONFIG } from './goals/GoalDetailPanel';
 
-/**
- * GoalProgressWidget - Shows progress toward user goals on the dashboard
- * Maps completed CoS tasks to goal categories from GOALS.md
- */
+const HORIZON_LABELS = {
+  '1-year': '1Y', '3-year': '3Y', '5-year': '5Y',
+  '10-year': '10Y', '20-year': '20Y', 'lifetime': 'Life'
+};
+
+const STALL_THRESHOLD_DAYS = 14;
+const MIN_BAR_WIDTH_PCT = 2;
+
+const getLastProgressDate = (goal) => {
+  if (!goal.progressHistory?.length) return goal.createdAt || null;
+  return goal.progressHistory.reduce((a, b) => b.timestamp > a.timestamp ? b : a).timestamp;
+};
+
+const getDaysSince = (dateStr) => {
+  if (!dateStr) return null;
+  return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+};
+
 const GoalProgressWidget = memo(function GoalProgressWidget() {
-  const { data: progress, loading } = useAutoRefetch(
-    () => api.getCosGoalProgressSummary({ silent: true }).catch(() => null),
-    60000
+  const { data: goalsData, loading } = useAutoRefetch(
+    () => api.getGoals({ silent: true }).catch(() => null),
+    300000
   );
 
-  // Don't render while loading or if no goals
-  if (loading || !progress?.goals?.length) {
-    return null;
-  }
+  const { goals, stalledCount, avgProgress } = useMemo(() => {
+    if (!goalsData?.goals?.length) return { goals: [], stalledCount: 0, avgProgress: 0 };
 
-  const { goals, summary } = progress;
+    const topLevel = goalsData.goals
+      .filter(g => !g.parentId && g.status === 'active')
+      .sort((a, b) => (b.urgency || 0) - (a.urgency || 0))
+      .map(g => {
+        const daysSinceUpdate = getDaysSince(getLastProgressDate(g));
+        return {
+          ...g,
+          daysSinceUpdate,
+          isStalled: daysSinceUpdate !== null && daysSinceUpdate >= STALL_THRESHOLD_DAYS
+        };
+      });
 
-  // Color mappings for engagement levels
-  const getColorClasses = (color, engagement) => {
-    const intensityMap = {
-      high: { emerald: 'bg-emerald-500', purple: 'bg-purple-500', blue: 'bg-blue-500', pink: 'bg-pink-500', green: 'bg-green-500', gray: 'bg-gray-500' },
-      medium: { emerald: 'bg-emerald-500/60', purple: 'bg-purple-500/60', blue: 'bg-blue-500/60', pink: 'bg-pink-500/60', green: 'bg-green-500/60', gray: 'bg-gray-500/60' },
-      low: { emerald: 'bg-emerald-500/30', purple: 'bg-purple-500/30', blue: 'bg-blue-500/30', pink: 'bg-pink-500/30', green: 'bg-green-500/30', gray: 'bg-gray-500/30' }
+    return {
+      goals: topLevel,
+      stalledCount: topLevel.filter(g => g.isStalled).length,
+      avgProgress: Math.round(topLevel.reduce((sum, g) => sum + (g.progress || 0), 0) / topLevel.length)
     };
-    return intensityMap[engagement]?.[color] || 'bg-gray-500/30';
-  };
+  }, [goalsData]);
+
+  if (loading || !goals.length) return null;
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <div className="text-2xl" aria-hidden="true">
-            <Target className="w-6 h-6 text-port-accent" />
-          </div>
+          <Target className="w-6 h-6 text-port-accent" aria-hidden="true" />
           <div>
-            <h3 className="text-lg font-semibold text-white">Goal Progress</h3>
+            <h3 className="text-lg font-semibold text-white">Goals</h3>
             <p className="text-sm text-gray-500">
-              {summary.totalTasks} tasks toward {summary.totalGoals} goals
+              {goals.length} active &middot; {avgProgress}% avg
             </p>
           </div>
         </div>
         <Link
-          to="/cos/tasks"
+          to="/goals"
           className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden sm:inline">View Tasks</span>
+          <span className="hidden sm:inline">View All</span>
           <ChevronRight size={16} />
         </Link>
       </div>
 
-      {/* Goal Progress Bars */}
       <div className="space-y-3">
-        {goals.map((goal) => (
-          <div key={goal.name} className="group">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-2">
-                <span className="text-base" aria-hidden="true">{goal.icon}</span>
-                <span className="text-sm font-medium text-gray-300">{goal.name}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                {goal.successRate !== null && (
-                  <span className={`text-xs ${goal.successRate >= 80 ? 'text-port-success' : goal.successRate >= 50 ? 'text-port-warning' : 'text-port-error'}`}>
-                    {goal.successRate}%
+        {goals.map((goal) => {
+          const cat = CATEGORY_CONFIG[goal.category] || CATEGORY_CONFIG.mastery;
+          const CatIcon = cat.icon;
+
+          return (
+            <Link key={goal.id} to="/goals" className="block group">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CatIcon size={14} className={`shrink-0 ${cat.color}`} aria-hidden="true" />
+                  <span className="text-sm font-medium text-gray-300 truncate group-hover:text-white transition-colors">
+                    {goal.title}
                   </span>
-                )}
-                <span className="text-xs text-gray-500">
-                  {goal.tasks} task{goal.tasks !== 1 ? 's' : ''}
-                </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  {goal.isStalled && (
+                    <AlertTriangle size={12} className="text-port-warning" title={`No progress in ${goal.daysSinceUpdate}d`} />
+                  )}
+                  <span className="text-xs text-gray-600">{HORIZON_LABELS[goal.horizon] || goal.horizon}</span>
+                  <span className="text-xs font-medium text-gray-400">{goal.progress || 0}%</span>
+                </div>
               </div>
-            </div>
-            {/* Progress bar */}
-            <div className="h-2 bg-port-border rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${getColorClasses(goal.color, goal.engagement)}`}
-                style={{
-                  width: `${Math.min(100, Math.max(5, (goal.tasks / Math.max(...goals.map(g => g.tasks), 1)) * 100))}%`
-                }}
-              />
-            </div>
-          </div>
-        ))}
+              <div className="h-1.5 bg-port-border rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(goal.progress || 0, MIN_BAR_WIDTH_PCT)}%`, backgroundColor: cat.hex }}
+                />
+              </div>
+            </Link>
+          );
+        })}
       </div>
 
-      {/* Insights Row */}
-      {(summary.mostActive || summary.leastActive) && (
-        <div className="mt-4 pt-4 border-t border-port-border">
-          <div className="flex flex-wrap gap-3 text-xs">
-            {summary.mostActive && (
-              <div className="flex items-center gap-1.5 text-port-success">
-                <TrendingUp size={12} />
-                <span>Most active: {summary.mostActive}</span>
-              </div>
-            )}
-            {summary.leastActive && (
-              <div className="flex items-center gap-1.5 text-port-warning">
-                <AlertTriangle size={12} />
-                <span>Needs attention: {summary.leastActive}</span>
-              </div>
-            )}
+      {stalledCount > 0 && (
+        <div className="mt-4 pt-3 border-t border-port-border">
+          <div className="flex items-center gap-1.5 text-xs text-port-warning">
+            <AlertTriangle size={12} />
+            <span>{stalledCount} goal{stalledCount !== 1 ? 's' : ''} stalled ({STALL_THRESHOLD_DAYS}+ days idle)</span>
           </div>
-        </div>
-      )}
-
-      {/* Overall Success Rate */}
-      {summary.overallSuccessRate !== null && (
-        <div className="mt-3 text-center">
-          <span className="text-xs text-gray-500">
-            Overall success rate:{' '}
-            <span className={`font-medium ${
-              summary.overallSuccessRate >= 80 ? 'text-port-success' :
-              summary.overallSuccessRate >= 50 ? 'text-port-warning' : 'text-port-error'
-            }`}>
-              {summary.overallSuccessRate}%
-            </span>
-          </span>
         </div>
       )}
     </div>
