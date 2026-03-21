@@ -24,6 +24,8 @@ const INTERVAL_DESCRIPTIONS = {
 };
 
 // Toggle a global taskMetadata field, enforcing the openPR→useWorktree invariant.
+// Persists both true and false values so explicit overrides survive the server-side
+// merge with task-type defaults (e.g., feature-ideas defaults openPR to true).
 function toggleMetadataField(metadata, field) {
   const current = metadata || {};
   const newMeta = { ...current, [field]: !current[field] };
@@ -35,11 +37,7 @@ function toggleMetadataField(metadata, field) {
   if (newMeta.useWorktree === false && newMeta.openPR) {
     newMeta.openPR = false;
   }
-  // This is the GLOBAL taskMetadata config (the app-level default itself), not a per-task-type
-  // override. Only persist true values; absent keys default to disabled. Per-task-type overrides
-  // are handled separately by toggleAppMetadataOverride which supports tri-state (inherit/true/false).
-  const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v === true));
-  return Object.keys(active).length ? active : null;
+  return newMeta;
 }
 
 
