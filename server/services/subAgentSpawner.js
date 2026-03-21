@@ -39,8 +39,9 @@ const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 const RUNS_DIR = PATHS.runs;
 
-// Metadata booleans may arrive as true or 'true' (from JSON vs form/URL params)
+// Metadata booleans may arrive as true/'true' or false/'false' (from JSON vs TASKS.md string round-trip)
 export const isTruthyMeta = (value) => value === true || value === 'true';
+export const isFalsyMeta = (value) => value === false || value === 'false';
 
 /**
  * Extract task type key for learning lookup
@@ -1529,7 +1530,7 @@ export async function spawnAgentForTask(task) {
         agentId, worktreePath: worktreeInfo.worktreePath, branchName: worktreeInfo.branchName, baseBranch: worktreeInfo.baseBranch
       });
     }
-  } else if (!jiraBranchName && task.metadata?.useWorktree !== false) {
+  } else if (!jiraBranchName && !isFalsyMeta(task.metadata?.useWorktree)) {
     // No explicit worktree requested and not explicitly disabled: use worktree only when conflict is detected
     const { getAgents } = await import('./cos.js');
     const allAgents = await getAgents();
@@ -1981,7 +1982,7 @@ async function cleanupAgentWorktree(agentId, success, { openPR = false, descript
       git.getRepoBranches(sourceWorkspace).catch(() => ({ baseBranch: null, devBranch: null }))
     ]);
 
-    // Only create PR if push succeeded; fall back to auto-merge if push fails
+    // Only create PR if push succeeded; preserve worktree/branch for manual intervention if push fails
     if (pushResult) {
       const targetBranch = branchInfo.devBranch || branchInfo.baseBranch || 'main';
       const taskDesc = description || 'CoS automated task';

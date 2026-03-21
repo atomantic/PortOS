@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isTruthyMeta } from './subAgentSpawner.js';
+import { isTruthyMeta, isFalsyMeta } from './subAgentSpawner.js';
 import { applyAppWorktreeDefault } from './cos.js';
 
 /**
@@ -693,6 +693,29 @@ describe('Task Failure Retry Logic', () => {
       expect(isTruthyMeta('false')).toBe(false);
       expect(isTruthyMeta(1)).toBe(false);
       expect(isTruthyMeta('')).toBe(false);
+    });
+  });
+
+  // --- isFalsyMeta helper (imported from production) ---
+  describe('isFalsyMeta', () => {
+    it('should return true for boolean false', () => {
+      expect(isFalsyMeta(false)).toBe(true);
+    });
+
+    it('should return true for string "false"', () => {
+      expect(isFalsyMeta('false')).toBe(true);
+    });
+
+    it('should return false for true', () => {
+      expect(isFalsyMeta(true)).toBe(false);
+    });
+
+    it('should return false for undefined/null/other values', () => {
+      expect(isFalsyMeta(undefined)).toBe(false);
+      expect(isFalsyMeta(null)).toBe(false);
+      expect(isFalsyMeta('true')).toBe(false);
+      expect(isFalsyMeta(0)).toBe(false);
+      expect(isFalsyMeta('')).toBe(false);
     });
   });
 

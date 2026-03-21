@@ -3204,15 +3204,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     if (taskData.provider) metadata.provider = taskData.provider;
     if (taskData.app) metadata.app = taskData.app;
     if (taskData.createJiraTicket) metadata.createJiraTicket = true;
-    // Boolean flags: persist both true and false explicitly so app-level defaults don't override user intent
+    // Boolean flags: only persist true values. In TASKS.md, false round-trips as the string
+    // 'false' which is truthy in JS. Omitting (undefined) means "use app defaults", and
+    // isTruthyMeta handles 'true' strings correctly for the true case.
     if (taskData.useWorktree === true) metadata.useWorktree = true;
-    else if (taskData.useWorktree === false) metadata.useWorktree = false;
     if (taskData.openPR === true) metadata.openPR = true;
-    else if (taskData.openPR === false) metadata.openPR = false;
     if (taskData.simplify === true) metadata.simplify = true;
-    else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
-    else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
