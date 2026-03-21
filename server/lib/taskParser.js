@@ -137,7 +137,10 @@ function escapeNewlines(value) {
 
 /**
  * Parse metadata line (indented under task)
- * Format:   - Key: Value
+ * Format:   - key: Value
+ * Keys are written in camelCase (e.g., openPR, useWorktree, reviewLoop).
+ * Legacy Title-Case keys (e.g., Context, App) are accepted and normalized
+ * to camelCase by lowercasing the first character.
  */
 function parseMetadataLine(line) {
   const match = line.match(/^\s+-\s*(\w+):\s*(.+)$/);

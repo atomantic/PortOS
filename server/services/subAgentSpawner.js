@@ -1984,7 +1984,8 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
 
     // Only create PR if push succeeded; preserve worktree/branch for manual intervention if push fails
     if (pushResult) {
-      const targetBranch = branchInfo.devBranch || branchInfo.baseBranch || 'main';
+      // Use baseBranch (not devBranch) since worktrees are created from the default branch
+      const targetBranch = branchInfo.baseBranch || 'main';
       const taskDesc = description || 'CoS automated task';
       const prTitle = taskDesc.replace(/[\r\n]+/g, ' ').trim().substring(0, 100);
 
@@ -2803,7 +2804,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${pla
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${task.metadata?.app && worktreeInfo && willOpenPR ? `- Commit code after each feature or bug fix using the git tools or /cam skill. A pull request will be automatically created when your task completes — do NOT open a PR manually.` : task.metadata?.app && worktreeInfo ? `- Commit code after each feature or bug fix using the git tools or /cam skill. Your worktree branch will be automatically merged back to the default branch when your task completes — do NOT open a PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
+${task.metadata?.app && worktreeInfo && willOpenPR ? `- Commit code after each feature or bug fix using the git tools or /cam skill. A pull request will be automatically created when your task completes — do NOT open a PR manually.` : task.metadata?.app && worktreeInfo ? `- Commit code after each feature or bug fix using the git tools or /cam skill. Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. If there are uncommitted changes from a previous agent or manual work, **stash or discard them** before proceeding — do NOT commit someone else's changes.

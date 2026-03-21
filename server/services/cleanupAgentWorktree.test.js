@@ -272,7 +272,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
   });
 
-  it('should use devBranch as PR base when available', async () => {
+  it('should use baseBranch as PR base (not devBranch, since worktrees are created from baseBranch)', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/3' });
     git.getRepoBranches.mockResolvedValue({ baseBranch: 'main', devBranch: 'develop' });
@@ -280,7 +280,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
     await cleanupAgentWorktree('agent-1', true, { openPR: true, description: 'Test' });
 
     expect(git.createPR).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      base: 'develop'
+      base: 'main'
     }));
   });
 
