@@ -75,6 +75,7 @@ import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
 import CmdKSearch from './CmdKSearch';
+import KeyboardHelp from './KeyboardHelp';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -676,6 +677,8 @@ export default function Layout() {
       </div>
       {/* Cmd+K search overlay — mounted in layout so it's available on every page */}
       <CmdKSearch />
+      {/* Keyboard shortcuts help — press ? to toggle */}
+      <KeyboardHelp />
     </div>
   );
 }
