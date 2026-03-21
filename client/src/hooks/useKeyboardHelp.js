@@ -5,7 +5,13 @@ export function useKeyboardHelp() {
 
   useEffect(() => {
     const handler = (e) => {
-      // Don't trigger when typing in inputs/textareas/contenteditable
+      // Escape always closes, even from inputs/textareas
+      if (e.key === 'Escape') {
+        setOpen(false);
+        return;
+      }
+
+      // Don't trigger shortcuts when typing in inputs/textareas/contenteditable
       const tag = e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
       // Don't trigger with modifier keys
@@ -14,8 +20,6 @@ export function useKeyboardHelp() {
       if (e.key === '?' && !e.repeat) {
         e.preventDefault();
         setOpen(prev => !prev);
-      } else if (e.key === 'Escape') {
-        setOpen(false);
       }
     };
     document.addEventListener('keydown', handler);

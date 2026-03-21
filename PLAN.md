@@ -12,7 +12,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Backlog
 
-- [x] **Keyboard Shortcuts Help Modal** — Press `?` to show all keyboard shortcuts; global overlay with section grouping, accessible dialog
 - [ ] **God file decomposition** — Split cos.js, subAgentSpawner.js, digital-twin.js, routes/scaffold.js, routes/cos.js, client/api.js into focused modules; resolve circular dependency
 - [ ] **Test coverage** — Critical gaps: cos.js, cosRunnerClient.js, agentActionExecutor.js (~29% service, ~12% route coverage)
 - [ ] **M50 P9**: CoS Automation & Rules — Automated email classification, rule-based pre-filtering, email-to-task pipeline

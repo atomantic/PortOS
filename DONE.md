@@ -4,6 +4,12 @@ Archive of completed work. For active roadmap, see [PLAN.md](./PLAN.md). For pro
 
 ---
 
+## 2026-03-20
+
+- **Keyboard Shortcuts Help Modal** — Press `?` to show all keyboard shortcuts; global overlay with section grouping, accessible dialog
+
+---
+
 ## 2026-03-18
 
 - Fixed PromptManager.jsx fetch calls — response.ok checks now present on all endpoints
