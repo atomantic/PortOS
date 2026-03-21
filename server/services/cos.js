@@ -2529,6 +2529,46 @@ export async function killAgent(agentId) {
 }
 
 /**
+ * Send a BTW (additional context) message to a running agent.
+ * Writes the message to a file in the agent's workspace and tracks it in state.
+ */
+export async function sendBtwToAgent(agentId, message) {
+  // Single locked read to validate agent and extract workspacePath
+  const agentInfo = await withStateLock(async () => {
+    const state = await loadState();
+    const agent = state.agents[agentId];
+    if (!agent) return { error: 'Agent not found' };
+    if (agent.status !== 'running') return { error: 'Agent is not running' };
+    if (!agent.metadata?.workspacePath) return { error: 'Agent has no workspace path' };
+    return { workspacePath: agent.metadata.workspacePath };
+  });
+
+  if (agentInfo.error) return agentInfo;
+
+  // Send to runner to write the BTW.md file
+  const { sendBtwToAgent: sendViaRunner } = await import('./cosRunnerClient.js');
+  const result = await sendViaRunner(agentId, message, agentInfo.workspacePath);
+
+  // Track in agent state (cap at 50 messages)
+  const timestamp = new Date().toISOString();
+  await withStateLock(async () => {
+    const state = await loadState();
+    if (!state.agents[agentId]) return;
+    if (!state.agents[agentId].btwMessages) {
+      state.agents[agentId].btwMessages = [];
+    }
+    state.agents[agentId].btwMessages.push({ message, timestamp });
+    if (state.agents[agentId].btwMessages.length > 50) {
+      state.agents[agentId].btwMessages = state.agents[agentId].btwMessages.slice(-50);
+    }
+    await saveState(state);
+  });
+
+  cosEvents.emit('agent:btw', { agentId, message, timestamp });
+  return { success: true, ...result };
+}
+
+/**
  * Get process stats for an agent (CPU, memory)
  */
 export async function getAgentProcessStats(agentId) {

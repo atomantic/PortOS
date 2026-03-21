@@ -59,6 +59,11 @@ export function initCosRunnerConnection() {
     if (handler) handler(data);
   });
 
+  socket.on('agent:btw', (data) => {
+    const handler = eventHandlers.get('agent:btw');
+    if (handler) handler(data);
+  });
+
   // Batch orphaned agents event (startup cleanup)
   socket.on('agents:orphaned', (data) => {
     const handler = eventHandlers.get('agents:orphaned');
@@ -211,6 +216,22 @@ export async function terminateAllAgentsViaRunner() {
   }, 30000);
   if (!response.ok) {
     throw new Error('Failed to terminate agents');
+  }
+  return response.json();
+}
+
+/**
+ * Send a BTW (additional context) message to a running agent via the runner
+ */
+export async function sendBtwToAgent(agentId, message, workspacePath) {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/btw/${agentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, workspacePath }),
+  }, 30000);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to send BTW message');
   }
   return response.json();
 }
