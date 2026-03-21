@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   Fingerprint, Dna, Clock, Activity, Palette, Target,
   ChevronRight, RefreshCw, Sun, Moon, Coffee, Zap,
-  Heart, DollarSign, Lightbulb, Users, Flame
+  Heart, DollarSign, Lightbulb, Users, Flame, Link2,
+  AlertTriangle, CheckCircle, Info
 } from 'lucide-react';
 import * as api from '../../../services/api';
 
@@ -44,6 +45,19 @@ function urgencyLabel(urgency) {
   return 'Low';
 }
 
+const SEVERITY_CONFIG = {
+  success: { icon: CheckCircle, color: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10' },
+  warning: { icon: AlertTriangle, color: 'text-yellow-400', border: 'border-yellow-500/30', bg: 'bg-yellow-500/10' },
+  info: { icon: Info, color: 'text-blue-400', border: 'border-blue-500/30', bg: 'bg-blue-500/10' }
+};
+
+const CATEGORY_LABELS = {
+  health: 'Health',
+  lifestyle: 'Lifestyle',
+  productivity: 'Productivity',
+  goals: 'Goals'
+};
+
 export default function IdentityTab({ onRefresh }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -52,22 +66,25 @@ export default function IdentityTab({ onRefresh }) {
   const [longevity, setLongevity] = useState(null);
   const [taste, setTaste] = useState(null);
   const [goals, setGoals] = useState(null);
+  const [crossInsights, setCrossInsights] = useState(null);
   const [derivingChronotype, setDerivingChronotype] = useState(false);
   const [derivingLongevity, setDerivingLongevity] = useState(false);
 
   const loadData = useCallback(async () => {
-    const [identityData, chronoData, longData, tasteData, goalsData] = await Promise.all([
+    const [identityData, chronoData, longData, tasteData, goalsData, insightsData] = await Promise.all([
       api.getIdentityStatus().catch(() => null),
       api.getChronotype().catch(() => null),
       api.getLongevity().catch(() => null),
       api.getTasteProfile().catch(() => null),
-      api.getGoals().catch(() => null)
+      api.getGoals().catch(() => null),
+      api.getCrossInsights().catch(() => null)
     ]);
     setIdentity(identityData);
     setChronotype(chronoData);
     setLongevity(longData);
     setTaste(tasteData);
     setGoals(goalsData);
+    setCrossInsights(insightsData);
     setLoading(false);
   }, []);
 
@@ -484,6 +501,60 @@ export default function IdentityTab({ onRefresh }) {
           </button>
         </div>
       </div>
+
+      {/* Cross-Insights Section */}
+      {crossInsights?.insights?.length > 0 && (
+        <div className="bg-port-card border border-port-border rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Link2 className="w-5 h-5 text-port-accent" />
+            <h3 className="font-medium text-white">Cross-Domain Insights</h3>
+            <span className="text-xs text-gray-500 ml-auto">
+              {crossInsights.insights.length} insight{crossInsights.insights.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {crossInsights.insights.map(insight => {
+              const config = SEVERITY_CONFIG[insight.severity] || SEVERITY_CONFIG.info;
+              const SeverityIcon = config.icon;
+              return (
+                <div
+                  key={insight.id}
+                  className={`flex gap-3 p-3 rounded-lg border ${config.border} ${config.bg}`}
+                >
+                  <SeverityIcon className={`w-4 h-4 shrink-0 mt-0.5 ${config.color}`} />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-medium text-white">{insight.title}</span>
+                      <span className="text-[10px] text-gray-500 bg-port-bg px-1.5 py-0.5 rounded">
+                        {CATEGORY_LABELS[insight.category] || insight.category}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 leading-relaxed">{insight.text}</p>
+                    {insight.sources?.length > 0 && (
+                      <div className="flex gap-1 mt-2">
+                        {insight.sources.map(src => (
+                          <span key={src} className="text-[10px] text-gray-600 bg-port-bg px-1.5 py-0.5 rounded">
+                            {src}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={() => navigate('/insights/cross-domain')}
+            className="flex items-center gap-1 mt-4 text-sm text-port-accent hover:text-white transition-colors"
+          >
+            View Full Insights
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

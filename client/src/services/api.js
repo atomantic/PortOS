@@ -1345,6 +1345,7 @@ export const deleteEpigeneticIntervention = (id) => request(`/meatspace/genome/e
 
 // Digital Twin - Identity
 export const getIdentityStatus = () => request('/digital-twin/identity');
+export const getCrossInsights = () => request('/digital-twin/identity/cross-insights');
 export const getChronotype = () => request('/digital-twin/identity/chronotype');
 export const deriveChronotype = () => request('/digital-twin/identity/chronotype/derive', { method: 'POST' });
 export const updateChronotypeBehavioral = (data) => request('/digital-twin/identity/chronotype', {

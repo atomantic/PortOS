@@ -55,6 +55,16 @@ router.put('/chronotype', asyncHandler(async (req, res) => {
 }));
 
 // =============================================================================
+// CROSS-INSIGHTS
+// =============================================================================
+
+// GET /api/digital-twin/identity/cross-insights — Rule-based cross-domain insights
+router.get('/cross-insights', asyncHandler(async (req, res) => {
+  const result = await identityService.getCrossInsights();
+  res.json(result);
+}));
+
+// =============================================================================
 // LONGEVITY
 // =============================================================================
 
