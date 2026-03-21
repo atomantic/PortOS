@@ -399,7 +399,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               type="checkbox"
               checked={openPR}
               disabled={!useWorktree}
-              onChange={(e) => setOpenPR(e.target.checked)}
+              onChange={(e) => {
+                setOpenPR(e.target.checked);
+                if (e.target.checked) setReviewLoop(false);
+              }}
               className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
             />
             <span className={`flex items-center gap-1.5 text-sm ${useWorktree ? 'text-gray-400' : 'text-gray-600'}`} title="Open a pull request to the default branch. If unchecked with worktree enabled, auto-merges on completion.">
@@ -423,11 +426,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             <input
               type="checkbox"
               checked={reviewLoop}
+              disabled={openPR}
               onChange={(e) => setReviewLoop(e.target.checked)}
-              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
             />
-            <span className="flex items-center gap-1.5 text-sm text-gray-400">
-              <RefreshCw size={14} className="text-amber-400" />
+            <span className={`flex items-center gap-1.5 text-sm ${openPR ? 'text-gray-600' : 'text-gray-400'}`} title={openPR ? 'Review Loop is incompatible with Open PR — the PR is created after the agent exits, so there is no PR to iterate on during the run.' : 'After the agent opens a PR during its run, keep iterating on review feedback until checks pass.'}>
+              <RefreshCw size={14} className={openPR ? 'text-gray-600' : 'text-amber-400'} />
               Review Loop
             </span>
           </label>

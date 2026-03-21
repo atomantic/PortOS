@@ -54,7 +54,7 @@ export const AGENT_OPTIONS = [
   { field: 'useWorktree', label: 'Worktree', shortLabel: 'WT', description: 'Work in an isolated git worktree on a feature branch. If unchecked, commits directly to the default branch.' },
   { field: 'openPR', label: 'Open PR', shortLabel: 'PR', description: 'Open a pull request to the default branch (implies worktree). If unchecked with worktree enabled, auto-merges to the default branch on completion.' },
   { field: 'simplify', label: 'Run /simplify', shortLabel: '/s', description: 'Review code for reuse and quality before committing' },
-  { field: 'reviewLoop', label: 'Review Loop', shortLabel: 'RL', description: 'After opening a PR, run review feedback loop until checks pass and PR is approved' }
+  { field: 'reviewLoop', label: 'Review Loop', shortLabel: 'RL', description: 'After the agent opens a PR during its run, keep iterating on review feedback until checks pass. Only applies when Open PR is not enabled (manual PR creation by agent).' }
 ];
 
 // Compute new taskMetadata after toggling a field in a per-app override.
