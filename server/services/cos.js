@@ -1879,7 +1879,7 @@ export function applyAppWorktreeDefault(metadata, app) {
       metadata.useWorktree = false;
     }
   }
-  if (metadata.openPR === undefined && metadata.useWorktree !== false) {
+  if (metadata.openPR === undefined && metadata.useWorktree !== false && metadata.useWorktree !== 'false') {
     if (app.defaultOpenPR === true) {
       metadata.openPR = true;
       metadata.useWorktree = true; // openPR implies useWorktree
@@ -1888,7 +1888,7 @@ export function applyAppWorktreeDefault(metadata, app) {
     }
   }
   // Ensure openPR=false when useWorktree=false (invariant: openPR implies useWorktree)
-  if (metadata.useWorktree === false) {
+  if (metadata.useWorktree === false || metadata.useWorktree === 'false') {
     metadata.openPR = false;
   }
 }
