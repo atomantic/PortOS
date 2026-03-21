@@ -54,6 +54,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     setCreateJiraTicket(!!app?.jira?.enabled);
     setUseWorktree(defaultUseWorktree);
     setOpenPR(defaultOpenPR);
+    if (defaultOpenPR) setReviewLoop(false);
   }, [newTask.app, apps]);
 
   // Get models for selected provider
