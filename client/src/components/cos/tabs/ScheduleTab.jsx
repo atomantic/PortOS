@@ -35,8 +35,9 @@ function toggleMetadataField(metadata, field) {
   if (newMeta.useWorktree === false && newMeta.openPR) {
     newMeta.openPR = false;
   }
-  // Keep only entries that differ from the default (false/undefined); remove entries
-  // that are false (returning to default/inherited state) to keep metadata clean
+  // This is the GLOBAL taskMetadata config (the app-level default itself), not a per-task-type
+  // override. Only persist true values; absent keys default to disabled. Per-task-type overrides
+  // are handled separately by toggleAppMetadataOverride which supports tri-state (inherit/true/false).
   const active = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v === true));
   return Object.keys(active).length ? active : null;
 }
