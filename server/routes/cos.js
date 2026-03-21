@@ -197,7 +197,9 @@ router.post('/tasks', asyncHandler(async (req, res) => {
     throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position, createJiraTicket, jiraTicketId, jiraTicketUrl, useWorktree, openPR, simplify, reviewLoop };
+  // Coerce boolean flags — values from req.body may arrive as strings like 'false' (truthy in JS)
+  const toBool = (v) => v === true || v === 'true' ? true : v === false || v === 'false' ? false : undefined;
+  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position, createJiraTicket, jiraTicketId, jiraTicketUrl, useWorktree: toBool(useWorktree), openPR: toBool(openPR), simplify: toBool(simplify), reviewLoop: toBool(reviewLoop) };
   const result = await cos.addTask(taskData, type);
 
   if (result?.duplicate) {
