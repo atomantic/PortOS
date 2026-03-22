@@ -127,6 +127,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         scoring: false,
         score: fb.score ?? scored?.score ?? 0,
         feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
+        missedExamples: fb.missedExamples,
       });
       return;
     }
@@ -226,8 +227,18 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
           <FbIcon size={40} className={fbScoreColor} />
           <div className={`text-3xl font-mono font-bold mt-2 ${fbScoreColor}`}>{trainingFeedback.score}</div>
         </div>
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-2">
           <p className="text-sm text-gray-300">{trainingFeedback.feedback}</p>
+          {trainingFeedback.missedExamples?.length > 0 && (
+            <div className="pt-2 border-t border-port-border">
+              <p className="text-xs text-gray-500 mb-1">You could also have said:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {trainingFeedback.missedExamples.map((ex, i) => (
+                  <span key={i} className="px-2 py-0.5 bg-port-accent/10 text-port-accent text-xs rounded">{ex}</span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <button
           onClick={acknowledgeTrainingFeedback}

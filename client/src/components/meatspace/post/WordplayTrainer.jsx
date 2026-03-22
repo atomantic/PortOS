@@ -114,6 +114,7 @@ export default function WordplayTrainer({ onBack, config }) {
       feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
       validCount: fb.validCount,
       invalidItems: fb.invalidItems,
+      missedExamples: fb.missedExamples,
     });
     setResults(prev => [...prev, {
       ...responseObj,
@@ -268,13 +269,23 @@ export default function WordplayTrainer({ onBack, config }) {
           <FbIcon size={40} className={fbScoreColor} />
           <div className={`text-3xl font-mono font-bold mt-2 ${fbScoreColor}`}>{feedback.score}</div>
         </div>
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-2">
           <p className="text-sm text-gray-300">{feedback.feedback}</p>
           {feedback.validCount != null && (
-            <p className="text-xs text-gray-500 mt-2">Valid items: {feedback.validCount}</p>
+            <p className="text-xs text-gray-500">Valid items: {feedback.validCount}</p>
           )}
           {feedback.invalidItems?.length > 0 && (
-            <p className="text-xs text-port-error mt-1">Invalid: {feedback.invalidItems.join(', ')}</p>
+            <p className="text-xs text-port-error">Invalid: {feedback.invalidItems.join(', ')}</p>
+          )}
+          {feedback.missedExamples?.length > 0 && (
+            <div className="pt-2 border-t border-port-border">
+              <p className="text-xs text-gray-500 mb-1">You could also have said:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {feedback.missedExamples.map((ex, i) => (
+                  <span key={i} className="px-2 py-0.5 bg-port-accent/10 text-port-accent text-xs rounded">{ex}</span>
+                ))}
+              </div>
+            </div>
           )}
         </div>
         <button

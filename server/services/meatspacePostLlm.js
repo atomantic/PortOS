@@ -337,7 +337,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 {"challenges":[{"rootWord":"paper","position":"prefix","examples":["paperback","paper trail","paperweight","paper clip","paper thin"],"minExpected":8}]}
 
 position is "prefix" if the root starts the compound (firehouse), "suffix" if it ends it (campfire), or "both" if common either way (light→lighthouse, flashlight).
-The examples field should contain 5 sample answers. minExpected is the target count.`;
+The examples field should contain 10-15 sample answers for reference. minExpected is the target count.`;
 
   const response = await callAI(prompt, providerId, model);
   const data = parseJsonFromAI(response);
@@ -524,7 +524,7 @@ function scoreLocalBridgeWord(drillData, userResponses) {
 function scoreLocalCompoundChain(drillData, userResponses) {
   const scores = userResponses.map((r, i) => {
     const challenge = drillData.challenges?.[i];
-    if (!challenge?.rootWord) return { score: 0, feedback: 'No root word', validCount: 0, invalidItems: [] };
+    if (!challenge?.rootWord) return { score: 0, feedback: 'No root word', validCount: 0, invalidItems: [], missedExamples: [] };
     const root = challenge.rootWord.toLowerCase();
     const seen = new Set();
     const valid = [];
@@ -544,7 +544,12 @@ function scoreLocalCompoundChain(drillData, userResponses) {
     const fb = valid.length >= target
       ? `${valid.length} valid compounds — great job!`
       : `${valid.length} valid compound${valid.length !== 1 ? 's' : ''} (target: ${target})`;
-    return { score, feedback: fb, validCount: valid.length, invalidItems: invalid };
+    // Show examples the user didn't find
+    const validLower = new Set(valid.map(v => v.toLowerCase().replace(/[\s-]/g, '')));
+    const missedExamples = (challenge.examples || []).filter(ex =>
+      !validLower.has(ex.toLowerCase().replace(/[\s-]/g, ''))
+    );
+    return { score, feedback: fb, validCount: valid.length, invalidItems: invalid, missedExamples };
   });
   const overallScore = averageScore(scores);
   return { overallScore, scores, summary: `Average ${overallScore}% across ${scores.length} challenges` };
@@ -558,11 +563,13 @@ function scoreLocalVerbalFluency(drillData, userResponses) {
     const uniqueCount = seen.size;
     const target = cat?.minExpected || 15;
     const score = Math.round(Math.min(1, uniqueCount / target) * 100);
+    const missedExamples = (cat?.examples || []).filter(ex => !seen.has(ex.toLowerCase().trim()));
     return {
       score,
       feedback: `${uniqueCount} unique item${uniqueCount !== 1 ? 's' : ''} (target: ${target})`,
       validCount: uniqueCount,
       invalidItems: [],
+      missedExamples,
     };
   });
   const overallScore = averageScore(scores);
