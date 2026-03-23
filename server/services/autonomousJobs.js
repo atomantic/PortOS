@@ -224,12 +224,14 @@ You are acting as my Chief of Staff, preparing a daily briefing.
 
 Tasks to perform:
 1. Review pending user tasks (GET /api/cos/tasks/user) and summarize priorities
-2. Check brain digest (GET /api/brain/digest/latest) for recent thought patterns
-3. Review CoS learning insights (GET /api/cos/learning/insights) for system health
-4. Check which agents completed work recently (GET /api/cos/agents)
-5. Suggest 2-3 focus areas for today based on open tasks and recent activity
+2. Check internal CoS tasks (GET /api/cos/tasks/internal) to see what's already queued
+3. Check brain digest (GET /api/brain/digest/latest) for recent thought patterns
+4. Review CoS learning insights (GET /api/cos/learning/insights) for system health
+5. Check which agents completed work recently (GET /api/cos/agents)
+6. Suggest 2-3 focus areas for today based on open tasks and recent activity
+7. For each agent-actionable focus area (coding tasks, GitHub maintenance, system fixes — NOT personal activities), create a CoS task via POST /api/cos/tasks if no equivalent task already exists in the pending tasks from steps 1-2. Use type "internal", appropriate priority, and include context about why it was flagged.
 
-Write the briefing in a concise, actionable format. Save it as a CoS report.`,
+Write the briefing in a concise, actionable format. Save it as a CoS report. Note which tasks were created.`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
