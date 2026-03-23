@@ -39,6 +39,9 @@
 - Alcohol page summary compressed into a single compact stat bar row to maximize above-the-fold content
 
 ## Fixed
+- Notifications crash on missing metadata: added optional chaining in `removeByMetadata()` and `exists()`
+- Telegram memory approve/reject: wrapped in try/catch to prevent unhandled errors, clears inline keyboard buttons after action
+- ETA duration estimates skewed by failed agents: track success-only durations separately, add `recalculate-durations` endpoint for retroactive rebuild from agent archive
 - CoS orphan retry over-spawning: `resetOrphanedTasks()` was bypassing retry limits by blindly resetting in_progress tasks to pending — now routes through `handleOrphanedTask()` for consistent spawn counting, cooldown, and max-retry enforcement
 - CoS scheduled improvement tasks (feature-ideas, etc.) never spawning: event listener mismatch (`tasks:user:added`/`tasks:cos:added` vs actual `tasks:changed` event), missing dequeue trigger after improvement check timer, and no improvement queuing after daemon restart until timer fires
 - App icons in CoS schedule per-app override list rendering at natural image size instead of respecting the `size` prop
