@@ -6,8 +6,8 @@
  * to provide smarter task prioritization and model selection.
  */
 
-import { writeFile, rename } from 'fs/promises';
-import { existsSync } from 'fs';
+import { writeFile, readFile, rename } from 'fs/promises';
+import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cos.js';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -17,6 +17,22 @@ const withLock = createMutex();
 
 const DATA_DIR = PATHS.cos;
 const LEARNING_FILE = join(DATA_DIR, 'learning.json');
+const AGENTS_DIR = join(DATA_DIR, 'agents');
+
+/**
+ * Calculate ETA-oriented duration stats from success-only metrics with fallback.
+ * Returns { avgDurationMs, maxDurationMs, p80DurationMs }.
+ */
+function calculateDurationETA(metrics) {
+  const hasSuccessData = (metrics.successDurationMs || 0) > 0;
+  const avgBase = hasSuccessData ? metrics.successDurationMs : metrics.totalDurationMs;
+  const countBase = hasSuccessData ? metrics.succeeded : metrics.completed;
+  if (!countBase || countBase <= 0) return { avgDurationMs: 0, maxDurationMs: 0, p80DurationMs: 0 };
+  const avg = Math.round(avgBase / countBase);
+  const max = hasSuccessData ? (metrics.successMaxDurationMs || avg) : avg;
+  const p80 = Math.round(Math.min(avg * 3, avg + 0.6 * (max - avg)));
+  return { avgDurationMs: avg, maxDurationMs: max, p80DurationMs: p80 };
+}
 
 /**
  * Default learning data structure
@@ -175,6 +191,7 @@ export async function recordTaskCompletion(agent, task) {
       succeeded: 0,
       failed: 0,
       totalDurationMs: 0,
+      successDurationMs: 0,
       avgDurationMs: 0
     };
   }
@@ -184,17 +201,15 @@ export async function recordTaskCompletion(agent, task) {
   typeMetrics.completed++;
   if (success) {
     typeMetrics.succeeded++;
+    // Only include successful durations in ETA calculations — failed agents often
+    // run long in error loops and skew estimates
+    typeMetrics.successDurationMs = (typeMetrics.successDurationMs || 0) + duration;
+    typeMetrics.successMaxDurationMs = Math.max(typeMetrics.successMaxDurationMs || 0, duration);
   } else {
     typeMetrics.failed++;
   }
   typeMetrics.totalDurationMs += duration;
-  typeMetrics.avgDurationMs = Math.round(typeMetrics.totalDurationMs / typeMetrics.completed);
-  typeMetrics.maxDurationMs = Math.max(typeMetrics.maxDurationMs || 0, duration);
-  // P80 estimate: avg + 60% of the gap between avg and max
-  // This provides a realistic upper-bound for progress bars so they don't hit 100% too early
-  typeMetrics.p80DurationMs = Math.round(
-    typeMetrics.avgDurationMs + 0.6 * (typeMetrics.maxDurationMs - typeMetrics.avgDurationMs)
-  );
+  Object.assign(typeMetrics, calculateDurationETA(typeMetrics));
   typeMetrics.lastCompleted = new Date().toISOString();
   typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
 
@@ -203,11 +218,12 @@ export async function recordTaskCompletion(agent, task) {
   tierMetrics.completed++;
   if (success) {
     tierMetrics.succeeded++;
+    tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
   } else {
     tierMetrics.failed++;
   }
   tierMetrics.totalDurationMs += duration;
-  tierMetrics.avgDurationMs = Math.round(tierMetrics.totalDurationMs / tierMetrics.completed);
+  tierMetrics.avgDurationMs = calculateDurationETA(tierMetrics).avgDurationMs;
 
   // Track routing accuracy: taskType × modelTier cross-reference
   if (!data.routingAccuracy) data.routingAccuracy = {};
@@ -264,15 +280,13 @@ export async function recordTaskCompletion(agent, task) {
   data.totals.completed++;
   if (success) {
     data.totals.succeeded++;
+    data.totals.successDurationMs = (data.totals.successDurationMs || 0) + duration;
+    data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs || 0, duration);
   } else {
     data.totals.failed++;
   }
   data.totals.totalDurationMs += duration;
-  data.totals.avgDurationMs = Math.round(data.totals.totalDurationMs / data.totals.completed);
-  data.totals.maxDurationMs = Math.max(data.totals.maxDurationMs || 0, duration);
-  data.totals.p80DurationMs = Math.round(
-    data.totals.avgDurationMs + 0.6 * ((data.totals.maxDurationMs || data.totals.avgDurationMs) - data.totals.avgDurationMs)
-  );
+  Object.assign(data.totals, calculateDurationETA(data.totals));
 
   await saveLearningData(data);
 
@@ -911,15 +925,13 @@ export async function resetTaskTypeLearning(taskType) {
   data.totals.succeeded -= metrics.succeeded;
   data.totals.failed -= metrics.failed;
   data.totals.totalDurationMs -= metrics.totalDurationMs;
-  data.totals.avgDurationMs = data.totals.completed > 0
-    ? Math.round(data.totals.totalDurationMs / data.totals.completed)
-    : 0;
+  if (data.totals.successDurationMs) {
+    data.totals.successDurationMs -= (metrics.successDurationMs || 0);
+  }
   // Recalculate max from remaining task types (we can't subtract a max)
   const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
-  data.totals.maxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.maxDurationMs || 0), 0);
-  data.totals.p80DurationMs = data.totals.completed > 0
-    ? Math.round(data.totals.avgDurationMs + 0.6 * ((data.totals.maxDurationMs || data.totals.avgDurationMs) - data.totals.avgDurationMs))
-    : 0;
+  data.totals.successMaxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.successMaxDurationMs || 0), 0);
+  Object.assign(data.totals, calculateDurationETA(data.totals));
 
   // Clean up error patterns referencing this task type
   for (const [category, pattern] of Object.entries(data.errorPatterns)) {
@@ -1163,6 +1175,104 @@ export async function recalculateModelTierMetrics() {
   }
 
   return { recalculated: changes.length > 0, changes };
+  });
+}
+
+/**
+ * Rebuild success-only duration stats from the agent archive.
+ * Scans all completed agent metadata to recalculate avgDurationMs, maxDurationMs, and p80DurationMs
+ * using only successful agent durations (failed agents often run long in error loops and skew ETAs).
+ */
+export async function recalculateDurationStats() {
+  return withLock(async () => {
+  const data = await loadLearningData();
+
+  // Reset success-only duration fields
+  for (const metrics of Object.values(data.byTaskType)) {
+    metrics.successDurationMs = 0;
+    metrics.successMaxDurationMs = 0;
+  }
+  data.totals.successDurationMs = 0;
+  data.totals.successMaxDurationMs = 0;
+
+  let agentCount = 0;
+  let successCount = 0;
+
+  if (existsSync(AGENTS_DIR)) {
+    const dateDirs = readdirSync(AGENTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(d.name));
+
+    // Collect all metadata paths then read in parallel
+    const metaPaths = [];
+    for (const dateDir of dateDirs) {
+      const datePath = join(AGENTS_DIR, dateDir.name);
+      const agentDirs = readdirSync(datePath, { withFileTypes: true })
+        .filter(d => d.isDirectory());
+      for (const agentDir of agentDirs) {
+        metaPaths.push(join(datePath, agentDir.name, 'metadata.json'));
+      }
+    }
+
+    const results = await Promise.all(
+      metaPaths.map(p => readFile(p, 'utf-8').catch(() => null))
+    );
+
+    for (const raw of results) {
+      if (!raw) continue;
+      const meta = JSON.parse(raw);
+      agentCount++;
+
+      const duration = meta.result?.duration || 0;
+      if (!meta.result?.success || duration <= 0) continue;
+
+      successCount++;
+      const taskType = extractTaskType({
+        description: meta.metadata?.taskDescription,
+        metadata: meta.metadata,
+        taskType: meta.metadata?.taskType
+      });
+
+      if (data.byTaskType[taskType]) {
+        data.byTaskType[taskType].successDurationMs += duration;
+        data.byTaskType[taskType].successMaxDurationMs = Math.max(
+          data.byTaskType[taskType].successMaxDurationMs, duration
+        );
+      }
+
+      data.totals.successDurationMs += duration;
+      data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs, duration);
+    }
+  }
+
+  // Recalculate avgDurationMs, maxDurationMs, and p80DurationMs using the helper
+  for (const metrics of Object.values(data.byTaskType)) {
+    if ((metrics.succeeded || 0) > 0 && metrics.successDurationMs > 0) {
+      Object.assign(metrics, calculateDurationETA(metrics));
+    }
+  }
+
+  if ((data.totals.succeeded || 0) > 0 && data.totals.successDurationMs > 0) {
+    Object.assign(data.totals, calculateDurationETA(data.totals));
+  }
+
+  await saveLearningData(data);
+
+  emitLog('info', `📚 Recalculated duration stats from ${agentCount} agents (${successCount} successful)`, {
+    agentCount, successCount,
+    newAvgMs: data.totals.avgDurationMs,
+    newP80Ms: data.totals.p80DurationMs
+  }, '[TaskLearning]');
+
+  return {
+    recalculated: true,
+    agentsScanned: agentCount,
+    successfulAgents: successCount,
+    newTotals: {
+      avgDurationMs: data.totals.avgDurationMs,
+      p80DurationMs: data.totals.p80DurationMs,
+      maxDurationMs: data.totals.maxDurationMs
+    }
+  };
   });
 }
 

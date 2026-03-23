@@ -641,6 +641,12 @@ router.post('/learning/recalculate-model-tiers', asyncHandler(async (req, res) =
   res.json({ success: true, ...result });
 }));
 
+// POST /api/cos/learning/recalculate-durations - Rebuild success-only duration stats from agent archive
+router.post('/learning/recalculate-durations', asyncHandler(async (req, res) => {
+  const result = await taskLearning.recalculateDurationStats();
+  res.json({ success: true, ...result });
+}));
+
 // ============================================================
 // Weekly Digest Routes
 // ============================================================

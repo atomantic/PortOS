@@ -328,7 +328,13 @@ async function handleCallbackQuery(query) {
     const memoryId = data.slice(colonIdx + 1);
     const isApprove = action === CALLBACK_APPROVE;
 
-    const result = isApprove ? await approveMemory(memoryId) : await rejectMemory(memoryId);
+    let result;
+    try {
+      result = isApprove ? await approveMemory(memoryId) : await rejectMemory(memoryId);
+    } catch (err) {
+      console.error(`📱 Telegram: memory ${isApprove ? 'approve' : 'reject'} failed — ${err.message}`);
+      result = { success: false, error: err.message };
+    }
 
     const responseText = result.success
       ? (isApprove ? '✅ Memory approved' : '❌ Memory rejected')
@@ -343,7 +349,8 @@ async function handleCallbackQuery(query) {
       bot.answerCallbackQuery(query.id, { text: responseText }).catch(() => {}),
       bot.editMessageText(originalText + statusLine, {
         chat_id: query.message.chat.id,
-        message_id: query.message.message_id
+        message_id: query.message.message_id,
+        reply_markup: JSON.stringify({ inline_keyboard: [] })
       }).catch(() => {})
     ]);
   }

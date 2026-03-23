@@ -275,6 +275,37 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(404);
     });
+
+    it('should set blocker metadata when marking as blocked', async () => {
+      cos.updateTask.mockResolvedValue({ id: 'task-001', status: 'blocked' });
+
+      const response = await request(app)
+        .put('/api/cos/tasks/task-001')
+        .send({ status: 'blocked', blockedReason: 'Waiting for API access' });
+
+      expect(response.status).toBe(200);
+      expect(cos.updateTask).toHaveBeenCalledWith(
+        'task-001',
+        expect.objectContaining({
+          status: 'blocked',
+          metadata: { blocker: 'Waiting for API access' }
+        }),
+        'user'
+      );
+    });
+
+    it('should not send metadata when changing status to pending (service handles cleanup)', async () => {
+      cos.updateTask.mockResolvedValue({ id: 'task-001', status: 'pending' });
+
+      const response = await request(app)
+        .put('/api/cos/tasks/task-001')
+        .send({ status: 'pending' });
+
+      expect(response.status).toBe(200);
+      const callArgs = cos.updateTask.mock.calls[0][1];
+      expect(callArgs.status).toBe('pending');
+      expect(callArgs.metadata).toBeUndefined();
+    });
   });
 
   describe('DELETE /api/cos/tasks/:id', () => {

@@ -199,7 +199,7 @@ export async function removeByMetadata(field, value) {
     const data = await loadNotifications();
     const before = data.notifications.length;
 
-    data.notifications = data.notifications.filter(n => n.metadata[field] !== value);
+    data.notifications = data.notifications.filter(n => n.metadata?.[field] !== value);
 
     const removed = before - data.notifications.length;
     if (removed > 0) {
@@ -288,7 +288,7 @@ export async function exists(type, metadataField, metadataValue) {
     return data.notifications.some(n => n.type === type);
   }
   return data.notifications.some(
-    n => n.type === type && n.metadata[metadataField] === metadataValue
+    n => n.type === type && n.metadata?.[metadataField] === metadataValue
   );
 }
 
