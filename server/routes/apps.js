@@ -658,7 +658,8 @@ const ALLOWED_EDITORS = new Set([
   'goland',    // GoLand
   'clion',     // CLion
   'rider',     // Rider
-  'studio'     // Android Studio
+  'studio',    // Android Studio
+  'xed'        // Xcode
 ]);
 
 // POST /api/apps/:id/open-editor - Open app in editor
