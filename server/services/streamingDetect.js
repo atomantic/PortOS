@@ -445,6 +445,7 @@ export async function streamDetection(socket, dirPath) {
 
     result.startCommands = [];
     result.pm2ProcessNames = [];
+    result.editorCommand = 'xed .';
   }
 
   // Step 3: Read package.json

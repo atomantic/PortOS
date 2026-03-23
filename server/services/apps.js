@@ -197,7 +197,8 @@ export async function createApp(appData) {
     envFile: appData.envFile || '.env',
     icon: appData.icon || null,
     appIconPath: appData.appIconPath || null,
-    editorCommand: appData.editorCommand || 'code .',
+    editorCommand: appData.editorCommand
+      || (['ios-native', 'macos-native', 'xcode', 'swift'].includes(appData.type) ? 'xed .' : 'code .'),
     archived: false,
     jira: appData.jira || null,
     taskTypeOverrides: Object.fromEntries(
