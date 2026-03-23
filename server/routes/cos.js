@@ -43,7 +43,7 @@ const cosConfigSchema = z.object({
   selfImprovementEnabled: z.boolean().optional(),
   appImprovementEnabled: z.boolean().optional(),
   improvementEnabled: z.boolean().optional(),
-  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil']).optional(),
+  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus']).optional(),
   dynamicAvatar: z.boolean().optional(),
   alwaysOn: z.boolean().optional(),
   appReviewCooldownMs: z.number().int().min(0).optional(),
@@ -235,12 +235,9 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (provider !== undefined) updates.provider = provider;
   if (app !== undefined) updates.app = app;
 
-  // Handle blocker metadata - set when marking as blocked, clear when unblocking
+  // Set blocker metadata when marking as blocked
   if (status === 'blocked' && blockedReason) {
     updates.metadata = { blocker: blockedReason };
-  } else if (status && status !== 'blocked') {
-    // Clear blocker when moving out of blocked status
-    updates.metadata = { blocker: undefined };
   }
 
   const result = await cos.updateTask(id, updates, type);

@@ -302,7 +302,7 @@ const DEFAULT_CONFIG = {
   selfImprovementEnabled: true,            // Deprecated: use improvementEnabled
   appImprovementEnabled: true,             // Deprecated: use improvementEnabled
   improvementEnabled: true,                // Allow CoS to run improvement tasks on all apps (including PortOS)
-  avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil'
+  avatarStyle: 'svg',                      // UI preference: 'svg' | 'ascii' | 'cyber' | 'sigil' | 'esoteric' | 'nexus'
   dynamicAvatar: true,                     // Avatar changes based on active agent context
   // Always-on mode settings
   alwaysOn: true,                          // CoS starts automatically and stays active
@@ -3585,6 +3585,13 @@ export async function updateTask(taskId, updates, taskType = 'user') {
   if (updates.model !== undefined) updatedMetadata.model = updates.model || undefined;
   if (updates.provider !== undefined) updatedMetadata.provider = updates.provider || undefined;
   if (updates.app !== undefined) updatedMetadata.app = updates.app || undefined;
+
+  // Clear blocked/failure metadata when transitioning out of blocked status
+  if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
+    for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      delete updatedMetadata[key];
+    }
+  }
 
   // Clean undefined values from metadata
   Object.keys(updatedMetadata).forEach(key => {
