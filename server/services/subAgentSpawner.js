@@ -1834,11 +1834,23 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
     outputBuffer = await readFile(outputFile, 'utf-8').catch(() => '');
   }
 
+  // Post-execution validation: check for task commit even if exit code is non-zero
+  // This catches cases where the agent was killed/crashed after committing work
+  let effectiveSuccess = success;
+  if (!effectiveSuccess && task?.id) {
+    const workspacePath = agent.workspacePath || ROOT_DIR;
+    const commitFound = checkForTaskCommit(task.id, workspacePath);
+    if (commitFound) {
+      emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
+      effectiveSuccess = true;
+    }
+  }
+
   // Analyze failure if applicable
-  const errorAnalysis = success ? null : analyzeAgentFailure(outputBuffer, task, model);
+  const errorAnalysis = effectiveSuccess ? null : analyzeAgentFailure(outputBuffer, task, model);
 
   await completeAgent(agentId, {
-    success,
+    success: effectiveSuccess,
     exitCode,
     duration,
     outputLength: outputBuffer.length,
@@ -1851,7 +1863,7 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
   }
 
   // Update task status with retry tracking
-  if (success) {
+  if (effectiveSuccess) {
     await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
   } else {
     const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
@@ -1879,7 +1891,7 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
   }
 
   // Process memory extraction and app cooldown
-  await processAgentCompletion(agentId, task, success, outputBuffer);
+  await processAgentCompletion(agentId, task, effectiveSuccess, outputBuffer);
 
   // Fetch agent state once for JIRA and plan-question blocks
   const { getAgent: getAgentState } = await import('./cos.js');
@@ -3375,6 +3387,14 @@ export async function handleOrphanedTask(taskId, agentId, getTaskById) {
   // Never requeue tasks that were explicitly terminated by the user
   if (task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') {
     emitLog('info', `⏭️ Skipping orphaned task ${taskId} — user-terminated`, { taskId, agentId });
+    return;
+  }
+
+  // Check if the agent actually committed work before treating as orphaned
+  const commitFound = checkForTaskCommit(taskId);
+  if (commitFound) {
+    emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
+    await updateTask(taskId, { status: 'completed' }, task.taskType || 'user');
     return;
   }
 

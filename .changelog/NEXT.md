@@ -52,6 +52,8 @@
 - Chart date range comparison uses local date strings instead of UTC Date objects — fixes today/yesterday missing from 7-day chart
 - Empty entry objects no longer accumulate in daily-log.json after moving the last item from a date
 - README screenshot labels corrected to match actual screenshot content (all 6 were mislabeled)
+- Agent commit detection disconnected from task status: `handleAgentCompletion` now checks for task commits before treating killed/crashed agents as failures, preventing false `startup-failure` classifications when work was actually committed
+- Orphaned agent handler now checks for task commits before retrying, completing the task instead of endlessly re-spawning when work is already done
 - Zod `.default(false)` on `archived`, `defaultUseWorktree`, and `defaultOpenPR` in `appSchema` caused `appUpdateSchema.partial()` to inject `false` for omitted fields, silently overwriting stored `true` values during partial updates
 
 ## Removed
