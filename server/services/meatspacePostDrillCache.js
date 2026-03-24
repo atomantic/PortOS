@@ -57,6 +57,8 @@ function replenishType(type, providerId, model) {
     let consecutiveFailures = 0;
     try {
       for (let i = 0; i < needed; i++) {
+        // Pause between LLM calls to avoid rate limiting
+        if (i > 0) await new Promise(r => setTimeout(r, 2000));
         const drill = await generateLlmDrill(type, { count: 5 }, providerId, model).catch(err => {
           console.log(`⚠️ POST cache: failed to generate ${type}: ${err.message}`);
           return null;
@@ -117,16 +119,25 @@ export function getCacheStats() {
 }
 
 /**
- * Initialize cache: load from disk, start background fill for empty types.
+ * Initialize cache: load from disk, start sequential background fill for low types.
  */
 export async function initDrillCache(providerId, model) {
   await loadCache();
   const stats = CACHEABLE_TYPES.map(t => `${t}:${cache[t]?.length || 0}`).join(' ');
   console.log(`📦 POST drill cache loaded: ${stats}`);
 
-  for (const type of CACHEABLE_TYPES) {
-    if ((cache[type]?.length || 0) < MIN_PER_TYPE) {
-      replenishType(type, providerId, model);
-    }
+  // Fill types sequentially (not in parallel) to avoid LLM API spam on startup
+  const lowTypes = CACHEABLE_TYPES.filter(t => (cache[t]?.length || 0) < MIN_PER_TYPE);
+  if (lowTypes.length > 0) {
+    console.log(`📦 POST cache: queuing startup fill for ${lowTypes.length} types`);
+    (async () => {
+      for (const type of lowTypes) {
+        replenishType(type, providerId, model);
+        // Wait for this type to finish before starting the next
+        while (replenishing.has(type)) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+    })();
   }
 }

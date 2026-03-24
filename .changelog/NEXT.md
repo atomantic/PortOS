@@ -1,6 +1,8 @@
 ### Fixed
 - Job scheduling now uses user's configured timezone instead of UTC — daily briefing and all scheduled jobs fire at the correct local time
 - Briefing notification date uses user timezone instead of UTC date
+- Throttle LLM drill cache startup: serialize type replenishment and add 2s delay between LLM calls to prevent API spam on server restart
+- Throttle JIRA sync: add 500ms delay between project ticket fetches to prevent 429 rate limit errors
 
 ### Added
 - Character Sheet page: D&D-style character tracking with XP, HP, leveling, dice-based damage, short/long rests, custom event logging, and JIRA/CoS task sync for XP

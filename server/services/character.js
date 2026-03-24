@@ -179,6 +179,8 @@ export async function addEvent(event) {
   return { character, event: logEntry, leveledUp };
 }
 
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
 export async function syncJiraXP() {
   const character = await getCharacter();
   const config = await jiraService.getInstances();
@@ -195,7 +197,9 @@ export async function syncJiraXP() {
       continue;
     }
 
-    for (const project of projects) {
+    for (let i = 0; i < projects.length; i++) {
+      if (i > 0) await delay(500); // Rate-limit JIRA API calls
+      const project = projects[i];
       let tickets;
       try {
         tickets = await jiraService.getMyCurrentSprintTickets(instanceId, project.key);
