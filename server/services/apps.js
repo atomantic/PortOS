@@ -199,7 +199,7 @@ export async function createApp(appData) {
     icon: appData.icon || null,
     appIconPath: appData.appIconPath || null,
     editorCommand: appData.editorCommand
-      || (NON_PM2_TYPES.has(appData.type) ? 'xed .' : 'code .'),
+      || (NON_PM2_TYPES.has(appData.type) && process.platform === 'darwin' ? 'xed .' : 'code .'),
     archived: false,
     jira: appData.jira || null,
     taskTypeOverrides: Object.fromEntries(
