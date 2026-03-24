@@ -38,7 +38,7 @@ export function formatTimeOfDay(dateStr) {
  */
 export function formatDate(dateStr) {
   if (!dateStr) return null;
-  return new Date(dateStr).toLocaleString();
+  return new Date(dateStr).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
 /**

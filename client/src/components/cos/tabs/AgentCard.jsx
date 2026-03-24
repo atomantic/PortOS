@@ -108,7 +108,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
   // Sync btw messages from parent when agent data refreshes
   useEffect(() => {
-    if (agent.btwMessages?.length) setBtwMessages(agent.btwMessages);
+    setBtwMessages(agent.btwMessages || []);
   }, [agent.btwMessages]);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [showFeedbackComment, setShowFeedbackComment] = useState(false);
