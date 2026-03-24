@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
-import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon } from 'lucide-react';
+import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX } from 'lucide-react';
 import * as api from '../services/api';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
@@ -54,6 +54,8 @@ export default function Shell() {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [appFolders, setAppFolders] = useState([]);
   const [folderDropdownOpen, setFolderDropdownOpen] = useState(false);
+  const [showPasteInput, setShowPasteInput] = useState(false);
+  const pasteInputRef = useRef(null);
   const dropdownRef = useRef(null);
   const sessionsRef = useRef([]);
 
@@ -93,12 +95,34 @@ export default function Shell() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Send a command string to the active shell session
-  const sendCommand = useCallback((cmd) => {
+  const emitShellInput = useCallback((data) => {
     if (!socket || !sessionIdRef.current) return;
-    socket.emit('shell:input', { sessionId: sessionIdRef.current, data: cmd + '\n' });
+    socket.emit('shell:input', { sessionId: sessionIdRef.current, data });
     termInstanceRef.current?.focus();
   }, [socket]);
+
+  const sendCommand = useCallback((cmd) => emitShellInput(cmd + '\n'), [emitShellInput]);
+  const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);
+  const handlePaste = useCallback(() => {
+    if (navigator.clipboard?.readText) {
+      navigator.clipboard.readText()
+        .then(text => { if (text) emitShellInput(text); })
+        .catch(() => setShowPasteInput(true));
+    } else {
+      setShowPasteInput(true);
+    }
+  }, [emitShellInput]);
+
+  const handlePasteInputEvent = useCallback((e) => {
+    e.preventDefault();
+    const text = e.clipboardData?.getData('text');
+    if (text) emitShellInput(text);
+    setShowPasteInput(false);
+  }, [emitShellInput]);
+
+  useEffect(() => {
+    if (showPasteInput) pasteInputRef.current?.focus();
+  }, [showPasteInput]);
 
   // Initialize terminal once
   useEffect(() => {
@@ -472,6 +496,33 @@ export default function Shell() {
       {/* Quick commands toolbar */}
       {connected && (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <button
+            onClick={sendCtrlC}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 text-red-400 hover:text-red-300 rounded text-xs font-mono transition-colors border border-red-500/30 min-h-[40px]"
+            title="Send Ctrl+C interrupt"
+          >
+            <OctagonX size={14} />
+            Ctrl+C
+          </button>
+          <button
+            onClick={handlePaste}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-blue-300 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px]"
+            title="Paste clipboard contents"
+          >
+            <ClipboardPaste size={14} />
+            Paste
+          </button>
+          {showPasteInput && (
+            <input
+              ref={pasteInputRef}
+              type="text"
+              className="w-32 px-2 py-1.5 bg-port-card text-white text-xs font-mono rounded border border-port-accent/50 focus:outline-none focus:border-port-accent min-h-[40px] placeholder-gray-500"
+              placeholder="Tap & paste here"
+              onPaste={handlePasteInputEvent}
+              onBlur={() => setShowPasteInput(false)}
+            />
+          )}
+          <div className="w-px h-6 bg-port-border" />
           {QUICK_COMMANDS.map(({ label, command }) => (
             <button
               key={label}
