@@ -71,6 +71,12 @@ describe('timezone', () => {
       expect(resultDate.getUTCDate()).toBe(24)
     })
 
+    it('returns same timestamp when afterMs exactly matches target time', () => {
+      const after = new Date('2026-03-24T14:00:00Z').getTime()
+      const result = nextLocalTime(after, 14, 0, 'UTC')
+      expect(result).toBe(after)
+    })
+
     it('wraps to next day if time has passed', () => {
       const after = new Date('2026-03-24T15:00:00Z').getTime()
       const result = nextLocalTime(after, 14, 0, 'UTC')

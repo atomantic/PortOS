@@ -966,9 +966,11 @@ router.post('/jobs', asyncHandler(async (req, res) => {
     if (parts.length !== 5) {
       throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    // Validate syntax and field ranges (parseCronToNextRun throws on invalid expressions)
-    // Note: null return means no match within search window (e.g. leap day) -- not invalid
-    parseCronToNextRun(cronExpression, new Date(), 'UTC');
+    // Validate syntax, field ranges, and reachability
+    const nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
+    if (!nextRun) {
+      throw new ServerError('Invalid cronExpression: no matching time found (check field ranges)', { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
 
   const job = await autonomousJobs.createJob({
@@ -987,8 +989,11 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
     if (parts.length !== 5) {
       throw new ServerError('cronExpression must be a 5-field cron expression', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    // Validate syntax and field ranges (parseCronToNextRun throws on invalid expressions)
-    parseCronToNextRun(cronExpression, new Date(), 'UTC');
+    // Validate syntax, field ranges, and reachability
+    const nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
+    if (!nextRun) {
+      throw new ServerError('Invalid cronExpression: no matching time found (check field ranges)', { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
   const job = await autonomousJobs.updateJob(req.params.id, {
     name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,

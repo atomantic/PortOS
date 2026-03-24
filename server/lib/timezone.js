@@ -104,7 +104,7 @@ export function nextLocalTime(afterMs, hours, minutes, timezone) {
 
   // How many minutes until the target time?
   let deltaMin = desiredMin - currentMin
-  if (deltaMin <= 0) deltaMin += 1440 // wrap to next day
+  if (deltaMin < 0) deltaMin += 1440 // wrap to next day
 
   const candidate = afterMs + deltaMin * 60_000
   // DST transitions can shift the result by up to ±60 min — verify and nudge if needed.
