@@ -251,3 +251,7 @@ Configure AI providers for the runner and Chief of Staff:
 ## License
 
 MIT
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/portos)
