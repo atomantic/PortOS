@@ -152,18 +152,13 @@ export default function Review() {
 
   return (
     <div className="h-full overflow-auto p-4 md:p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-3">
         {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-              <ClipboardList size={24} />
-              Review Hub
-            </h2>
-            <p className="text-gray-500 text-sm mt-1 max-w-2xl">
-              Your agent inbox: triage alerts, review CoS requests, and keep the next actions above the fold.
-            </p>
-          </div>
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <ClipboardList size={20} />
+            Review Hub
+          </h2>
           <div className="flex items-center gap-2 flex-wrap">
             <select
               value={filter}
@@ -187,147 +182,95 @@ export default function Review() {
         </div>
 
         {/* Triage summary */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-          <SummaryCard
-            icon={BellRing}
-            label="Needs attention"
-            value={pendingCount}
-            tone="text-white"
-            detail={pendingCount === 0 ? 'Inbox is clear' : 'Pending review items'}
-          />
-          <SummaryCard
-            icon={AlertTriangle}
-            label="Alerts"
-            value={pendingAlerts.length}
-            tone="text-port-warning"
-            detail={pendingAlerts.length > 0 ? 'Handle these first' : 'No active alerts'}
-            urgent={pendingAlerts.length > 0}
-          />
-          <SummaryCard
-            icon={Crown}
-            label="CoS Actions"
-            value={pendingCos.length}
-            tone="text-port-accent"
-            detail={pendingCos.length > 0 ? 'Requests waiting on you' : 'No pending CoS asks'}
-          />
-          <SummaryCard
-            icon={ClipboardList}
-            label="Todos"
-            value={pendingTodos.length}
-            tone="text-port-success"
-            detail={pendingTodos.length > 0 ? 'Open personal tasks' : 'No pending todos'}
-          />
+        <section className="flex flex-wrap gap-2">
+          <SummaryPill icon={BellRing} label="Pending" value={pendingCount} tone="text-white" />
+          <SummaryPill icon={AlertTriangle} label="Alerts" value={pendingAlerts.length} tone="text-port-warning" urgent={pendingAlerts.length > 0} />
+          <SummaryPill icon={Crown} label="CoS" value={pendingCos.length} tone="text-port-accent" />
+          <SummaryPill icon={ClipboardList} label="Todos" value={pendingTodos.length} tone="text-port-success" />
         </section>
 
-        {/* Action queue + quick add */}
-        <section className="grid grid-cols-1 xl:grid-cols-[1.65fr,1fr] gap-6 items-start">
-          <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <Eye size={18} className="text-port-warning" />
-                  Action Queue
-                </h3>
-                <p className="text-sm text-gray-500 mt-1">
-                  Sorted by urgency so the page starts with what agents need you to see.
-                </p>
-              </div>
-              {actionableItems.length > 0 && (
-                <span className="text-xs rounded-full px-2.5 py-1 bg-port-warning/10 text-port-warning border border-port-warning/20">
-                  {actionableItems.length} actionable
-                </span>
-              )}
+        {/* Quick Add */}
+        <form onSubmit={handleCreateTodo} className="flex gap-2">
+          <input
+            type="text"
+            value={newTodo}
+            onChange={(e) => setNewTodo(e.target.value)}
+            placeholder="Quick add todo..."
+            className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+          />
+          <button
+            type="submit"
+            disabled={!newTodo.trim()}
+            className="px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
+          >
+            <Plus size={16} />
+            Add
+          </button>
+        </form>
+
+        {/* Action queue — only shown when there are actionable items */}
+        {topActionItems.length > 0 && (
+          <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Eye size={16} className="text-port-warning" />
+                Action Queue
+              </h3>
+              <span className="text-xs rounded-full px-2 py-0.5 bg-port-warning/10 text-port-warning border border-port-warning/20">
+                {actionableItems.length} actionable
+              </span>
             </div>
-
-            {topActionItems.length > 0 ? (
-              <div className="space-y-2">
-                {topActionItems.map(item => (
-                  <ReviewItem
-                    key={item.id}
-                    item={item}
-                    config={TYPE_CONFIG[item.type]}
-                    isEditing={editingId === item.id}
-                    onComplete={handleComplete}
-                    onDismiss={handleDismiss}
-                    onDelete={handleDelete}
-                    onStartEdit={() => setEditingId(item.id)}
-                    onSaveEdit={handleSaveEdit}
-                    onCancelEdit={() => setEditingId(null)}
-                    compact={false}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-dashed border-port-border p-6 text-center text-gray-500">
-                <CheckCircle2 size={28} className="mx-auto mb-2 opacity-50 text-port-success" />
-                <p className="text-white">No actionable items right now</p>
-                <p className="text-sm mt-1">When agents surface alerts or requests, they’ll land here first.</p>
-              </div>
-            )}
-
+            <div className="space-y-2">
+              {topActionItems.map(item => (
+                <ReviewItem
+                  key={item.id}
+                  item={item}
+                  config={TYPE_CONFIG[item.type]}
+                  isEditing={editingId === item.id}
+                  onComplete={handleComplete}
+                  onDismiss={handleDismiss}
+                  onDelete={handleDelete}
+                  onStartEdit={() => setEditingId(item.id)}
+                  onSaveEdit={handleSaveEdit}
+                  onCancelEdit={() => setEditingId(null)}
+                  compact={false}
+                />
+              ))}
+            </div>
             {remainingActionCount > 0 && (
               <p className="text-xs text-gray-500">
-                {remainingActionCount} more actionable item{remainingActionCount !== 1 ? 's' : ''} below in the detailed sections.
+                {remainingActionCount} more actionable item{remainingActionCount !== 1 ? 's' : ''} below.
               </p>
             )}
-          </div>
+          </section>
+        )}
 
-          <div className="space-y-4">
-            <form onSubmit={handleCreateTodo} className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-              <div>
-                <h3 className="text-lg font-semibold text-white">Quick Add</h3>
-                <p className="text-sm text-gray-500 mt-1">Capture a task without leaving the review flow.</p>
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={newTodo}
-                  onChange={(e) => setNewTodo(e.target.value)}
-                  placeholder="Add a new todo..."
-                  className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-                />
+        {/* Daily Briefing */}
+        {briefing && briefing.source !== 'none' && (
+          <section className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <FileText size={16} className="text-gray-400" />
+                Daily Briefing
+              </h3>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-gray-600">
+                  {briefing.source} &middot; {new Date(briefing.generatedAt).toLocaleString()}
+                </span>
                 <button
-                  type="submit"
-                  disabled={!newTodo.trim()}
-                  className="px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
+                  onClick={() => setBriefingFullscreen(prev => !prev)}
+                  className="p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+                  title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                 >
-                  <Plus size={16} />
-                  Add
+                  {briefingFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                 </button>
               </div>
-            </form>
-
-            {/* Daily Briefing */}
-            {briefing && briefing.source !== 'none' && (
-              <section className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <div>
-                    <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                      <FileText size={18} className="text-gray-400" />
-                      Daily Briefing
-                    </h3>
-                    <p className="text-sm text-gray-500 mt-1">
-                      Context and narrative, kept secondary to urgent review items.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setBriefingFullscreen(prev => !prev)}
-                    className="p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
-                    title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                  >
-                    {briefingFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                  </button>
-                </div>
-                <div className={`text-gray-400 text-sm overflow-y-auto ${briefingFullscreen ? '' : 'max-h-[28rem]'}`}>
-                  <MarkdownOutput content={briefing.content} />
-                </div>
-                <p className="text-gray-600 text-xs mt-2">
-                  Source: {briefing.source} &middot; {new Date(briefing.generatedAt).toLocaleString()}
-                </p>
-              </section>
-            )}
-          </div>
-        </section>
+            </div>
+            <div className={`text-gray-400 text-sm overflow-y-auto ${briefingFullscreen ? '' : 'max-h-[32rem]'}`}>
+              <MarkdownOutput content={briefing.content} />
+            </div>
+          </section>
+        )}
 
         {/* Detailed sections */}
         {['alert', 'cos', 'todo', 'briefing'].map(type => {
@@ -376,17 +319,12 @@ export default function Review() {
   );
 }
 
-function SummaryCard({ icon: Icon, label, value, detail, tone = 'text-white', urgent = false }) {
+function SummaryPill({ icon: Icon, label, value, tone = 'text-white', urgent = false }) {
   return (
-    <div className={`rounded-xl border p-4 bg-port-card ${urgent ? 'border-port-warning/40' : 'border-port-border'}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
-          <p className={`text-2xl font-bold mt-1 ${tone}`}>{value}</p>
-          <p className="text-sm text-gray-500 mt-1">{detail}</p>
-        </div>
-        <Icon size={18} className={urgent ? 'text-port-warning' : tone} />
-      </div>
+    <div className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 bg-port-card ${urgent ? 'border-port-warning/40' : 'border-port-border'}`}>
+      <Icon size={14} className={urgent ? 'text-port-warning' : tone} />
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className={`text-sm font-bold ${tone}`}>{value}</span>
     </div>
   );
 }

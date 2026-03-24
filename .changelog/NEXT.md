@@ -22,6 +22,7 @@
 - Personal Goals dashboard widget: shows top-level goals with progress bars, category icons, horizon labels, and stall detection (14+ days idle) — replaces broken CoS task-based goal widget that never rendered
 
 ## Changed
+- Review Hub compacted: metrics cards → inline pills, empty action queue hidden instead of showing empty state, quick-add simplified to inline input, daily briefing moves up to be visible without scrolling
 - Sidebar navigation reorganized: Review Hub promoted to top section, standalone items (Feature Agents, Loops, Shell, Instances, Security, Uploads) consolidated into parent groups (Dev Tools, Chief of Staff, Settings), AI Config dissolved into Settings, Ambient moved to footer icon button
 - Release-check scheduled task now discovers the project's release process from CLAUDE.md, README.md, CONTRIBUTING.md, docs/, CI workflows, and changelog docs instead of hardcoding dev→main
 - Exported `cleanupAgentWorktree` from `subAgentSpawner.js` with dedicated test file covering the openPR completion path (push, PR creation, failure preservation, auto-merge fallback)
