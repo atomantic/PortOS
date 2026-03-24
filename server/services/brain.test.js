@@ -647,7 +647,7 @@ describe('brain service', () => {
 
     it('should truncate digest text exceeding 150 words', async () => {
       storage.getProjects.mockResolvedValue([]);
-      storage.getAdminItems.mockResolvedValue([]);
+      storage.getAdminItems.mockResolvedValue([{ id: 'a1', title: 'Task', status: 'open' }]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
 
@@ -721,7 +721,7 @@ describe('brain service', () => {
     });
 
     it('should throw when AI returns invalid digest format', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
@@ -793,7 +793,7 @@ describe('brain service', () => {
     });
 
     it('should truncate review text exceeding 250 words', async () => {
-      storage.getInboxLog.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([{ id: 'inbox-001', capturedAt: new Date().toISOString(), status: 'filed' }]);
       storage.getProjects.mockResolvedValue([]);
 
       const mockProvider = { id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' };
@@ -825,7 +825,7 @@ describe('brain service', () => {
     });
 
     it('should throw when AI returns invalid review format', async () => {
-      storage.getInboxLog.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([{ id: 'inbox-001', capturedAt: new Date().toISOString(), status: 'filed' }]);
       storage.getProjects.mockResolvedValue([]);
 
       const mockProvider = { id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' };
@@ -848,7 +848,7 @@ describe('brain service', () => {
 
   describe('parseJsonResponse (indirect via AI calls)', () => {
     it('should handle JSON wrapped in markdown code blocks', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
@@ -880,7 +880,7 @@ describe('brain service', () => {
     });
 
     it('should throw on empty AI response', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
@@ -905,7 +905,7 @@ describe('brain service', () => {
 
   describe('callAI error handling (indirect)', () => {
     it('should throw when no provider available', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
@@ -916,7 +916,7 @@ describe('brain service', () => {
     });
 
     it('should throw when provider is disabled', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
@@ -927,7 +927,7 @@ describe('brain service', () => {
     });
 
     it('should throw on API error response', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
@@ -945,7 +945,7 @@ describe('brain service', () => {
     });
 
     it('should throw for unsupported provider type', async () => {
-      storage.getProjects.mockResolvedValue([]);
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);

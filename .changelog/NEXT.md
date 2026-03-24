@@ -1,4 +1,5 @@
 ### Fixed
+- New instances no longer trigger LLM calls on startup — seed drill cache in data.sample and skip brain digest/review when no data exists
 - Job scheduling now uses user's configured timezone instead of UTC — daily briefing and all scheduled jobs fire at the correct local time
 - Briefing notification date uses user timezone instead of UTC date
 - Throttle LLM drill cache startup: serialize type replenishment and add 2s delay between LLM calls to prevent API spam on server restart

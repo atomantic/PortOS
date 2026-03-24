@@ -1,0 +1,1913 @@
+{
+  "compound-chain": [
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "fire",
+          "position": "both",
+          "examples": [
+            "firehouse",
+            "firewall",
+            "campfire",
+            "wildfire",
+            "backfire"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "both",
+          "examples": [
+            "crossword",
+            "crossbow",
+            "crossroads",
+            "double-cross",
+            "crisscross"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "hand",
+          "position": "both",
+          "examples": [
+            "handshake",
+            "handbook",
+            "backhand",
+            "shorthand",
+            "firsthand"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakdown",
+            "heartbreak",
+            "daybreak",
+            "jawbreaker"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "spotlight",
+            "moonlight",
+            "flashlight",
+            "lightweight"
+          ],
+          "minExpected": 12
+        }
+      ]
+    },
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "lightweight",
+            "flashlight",
+            "moonlight",
+            "spotlight"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "prefix",
+          "examples": [
+            "crossword",
+            "crossroads",
+            "crossfire",
+            "crossbow",
+            "crosswalk"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakthrough",
+            "daybreak",
+            "heartbreak",
+            "outbreak"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "head",
+          "position": "both",
+          "examples": [
+            "headline",
+            "headphones",
+            "forehead",
+            "overhead",
+            "figurehead"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "ground",
+          "position": "both",
+          "examples": [
+            "groundwork",
+            "underground",
+            "playground",
+            "background",
+            "groundwater"
+          ],
+          "minExpected": 10
+        }
+      ]
+    },
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "fire",
+          "position": "both",
+          "examples": [
+            "firehouse",
+            "firewall",
+            "firework",
+            "campfire",
+            "crossfire"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "back",
+          "position": "both",
+          "examples": [
+            "backbone",
+            "backpack",
+            "backstage",
+            "feedback",
+            "flashback"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "prefix",
+          "examples": [
+            "crossword",
+            "crossbow",
+            "crossroad",
+            "crossover",
+            "crosswalk"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakthrough",
+            "breakwater",
+            "daybreak",
+            "jailbreak"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "lightweight",
+            "moonlight",
+            "spotlight",
+            "twilight"
+          ],
+          "minExpected": 12
+        }
+      ]
+    },
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "fire",
+          "position": "both",
+          "examples": [
+            "firehouse",
+            "firework",
+            "firefly",
+            "campfire",
+            "crossfire"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "both",
+          "examples": [
+            "crossword",
+            "crossbow",
+            "crossroads",
+            "crisscross",
+            "double-cross"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "lightweight",
+            "flashlight",
+            "moonlight",
+            "spotlight"
+          ],
+          "minExpected": 14
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakthrough",
+            "heartbreak",
+            "outbreak",
+            "jawbreaker"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "hand",
+          "position": "both",
+          "examples": [
+            "handshake",
+            "handbook",
+            "handwriting",
+            "backhand",
+            "shorthand"
+          ],
+          "minExpected": 10
+        }
+      ]
+    },
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "lightweight",
+            "flashlight",
+            "moonlight",
+            "spotlight"
+          ],
+          "minExpected": 15
+        },
+        {
+          "rootWord": "hand",
+          "position": "both",
+          "examples": [
+            "handshake",
+            "handbook",
+            "handmade",
+            "backhand",
+            "shorthand"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "both",
+          "examples": [
+            "crossword",
+            "crossbow",
+            "crosswalk",
+            "crisscross",
+            "double-cross"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakthrough",
+            "daybreak",
+            "heartbreak",
+            "jailbreak"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "stone",
+          "position": "both",
+          "examples": [
+            "stonewall",
+            "limestone",
+            "milestone",
+            "cornerstone",
+            "keystone"
+          ],
+          "minExpected": 12
+        }
+      ]
+    },
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "fire",
+          "position": "both",
+          "examples": [
+            "firehouse",
+            "firework",
+            "fireplace",
+            "campfire",
+            "crossfire"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "back",
+          "position": "both",
+          "examples": [
+            "backbone",
+            "backyard",
+            "setback",
+            "feedback",
+            "quarterback"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "both",
+          "examples": [
+            "crossword",
+            "crossroads",
+            "crisscross",
+            "double-cross",
+            "crossbow"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakdown",
+            "daybreak",
+            "outbreak",
+            "breakthrough"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "lightweight",
+            "moonlight",
+            "spotlight",
+            "flashlight"
+          ],
+          "minExpected": 12
+        }
+      ]
+    },
+    {
+      "type": "compound-chain",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "rootWord": "fire",
+          "position": "both",
+          "examples": [
+            "firehouse",
+            "firewall",
+            "campfire",
+            "crossfire",
+            "firework"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "back",
+          "position": "both",
+          "examples": [
+            "backbone",
+            "backpack",
+            "feedback",
+            "setback",
+            "throwback"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "cross",
+          "position": "prefix",
+          "examples": [
+            "crossroads",
+            "crossbow",
+            "crosswalk",
+            "crossword",
+            "crossover"
+          ],
+          "minExpected": 10
+        },
+        {
+          "rootWord": "light",
+          "position": "both",
+          "examples": [
+            "lighthouse",
+            "spotlight",
+            "daylight",
+            "headlight",
+            "lighthearted"
+          ],
+          "minExpected": 12
+        },
+        {
+          "rootWord": "break",
+          "position": "both",
+          "examples": [
+            "breakfast",
+            "breakthrough",
+            "daybreak",
+            "heartbreak",
+            "breakwater"
+          ],
+          "minExpected": 10
+        }
+      ]
+    }
+  ],
+  "bridge-word": [
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "camp___",
+            "___work",
+            "___place",
+            "___truck"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It keeps you warm"
+        },
+        {
+          "clues": [
+            "rain___",
+            "___fall",
+            "___proof",
+            "___mark"
+          ],
+          "answer": "water",
+          "difficulty": "easy",
+          "hint": "You drink it every day"
+        },
+        {
+          "clues": [
+            "card___",
+            "___room",
+            "___walk",
+            "skate___"
+          ],
+          "answer": "board",
+          "difficulty": "medium",
+          "hint": "A flat rigid surface"
+        },
+        {
+          "clues": [
+            "figure___",
+            "___line",
+            "___band",
+            "over___"
+          ],
+          "answer": "head",
+          "difficulty": "medium",
+          "hint": "It sits on your shoulders"
+        },
+        {
+          "clues": [
+            "off___",
+            "___board",
+            "___time",
+            "hand___"
+          ],
+          "answer": "spring",
+          "difficulty": "hard",
+          "hint": "A season or a coil"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "camp___",
+            "___place",
+            "___work",
+            "___fly"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It keeps you warm"
+        },
+        {
+          "clues": [
+            "note___",
+            "___worm",
+            "___mark",
+            "text___"
+          ],
+          "answer": "book",
+          "difficulty": "easy",
+          "hint": "Found in a library"
+        },
+        {
+          "clues": [
+            "day___",
+            "___house",
+            "spot___",
+            "___bulb"
+          ],
+          "answer": "light",
+          "difficulty": "medium",
+          "hint": "Flip a switch for this"
+        },
+        {
+          "clues": [
+            "___berry",
+            "___board",
+            "___smith",
+            "___out"
+          ],
+          "answer": "black",
+          "difficulty": "medium",
+          "hint": "The darkest color"
+        },
+        {
+          "clues": [
+            "back___",
+            "___work",
+            "play___",
+            "___breaking"
+          ],
+          "answer": "ground",
+          "difficulty": "hard",
+          "hint": "Beneath your feet"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "flash___",
+            "___house",
+            "day___",
+            "spot___"
+          ],
+          "answer": "light",
+          "difficulty": "easy",
+          "hint": "Opposite of dark"
+        },
+        {
+          "clues": [
+            "camp___",
+            "___work",
+            "___place",
+            "___fly"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It burns"
+        },
+        {
+          "clues": [
+            "card___",
+            "___room",
+            "skate___",
+            "___walk"
+          ],
+          "answer": "board",
+          "difficulty": "medium",
+          "hint": "A flat piece of material"
+        },
+        {
+          "clues": [
+            "dead___",
+            "___up",
+            "out___",
+            "side___"
+          ],
+          "answer": "line",
+          "difficulty": "medium",
+          "hint": "Draw one with a ruler"
+        },
+        {
+          "clues": [
+            "book___",
+            "___et",
+            "land___",
+            "trade___"
+          ],
+          "answer": "mark",
+          "difficulty": "hard",
+          "hint": "Leave one on paper"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "camp___",
+            "___work",
+            "___place",
+            "___fly"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It provides warmth and light"
+        },
+        {
+          "clues": [
+            "___ball",
+            "___flake",
+            "___board",
+            "___man"
+          ],
+          "answer": "snow",
+          "difficulty": "easy",
+          "hint": "Falls from winter skies"
+        },
+        {
+          "clues": [
+            "bare___",
+            "___print",
+            "___note",
+            "___hold"
+          ],
+          "answer": "foot",
+          "difficulty": "medium",
+          "hint": "You stand on two of these"
+        },
+        {
+          "clues": [
+            "black___",
+            "___room",
+            "card___",
+            "___walk"
+          ],
+          "answer": "board",
+          "difficulty": "medium",
+          "hint": "A flat rigid surface"
+        },
+        {
+          "clues": [
+            "pad___",
+            "___smith",
+            "grid___",
+            "___down"
+          ],
+          "answer": "lock",
+          "difficulty": "hard",
+          "hint": "Secures a door"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "note___",
+            "___mark",
+            "___worm",
+            "text___"
+          ],
+          "answer": "book",
+          "difficulty": "easy",
+          "hint": "You might find one in a library"
+        },
+        {
+          "clues": [
+            "camp___",
+            "___work",
+            "___fly",
+            "___place"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It's hot and bright"
+        },
+        {
+          "clues": [
+            "lime___",
+            "___wall",
+            "key___",
+            "___cold"
+          ],
+          "answer": "stone",
+          "difficulty": "medium",
+          "hint": "A piece of rock"
+        },
+        {
+          "clues": [
+            "water___",
+            "___out",
+            "down___",
+            "___back"
+          ],
+          "answer": "fall",
+          "difficulty": "medium",
+          "hint": "What leaves do in autumn"
+        },
+        {
+          "clues": [
+            "pad___",
+            "___smith",
+            "grid___",
+            "___down"
+          ],
+          "answer": "lock",
+          "difficulty": "hard",
+          "hint": "Keeps things secure"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "camp___",
+            "___place",
+            "___work",
+            "___fly"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It keeps you warm outdoors"
+        },
+        {
+          "clues": [
+            "note___",
+            "___mark",
+            "___worm",
+            "text___"
+          ],
+          "answer": "book",
+          "difficulty": "easy",
+          "hint": "Found on a library shelf"
+        },
+        {
+          "clues": [
+            "___shake",
+            "back___",
+            "second___",
+            "___writing"
+          ],
+          "answer": "hand",
+          "difficulty": "medium",
+          "hint": "You have two of them"
+        },
+        {
+          "clues": [
+            "card___",
+            "___room",
+            "___walk",
+            "skate___"
+          ],
+          "answer": "board",
+          "difficulty": "medium",
+          "hint": "A flat surface"
+        },
+        {
+          "clues": [
+            "mile___",
+            "key___",
+            "___wall",
+            "___cold"
+          ],
+          "answer": "stone",
+          "difficulty": "hard",
+          "hint": "A natural building material"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "___burn",
+            "___rise",
+            "___flower",
+            "___screen"
+          ],
+          "answer": "sun",
+          "difficulty": "easy",
+          "hint": "It comes up every morning"
+        },
+        {
+          "clues": [
+            "note___",
+            "___mark",
+            "text___",
+            "___worm"
+          ],
+          "answer": "book",
+          "difficulty": "easy",
+          "hint": "You might find one in a library"
+        },
+        {
+          "clues": [
+            "out___",
+            "___step",
+            "___bell",
+            "trap___"
+          ],
+          "answer": "door",
+          "difficulty": "medium",
+          "hint": "You walk through one every day"
+        },
+        {
+          "clues": [
+            "over___",
+            "___band",
+            "figure___",
+            "___line"
+          ],
+          "answer": "head",
+          "difficulty": "medium",
+          "hint": "It sits on top of your shoulders"
+        },
+        {
+          "clues": [
+            "first___",
+            "___shake",
+            "short___",
+            "___made"
+          ],
+          "answer": "hand",
+          "difficulty": "hard",
+          "hint": "You have two of them"
+        }
+      ]
+    },
+    {
+      "type": "bridge-word",
+      "config": {
+        "count": 5
+      },
+      "puzzles": [
+        {
+          "clues": [
+            "___flower",
+            "___burn",
+            "___rise",
+            "___screen"
+          ],
+          "answer": "sun",
+          "difficulty": "easy",
+          "hint": "It rises every morning"
+        },
+        {
+          "clues": [
+            "camp___",
+            "___work",
+            "___place",
+            "___fly"
+          ],
+          "answer": "fire",
+          "difficulty": "easy",
+          "hint": "It's hot and bright"
+        },
+        {
+          "clues": [
+            "note___",
+            "___mark",
+            "text___",
+            "___worm"
+          ],
+          "answer": "book",
+          "difficulty": "medium",
+          "hint": "Found in a library"
+        },
+        {
+          "clues": [
+            "day___",
+            "___through",
+            "___down",
+            "out___"
+          ],
+          "answer": "break",
+          "difficulty": "medium",
+          "hint": "A pause or fracture"
+        },
+        {
+          "clues": [
+            "lime___",
+            "key___",
+            "mile___",
+            "___wall"
+          ],
+          "answer": "stone",
+          "difficulty": "hard",
+          "hint": "A type of rock"
+        }
+      ]
+    }
+  ],
+  "double-meaning": [
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "crane",
+          "meanings": [
+            "a tall wading bird",
+            "a machine used to lift heavy objects"
+          ],
+          "example": "The crane on the riverbank watched the crane on the construction site lift steel beams all morning.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "spring",
+          "meanings": [
+            "the season after winter",
+            "a coiled piece of metal",
+            "a natural water source"
+          ],
+          "example": "Every spring, the mattress spring pokes through just as the mountain spring thaws.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "pitch",
+          "meanings": [
+            "to throw a ball",
+            "a sticky dark substance",
+            "the highness or lowness of a sound"
+          ],
+          "example": "He tried to pitch the idea at a higher pitch, but his voice got stuck like pitch.",
+          "difficulty": "hard"
+        },
+        {
+          "word": "sentence",
+          "meanings": [
+            "a grammatical unit of words",
+            "a punishment assigned by a judge"
+          ],
+          "example": "The judge struggled to sentence the grammarian, who kept correcting every sentence in the verdict.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "jam",
+          "meanings": [
+            "a fruit preserve spread on bread",
+            "a situation where things are stuck or crowded",
+            "an informal music session"
+          ],
+          "example": "Stuck in a jam on the freeway, the band ate jam on toast and decided to jam acoustically in the back seat.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitch",
+          "meanings": [
+            "throw a ball",
+            "dark sticky substance",
+            "musical tone",
+            "sales presentation"
+          ],
+          "example": "His pitch went so high during the pitch meeting that it sounded like a musical pitch covered in pitch.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "large bird",
+            "construction machine",
+            "to stretch one's neck"
+          ],
+          "example": "I had to crane my neck to watch the crane lift the injured crane back to its nest.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "bank",
+          "meanings": [
+            "financial institution",
+            "side of a river",
+            "to tilt an aircraft"
+          ],
+          "example": "The pilot had to bank sharply to avoid the bank of the river near the bank where we keep our savings.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "hamper",
+          "meanings": [
+            "a large basket",
+            "to hinder or obstruct"
+          ],
+          "example": "The overflowing laundry hamper in the hallway continued to hamper everyone trying to reach the door.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "mole",
+          "meanings": [
+            "burrowing mammal",
+            "unit of measurement in chemistry",
+            "spy within an organization",
+            "dark spot on skin"
+          ],
+          "example": "The mole in our lab reported that exactly one mole of the compound would remove a mole from your skin, but the garden mole ate the sample.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "a baseball player who throws the ball"
+          ],
+          "example": "The pitcher on the mound asked the dugout for a pitcher of water.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "sentence",
+          "meanings": [
+            "a grammatical unit of words",
+            "a punishment given by a judge"
+          ],
+          "example": "The judge read his sentence aloud, making sure every sentence was clear.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "club",
+          "meanings": [
+            "a social organization or venue",
+            "a heavy stick used as a weapon"
+          ],
+          "example": "He was kicked out of the club after swinging a club at the bouncer.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "draft",
+          "meanings": [
+            "a preliminary version of a document",
+            "a current of cool air"
+          ],
+          "example": "A cold draft blew through the window and scattered the pages of her draft.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "match",
+          "meanings": [
+            "a small stick used to start a fire",
+            "a contest or competition between opponents"
+          ],
+          "example": "He struck a match to celebrate winning the match.",
+          "difficulty": "easy"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "bat",
+          "meanings": [
+            "a flying nocturnal mammal",
+            "a club used to hit a ball in baseball or cricket"
+          ],
+          "example": "The bat flew so close to home plate that the batter nearly swatted it with his bat.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird with long legs",
+            "a heavy machine used for lifting and moving objects"
+          ],
+          "example": "The crane on the riverbank watched curiously as the construction crane hoisted steel beams overhead.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "the player who throws the ball in baseball"
+          ],
+          "example": "The pitcher poured himself a glass from the pitcher before taking the mound.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "court",
+          "meanings": [
+            "a place where legal trials are held",
+            "to pursue romantically"
+          ],
+          "example": "He tried to court her with love letters, but she said she'd see him in court instead.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "mole",
+          "meanings": [
+            "a small burrowing mammal",
+            "a unit of measurement in chemistry equal to 6.022×10²³ particles"
+          ],
+          "example": "The chemistry student calculated a mole of dirt particles while a mole tunneled beneath the lab.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "a baseball player who throws the ball"
+          ],
+          "example": "The pitcher poured water from the pitcher between innings.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "jam",
+          "meanings": [
+            "a fruit preserve spread on bread",
+            "a difficult situation or traffic congestion"
+          ],
+          "example": "I was stuck in a jam on the highway because a truck spilled jam across three lanes.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "bank",
+          "meanings": [
+            "a financial institution",
+            "the sloping land beside a river"
+          ],
+          "example": "The bank on the river bank flooded, and now my savings are literally underwater.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird",
+            "a heavy machine used for lifting"
+          ],
+          "example": "The crane watched curiously as the crane hoisted steel beams over the marsh.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "suit",
+          "meanings": [
+            "a set of formal clothing",
+            "a legal action or lawsuit"
+          ],
+          "example": "He wore his finest suit to file the suit against his tailor.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "bat",
+          "meanings": [
+            "a flying nocturnal mammal",
+            "a wooden club used in baseball"
+          ],
+          "example": "The bat flew so close to home plate that the batter nearly swung his bat at it.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird",
+            "a heavy construction machine for lifting"
+          ],
+          "example": "The crane on the riverbank watched curiously as the crane on the construction site hoisted a steel beam.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "pitch",
+          "meanings": [
+            "a throw in baseball",
+            "the highness or lowness of a musical sound"
+          ],
+          "example": "The pitcher's wild pitch made the stadium organist hit a sour pitch in surprise.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "draft",
+          "meanings": [
+            "a preliminary version of a document",
+            "a current of cool air"
+          ],
+          "example": "A cold draft from the window scattered the pages of her rough draft across the floor.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "mole",
+          "meanings": [
+            "a small burrowing mammal",
+            "a unit of measurement in chemistry"
+          ],
+          "example": "The chemistry student calculated one mole of dirt displaced by an actual mole tunneling through the quad.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "a baseball player who throws the ball"
+          ],
+          "example": "The pitcher filled the pitcher with ice water between innings.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "bank",
+          "meanings": [
+            "a financial institution",
+            "the side of a river"
+          ],
+          "example": "I sat on the bank and watched my savings flow away like the river beside me.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird",
+            "a machine used to lift heavy objects"
+          ],
+          "example": "The crane watched curiously as the crane hoisted steel beams over the marsh.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "match",
+          "meanings": [
+            "a small stick used to start fire",
+            "a competitive contest between opponents"
+          ],
+          "example": "She struck a match to celebrate winning the match.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "grave",
+          "meanings": [
+            "a burial site",
+            "serious or solemn in manner"
+          ],
+          "example": "The priest spoke in a grave tone as they lowered the casket into the grave.",
+          "difficulty": "medium"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "a baseball player who throws the ball"
+          ],
+          "example": "The pitcher poured water from the pitcher between innings.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "bass",
+          "meanings": [
+            "a low-pitched musical tone",
+            "a type of freshwater fish"
+          ],
+          "example": "The bass guitarist reeled in a massive bass while humming a bass line.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "draft",
+          "meanings": [
+            "a preliminary version of a document",
+            "a current of cool air",
+            "selecting players for a team"
+          ],
+          "example": "A cold draft blew the draft of his draft picks off the desk.",
+          "difficulty": "hard"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird",
+            "a heavy machinery used for lifting",
+            "to stretch one's neck"
+          ],
+          "example": "She had to crane her neck to watch the crane lift a statue of a crane.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "match",
+          "meanings": [
+            "a thin stick used to start fire",
+            "a contest or game between opponents",
+            "something that corresponds or pairs well"
+          ],
+          "example": "The tennis match was a perfect match of rivals, each with a fire lit as if by a match.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "a baseball player who throws the ball"
+          ],
+          "example": "The pitcher filled the pitcher with ice water between innings.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "bat",
+          "meanings": [
+            "a nocturnal flying mammal",
+            "a wooden club used to hit a ball"
+          ],
+          "example": "A bat swooped so close to home plate the batter nearly swung his bat at it.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird",
+            "a heavy machine used for lifting"
+          ],
+          "example": "The crane on the riverbank watched the crane on the construction site lift steel beams.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "match",
+          "meanings": [
+            "a thin stick used to start fire",
+            "a contest or competition between opponents"
+          ],
+          "example": "She struck a match to light the victory bonfire after winning the championship match.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "draft",
+          "meanings": [
+            "a preliminary version of a document",
+            "a current of cool air",
+            "selecting players for a sports team"
+          ],
+          "example": "A cold draft blew the draft of his speech off the table right before the NFL draft began.",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "double-meaning",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "word": "pitcher",
+          "meanings": [
+            "a container for pouring liquids",
+            "a baseball player who throws the ball"
+          ],
+          "example": "The pitcher poured water from the pitcher between innings.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "bat",
+          "meanings": [
+            "a nocturnal flying mammal",
+            "a wooden club used to hit a ball"
+          ],
+          "example": "A bat swooped down and knocked the bat right out of his hands.",
+          "difficulty": "easy"
+        },
+        {
+          "word": "crane",
+          "meanings": [
+            "a large wading bird with long legs",
+            "a heavy machine used to lift and move objects"
+          ],
+          "example": "The crane watched curiously as the crane hoisted steel beams over the marsh.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "match",
+          "meanings": [
+            "a small stick used to start a fire",
+            "a contest or competition between opponents"
+          ],
+          "example": "She struck a match to celebrate winning the match.",
+          "difficulty": "medium"
+        },
+        {
+          "word": "volume",
+          "meanings": [
+            "the loudness of a sound",
+            "a single book in a series"
+          ],
+          "example": "He turned down the volume so he could focus on the final volume of the trilogy.",
+          "difficulty": "hard"
+        }
+      ]
+    }
+  ],
+  "idiom-twist": [
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Chemistry",
+          "example": "Don't cry over spilled reagents",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When life gives you lemons, make lemonade",
+          "domain": "Music production",
+          "example": "When life gives you loops, make a remix",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "You can't judge a book by its cover",
+          "domain": "Cybersecurity",
+          "example": "You can't judge a packet by its header",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Astrophysics",
+          "example": "Burning the star at both poles",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A token for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "You can't have your cake and eat it too",
+          "domain": "Dieting",
+          "example": "You can't have your carbs and eat them too",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When it rains, it pours",
+          "domain": "Cybersecurity",
+          "example": "When it breaches, it dumps",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Cryptocurrency",
+          "example": "Burning the token at both ends",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "The squeaky wheel gets the grease",
+          "domain": "Open Source Software",
+          "example": "The squeaky issue gets the merge",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Cybersecurity",
+          "example": "Don't cry over leaked data",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When life gives you lemons, make lemonade",
+          "domain": "Music production",
+          "example": "When life gives you samples, make a remix",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "You can't judge a book by its cover",
+          "domain": "Cooking",
+          "example": "You can't judge a dish by its plating",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Space exploration",
+          "example": "Burning the rocket at both stages",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Chemistry",
+          "example": "Don't cry over spilled reagents",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Kill two birds with one stone",
+          "domain": "Music Production",
+          "example": "Mix two tracks with one session",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Cryptocurrency",
+          "example": "Burning the token at both ends",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "The pen is mightier than the sword",
+          "domain": "Competitive Gaming",
+          "example": "The ping is mightier than the score",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Chemistry",
+          "example": "Don't cry over spilled reagents",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When life gives you lemons, make lemonade",
+          "domain": "Music production",
+          "example": "When life gives you demos, make remixes",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "You can't judge a book by its cover",
+          "domain": "Cybersecurity",
+          "example": "You can't judge a hack by its header",
+          "difficulty": "hard"
+        },
+        {
+          "idiom": "The pen is mightier than the sword",
+          "domain": "Baking",
+          "example": "The whisk is mightier than the fork",
+          "difficulty": "medium"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Chemistry",
+          "example": "Don't cry over spilled reagents",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When life gives you lemons, make lemonade",
+          "domain": "Music production",
+          "example": "When life gives you samples, make a remix",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "You can't judge a book by its cover",
+          "domain": "Cybersecurity",
+          "example": "You can't judge a packet by its header",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Space exploration",
+          "example": "Burning the booster at both stages",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A token for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Databases",
+          "example": "Don't cry over dropped tables",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Kill two birds with one stone",
+          "domain": "Cooking",
+          "example": "Grill two steaks with one flame",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Cryptocurrency",
+          "example": "Burning the wallet at both chains",
+          "difficulty": "hard"
+        },
+        {
+          "idiom": "The grass is always greener on the other side",
+          "domain": "Space exploration",
+          "example": "The atmosphere is always breezier on the other planet",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A stitch in time saves nine",
+          "domain": "Cybersecurity",
+          "example": "A patch in time saves nine breaches",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Databases",
+          "example": "Don't cry over dropped tables",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When it rains, it pours",
+          "domain": "Customer support",
+          "example": "When it rings, it roars",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "You can't have your cake and eat it too",
+          "domain": "Cloud computing",
+          "example": "You can't have your cache and free tier too",
+          "difficulty": "hard"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Space exploration",
+          "example": "Burning the boosters at both stages",
+          "difficulty": "hard"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Burning the candle at both ends",
+          "domain": "Cryptocurrency",
+          "example": "Burning the token at both ends",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Databases",
+          "example": "Don't cry over dropped tables",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "The grass is always greener on the other side",
+          "domain": "Space exploration",
+          "example": "The atmosphere is always greener on the other planet",
+          "difficulty": "hard"
+        },
+        {
+          "idiom": "You can lead a horse to water but you can't make it drink",
+          "domain": "Online education",
+          "example": "You can lead a student to the course but you can't make them click",
+          "difficulty": "medium"
+        }
+      ]
+    },
+    {
+      "type": "idiom-twist",
+      "config": {
+        "count": 5
+      },
+      "challenges": [
+        {
+          "idiom": "A penny for your thoughts",
+          "domain": "Artificial Intelligence",
+          "example": "A prompt for your thoughts",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "Don't cry over spilled milk",
+          "domain": "Chemistry",
+          "example": "Don't cry over spilled reagents",
+          "difficulty": "easy"
+        },
+        {
+          "idiom": "When life gives you lemons, make lemonade",
+          "domain": "Music production",
+          "example": "When life gives you demos, make remixes",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "You can't teach an old dog new tricks",
+          "domain": "Web development",
+          "example": "You can't teach an old site new frameworks",
+          "difficulty": "medium"
+        },
+        {
+          "idiom": "The pen is mightier than the sword",
+          "domain": "Cybersecurity",
+          "example": "The patch is mightier than the firewall",
+          "difficulty": "hard"
+        }
+      ]
+    }
+  ]
+}

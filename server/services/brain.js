@@ -489,6 +489,13 @@ export async function runDailyDigest(providerOverride, modelOverride) {
   // Filter people with follow-ups
   const peopleWithFollowUps = allPeople.filter(p => p.followUps && p.followUps.length > 0);
 
+  // Skip AI call when brain has no data (fresh instance)
+  if (!activeProjects.length && !openAdmin.length && !peopleWithFollowUps.length && !needsReviewLogs.length) {
+    console.log('🧠 Skipping daily digest: no brain data yet');
+    await storage.updateMeta({ lastDailyDigest: new Date().toISOString() });
+    return null;
+  }
+
   const aiResponse = await callAI(
     'brain-daily-digest',
     {
@@ -544,6 +551,13 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
 
   // Get active projects
   const activeProjects = await storage.getProjects({ status: 'active' });
+
+  // Skip AI call when brain has no data (fresh instance)
+  if (!recentInboxLogs.length && !activeProjects.length) {
+    console.log('🧠 Skipping weekly review: no brain data yet');
+    await storage.updateMeta({ lastWeeklyReview: new Date().toISOString() });
+    return null;
+  }
 
   const aiResponse = await callAI(
     'brain-weekly-review',

@@ -5,7 +5,7 @@
   "weeklyReviewTime": "16:00",
   "weeklyReviewDay": "sunday",
   "defaultProvider": "lmstudio",
-  "defaultModel": "gptoss-20b",
+  "defaultModel": "",
   "lastDailyDigest": null,
   "lastWeeklyReview": null
 }
