@@ -144,18 +144,28 @@ function matchesCronField(value, expr) {
     return expr.split(',').some(part => matchesCronField(value, part.trim()))
   }
 
+  // Handle step values first (e.g., */5, 0/10, 1-5/2)
+  if (expr.includes('/')) {
+    const [rangeExpr, step] = expr.split('/')
+    const stepNum = Number(step)
+    let startNum = 0
+    let endNum = Infinity
+    if (rangeExpr === '*') {
+      startNum = 0
+    } else if (rangeExpr.includes('-')) {
+      const [s, e] = rangeExpr.split('-').map(Number)
+      startNum = s
+      endNum = e
+    } else {
+      startNum = Number(rangeExpr)
+    }
+    return value >= startNum && value <= endNum && (value - startNum) % stepNum === 0
+  }
+
   // Handle ranges (e.g., 1-5)
   if (expr.includes('-')) {
     const [start, end] = expr.split('-').map(Number)
     return value >= start && value <= end
-  }
-
-  // Handle step values (e.g., */5 or 0/10)
-  if (expr.includes('/')) {
-    const [start, step] = expr.split('/')
-    const startNum = start === '*' ? 0 : Number(start)
-    const stepNum = Number(step)
-    return (value - startNum) % stepNum === 0 && value >= startNum
   }
 
   // Direct value match
@@ -514,7 +524,7 @@ function getStats() {
 function cancelAll() {
   const count = scheduledEvents.size
 
-  for (const id of scheduledEvents.keys()) {
+  for (const id of [...scheduledEvents.keys()]) {
     cancel(id)
   }
 

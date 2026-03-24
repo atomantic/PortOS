@@ -26,7 +26,7 @@ import { ensureDir, ensureDirs, formatDuration, safeJSONParse, PATHS } from '../
 import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
-import { getUserTimezone, nextLocalTime, todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '../lib/timezone.js';
 // Import and re-export cosEvents from separate module to avoid circular dependencies
 import { cosEvents as _cosEvents } from './cosEvents.js';
 export const cosEvents = _cosEvents;
@@ -3768,12 +3768,11 @@ function computeNextJobFireTime(job, timezone) {
     nextDue = nextLocalTime(nextDue, hours, minutes, timezone);
   }
 
-  // If weekdaysOnly, skip to next weekday
+  // If weekdaysOnly, skip to next weekday (using local day-of-week)
   if (job.weekdaysOnly) {
-    const nextDate = new Date(nextDue);
-    const day = nextDate.getDay();
-    if (day === 0) nextDue += 24 * 60 * 60 * 1000; // Sunday → Monday
-    if (day === 6) nextDue += 2 * 24 * 60 * 60 * 1000; // Saturday → Monday
+    const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone);
+    if (dayOfWeek === 0) nextDue += 24 * 60 * 60 * 1000; // Sunday → Monday
+    if (dayOfWeek === 6) nextDue += 2 * 24 * 60 * 60 * 1000; // Saturday → Monday
   }
 
   return nextDue;

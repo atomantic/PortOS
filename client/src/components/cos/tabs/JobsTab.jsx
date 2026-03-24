@@ -189,10 +189,11 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
 
   const handleSave = async () => {
     const payload = normalizeJobPayload(editData);
-    await api.updateCosJob(job.id, payload).catch(err => {
+    const result = await api.updateCosJob(job.id, payload).catch(err => {
       toast.error(err.message);
       return null;
     });
+    if (!result) return;
     toast.success('Job updated');
     setEditing(false);
     onUpdate();
@@ -544,10 +545,11 @@ export default function JobsTab() {
   };
 
   const handleDelete = async (jobId) => {
-    await api.deleteCosJob(jobId).catch(err => {
+    const result = await api.deleteCosJob(jobId).catch(err => {
       toast.error(err.message);
       return null;
     });
+    if (!result) return;
     toast.success('Job deleted');
     fetchJobs();
   };

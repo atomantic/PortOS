@@ -71,7 +71,8 @@ export default function CharacterSheet() {
   const [evtDice, setEvtDice] = useState('');
 
   const load = useCallback(async () => {
-    const data = await get();
+    const data = await get().catch(() => null);
+    if (!data || data.error) return setLoading(false);
     setChar(data);
     setNameVal(data.name || '');
     setClassVal(data.class || '');
