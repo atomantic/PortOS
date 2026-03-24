@@ -3,40 +3,44 @@
  *
  * Manages onboard tools (image generation, etc.) that CoS agents can discover and use.
  * Tools are stored as individual JSON files in data/tools/.
+ * In-memory cache avoids disk I/O on hot paths (agent spawning).
  */
 
-import { readFile, writeFile, readdir, unlink } from 'fs/promises';
+import { writeFile, readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const toolPath = (id) => join(PATHS.tools, `${id}.json`);
 
-export async function getTools() {
+let cache = null;
+
+async function loadAll() {
   await ensureDir(PATHS.tools);
   const files = await readdir(PATHS.tools);
   const tools = [];
   for (const f of files) {
     if (!f.endsWith('.json')) continue;
-    const raw = await readFile(join(PATHS.tools, f), 'utf-8').catch(() => null);
-    if (raw) tools.push(JSON.parse(raw));
+    const data = await readJSONFile(join(PATHS.tools, f), null);
+    if (data) tools.push(data);
   }
+  cache = tools;
   return tools;
 }
 
+function invalidateCache() { cache = null; }
+
+export async function getTools() {
+  return cache || loadAll();
+}
+
 export async function getTool(id) {
-  const raw = await readFile(toolPath(id), 'utf-8').catch(() => null);
-  return raw ? JSON.parse(raw) : null;
+  return readJSONFile(toolPath(id), null);
 }
 
 export async function getEnabledTools() {
   const all = await getTools();
   return all.filter(t => t.enabled);
-}
-
-export async function getToolsByCategory(category) {
-  const all = await getTools();
-  return all.filter(t => t.category === category);
 }
 
 export async function registerTool(config) {
@@ -54,6 +58,7 @@ export async function registerTool(config) {
     updatedAt: now
   };
   await writeFile(toolPath(tool.id), JSON.stringify(tool, null, 2) + '\n');
+  invalidateCache();
   console.log(`🔧 Tool registered: ${tool.name} (${tool.id})`);
   return tool;
 }
@@ -64,26 +69,27 @@ export async function updateTool(id, updates) {
   const merged = {
     ...existing,
     ...updates,
-    id, // prevent id override
+    id,
     updatedAt: new Date().toISOString()
   };
   await writeFile(toolPath(id), JSON.stringify(merged, null, 2) + '\n');
+  invalidateCache();
   console.log(`🔧 Tool updated: ${merged.name} (${id})`);
   return merged;
 }
 
 export async function deleteTool(id) {
   await unlink(toolPath(id)).catch(() => null);
+  invalidateCache();
   console.log(`🗑️ Tool deleted: ${id}`);
 }
 
-export function getToolsSummaryForPrompt() {
-  return getEnabledTools().then(tools => {
-    if (tools.length === 0) return '';
-    const lines = tools.map(t => {
-      const hint = t.promptHints ? ` — ${t.promptHints}` : '';
-      return `- **${t.name}** (${t.category}): ${t.description}${hint}`;
-    });
-    return `## Available Tools\nThe following onboard tools are available for this instance:\n\n${lines.join('\n')}\n`;
+export async function getToolsSummaryForPrompt() {
+  const tools = await getEnabledTools();
+  if (tools.length === 0) return '';
+  const lines = tools.map(t => {
+    const hint = t.promptHints ? ` — ${t.promptHints}` : '';
+    return `- **${t.name}** (${t.category}): ${t.description}${hint}`;
   });
+  return `## Available Tools\nThe following onboard tools are available for this instance:\n\n${lines.join('\n')}\n`;
 }

@@ -869,20 +869,21 @@ function GeneralTab() {
   );
 }
 
+const SDAPI_TOOL_ID = 'sdapi';
+
 function ImageGenTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [status, setStatus] = useState(null);
   const [checking, setChecking] = useState(false);
-  const [toolId, setToolId] = useState(null);
+  const [toolRegistered, setToolRegistered] = useState(false);
 
   useEffect(() => {
     Promise.all([getSettings(), getToolsList()])
       .then(([settings, tools]) => {
         setSdapiUrl(settings?.imageGen?.sdapiUrl || '');
-        const sdTool = tools.find(t => t.category === 'image-generation' && t.name === 'Stable Diffusion');
-        if (sdTool) setToolId(sdTool.id);
+        setToolRegistered(tools.some(t => t.id === SDAPI_TOOL_ID));
       })
       .catch(() => toast.error('Failed to load image gen settings'))
       .finally(() => setLoading(false));
@@ -905,23 +906,20 @@ function ImageGenTab() {
       .catch(() => toast.error('Failed to save settings'));
 
     // Register or update the tool in the CoS tools registry
-    if (url) {
-      const toolData = {
-        name: 'Stable Diffusion',
-        category: 'image-generation',
-        description: 'Generate images via Stable Diffusion API (AUTOMATIC1111 / Forge WebUI)',
-        enabled: true,
-        config: { sdapiUrl: url },
-        promptHints: 'Use POST /api/image-gen/generate with { prompt, negativePrompt, width, height, steps, cfgScale }. Use POST /api/image-gen/avatar for character portraits.'
-      };
-      if (toolId) {
-        await updateTool(toolId, toolData).catch(() => {});
-      } else {
-        const created = await registerTool({ id: 'sdapi', ...toolData }).catch(() => null);
-        if (created) setToolId(created.id);
-      }
-    } else if (toolId) {
-      await updateTool(toolId, { enabled: false }).catch(() => {});
+    const toolData = {
+      name: 'Stable Diffusion',
+      category: 'image-generation',
+      description: 'Generate images via Stable Diffusion API (AUTOMATIC1111 / Forge WebUI)',
+      enabled: !!url,
+      config: { sdapiUrl: url },
+      promptHints: 'Use POST /api/image-gen/generate with { prompt, negativePrompt, width, height, steps, cfgScale }. Use POST /api/image-gen/avatar for character portraits.'
+    };
+    if (toolRegistered) {
+      await updateTool(SDAPI_TOOL_ID, toolData).catch(() => {});
+    } else if (url) {
+      await registerTool({ id: SDAPI_TOOL_ID, ...toolData })
+        .then(() => setToolRegistered(true))
+        .catch(() => {});
     }
 
     setSaving(false);
@@ -983,10 +981,10 @@ function ImageGenTab() {
           When configured, this tool is registered with the CoS tools registry. Agents can use it to generate
           images for briefings, character avatars, and other visual content. Images are stored in <code className="text-gray-400">./data/images/</code>.
         </p>
-        {toolId && (
+        {toolRegistered && (
           <div className="flex items-center gap-2 text-xs text-port-success">
             <Wrench size={12} />
-            Registered as CoS tool (ID: {toolId})
+            Registered as CoS tool
           </div>
         )}
       </div>

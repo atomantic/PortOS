@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { timeAgo } from '../utils/formatters';
+import { generateAvatar } from '../services/api';
 
 const request = async (endpoint, options = {}) => {
   const response = await fetch(`/api/character${endpoint}`, {
@@ -191,19 +192,12 @@ export default function CharacterSheet() {
 
   const handleGenerateAvatar = () => {
     setGeneratingAvatar(true);
-    fetch('/api/image-gen/avatar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: char.name, characterClass: char.class })
-    })
-      .then(res => res.ok ? res.json() : res.json().then(e => Promise.reject(new Error(e.error))))
+    generateAvatar({ name: char.name, characterClass: char.class })
       .then(result => {
-        const updated = { ...char, avatarPath: result.path };
-        setChar(updated);
+        setChar(prev => ({ ...prev, avatarPath: result.path }));
         return put({ avatarPath: result.path });
       })
-      .then(() => toast.success('Avatar generated'))
-      .catch(err => toast.error(err.message || 'Failed to generate avatar'))
+      .catch(() => {})
       .finally(() => setGeneratingAvatar(false));
   };
 

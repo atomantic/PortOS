@@ -12,36 +12,50 @@ import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSettings } from './settings.js';
 
+const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
+
+// Cache detected model to avoid extra HTTP round-trip per generation
+let cachedModel = { name: null, timestamp: 0 };
+const MODEL_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 async function getSdApiUrl() {
   const settings = await getSettings();
   return settings.imageGen?.sdapiUrl || null;
+}
+
+async function detectModel(baseUrl) {
+  if (cachedModel.name && Date.now() - cachedModel.timestamp < MODEL_CACHE_TTL) {
+    return cachedModel.name;
+  }
+  const res = await fetchWithTimeout(`${baseUrl}/sdapi/v1/options`, {}, 10000).catch(() => null);
+  if (!res?.ok) return 'unknown';
+  const options = await res.json().catch(() => null);
+  const model = options?.sd_model_checkpoint || 'unknown';
+  cachedModel = { name: model, timestamp: Date.now() };
+  return model;
 }
 
 export async function checkConnection() {
   const baseUrl = await getSdApiUrl();
   if (!baseUrl) return { connected: false, reason: 'No SD API URL configured' };
 
-  const res = await fetchWithTimeout(`${baseUrl}/sdapi/v1/options`, {}, 10000).catch(() => null);
-  if (!res?.ok) return { connected: false, reason: 'SD API unreachable' };
-
-  const options = await res.json().catch(() => null);
-  return {
-    connected: true,
-    model: options?.sd_model_checkpoint || 'unknown'
-  };
+  const model = await detectModel(baseUrl);
+  if (model === 'unknown' && !cachedModel.timestamp) {
+    return { connected: false, reason: 'SD API unreachable' };
+  }
+  return { connected: true, model };
 }
 
 export async function generateImage({ prompt, negativePrompt, width, height, steps, cfgScale, seed }) {
   const baseUrl = await getSdApiUrl();
   if (!baseUrl) throw new Error('No SD API URL configured — set it in Settings > Image Gen');
 
-  // Auto-detect model for Flux-specific parameters
-  const status = await checkConnection();
-  const isFlux = status.model?.toLowerCase().includes('flux');
+  const model = await detectModel(baseUrl);
+  const isFlux = model?.toLowerCase().includes('flux');
 
   const payload = {
     prompt,
-    negative_prompt: negativePrompt || 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature',
+    negative_prompt: negativePrompt || DEFAULT_NEGATIVE_PROMPT,
     steps: steps || (isFlux ? 15 : 25),
     width: width || (isFlux ? 832 : 512),
     height: height || (isFlux ? 1216 : 768),
@@ -61,7 +75,7 @@ export async function generateImage({ prompt, negativePrompt, width, height, ste
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     },
-    300000 // 5 min timeout for generation
+    300000
   );
 
   if (!res.ok) {
@@ -72,11 +86,9 @@ export async function generateImage({ prompt, negativePrompt, width, height, ste
   const data = await res.json();
   if (!data.images?.length) throw new Error('SD API returned no images');
 
-  // Save base64 image to disk
   await ensureDir(PATHS.images);
   const filename = `${randomUUID()}.png`;
-  const filePath = join(PATHS.images, filename);
-  await writeFile(filePath, Buffer.from(data.images[0], 'base64'));
+  await writeFile(join(PATHS.images, filename), Buffer.from(data.images[0], 'base64'));
 
   console.log(`🖼️ Image saved: ${filename}`);
   return { filename, path: `/data/images/${filename}` };
@@ -88,6 +100,6 @@ export async function generateAvatar({ name, characterClass, prompt }) {
     prompt: prompt || defaultPrompt,
     width: 512,
     height: 512,
-    negativePrompt: 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature, nude, nsfw'
+    negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, nude, nsfw`
   });
 }
