@@ -608,7 +608,7 @@ export default function Layout() {
             <div className="flex items-center gap-1">
               <NavLink
                 to="/ambient"
-                className={`p-1.5 rounded-lg transition-colors ${
+                className={`p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
                   isActive('/ambient')
                     ? 'text-port-accent'
                     : 'text-gray-500 hover:text-white'
@@ -618,7 +618,7 @@ export default function Layout() {
               >
                 <Monitor size={18} />
               </NavLink>
-              <ThemeSwitcher />
+              <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
               <NotificationDropdown
                 notifications={notifications}
                 unreadCount={unreadCount}

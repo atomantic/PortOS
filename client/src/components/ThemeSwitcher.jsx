@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Palette } from 'lucide-react';
 import { useThemeContext } from './ThemeContext';
 
-export default function ThemeSwitcher({ position = 'above' }) {
+export default function ThemeSwitcher({ position = 'above', className = '' }) {
   const { themeId, themes, setTheme } = useThemeContext();
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
@@ -28,7 +28,7 @@ export default function ThemeSwitcher({ position = 'above' }) {
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className={`relative ${className}`}>
       <button
         onClick={() => setOpen(!open)}
         className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"
