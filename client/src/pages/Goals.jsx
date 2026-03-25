@@ -6,15 +6,15 @@ import GoalsTreeView from '../components/goals/GoalsTreeView';
 import GoalsListView from '../components/goals/GoalsListView';
 
 const TABS = [
-  { id: 'tree', label: 'Tree', icon: TreePine },
-  { id: 'list', label: 'List', icon: List }
+  { id: 'list', label: 'List', icon: List },
+  { id: 'tree', label: 'Tree', icon: TreePine }
 ];
 
 const VALID_TABS = new Set(TABS.map(t => t.id));
 
 export default function Goals() {
   const { tab: rawTab } = useParams();
-  const tab = VALID_TABS.has(rawTab) ? rawTab : 'tree';
+  const tab = VALID_TABS.has(rawTab) ? rawTab : 'list';
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -29,7 +29,7 @@ export default function Goals() {
 
   useEffect(() => {
     if (rawTab && !VALID_TABS.has(rawTab)) {
-      navigate('/goals/tree', { replace: true });
+      navigate('/goals/list', { replace: true });
     }
   }, [rawTab, navigate]);
 
@@ -87,10 +87,10 @@ export default function Goals() {
           <div className="flex items-center justify-center h-full">
             <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
           </div>
-        ) : tab === 'tree' ? (
-          <GoalsTreeView data={data} onRefresh={loadData} />
-        ) : (
+        ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} />
+        ) : (
+          <GoalsTreeView data={data} onRefresh={loadData} />
         )}
       </div>
     </div>

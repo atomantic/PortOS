@@ -8,6 +8,10 @@ import * as api from '../../services/api';
 import { layoutGoalNodes } from './goalTreeLayout';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
 import { applyOrganizationSuggestion } from './applyOrganization';
+import useProviderModels from '../../hooks/useProviderModels';
+import ProviderModelSelector from '../ProviderModelSelector';
+
+const API_PROVIDER_FILTER = p => p.enabled && p.type === 'api';
 
 const EDGE_COLORS = {
   parent: '#3b82f6',
@@ -250,6 +254,10 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const [organizing, setOrganizing] = useState(false);
   const [orgSuggestion, setOrgSuggestion] = useState(null);
   const [applyingOrg, setApplyingOrg] = useState(false);
+  const {
+    providers, selectedProviderId, selectedModel, availableModels,
+    setSelectedProviderId, setSelectedModel, loading: providersLoading
+  } = useProviderModels({ filter: API_PROVIDER_FILTER });
 
   const dragStartRef = useRef(null);
 
@@ -311,8 +319,9 @@ export default function GoalsTreeView({ data, onRefresh }) {
   };
 
   const handleOrganize = async () => {
+    if (!selectedProviderId) { toast.error('No API provider available'); return; }
     setOrganizing(true);
-    const result = await api.organizeGoals().catch(() => null);
+    const result = await api.organizeGoals({ providerId: selectedProviderId, model: selectedModel }).catch(() => null);
     setOrganizing(false);
     if (result) {
       setOrgSuggestion(result);
@@ -371,15 +380,27 @@ export default function GoalsTreeView({ data, onRefresh }) {
             Add
           </button>
           {(data?.flat?.length ?? 0) >= 2 && (
-            <button
-              onClick={handleOrganize}
-              disabled={organizing}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-50"
-              title="Use AI to organize goals into a hierarchy with an apex north-star goal"
-            >
-              <Wand2 className={`w-3 h-3 ${organizing ? 'animate-spin' : ''}`} />
-              {organizing ? 'Analyzing...' : 'Organize'}
-            </button>
+            <div className="flex items-center gap-2">
+              <ProviderModelSelector
+                providers={providers}
+                selectedProviderId={selectedProviderId}
+                selectedModel={selectedModel}
+                availableModels={availableModels}
+                onProviderChange={setSelectedProviderId}
+                onModelChange={setSelectedModel}
+                label="AI Provider"
+                disabled={organizing || providersLoading}
+              />
+              <button
+                onClick={handleOrganize}
+                disabled={organizing || !selectedProviderId}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-50"
+                title="Use AI to organize goals into a hierarchy with an apex north-star goal"
+              >
+                <Wand2 className={`w-3 h-3 ${organizing ? 'animate-spin' : ''}`} />
+                {organizing ? 'Analyzing...' : 'Organize'}
+              </button>
+            </div>
           )}
         </div>
 
