@@ -1225,6 +1225,18 @@ Respond with JSON only (no markdown fences). The response must be an object with
     throw new ServerError(`AI returned invalid organization data: ${e.message}`, { status: 502, code: 'AI_PARSE_ERROR' });
   }
 
+  // Validate required shape from LLM response
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.organization)) {
+    throw new ServerError('AI returned unexpected shape: missing organization array', { status: 502, code: 'AI_PARSE_ERROR' });
+  }
+  if (!parsed.apexGoal || typeof parsed.apexGoal !== 'object') {
+    throw new ServerError('AI returned unexpected shape: missing apexGoal', { status: 502, code: 'AI_PARSE_ERROR' });
+  }
+
+  // Filter organization to only known goal IDs
+  const goalIds = new Set(activeGoals.map(g => g.id));
+  parsed.organization = parsed.organization.filter(item => item.id && goalIds.has(item.id));
+
   console.log(`🎯 Organized ${activeGoals.length} goals into hierarchy`);
   return parsed;
 }

@@ -1802,18 +1802,9 @@ describe('Integration: organizeGoals', () => {
       }))
     }));
 
+    // callProviderAISimple mock set per-test to use actual goal IDs
     vi.doMock('../lib/aiProvider.js', () => ({
-      callProviderAISimple: vi.fn(async () => ({
-        text: JSON.stringify({
-          apexGoal: { existingId: null, suggestedTitle: 'Live fully', suggestedDescription: 'The ultimate purpose' },
-          organization: [
-            { id: 'g1', goalType: 'sub-apex', suggestedParentId: null, reasoning: 'Major life pillar' },
-            { id: 'g2', goalType: 'standard', suggestedParentId: 'g1', reasoning: 'Supports pillar' }
-          ],
-          suggestedSubApex: [],
-          analysis: 'Your goals center around personal growth.'
-        })
-      })),
+      callProviderAISimple: vi.fn(async () => ({ text: '{}' })),
       parseLLMJSON: vi.fn((text) => JSON.parse(text))
     }));
 
@@ -1823,8 +1814,23 @@ describe('Integration: organizeGoals', () => {
   });
 
   it('should return LLM organization suggestion', async () => {
-    await createGoal({ title: 'Health & Fitness' });
-    await createGoal({ title: 'Learn Spanish' });
+    const goal1 = await createGoal({ title: 'Health & Fitness' });
+    const goal2 = await createGoal({ title: 'Learn Spanish' });
+
+    // Re-mock with actual goal IDs
+    const { callProviderAISimple, parseLLMJSON } = await import('../lib/aiProvider.js');
+    callProviderAISimple.mockResolvedValue({
+      text: JSON.stringify({
+        apexGoal: { existingId: null, suggestedTitle: 'Live fully', suggestedDescription: 'The ultimate purpose' },
+        organization: [
+          { id: goal1.id, goalType: 'sub-apex', suggestedParentId: null, reasoning: 'Major life pillar' },
+          { id: goal2.id, goalType: 'standard', suggestedParentId: goal1.id, reasoning: 'Supports pillar' }
+        ],
+        suggestedSubApex: [],
+        analysis: 'Your goals center around personal growth.'
+      })
+    });
+    parseLLMJSON.mockImplementation((text) => JSON.parse(text));
 
     const result = await organizeGoals();
 
@@ -1832,7 +1838,7 @@ describe('Integration: organizeGoals', () => {
     expect(result.apexGoal.suggestedTitle).toBe('Live fully');
     expect(result.organization).toHaveLength(2);
     expect(result.organization[0].goalType).toBe('sub-apex');
-    expect(result.organization[1].suggestedParentId).toBe('g1');
+    expect(result.organization[1].suggestedParentId).toBe(goal1.id);
     expect(result.analysis).toContain('personal growth');
   });
 
