@@ -8,6 +8,7 @@ import { PATHS } from './lib/fileUtils.js';
 import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 
+import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
 import systemHealthRoutes from './routes/systemHealth.js';
 import appsRoutes from './routes/apps.js';
@@ -200,6 +201,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.set('io', io);
 
 // API Routes
+app.use('/api/alerts', alertsRoutes);
 app.use('/api/system', systemHealthRoutes);
 app.use('/api/apps', appsRoutes);
 app.use('/api/ports', portsRoutes);

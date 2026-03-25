@@ -87,6 +87,9 @@ export const uploadAppleHealthXml = (file) => {
   });
 };
 
+// Alerts
+export const getAlertsSummary = (options) => request('/alerts/summary', options);
+
 // Health
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);

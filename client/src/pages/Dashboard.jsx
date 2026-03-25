@@ -9,6 +9,7 @@ import GoalProgressWidget from '../components/GoalProgressWidget';
 import UpcomingTasksWidget from '../components/UpcomingTasksWidget';
 import DecisionLogWidget from '../components/DecisionLogWidget';
 import DeathClockWidget from '../components/DeathClockWidget';
+import ProactiveAlertsWidget from '../components/ProactiveAlertsWidget';
 import QuickBrainCapture from '../components/QuickBrainCapture';
 import QuickTaskWidget from '../components/QuickTaskWidget';
 import ReviewHubCard from '../components/ReviewHubCard';
@@ -148,6 +149,7 @@ export default function Dashboard() {
 
       {/* Row 4 — Status, stats, decisions */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        <ProactiveAlertsWidget />
         <ReviewHubCard />
         <SystemHealthWidget />
         <BackupWidget />
