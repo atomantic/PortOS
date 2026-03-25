@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Target, TreePine, List, RefreshCw } from 'lucide-react';
+import { Loader2, Target, TreePine, List } from 'lucide-react';
 import * as api from '../services/api';
 import GoalsTreeView from '../components/goals/GoalsTreeView';
 import GoalsListView from '../components/goals/GoalsListView';
@@ -51,13 +51,6 @@ export default function Goals() {
           )}
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            onClick={() => { setLoading(true); loadData(); }}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
           <div className="flex bg-port-bg rounded-lg p-0.5">
             {TABS.map(t => {
               const Icon = t.icon;
@@ -85,7 +78,7 @@ export default function Goals() {
       <div className="flex-1 overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <Loader2 className="w-6 h-6 text-port-accent animate-spin" />
           </div>
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} />

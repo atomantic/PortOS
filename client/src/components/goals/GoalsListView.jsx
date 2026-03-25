@@ -192,6 +192,7 @@ export default function GoalsListView({ data, onRefresh }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
+  const [quickAdd, setQuickAdd] = useState('');
   const [organizing, setOrganizing] = useState(false);
   const [draggedGoal, setDraggedGoal] = useState(null);
   const {
@@ -249,6 +250,13 @@ export default function GoalsListView({ data, onRefresh }) {
     await api.createGoal(newGoal);
     setNewGoal({ ...DEFAULT_NEW_GOAL });
     setShowNewGoal(false);
+    onRefresh();
+  };
+
+  const handleQuickAdd = async () => {
+    if (!quickAdd.trim()) return;
+    await api.createGoal({ ...DEFAULT_NEW_GOAL, title: quickAdd.trim() });
+    setQuickAdd('');
     onRefresh();
   };
 
@@ -314,17 +322,17 @@ export default function GoalsListView({ data, onRefresh }) {
               className="w-full bg-port-bg border border-port-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-white"
             />
           </div>
-          <button
-            onClick={() => {
-              setNewGoal({ ...DEFAULT_NEW_GOAL });
-              setShowNewGoal(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-blue-600 whitespace-nowrap"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Add Root Goal</span>
-            <span className="sm:hidden">Add</span>
-          </button>
+          <div className="relative flex-1 min-w-[140px] max-w-xs">
+            <Plus className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+            <input
+              type="text"
+              value={quickAdd}
+              onChange={e => setQuickAdd(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleQuickAdd()}
+              placeholder="Add goal..."
+              className="w-full bg-port-bg border border-port-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-white placeholder-gray-500"
+            />
+          </div>
           {(data?.flat?.length ?? 0) >= 2 && (
             <div className="flex items-center gap-2">
               <div className="hidden sm:block">
