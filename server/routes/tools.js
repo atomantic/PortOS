@@ -24,7 +24,7 @@ const registerToolSchema = z.object({
   promptHints: z.string().max(1000).optional()
 });
 
-const updateToolSchema = registerToolSchema.partial();
+const updateToolSchema = registerToolSchema.omit({ id: true }).partial();
 
 // GET /api/tools - List all tools
 router.get('/', asyncHandler(async (req, res) => {

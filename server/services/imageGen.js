@@ -10,6 +10,7 @@ import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSettings } from './settings.js';
 import { imageGenEvents } from './imageGenEvents.js';
@@ -98,11 +99,11 @@ function startProgressPolling(baseUrl, generationId) {
 }
 
 function validateSdUrl(rawUrl) {
-  if (!rawUrl) throw new Error('No SD API URL configured — set it in Settings > Image Gen');
+  if (!rawUrl) throw new ServerError('No SD API URL configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   let url;
-  try { url = new URL(rawUrl); } catch { throw new Error('Invalid SD API URL — must be a valid http/https URL'); }
+  try { url = new URL(rawUrl); } catch { throw new ServerError('Invalid SD API URL — must be a valid http/https URL', { status: 400, code: 'INVALID_SD_URL' }); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Invalid SD API URL — only http and https are allowed');
+    throw new ServerError('Invalid SD API URL — only http and https are allowed', { status: 400, code: 'INVALID_SD_URL' });
   }
   return url.origin;
 }

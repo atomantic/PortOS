@@ -337,8 +337,8 @@ startUpdateScheduler();
 // Restore any active loops from previous session
 restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.message}`));
 
-// Serve generated images from data/images/
-app.use('/data/images', express.static(join(PATHS.data, 'images')));
+// Serve generated images from configured images directory
+app.use('/data/images', express.static(PATHS.images));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
