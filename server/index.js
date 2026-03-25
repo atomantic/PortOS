@@ -62,6 +62,8 @@ import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
 import loopsRoutes from './routes/loops.js';
 import characterRoutes from './routes/character.js';
+import toolsRoutes from './routes/tools.js';
+import imageGenRoutes from './routes/imageGen.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
 import { backfillOriginInstanceId } from './services/brainStorage.js';
@@ -260,6 +262,8 @@ app.use('/api/telegram', telegramRoutes);
 app.use('/api/update', updateRoutes);
 app.use('/api/loops', loopsRoutes);
 app.use('/api/character', characterRoutes);
+app.use('/api/tools', toolsRoutes);
+app.use('/api/image-gen', imageGenRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
@@ -332,6 +336,9 @@ startUpdateScheduler();
 
 // Restore any active loops from previous session
 restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.message}`));
+
+// Serve generated images from configured images directory
+app.use('/data/images', express.static(PATHS.images));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');

@@ -24,6 +24,10 @@ export default defineConfig(({ mode }) => {
           target: API_TARGET,
           changeOrigin: true
         },
+        '/data': {
+          target: API_TARGET,
+          changeOrigin: true
+        },
         '/socket.io': {
           target: API_TARGET,
           changeOrigin: true,

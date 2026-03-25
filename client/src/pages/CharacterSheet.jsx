@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sword, Star, Moon, ScrollText, Shield, Heart,
-  Sparkles, RefreshCw, Dices, X, ChevronDown, Zap
+  Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { timeAgo } from '../utils/formatters';
+import { generateAvatar } from '../services/api';
+import socket from '../services/socket';
 
 const request = async (endpoint, options = {}) => {
   const response = await fetch(`/api/character${endpoint}`, {
@@ -72,6 +74,10 @@ export default function CharacterSheet() {
   const [nameVal, setNameVal] = useState('');
   const [classVal, setClassVal] = useState('');
   const [syncing, setSyncing] = useState(null);
+  const [generatingAvatar, setGeneratingAvatar] = useState(false);
+  const [diffusionProgress, setDiffusionProgress] = useState(null);
+  const generatingRef = useRef(false);
+  const generationIdRef = useRef(null);
 
   // Form states
   const [dmgDice, setDmgDice] = useState('1d6');
@@ -101,6 +107,35 @@ export default function CharacterSheet() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Listen for diffusion progress events while generating
+  useEffect(() => {
+    const onStarted = (data) => {
+      if (generatingRef.current && !generationIdRef.current) {
+        generationIdRef.current = data.generationId;
+      }
+    };
+    const onProgress = (data) => {
+      if (generatingRef.current && data.generationId === generationIdRef.current) {
+        setDiffusionProgress(data);
+      }
+    };
+    const onDone = (data) => {
+      if (generatingRef.current && data.generationId === generationIdRef.current) {
+        setDiffusionProgress(null);
+      }
+    };
+    socket.on('image-gen:started', onStarted);
+    socket.on('image-gen:progress', onProgress);
+    socket.on('image-gen:completed', onDone);
+    socket.on('image-gen:failed', onDone);
+    return () => {
+      socket.off('image-gen:started', onStarted);
+      socket.off('image-gen:progress', onProgress);
+      socket.off('image-gen:completed', onDone);
+      socket.off('image-gen:failed', onDone);
+    };
+  }, []);
 
   const toggleAction = (action) => {
     setActiveAction(prev => prev === action ? null : action);
@@ -188,6 +223,25 @@ export default function CharacterSheet() {
     setEditingClass(false);
   };
 
+  const handleGenerateAvatar = () => {
+    setGeneratingAvatar(true);
+    setDiffusionProgress(null);
+    generatingRef.current = true;
+    generationIdRef.current = null;
+    generateAvatar({ name: char.name, characterClass: char.class })
+      .then(result => {
+        setChar(prev => ({ ...prev, avatarPath: result.path }));
+        return put({ avatarPath: result.path });
+      })
+      .catch(err => toast.error(err.message || 'Failed to generate avatar'))
+      .finally(() => {
+        setGeneratingAvatar(false);
+        setDiffusionProgress(null);
+        generatingRef.current = false;
+        generationIdRef.current = null;
+      });
+  };
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400">
@@ -234,6 +288,53 @@ export default function CharacterSheet() {
         {/* Character Identity & Stats */}
         <div className="bg-port-card border border-port-border rounded-xl p-4 md:p-6">
           <div className="flex flex-col md:flex-row md:items-start gap-4">
+            {/* Avatar */}
+            <div className="flex-shrink-0">
+              <div className="relative group w-20 h-20 rounded-lg overflow-hidden border border-port-border bg-port-bg">
+                {generatingAvatar && diffusionProgress?.currentImage ? (
+                  <img
+                    src={`data:image/png;base64,${diffusionProgress.currentImage}`}
+                    alt="Generating..."
+                    className="w-full h-full object-cover"
+                  />
+                ) : char.avatarPath ? (
+                  <img src={char.avatarPath} alt={char.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-600">
+                    <Shield className="w-8 h-8" />
+                  </div>
+                )}
+                {/* Progress bar overlay */}
+                {generatingAvatar && (
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/40">
+                    <div
+                      className="h-full bg-port-accent transition-all duration-300"
+                      style={{ width: `${(diffusionProgress?.progress ?? 0) * 100}%` }}
+                    />
+                  </div>
+                )}
+                <button
+                  onClick={handleGenerateAvatar}
+                  disabled={generatingAvatar}
+                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-0"
+                  title="Generate avatar"
+                  aria-label="Generate avatar"
+                >
+                  <Image className="w-5 h-5 text-white" />
+                </button>
+                {generatingAvatar && !diffusionProgress?.currentImage && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                    <RefreshCw className="w-5 h-5 text-white animate-spin" />
+                  </div>
+                )}
+              </div>
+              {generatingAvatar && diffusionProgress && (
+                <div className="text-[10px] text-gray-500 text-center mt-1">
+                  {diffusionProgress.step ?? 0}/{diffusionProgress.totalSteps ?? '?'}
+                </div>
+              )}
+            </div>
+
             {/* Name, Class, Level */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-3 mb-1">

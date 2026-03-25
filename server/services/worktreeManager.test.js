@@ -138,6 +138,37 @@ describe('Persistent Worktree Path Construction', () => {
   });
 });
 
+describe('Uncommitted Changes Detection', () => {
+  // Mirrors the dirty-file detection logic in removeWorktree
+  function hasDirtyFiles(porcelainOutput) {
+    return porcelainOutput.trim().length > 0;
+  }
+
+  it('should detect modified files as dirty', () => {
+    expect(hasDirtyFiles(' M src/index.js')).toBe(true);
+  });
+
+  it('should detect untracked files as dirty', () => {
+    expect(hasDirtyFiles('?? newfile.js')).toBe(true);
+  });
+
+  it('should detect staged files as dirty', () => {
+    expect(hasDirtyFiles('A  newfile.js')).toBe(true);
+  });
+
+  it('should detect multiple dirty files', () => {
+    expect(hasDirtyFiles(' M src/a.js\n M src/b.js\n?? src/c.js')).toBe(true);
+  });
+
+  it('should return false for clean worktree', () => {
+    expect(hasDirtyFiles('')).toBe(false);
+  });
+
+  it('should return false for whitespace-only output', () => {
+    expect(hasDirtyFiles('  \n  ')).toBe(false);
+  });
+});
+
 describe('Orphaned Worktree Detection', () => {
   function findOrphanedWorktrees(worktrees, worktreesDir, activeAgentIds) {
     return worktrees.filter(wt => {

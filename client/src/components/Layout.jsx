@@ -66,7 +66,8 @@ import {
   Dog,
   FilePen,
   MessageCircle,
-  Swords
+  Swords,
+  Image as ImageIcon
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -219,6 +220,7 @@ const navItems = [
     children: [
       { to: '/settings/backup', label: 'Backup', icon: Download },
       { to: '/settings/database', label: 'Database', icon: Database },
+      { to: '/settings/image-gen', label: 'Image Gen', icon: ImageIcon },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot },
       { to: '/security', label: 'Security', icon: Camera },

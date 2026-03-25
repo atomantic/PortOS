@@ -109,7 +109,21 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
 
   if (!existsSync(worktreePath)) {
     console.log(`🌳 Worktree already removed for ${agentId}`);
-    return { merged: false, removed: true };
+    return { merged: false, removed: true, uncommittedSaved: false };
+  }
+
+  // Safety check: abort removal when uncommitted changes are detected.
+  // Also fail closed if git status itself fails — treat unknown state as dirty.
+  let dirtyFiles;
+  try {
+    dirtyFiles = (await execGit(['status', '--porcelain'], worktreePath)).trim();
+  } catch (err) {
+    console.log(`⚠️ git status failed for worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
+    return { merged: false, removed: false, uncommittedSaved: false };
+  }
+  if (dirtyFiles) {
+    console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected, aborting cleanup to avoid data loss`);
+    return { merged: false, removed: false, uncommittedSaved: false };
   }
 
   let merged = false;
@@ -157,7 +171,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
 
   console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
 
-  return { merged, removed: true };
+  return { merged, removed: true, uncommittedSaved: false };
 }
 
 /**

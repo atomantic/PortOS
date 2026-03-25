@@ -18,6 +18,7 @@ import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
+import { imageGenEvents } from './imageGenEvents.js';
 import * as shellService from './shell.js';
 import {
   validateSocketData,
@@ -499,6 +500,9 @@ export function initSocket(io) {
 
   // Set up loop event forwarding
   setupLoopEventForwarding();
+
+  // Set up image generation event forwarding
+  setupImageGenEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -755,4 +759,23 @@ function setupLoopEventForwarding() {
   loopEvents.on('iteration:complete', (data) => broadcastToLoops('loop:iteration:complete', data));
   loopEvents.on('iteration:error', (data) => broadcastToLoops('loop:iteration:error', data));
   loopEvents.on('output', (data) => broadcastToLoops('loop:output', data));
+}
+
+// Set up image generation event forwarding — broadcast to all clients
+let imageGenForwardingSetup = false;
+function setupImageGenEventForwarding() {
+  if (imageGenForwardingSetup) return;
+  imageGenForwardingSetup = true;
+  imageGenEvents.on('started', (data) => {
+    if (ioInstance) ioInstance.emit('image-gen:started', data);
+  });
+  imageGenEvents.on('progress', (data) => {
+    if (ioInstance) ioInstance.emit('image-gen:progress', data);
+  });
+  imageGenEvents.on('completed', (data) => {
+    if (ioInstance) ioInstance.emit('image-gen:completed', data);
+  });
+  imageGenEvents.on('failed', (data) => {
+    if (ioInstance) ioInstance.emit('image-gen:failed', data);
+  });
 }

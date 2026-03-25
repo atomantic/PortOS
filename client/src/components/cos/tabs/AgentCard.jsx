@@ -14,7 +14,11 @@ import {
   ThumbsDown,
   MessageSquare,
   ExternalLink,
-  Send
+  Send,
+  GitBranch,
+  GitPullRequest,
+  Sparkles,
+  RefreshCw
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
@@ -457,6 +461,48 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 View ticket
                 <ExternalLink size={12} aria-hidden="true" />
               </a>
+            )}
+          </div>
+        )}
+
+        {/* Agent configuration badges */}
+        {(agent.metadata?.configUseWorktree || agent.metadata?.configOpenPR || agent.metadata?.configSimplify || agent.metadata?.configReviewLoop || agent.metadata?.configCodingOnMain) && (
+          <div className="flex items-center gap-1.5 flex-wrap mb-2">
+            {agent.metadata.configUseWorktree && (
+              <span className={`flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded ${
+                agent.metadata.configWorktreeAutoDetected ? 'bg-orange-500/15 text-orange-400' : 'bg-teal-500/15 text-teal-400'
+              }`} title={`Worktree: ${agent.metadata.worktreeBranch || 'unknown'}${agent.metadata.configWorktreeAutoDetected ? ' (auto-detected conflict)' : ''}`}>
+                <GitBranch size={10} aria-hidden="true" />
+                {agent.metadata.configWorktreeAutoDetected ? 'Auto-WT' : 'Worktree'}
+              </span>
+            )}
+            {agent.metadata.configCodingOnMain && !agent.metadata.configUseWorktree && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-yellow-500/15 text-yellow-500"
+                    title="Agent is coding directly on main branch">
+                <GitBranch size={10} aria-hidden="true" />
+                main
+              </span>
+            )}
+            {agent.metadata.configOpenPR && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-purple-500/15 text-purple-400"
+                    title="Will open a PR when done">
+                <GitPullRequest size={10} aria-hidden="true" />
+                PR
+              </span>
+            )}
+            {agent.metadata.configSimplify && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-emerald-500/15 text-emerald-400"
+                    title="Will run /simplify before committing">
+                <Sparkles size={10} aria-hidden="true" />
+                Simplify
+              </span>
+            )}
+            {agent.metadata.configReviewLoop && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-indigo-500/15 text-indigo-400"
+                    title="Review loop enabled — agent will iterate on PR feedback">
+                <RefreshCw size={10} aria-hidden="true" />
+                Review
+              </span>
             )}
           </div>
         )}

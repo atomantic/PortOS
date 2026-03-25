@@ -14,7 +14,8 @@ const router = Router();
 // Zod schemas for request validation
 const updateCharacterSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  class: z.string().min(1).max(100).optional()
+  class: z.string().min(1).max(100).optional(),
+  avatarPath: z.string().max(500).regex(/^\/data\/images\/[A-Za-z0-9._-]+$/, 'Invalid avatar path').optional()
 });
 
 const addXPSchema = z.object({
@@ -50,6 +51,7 @@ router.put('/', asyncHandler(async (req, res) => {
   const character = await characterService.getCharacter();
   if (data.name) character.name = data.name;
   if (data.class) character.class = data.class;
+  if (data.avatarPath) character.avatarPath = data.avatarPath;
   const updated = await characterService.saveCharacter(character);
   res.json(updated);
 }));

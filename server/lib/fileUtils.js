@@ -47,7 +47,9 @@ export const PATHS = {
   telegram: join(__lib_dirname, '../../data/telegram'),
   templates: join(__lib_dirname, '../../data/prompts/templates'),
   settings: join(__lib_dirname, '../../data/settings'),
-  missions: join(__lib_dirname, '../../data/cos/missions')
+  missions: join(__lib_dirname, '../../data/cos/missions'),
+  tools: join(__lib_dirname, '../../data/tools'),
+  images: join(__lib_dirname, '../../data/images')
 };
 
 /**

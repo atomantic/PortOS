@@ -1676,6 +1676,30 @@ export const updateTelegramMethod = (method) => request('/telegram/method', {
 });
 export const reloadTelegramBridge = () => request('/telegram/bridge/reload', { method: 'POST' });
 
+// Image Generation
+export const getImageGenStatus = () => request('/image-gen/status');
+export const generateImage = (data) => request('/image-gen/generate', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const generateAvatar = (data) => request('/image-gen/avatar', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+
+// Tools Registry
+export const getToolsList = () => request('/tools');
+export const getEnabledTools = () => request('/tools/enabled');
+export const registerTool = (data) => request('/tools', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
+export const updateTool = (id, data) => request(`/tools/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(data)
+});
+export const deleteTool = (id) => request(`/tools/${id}`, { method: 'DELETE' });
+
 // Insights
 export const getGenomeHealthCorrelations = () => request('/insights/genome-health');
 export const getInsightThemes = () => request('/insights/themes');
