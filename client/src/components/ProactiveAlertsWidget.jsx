@@ -15,9 +15,9 @@ import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 const SEVERITY_STYLES = {
-  critical: { bg: 'bg-port-error/10', text: 'text-port-error', border: 'border-port-error/30', dot: 'bg-port-error' },
-  high: { bg: 'bg-port-warning/10', text: 'text-port-warning', border: 'border-port-warning/30', dot: 'bg-port-warning' },
-  medium: { bg: 'bg-port-accent/10', text: 'text-port-accent', border: 'border-port-accent/30', dot: 'bg-port-accent' }
+  critical: { bg: 'bg-port-error/10', text: 'text-port-error', border: 'border-port-error/30' },
+  high: { bg: 'bg-port-warning/10', text: 'text-port-warning', border: 'border-port-warning/30' },
+  medium: { bg: 'bg-port-accent/10', text: 'text-port-accent', border: 'border-port-accent/30' }
 };
 
 const TYPE_ICONS = {

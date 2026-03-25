@@ -182,19 +182,16 @@ export async function generateAlerts() {
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   all.sort((a, b) => (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3));
 
-  const durationMs = Date.now() - startMs;
-  console.log(`🔔 Proactive alerts: ${all.length} alert${all.length !== 1 ? 's' : ''} generated in ${durationMs}ms`);
+  // Single-pass severity counts
+  const counts = { total: all.length, critical: 0, high: 0, medium: 0 };
+  for (const a of all) {
+    if (counts[a.severity] !== undefined) counts[a.severity]++;
+  }
 
-  return {
-    alerts: all,
-    counts: {
-      total: all.length,
-      critical: all.filter(a => a.severity === 'critical').length,
-      high: all.filter(a => a.severity === 'high').length,
-      medium: all.filter(a => a.severity === 'medium').length
-    },
-    checkedAt: new Date().toISOString()
-  };
+  const durationMs = Date.now() - startMs;
+  console.log(`🔔 Proactive alerts: ${counts.total} (critical: ${counts.critical}, high: ${counts.high}) in ${durationMs}ms`);
+
+  return { alerts: all, counts, checkedAt: new Date().toISOString() };
 }
 
 /**
