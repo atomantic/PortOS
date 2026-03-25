@@ -15,7 +15,7 @@ const router = Router();
 const updateCharacterSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   class: z.string().min(1).max(100).optional(),
-  avatarPath: z.string().max(500).optional()
+  avatarPath: z.string().max(500).regex(/^\/data\/images\/[A-Za-z0-9._-]+$/, 'Invalid avatar path').optional()
 });
 
 const addXPSchema = z.object({

@@ -901,9 +901,15 @@ function ImageGenTab() {
     setSaving(true);
     const url = sdapiUrl.trim().replace(/\/+$/, '') || undefined;
 
+    let settingsSaved = false;
     await updateSettings({ imageGen: { sdapiUrl: url } })
-      .then(() => toast.success('Image gen settings saved'))
+      .then(() => { settingsSaved = true; toast.success('Image gen settings saved'); })
       .catch(() => toast.error('Failed to save settings'));
+
+    if (!settingsSaved) {
+      setSaving(false);
+      return;
+    }
 
     // Register or update the tool in the CoS tools registry
     const toolData = {

@@ -43,10 +43,13 @@ export async function checkConnection() {
   const baseUrl = await getSdApiUrl();
   if (!baseUrl) return { connected: false, reason: 'No SD API URL configured' };
 
-  const model = await detectModel(baseUrl);
-  if (model === 'unknown' && !cachedModel.timestamp) {
-    return { connected: false, reason: 'SD API unreachable' };
-  }
+  // Always make a live request for status checks — bypass the model cache
+  const res = await fetchWithTimeout(`${baseUrl}/sdapi/v1/options`, {}, 10000).catch(() => null);
+  if (!res?.ok) return { connected: false, reason: 'SD API unreachable' };
+  const options = await res.json().catch(() => null);
+  const model = options?.sd_model_checkpoint || 'unknown';
+  // Update the cache while we're at it
+  cachedModel = { name: model, timestamp: Date.now() };
   return { connected: true, model };
 }
 
@@ -126,9 +129,12 @@ export async function generateImage({ prompt, negativePrompt, width, height, ste
       },
       300000
     );
-  } finally {
+  } catch (err) {
     stopPolling();
+    imageGenEvents.emit('failed', { generationId, error: 'Network error contacting image generation service' });
+    throw err;
   }
+  stopPolling();
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
