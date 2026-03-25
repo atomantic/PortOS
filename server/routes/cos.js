@@ -966,12 +966,14 @@ router.post('/jobs', asyncHandler(async (req, res) => {
     if (parts.length !== 5) {
       throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    // Validate syntax and field ranges; null means no match within search window
-    // (valid for infrequent schedules like leap-day), so only reject thrown errors
+    let nextRun;
     try {
-      parseCronToNextRun(cronExpression, new Date(), 'UTC');
+      nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
     } catch (err) {
       throw new ServerError(`Invalid cronExpression: ${err?.message || 'unable to parse'}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (nextRun === null) {
+      throw new ServerError('Invalid cronExpression: no valid run time could be determined', { status: 400, code: 'VALIDATION_ERROR' });
     }
   }
 
@@ -991,12 +993,14 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
     if (parts.length !== 5) {
       throw new ServerError('cronExpression must be a 5-field cron expression', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    // Validate syntax and field ranges; null means no match within search window
-    // (valid for infrequent schedules like leap-day), so only reject thrown errors
+    let nextRun;
     try {
-      parseCronToNextRun(cronExpression, new Date(), 'UTC');
+      nextRun = parseCronToNextRun(cronExpression, new Date(), 'UTC');
     } catch (err) {
       throw new ServerError(`Invalid cronExpression: ${err?.message || 'unable to parse'}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (nextRun === null) {
+      throw new ServerError('Invalid cronExpression: no valid run time could be determined', { status: 400, code: 'VALIDATION_ERROR' });
     }
   }
   const job = await autonomousJobs.updateJob(req.params.id, {
