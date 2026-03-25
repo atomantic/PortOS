@@ -410,6 +410,60 @@ export async function createPR(dir, { title, body, base, head }) {
 }
 
 /**
+ * Generate a rich PR description from branch commits and diff stats.
+ * Falls back to a simple description if git data is unavailable.
+ * @param {string} dir - Working directory (repo root)
+ * @param {string} baseBranch - Base branch (e.g., 'main')
+ * @param {string} headBranch - Head branch (agent's branch)
+ * @param {string} taskDescription - Original task prompt
+ * @returns {Promise<string>} Formatted PR body
+ */
+export async function generatePRDescription(dir, baseBranch, headBranch, taskDescription) {
+  const sections = ['Automated PR created by PortOS Chief of Staff.'];
+
+  const [comparison, changedFiles] = await Promise.all([
+    getBranchComparison(dir, baseBranch, headBranch).catch(() => null),
+    execGit(['diff', '--name-only', `${baseBranch}...${headBranch}`], dir, { ignoreExitCode: true })
+      .then(r => r.stdout.trim().split('\n').filter(Boolean)).catch(() => [])
+  ]);
+
+  if (comparison?.commits?.length) {
+    sections.push('\n## Changes');
+    for (const c of comparison.commits) {
+      sections.push(`- ${c.message}`);
+    }
+  }
+
+  if (comparison?.stats) {
+    const { files, insertions, deletions } = comparison.stats;
+    if (files > 0) {
+      sections.push(`\n**${files} file${files === 1 ? '' : 's'} changed** (+${insertions} -${deletions})`);
+    }
+  }
+
+  if (changedFiles.length > 0 && changedFiles.length <= 30) {
+    sections.push('\n<details><summary>Files changed</summary>\n');
+    for (const f of changedFiles) {
+      sections.push(`- \`${f}\``);
+    }
+    sections.push('\n</details>');
+  } else if (changedFiles.length > 30) {
+    sections.push(`\n<details><summary>Files changed (${changedFiles.length})</summary>\n`);
+    for (const f of changedFiles.slice(0, 30)) {
+      sections.push(`- \`${f}\``);
+    }
+    sections.push(`- ... and ${changedFiles.length - 30} more`);
+    sections.push('\n</details>');
+  }
+
+  if (taskDescription) {
+    sections.push(`\n<details><summary>Original task</summary>\n\n${taskDescription}\n\n</details>`);
+  }
+
+  return sections.join('\n');
+}
+
+/**
  * Detect base and dev branches from local branch list
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */

@@ -1934,9 +1934,12 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
       const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
       const targetBranch = devBranch || baseBranch || 'main';
 
+      const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, task.description);
+      const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
+
       const prResult = await git.createPR(workspace, {
         title: `${jiraTicketId}: ${(task.description || 'CoS automated task').substring(0, 100)}`,
-        body: `Resolves ${jiraTicketRef}\n\nAutomated PR created by PortOS Chief of Staff.\n\n**Task:** ${task.description || ''}`,
+        body: jiraPrBodyWithRef,
         base: targetBranch,
         head: jiraBranch
       }).catch(err => {
@@ -2051,9 +2054,11 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
       const taskDesc = description || 'CoS automated task';
       const prTitle = taskDesc.replace(/[\r\n]+/g, ' ').trim().substring(0, 100);
 
+      const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, taskDesc);
+
       const prResult = await git.createPR(worktreePath, {
         title: prTitle,
-        body: `Automated PR created by PortOS Chief of Staff.\n\n**Task:** ${taskDesc}`,
+        body: prBody,
         base: targetBranch,
         head: worktreeBranch
       }).catch(err => {

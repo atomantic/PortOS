@@ -158,7 +158,8 @@ vi.mock('./jira.js', () => ({
 vi.mock('./git.js', () => ({
   push: vi.fn(),
   getRepoBranches: vi.fn(),
-  createPR: vi.fn()
+  createPR: vi.fn(),
+  generatePRDescription: vi.fn()
 }));
 
 vi.mock('./runner.js', () => ({
@@ -194,6 +195,10 @@ describe('cleanupAgentWorktree - openPR path', () => {
     // Default: agent is a worktree agent with valid metadata
     getAgent.mockResolvedValue(mockWorktreeAgent());
     git.getRepoBranches.mockResolvedValue({ baseBranch: 'main', devBranch: null });
+    // generatePRDescription returns a rich body that includes the task description
+    git.generatePRDescription.mockImplementation((_dir, _base, _head, desc) =>
+      Promise.resolve(`Automated PR created by PortOS Chief of Staff.\n\n## Changes\n- feat: implemented task\n\n**1 file changed** (+10 -2)\n\n<details><summary>Original task</summary>\n\n${desc || 'CoS automated task'}\n\n</details>`)
+    );
   });
 
   it('should run PR flow when openPR is true and success is true', async () => {
