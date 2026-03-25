@@ -53,8 +53,11 @@ export async function checkConnection() {
   return { connected: true, model };
 }
 
+const IMAGE_PREVIEW_THROTTLE = 2000; // only send base64 previews every 2s
+
 function startProgressPolling(baseUrl, generationId) {
   let lastProgress = -1;
+  let lastImageEmit = 0;
   let inFlight = false;
   const interval = setInterval(async () => {
     if (inFlight) return;
@@ -70,13 +73,18 @@ function startProgressPolling(baseUrl, generationId) {
       if (progress === lastProgress) return;
       lastProgress = progress;
 
+      // Throttle base64 preview images to reduce bandwidth
+      const now = Date.now();
+      const includeImage = data.current_image && (now - lastImageEmit >= IMAGE_PREVIEW_THROTTLE);
+      if (includeImage) lastImageEmit = now;
+
       imageGenEvents.emit('progress', {
         generationId,
         progress: data.progress,
         eta: data.eta_relative,
         step: data.state?.sampling_step,
         totalSteps: data.state?.sampling_steps,
-        currentImage: data.current_image || null
+        currentImage: includeImage ? data.current_image : null
       });
     } finally {
       inFlight = false;

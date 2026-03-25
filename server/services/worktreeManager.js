@@ -117,18 +117,27 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   const dirtyFiles = (await execGit(['status', '--porcelain'], worktreePath).catch(() => '')).trim();
   if (dirtyFiles) {
     console.log(`🌳 Worktree for ${agentId} has uncommitted changes — committing before cleanup`);
+    let addOk = true;
     await execGit(['add', '-A'], worktreePath).catch(err => {
+      addOk = false;
       console.log(`⚠️ git add failed in worktree ${agentId}: ${err.message}`);
     });
-    await execGit(
-      ['commit', '-m', `chore: save uncommitted agent work (auto-committed during worktree cleanup)\n\nAgent ${agentId} had uncommitted changes that would have been lost during worktree removal.`],
-      worktreePath
-    ).then(() => {
-      uncommittedSaved = true;
-      console.log(`🌳 Auto-committed uncommitted changes for ${agentId}`);
-    }).catch(err => {
-      console.log(`⚠️ Auto-commit failed for worktree ${agentId}: ${err.message}`);
-    });
+    if (addOk) {
+      await execGit(
+        ['commit', '-m', `chore: save uncommitted agent work (auto-committed during worktree cleanup)\n\nAgent ${agentId} had uncommitted changes that would have been lost during worktree removal.`],
+        worktreePath
+      ).then(() => {
+        uncommittedSaved = true;
+        console.log(`🌳 Auto-committed uncommitted changes for ${agentId}`);
+      }).catch(err => {
+        console.log(`⚠️ Auto-commit failed for worktree ${agentId}: ${err.message}`);
+      });
+    }
+    // If we couldn't save the dirty files, abort removal to prevent data loss
+    if (!uncommittedSaved) {
+      console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes could not be saved`);
+      return { merged: false, removed: false, uncommittedSaved: false };
+    }
   }
 
   let merged = false;
