@@ -9,6 +9,7 @@
  * @param {function} props.onModelChange - Called with model string
  * @param {string} [props.label] - Label text (default: "Provider")
  * @param {boolean} [props.disabled] - Disable both selectors
+ * @param {boolean} [props.compact] - Hide labels for inline/toolbar use
  */
 export default function ProviderModelSelector({
   providers,
@@ -18,17 +19,19 @@ export default function ProviderModelSelector({
   onProviderChange,
   onModelChange,
   label = 'Provider',
-  disabled = false
+  disabled = false,
+  compact = false
 }) {
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 min-w-0">
-        <label className="block text-xs text-gray-500 mb-1">{label}</label>
+        {!compact && <label className="block text-xs text-gray-500 mb-1">{label}</label>}
         <select
           value={selectedProviderId}
           onChange={(e) => onProviderChange(e.target.value)}
           disabled={disabled}
-          className="w-full px-3 py-2 min-h-[40px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
+          title={compact ? label : undefined}
+          className="w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
         >
           {providers.map(p => (
             <option key={p.id} value={p.id}>{p.name}</option>
@@ -37,12 +40,13 @@ export default function ProviderModelSelector({
       </div>
       {availableModels.length > 0 && (
         <div className="flex-1 min-w-0">
-          <label className="block text-xs text-gray-500 mb-1">Model</label>
+          {!compact && <label className="block text-xs text-gray-500 mb-1">Model</label>}
           <select
             value={selectedModel}
             onChange={(e) => onModelChange(e.target.value)}
             disabled={disabled}
-            className="w-full px-3 py-2 min-h-[40px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
+            title={compact ? 'Model' : undefined}
+            className="w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
           >
             {availableModels.map(m => (
               <option key={m} value={m}>{m}</option>

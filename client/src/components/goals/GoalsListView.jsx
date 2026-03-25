@@ -337,6 +337,7 @@ export default function GoalsListView({ data, onRefresh }) {
                   onModelChange={setSelectedModel}
                   label="AI Provider"
                   disabled={organizing || providersLoading}
+                  compact
                 />
               </div>
               <button
