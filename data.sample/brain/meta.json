@@ -4,8 +4,8 @@
   "dailyDigestTime": "09:00",
   "weeklyReviewTime": "16:00",
   "weeklyReviewDay": "sunday",
-  "defaultProvider": "lmstudio",
-  "defaultModel": "",
+  "defaultProvider": "claude-code",
+  "defaultModel": "haiku",
   "lastDailyDigest": null,
   "lastWeeklyReview": null
 }

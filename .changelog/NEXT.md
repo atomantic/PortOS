@@ -6,3 +6,5 @@
 
 - Toggle switches rendering oversized due to min-h/min-w 44px touch-target constraints inflating the visual element
 - Brain scheduler CLI error messages now include actual CLI output for diagnosability
+- Brain CLI provider stdin warning by closing stdin on spawn
+- Brain default model/provider in data.sample for new users
