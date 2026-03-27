@@ -64,7 +64,8 @@ function execGit(args, cwd, options = {}) {
  */
 export async function getStatus(dir) {
   const result = await execGit(['status', '--porcelain'], dir);
-  const lines = result.stdout.trim().split('\n').filter(Boolean);
+  // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
+  const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
 
   const files = lines.map(line => {
     const status = line.substring(0, 2);
