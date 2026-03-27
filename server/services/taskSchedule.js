@@ -1783,7 +1783,7 @@ export async function getScheduleStatus() {
       }
     }
 
-    status.tasks[taskType] = {
+    const taskStatus = {
       ...interval,
       lastRun: execution.lastRun,
       runCount: execution.count,
@@ -1801,6 +1801,15 @@ export async function getScheduleStatus() {
       adjustedIntervalMs: learningInfo.adjustedIntervalMs,
       recommendation: learningInfo.recommendation
     };
+
+    // Include default stage prompts for pipeline tasks so UI can display them
+    if (interval.taskMetadata?.pipeline?.stages?.length > 0) {
+      taskStatus.stagePrompts = interval.taskMetadata.pipeline.stages.map(stage =>
+        DEFAULT_TASK_PROMPTS[stage.promptKey] || null
+      );
+    }
+
+    status.tasks[taskType] = taskStatus;
 
     if (learningInfo.adjusted) {
       status.learningAdjustmentsActive++;

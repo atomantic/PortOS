@@ -10,6 +10,8 @@
 - PR reviewer now runs as a 2-stage pipeline: security scan (read-only) → code review + merge
 - Pipeline stage badge on agent cards showing current stage progress
 - `getStagePrompt()` export in taskSchedule for resolving pipeline stage-specific prompts
+- Pipeline UI: collapsed row shows purple "2-stage" badge, expanded view shows stage flow visualization
+- Pipeline UI: tabbed prompt viewer shows each stage's full prompt with stage name tabs
 
 ## Changed
 
