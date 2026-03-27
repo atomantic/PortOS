@@ -899,7 +899,7 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
         name: drink.name,
         oz: drink.oz,
         abv: drink.abv,
-        count: drink.count || 1,
+        count: Math.max(1, Math.round(drink.count || 1)),
         date: entry.date,
       });
     }
@@ -913,7 +913,7 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
         id: crypto.randomUUID(),
         product: item.product,
         mgPerUnit: item.mgPerUnit,
-        count: item.count || 1,
+        count: Math.max(1, Math.round(item.count || 1)),
         date: entry.date,
       });
     }
