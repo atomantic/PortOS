@@ -19,6 +19,7 @@ import Shell from './pages/Shell';
 import BrowserPage from './pages/Browser';
 import Jira from './pages/Jira';
 import JiraReports from './pages/JiraReports';
+import DataManager from './pages/DataManager';
 import Insights from './pages/Insights';
 import Instances from './pages/Instances';
 import MeatSpace from './pages/MeatSpace';
@@ -136,6 +137,7 @@ export default function App() {
           <Route path="devtools/jira/reports" element={<JiraReports />} />
           <Route path="city" element={<CyberCity />} />
           <Route path="city/settings" element={<CyberCity />} />
+          <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />

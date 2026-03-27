@@ -1755,6 +1755,14 @@ export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { m
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
 
+// Data Manager
+export const getDataOverview = () => request('/data');
+export const getDataCategory = (key) => request(`/data/${key}`);
+export const archiveDataCategory = (key, opts) => request(`/data/${key}/archive`, { method: 'POST', body: JSON.stringify(opts || {}) });
+export const purgeDataCategory = (key, opts) => request(`/data/${key}`, { method: 'DELETE', body: JSON.stringify(opts || {}) });
+export const getDataBackups = () => request('/data/backups');
+export const deleteDataBackup = (filename) => request(`/data/backups/${filename}`, { method: 'DELETE' });
+
 // GSD (Get Stuff Done) Integration
 export const getGsdProjects = () => request('/cos/gsd/projects');
 export const getGsdProject = (appId) => request(`/cos/gsd/projects/${appId}`);

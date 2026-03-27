@@ -67,7 +67,8 @@ import {
   FilePen,
   MessageCircle,
   Swords,
-  Image as ImageIcon
+  Image as ImageIcon,
+  HardDrive
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -158,6 +159,7 @@ const navItems = [
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
+  { to: '/data', label: 'Data', icon: HardDrive, single: true },
   {
     label: 'Digital Twin',
     icon: Heart,
