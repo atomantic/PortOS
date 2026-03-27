@@ -1,13 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, AlertTriangle, Download, Package } from 'lucide-react';
+import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, AlertTriangle, Package } from 'lucide-react';
 import * as api from '../services/api';
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
-}
+import { formatBytes } from '../utils/formatters';
 
 function SizeBar({ size, maxSize }) {
   const pct = maxSize > 0 ? Math.max(1, (size / maxSize) * 100) : 0;
@@ -111,7 +105,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
   );
 }
 
-function BackupsSection({ backups, loading, onDelete, onRefresh }) {
+function BackupsSection({ backups, loading, onDelete }) {
   if (loading) return null;
   if (!backups.length) return null;
 
@@ -193,20 +187,16 @@ export default function DataManager() {
     setDetail(d);
   };
 
+  const refreshAfterAction = async (key) => {
+    fetchOverview();
+    if (expandedCat === key) setDetail(await api.getDataCategory(key).catch(() => null));
+  };
+
   const handleArchive = async (key) => {
     setArchiving(key);
-    const result = await api.archiveDataCategory(key).catch(err => {
-      console.error(`Archive failed: ${err.message}`);
-      return null;
-    });
+    const result = await api.archiveDataCategory(key).catch(() => null);
     setArchiving(null);
-    if (result) {
-      fetchOverview();
-      if (expandedCat === key) {
-        const d = await api.getDataCategory(key).catch(() => null);
-        setDetail(d);
-      }
-    }
+    if (result) refreshAfterAction(key);
   };
 
   const handlePurge = (key) => {
@@ -221,15 +211,9 @@ export default function DataManager() {
   const executePurge = async (key) => {
     setPurging(key);
     setConfirmPurge(null);
-    await api.purgeDataCategory(key).catch(err => {
-      console.error(`Purge failed: ${err.message}`);
-    });
+    await api.purgeDataCategory(key).catch(() => null);
     setPurging(null);
-    fetchOverview();
-    if (expandedCat === key) {
-      const d = await api.getDataCategory(key).catch(() => null);
-      setDetail(d);
-    }
+    refreshAfterAction(key);
   };
 
   const handleDeleteBackup = async (filename) => {
@@ -307,9 +291,7 @@ export default function DataManager() {
               detail={expandedCat === cat.key ? detail : null}
               onExpand={handleExpand}
               onArchive={handleArchive}
-              onPurge={confirmPurge === cat.key
-                ? handlePurge
-                : handlePurge}
+              onPurge={handlePurge}
               archiving={archiving === cat.key}
               purging={purging === cat.key}
             />
@@ -329,7 +311,6 @@ export default function DataManager() {
           backups={backups}
           loading={loading}
           onDelete={handleDeleteBackup}
-          onRefresh={fetchOverview}
         />
       </div>
     </div>

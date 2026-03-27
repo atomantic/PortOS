@@ -1,11 +1,12 @@
-import { readdir, stat, rm } from 'fs/promises';
+import { readdir, stat, rm, mkdir, writeFile as fsWriteFile } from 'fs/promises';
 import { join, relative } from 'path';
 import { existsSync } from 'fs';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
+const execAsync = promisify(exec);
 const DATA_DIR = join(process.cwd(), 'data');
 
-// Category definitions with display names and archivability
 const CATEGORIES = {
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true },
   'repos': { label: 'Cloned Repos', description: 'Git repositories cloned by agents', archivable: false, deletable: true },
@@ -29,132 +30,82 @@ const CATEGORIES = {
   'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true }
 };
 
-/**
- * Get size of a directory using du (fast, accurate)
- */
-function getDirSize(dirPath) {
-  if (!existsSync(dirPath)) return 0;
-  const output = execSync(`du -sk "${dirPath}" 2>/dev/null || echo "0"`, {
-    encoding: 'utf-8',
-    windowsHide: true
-  }).trim();
-  const kb = parseInt(output.split('\t')[0], 10) || 0;
-  return kb * 1024; // bytes
+// Validate category key contains only safe characters
+const SAFE_NAME = /^[a-z0-9_-]+$/;
+
+async function getDirSizeAndCount(dirPath) {
+  if (!existsSync(dirPath)) return { size: 0, fileCount: 0 };
+  const [duOut, findOut] = await Promise.all([
+    execAsync(`du -sk "${dirPath}" 2>/dev/null || echo "0"`, { windowsHide: true }).then(r => r.stdout.trim()),
+    execAsync(`find "${dirPath}" -type f 2>/dev/null | wc -l`, { windowsHide: true }).then(r => r.stdout.trim())
+  ]);
+  const kb = parseInt(duOut.split('\t')[0], 10) || 0;
+  return { size: kb * 1024, fileCount: parseInt(findOut, 10) || 0 };
 }
 
-/**
- * Count files in a directory
- */
-function countFiles(dirPath) {
-  if (!existsSync(dirPath)) return 0;
-  const output = execSync(`find "${dirPath}" -type f 2>/dev/null | wc -l`, {
-    encoding: 'utf-8',
-    windowsHide: true
-  }).trim();
-  return parseInt(output, 10) || 0;
-}
-
-/**
- * Get overview of all data categories with sizes
- */
 export async function getDataOverview() {
-  const totalSize = getDirSize(DATA_DIR);
-
-  // Get top-level items
   const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch(() => []);
+  const dirs = entries.filter(e => e.isDirectory());
 
-  const categories = [];
-  let categorizedSize = 0;
+  // Parallel: get total size + per-directory sizes in one batch
+  const [totalResult, ...dirResults] = await Promise.all([
+    getDirSizeAndCount(DATA_DIR),
+    ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name)))
+  ]);
 
-  for (const entry of entries) {
-    const fullPath = join(DATA_DIR, entry.name);
+  const categories = dirs.map((d, i) => {
+    const meta = CATEGORIES[d.name] || { label: d.name, description: 'Unknown category', archivable: false, deletable: false };
+    return {
+      key: d.name,
+      path: `data/${d.name}`,
+      ...meta,
+      ...dirResults[i]
+    };
+  });
 
-    if (entry.isDirectory()) {
-      const size = getDirSize(fullPath);
-      const fileCount = countFiles(fullPath);
-      const meta = CATEGORIES[entry.name] || {
-        label: entry.name,
-        description: 'Unknown category',
-        archivable: false,
-        deletable: false
-      };
-
-      categorizedSize += size;
-      categories.push({
-        key: entry.name,
-        path: relative(process.cwd(), fullPath),
-        ...meta,
-        size,
-        fileCount
-      });
-    } else {
-      // Top-level files
-      const fileStat = await stat(fullPath).catch(() => null);
-      if (fileStat) categorizedSize += fileStat.size;
-    }
-  }
-
-  // Sort by size descending
   categories.sort((a, b) => b.size - a.size);
 
-  // Count top-level JSON files
-  const topLevelFiles = entries.filter(e => !e.isDirectory());
-
   return {
-    totalSize,
-    categorizedSize,
-    topLevelFileCount: topLevelFiles.length,
+    totalSize: totalResult.size,
     categories,
-    dataDir: relative(process.cwd(), DATA_DIR)
+    dataDir: 'data'
   };
 }
 
-/**
- * Get detailed breakdown of a specific category
- */
 export async function getCategoryDetail(categoryKey) {
+  if (!SAFE_NAME.test(categoryKey)) return null;
   const dirPath = join(DATA_DIR, categoryKey);
   if (!existsSync(dirPath)) return null;
 
   const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
-  const items = [];
 
-  for (const entry of entries) {
+  // Parallel: stat files + getDirSizeAndCount for subdirs
+  const itemPromises = entries.map(async (entry) => {
     const fullPath = join(dirPath, entry.name);
     if (entry.isDirectory()) {
-      items.push({
-        name: entry.name,
-        type: 'directory',
-        size: getDirSize(fullPath),
-        fileCount: countFiles(fullPath)
-      });
-    } else {
-      const fileStat = await stat(fullPath).catch(() => null);
-      items.push({
-        name: entry.name,
-        type: 'file',
-        size: fileStat?.size || 0,
-        modified: fileStat?.mtime?.toISOString() || null
-      });
+      const { size, fileCount } = await getDirSizeAndCount(fullPath);
+      return { name: entry.name, type: 'directory', size, fileCount };
     }
-  }
+    const fileStat = await stat(fullPath).catch(() => null);
+    return {
+      name: entry.name,
+      type: 'file',
+      size: fileStat?.size || 0,
+      modified: fileStat?.mtime?.toISOString() || null
+    };
+  });
 
+  const items = await Promise.all(itemPromises);
   items.sort((a, b) => b.size - a.size);
 
+  const totalSize = items.reduce((sum, item) => sum + item.size, 0);
   const meta = CATEGORIES[categoryKey] || { label: categoryKey, archivable: false, deletable: false };
 
-  return {
-    key: categoryKey,
-    ...meta,
-    totalSize: getDirSize(dirPath),
-    items
-  };
+  return { key: categoryKey, ...meta, totalSize, items };
 }
 
-/**
- * Archive a category's old data (compress into backup)
- */
 export async function archiveCategory(categoryKey, options = {}) {
+  if (!SAFE_NAME.test(categoryKey)) throw new Error('Invalid category name');
   const meta = CATEGORIES[categoryKey];
   if (!meta?.archivable) throw new Error(`Category "${categoryKey}" is not archivable`);
 
@@ -162,127 +113,94 @@ export async function archiveCategory(categoryKey, options = {}) {
   if (!existsSync(dirPath)) throw new Error(`Category directory not found: ${categoryKey}`);
 
   const backupDir = join(DATA_DIR, 'backup');
-  if (!existsSync(backupDir)) {
-    execSync(`mkdir -p "${backupDir}"`, { windowsHide: true });
-  }
+  await mkdir(backupDir, { recursive: true });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const archiveName = `${categoryKey}-${timestamp}.tar.gz`;
   const archivePath = join(backupDir, archiveName);
 
-  // For health data, archive everything older than cutoff (default: 1 year)
-  const daysToKeep = options.daysToKeep ?? 365;
-
+  // Date-based archiving for daily-file categories (health)
   if (categoryKey === 'health') {
-    // Archive health files older than threshold
+    const daysToKeep = options.daysToKeep ?? 365;
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - daysToKeep);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    // Find old files
     const files = await readdir(dirPath).catch(() => []);
     const oldFiles = files.filter(f => f.endsWith('.json') && f.slice(0, 10) < cutoffStr);
-
     if (oldFiles.length === 0) return { archived: 0, archivePath: null, message: 'No old files to archive' };
 
-    // Create tar of old files
-    const fileList = oldFiles.join('\n');
-    execSync(`echo "${fileList}" | tar -czf "${archivePath}" -C "${dirPath}" -T -`, {
-      windowsHide: true, timeout: 120000
-    });
+    // Write file list to temp file to avoid shell argument limits
+    const listPath = join(backupDir, `.filelist-${Date.now()}.txt`);
+    await fsWriteFile(listPath, oldFiles.join('\n'));
+    await execAsync(`tar -czf "${archivePath}" -C "${dirPath}" -T "${listPath}"`, { timeout: 120000, windowsHide: true });
+    await rm(listPath).catch(() => {});
 
-    // Remove archived files
     for (const f of oldFiles) {
       await rm(join(dirPath, f)).catch(() => {});
     }
 
-    return { archived: oldFiles.length, archivePath: relative(process.cwd(), archivePath), size: getDirSize(archivePath) };
+    const archiveStat = await stat(archivePath).catch(() => null);
+    return { archived: oldFiles.length, archivePath: relative(process.cwd(), archivePath), size: archiveStat?.size || 0 };
   }
 
-  // Generic category: archive entire contents
-  const sizeBefore = getDirSize(dirPath);
-  execSync(`tar -czf "${archivePath}" -C "${DATA_DIR}" "${categoryKey}"`, {
-    windowsHide: true, timeout: 120000
-  });
+  // Generic: archive entire category contents
+  await execAsync(`tar -czf "${archivePath}" -C "${DATA_DIR}" "${categoryKey}"`, { timeout: 120000, windowsHide: true });
+  const archiveStat = await stat(archivePath).catch(() => null);
 
   return {
-    archived: countFiles(dirPath),
+    archived: 0,
     archivePath: relative(process.cwd(), archivePath),
-    originalSize: sizeBefore,
-    archiveSize: getDirSize(archivePath)
+    archiveSize: archiveStat?.size || 0
   };
 }
 
-/**
- * Delete contents of a category (with safety checks)
- */
 export async function purgeCategory(categoryKey, options = {}) {
+  if (!SAFE_NAME.test(categoryKey)) throw new Error('Invalid category name');
   const meta = CATEGORIES[categoryKey];
   if (!meta?.deletable) throw new Error(`Category "${categoryKey}" is not purgeable`);
 
   const dirPath = join(DATA_DIR, categoryKey);
   if (!existsSync(dirPath)) throw new Error(`Category directory not found: ${categoryKey}`);
 
-  const sizeBefore = getDirSize(dirPath);
-  const filesBefore = countFiles(dirPath);
-
   if (options.subPath) {
-    // Delete a specific subdirectory within the category
+    if (!SAFE_NAME.test(options.subPath.replace(/\//g, ''))) throw new Error('Invalid subpath');
     const targetPath = join(dirPath, options.subPath);
-    if (!existsSync(targetPath)) throw new Error(`Path not found: ${options.subPath}`);
     if (!targetPath.startsWith(dirPath)) throw new Error('Path traversal not allowed');
     await rm(targetPath, { recursive: true, force: true });
   } else {
-    // Clear all contents but keep the directory
     const entries = await readdir(dirPath).catch(() => []);
-    for (const entry of entries) {
-      await rm(join(dirPath, entry), { recursive: true, force: true });
-    }
+    await Promise.all(entries.map(entry => rm(join(dirPath, entry), { recursive: true, force: true })));
   }
 
-  const sizeAfter = getDirSize(dirPath);
-
-  return {
-    freedBytes: sizeBefore - sizeAfter,
-    filesRemoved: filesBefore - countFiles(dirPath),
-    category: categoryKey,
-    subPath: options.subPath || null
-  };
+  return { category: categoryKey, subPath: options.subPath || null };
 }
 
-/**
- * Get list of existing backups
- */
 export async function getBackups() {
   const backupDir = join(DATA_DIR, 'backup');
   if (!existsSync(backupDir)) return [];
 
   const entries = await readdir(backupDir, { withFileTypes: true }).catch(() => []);
-  const backups = [];
+  const files = entries.filter(e => e.isFile());
 
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const fullPath = join(backupDir, entry.name);
-    const fileStat = await stat(fullPath).catch(() => null);
-    backups.push({
+  const backups = await Promise.all(files.map(async (entry) => {
+    const fileStat = await stat(join(backupDir, entry.name)).catch(() => null);
+    return {
       name: entry.name,
       size: fileStat?.size || 0,
       created: fileStat?.birthtime?.toISOString() || fileStat?.mtime?.toISOString() || null
-    });
-  }
+    };
+  }));
 
   backups.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
   return backups;
 }
 
-/**
- * Delete a specific backup file
- */
 export async function deleteBackup(filename) {
+  if (!SAFE_NAME.test(filename.replace(/[.]/g, ''))) throw new Error('Invalid filename');
   const backupDir = join(DATA_DIR, 'backup');
   const fullPath = join(backupDir, filename);
   if (!fullPath.startsWith(backupDir)) throw new Error('Path traversal not allowed');
-  if (!existsSync(fullPath)) throw new Error(`Backup not found: ${filename}`);
   await rm(fullPath);
   return { deleted: filename };
 }
