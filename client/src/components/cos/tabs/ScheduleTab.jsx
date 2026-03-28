@@ -400,40 +400,44 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         )}
       </div>
 
-      <div>
-        <label className="text-sm text-gray-400 block mb-2">Provider (optional)</label>
-        <select
-          value={selectedProviderId}
-          onChange={(e) => handleProviderChange(e.target.value)}
-          disabled={updating}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-        >
-          <option value="">Default (active provider)</option>
-          {providers?.map(provider => (
-            <option key={provider.id} value={provider.id}>{provider.name}</option>
-          ))}
-        </select>
-        <p className="text-xs text-gray-500 mt-1">Leave as default to use the currently active provider</p>
-      </div>
+      {!config.taskMetadata?.pipeline?.stages?.length && (
+        <>
+          <div>
+            <label className="text-sm text-gray-400 block mb-2">Provider (optional)</label>
+            <select
+              value={selectedProviderId}
+              onChange={(e) => handleProviderChange(e.target.value)}
+              disabled={updating}
+              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+            >
+              <option value="">Default (active provider)</option>
+              {providers?.map(provider => (
+                <option key={provider.id} value={provider.id}>{provider.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Leave as default to use the currently active provider</p>
+          </div>
 
-      <div>
-        <label className="text-sm text-gray-400 block mb-2">Model (optional)</label>
-        <select
-          value={selectedModel}
-          onChange={(e) => handleModelChange(e.target.value)}
-          disabled={updating}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-        >
-          <option value="">Default model</option>
-          {selectedModel && !availableModels.includes(selectedModel) && (
-            <option value={selectedModel}>{selectedModel}</option>
-          )}
-          {availableModels.map(model => (
-            <option key={model} value={model}>{model}</option>
-          ))}
-        </select>
-        <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
-      </div>
+          <div>
+            <label className="text-sm text-gray-400 block mb-2">Model (optional)</label>
+            <select
+              value={selectedModel}
+              onChange={(e) => handleModelChange(e.target.value)}
+              disabled={updating}
+              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+            >
+              <option value="">Default model</option>
+              {selectedModel && !availableModels.includes(selectedModel) && (
+                <option value={selectedModel}>{selectedModel}</option>
+              )}
+              {availableModels.map(model => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
+          </div>
+        </>
+      )}
 
       <PromptEditor
         config={config}
