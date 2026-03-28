@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { rm } from 'fs/promises';
+import { readdir, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
@@ -147,8 +147,10 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       // Merge worktree branch back to the source branch
       await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
         .then(() => { merged = true; })
-        .catch(err => {
+        .catch(async (err) => {
           console.log(`⚠️ Could not auto-merge ${branchName}: ${err.message}`);
+          // Abort the failed merge to leave sourceWorkspace in a clean state
+          await execGit(['merge', '--abort'], sourceWorkspace).catch(() => {});
         });
     }
   }
@@ -165,11 +167,17 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       });
     });
 
-  // Delete the branch if we merged or if it was never used
-  await execGit(['branch', '-D', branchName], sourceWorkspace)
-    .catch(err => {
-      console.log(`⚠️ Branch delete failed for ${branchName}: ${err.message}`);
-    });
+  // Only delete the branch if merge succeeded or wasn't requested.
+  // When merge was requested but failed, preserve the branch so commits can be recovered.
+  const shouldDeleteBranch = merged || !options.merge;
+  if (shouldDeleteBranch) {
+    await execGit(['branch', '-D', branchName], sourceWorkspace)
+      .catch(err => {
+        console.log(`⚠️ Branch delete failed for ${branchName}: ${err.message}`);
+      });
+  } else {
+    console.log(`⚠️ Preserving branch ${branchName} — merge failed, commits need manual recovery`);
+  }
 
   console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
 
@@ -303,15 +311,20 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
   const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
   let cleaned = 0;
 
+  // Track which agent dirs we handle via git worktree list (PortOS-owned worktrees)
+  const handledAgentIds = new Set();
+
   for (const wt of worktrees) {
     // Only clean up worktrees under our managed directory
     if (!wt.path.startsWith(WORKTREES_DIR)) continue;
 
-    // Extract agent ID from the worktree path
     const agentId = wt.path.split('/').pop();
+    handledAgentIds.add(agentId);
     if (!activeAgentIds.has(agentId)) {
       const branchName = wt.branch?.replace('refs/heads/', '') || '';
-      await removeWorktree(agentId, sourceWorkspace, branchName, { merge: false })
+      // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
+      // If merge fails, the branch is preserved for manual recovery.
+      await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
         .catch(err => {
           console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
         });
@@ -319,8 +332,73 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
     }
   }
 
+  // Scan for external-repo worktrees (directories whose .git points to a different repo).
+  // These are invisible to `git worktree list` run against PortOS.
+  cleaned += await cleanupExternalRepoWorktrees(activeAgentIds, handledAgentIds);
+
   if (cleaned > 0) {
     console.log(`🌳 Cleaned ${cleaned} orphaned worktree(s)`);
+  }
+
+  return cleaned;
+}
+
+/**
+ * Clean up worktree directories that belong to external repos (managed apps).
+ * These are created when agents work on apps outside PortOS but use the shared
+ * worktrees directory. They're invisible to PortOS's `git worktree list`.
+ */
+async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
+  const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
+  let cleaned = 0;
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const agentId = entry.name;
+    if (alreadyHandled.has(agentId) || activeAgentIds.has(agentId)) continue;
+
+    const worktreePath = join(WORKTREES_DIR, agentId);
+    const gitFile = join(worktreePath, '.git');
+
+    // Read .git file to find the parent repo
+    const gitContent = await readFile(gitFile, 'utf-8').catch(() => null);
+    if (!gitContent?.startsWith('gitdir:')) {
+      // Not a valid worktree — just remove the directory
+      console.log(`🌳 Removing invalid worktree directory ${agentId}`);
+      await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+      cleaned++;
+      continue;
+    }
+
+    // Extract the parent repo from the gitdir path (e.g., /path/to/repo/.git/worktrees/agent-xxx)
+    const gitdir = gitContent.replace('gitdir:', '').trim();
+    const parentRepoGitDir = gitdir.replace(/\/worktrees\/[^/]+$/, '');
+    const parentRepo = parentRepoGitDir.replace(/\/\.git$/, '');
+
+    if (!existsSync(parentRepo)) {
+      // Parent repo no longer exists — just remove directory
+      console.log(`🌳 Removing orphaned external worktree ${agentId} (parent repo gone: ${parentRepo})`);
+      await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+      cleaned++;
+      continue;
+    }
+
+    // Clean via the parent repo's git
+    console.log(`🌳 Cleaning external worktree ${agentId} from ${parentRepo}`);
+    const branchName = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)
+      .then(b => b.trim())
+      .catch(() => '');
+
+    await execGit(['worktree', 'remove', worktreePath, '--force'], parentRepo)
+      .catch(async () => {
+        await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+        await execGit(['worktree', 'prune'], parentRepo).catch(() => {});
+      });
+
+    if (branchName) {
+      await execGit(['branch', '-D', branchName], parentRepo).catch(() => {});
+    }
+    cleaned++;
   }
 
   return cleaned;

@@ -57,5 +57,10 @@
 - readOnly tasks skip unnecessary git pull, JIRA branch creation, and worktree setup
 - Flaky test suite stabilized by increasing vitest timeout from 5s to 10s (parallel execution pressure caused intermittent timeouts)
 - Added `PORTOS_API_URL` constant to `ports.js` for dynamic API URL resolution in task prompts
+- Worktree merge failures now abort cleanly (`merge --abort`) instead of leaving the repo in MERGING state
+- Failed merges now preserve the branch for manual recovery instead of force-deleting it and orphaning commits
+- Orphaned worktree cleanup now attempts to merge committed work before removing (prevents losing PR/push failure preserved work)
+- External-repo worktrees (managed app agents) now cleaned up properly — previously invisible to `git worktree list` and accumulated on disk
+- Stash pop after rebase abort now handles conflicts consistently (checkout + drop) instead of leaving stale stashes
 
 ## Removed
