@@ -1794,6 +1794,59 @@ async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provi
 }
 
 /**
+ * Extract the final summary section from agent output.
+ * Walks backwards from the end to find the last block of non-tool-call content.
+ */
+function extractFinalSummary(outputBuffer) {
+  if (!outputBuffer) return null;
+
+  const lines = outputBuffer.split('\n');
+  const contentLines = [];
+  let foundContent = false;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    const isTool = line.startsWith('🔧') || line.startsWith('  →') || line.startsWith('  ↳') || line.startsWith('[stderr]');
+
+    if (!isTool && line.trim()) {
+      contentLines.unshift(line);
+      foundContent = true;
+    } else if (foundContent && isTool) {
+      break;
+    }
+  }
+
+  const summary = contentLines.join('\n').trim();
+  return summary || null;
+}
+
+/**
+ * Extract a concise output summary for pipeline stage agents.
+ * For review stages: reads the generated REVIEW.md from the workspace.
+ * For implement stages: extracts the final summary from the output.
+ */
+async function extractPipelineOutputSummary(task, workspacePath, outputBuffer) {
+  const pipeline = task.metadata?.pipeline;
+  if (!pipeline?.stages) return null;
+
+  const currentStage = pipeline.currentStage ?? 0;
+  const stage = pipeline.stages[currentStage];
+  if (!stage) return null;
+
+  const promptKey = stage.promptKey || '';
+
+  // For review stages: read REVIEW.md from workspace (the deliverable)
+  if (promptKey.includes('review') && !promptKey.includes('implement') && workspacePath) {
+    const reviewPath = join(workspacePath, 'REVIEW.md');
+    const content = await readFile(reviewPath, 'utf-8').catch(() => null);
+    if (content?.trim()) return content.trim();
+  }
+
+  // For implement/triage stages or fallback: extract last content section from output
+  return extractFinalSummary(outputBuffer);
+}
+
+/**
  * Advance a pipeline to its next stage after the current stage completes.
  * Creates a new task for the next stage or marks the pipeline as complete/failed.
  */
@@ -1971,6 +2024,18 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 
   // Analyze failure if applicable
   const errorAnalysis = effectiveSuccess ? null : analyzeAgentFailure(outputBuffer, task, model);
+
+  // Extract pipeline output summary before completion writes metadata to disk
+  if (task?.metadata?.pipeline && effectiveSuccess) {
+    const workspacePath = agent.workspacePath || ROOT_DIR;
+    const summary = await extractPipelineOutputSummary(task, workspacePath, outputBuffer).catch(err => {
+      console.log(`⚠️ Failed to extract pipeline summary for ${agentId}: ${err.message}`);
+      return null;
+    });
+    if (summary) {
+      await updateAgent(agentId, { metadata: { outputSummary: summary } });
+    }
+  }
 
   await completeAgent(agentId, {
     success: effectiveSuccess,
