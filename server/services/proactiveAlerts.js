@@ -6,6 +6,7 @@
  *   - Task success rate drops (task types with low success rates)
  *   - System health warnings (high memory/CPU, errored processes)
  *   - Learning health issues (skipped or critical task types)
+ *   - AI usage spikes (token/session usage significantly above rolling average)
  *
  * Designed to be called on-demand from the dashboard widget
  * and optionally from autonomous jobs.
@@ -15,12 +16,15 @@ import os from 'os';
 import { getGoals } from './identity.js';
 import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
+import { getUsage } from './usage.js';
 
 const STALL_THRESHOLD_DAYS = 14;
 const SUCCESS_RATE_WARNING = 50;
 const MEMORY_WARNING_PCT = 85;
 const MEMORY_CRITICAL_PCT = 95;
 const CPU_WARNING_PCT = 90;
+const USAGE_SPIKE_MULTIPLIER = 2.5;
+const USAGE_MIN_HISTORY_DAYS = 3;
 
 /**
  * Detect goals that have stalled (no progress update in 14+ days)
@@ -163,20 +167,81 @@ async function checkLearningHealth() {
 }
 
 /**
+ * Detect AI usage spikes (tokens or sessions significantly above rolling average)
+ */
+async function checkUsageSpikes() {
+  const usage = getUsage();
+  if (!usage?.dailyActivity) return [];
+
+  const daily = usage.dailyActivity;
+  const today = new Date().toISOString().split('T')[0];
+
+  // Collect recent days (excluding today since it's incomplete)
+  const recentDays = [];
+  for (let i = 1; i <= 14; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const dayData = daily[dateStr];
+    if (dayData && dayData.sessions > 0) {
+      recentDays.push(dayData);
+    }
+  }
+
+  if (recentDays.length < USAGE_MIN_HISTORY_DAYS) return [];
+
+  const avgTokens = recentDays.reduce((sum, d) => sum + (d.tokens || 0), 0) / recentDays.length;
+  const avgSessions = recentDays.reduce((sum, d) => sum + (d.sessions || 0), 0) / recentDays.length;
+
+  const alerts = [];
+  const todayData = daily[today];
+
+  if (todayData && avgTokens > 0) {
+    const tokenRatio = todayData.tokens / avgTokens;
+    if (tokenRatio >= USAGE_SPIKE_MULTIPLIER) {
+      const formatTokens = (t) => t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t);
+      alerts.push({
+        type: 'cost_spike',
+        severity: tokenRatio >= 5 ? 'high' : 'medium',
+        title: 'AI token usage spike',
+        detail: `${formatTokens(todayData.tokens)} tokens today vs ${formatTokens(Math.round(avgTokens))} avg/day (${tokenRatio.toFixed(1)}x)`,
+        link: '/devtools/usage',
+        metadata: { resource: 'tokens', today: todayData.tokens, average: Math.round(avgTokens), ratio: Math.round(tokenRatio * 10) / 10 }
+      });
+    }
+
+    const sessionRatio = todayData.sessions / avgSessions;
+    if (sessionRatio >= USAGE_SPIKE_MULTIPLIER && avgSessions > 0) {
+      alerts.push({
+        type: 'cost_spike',
+        severity: sessionRatio >= 5 ? 'high' : 'medium',
+        title: 'AI session spike',
+        detail: `${todayData.sessions} sessions today vs ${Math.round(avgSessions)} avg/day (${sessionRatio.toFixed(1)}x)`,
+        link: '/devtools/usage',
+        metadata: { resource: 'sessions', today: todayData.sessions, average: Math.round(avgSessions), ratio: Math.round(sessionRatio * 10) / 10 }
+      });
+    }
+  }
+
+  return alerts;
+}
+
+/**
  * Generate all proactive alerts by running all checks.
  * Returns a sorted list with critical/high items first.
  */
 export async function generateAlerts() {
   const startMs = Date.now();
 
-  const [goalAlerts, successAlerts, systemAlerts, learningAlerts] = await Promise.all([
+  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, usageAlerts] = await Promise.all([
     checkGoalStalls(),
     checkSuccessRates(),
     checkSystemHealth(),
-    checkLearningHealth()
+    checkLearningHealth(),
+    checkUsageSpikes()
   ]);
 
-  const all = [...goalAlerts, ...successAlerts, ...systemAlerts, ...learningAlerts];
+  const all = [...goalAlerts, ...successAlerts, ...systemAlerts, ...learningAlerts, ...usageAlerts];
 
   // Sort by severity: critical > high > medium > low
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };

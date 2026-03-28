@@ -134,13 +134,27 @@ function SelfCard({ self, onUpdate, syncStatus }) {
         </div>
         <p className="text-xs text-gray-500 font-mono">{self.instanceId}</p>
         {syncStatus?.local && (
-          <div className="mt-2 pt-2 border-t border-port-border/50 flex items-center gap-4 text-xs text-gray-400">
+          <div className="mt-2 pt-2 border-t border-port-border/50 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
             <span className="flex items-center gap-1.5">
               <Brain size={12} /> Brain seq: {syncStatus.local.brainSeq}
             </span>
             <span className="flex items-center gap-1.5">
               <Database size={12} /> Memory seq: {syncStatus.local.memorySeq}
             </span>
+            {SNAPSHOT_CATEGORIES.map(({ key, label, icon: Icon }) => {
+                const hasChecksum = !!syncStatus.local.checksums?.[key];
+                return (
+                  <span key={key} className="flex items-center gap-1.5">
+                    <Icon size={12} />
+                    <span>{label}:</span>
+                    {hasChecksum ? (
+                      <CheckCircle2 size={11} className="text-port-success" />
+                    ) : (
+                      <Clock size={11} className="text-gray-600" />
+                    )}
+                  </span>
+                );
+              })}
           </div>
         )}
       </div>
@@ -287,6 +301,9 @@ const SYNC_CATEGORY_META = [
   { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' }
 ];
 
+// Snapshot categories (excludes delta-based brain/memory)
+const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => m.key !== 'brain' && m.key !== 'memory');
+
 function SyncCategoriesPanel({ peer, onRefresh }) {
   const [expanded, setExpanded] = useState(false);
   const categories = peer.syncCategories || {};
@@ -372,6 +389,35 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum }) {
+  // Only compare when remote reports checksums — local fallback is misleading
+  const synced = cursorChecksum && remoteChecksum && cursorChecksum === remoteChecksum;
+  const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <Icon size={12} className="text-gray-500" />
+      <span className="text-gray-500">{label}:</span>
+      {synced ? (
+        <>
+          <CheckCircle2 size={11} className="text-port-success" />
+          <span className="text-port-success">synced</span>
+        </>
+      ) : behind ? (
+        <>
+          <AlertCircle size={11} className="text-port-warning" />
+          <span className="text-port-warning">behind</span>
+        </>
+      ) : (
+        <>
+          <Clock size={11} className="text-gray-500" />
+          <span className="text-gray-400">pending</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SyncStatusSection({ peer, syncStatus }) {
   if (!syncStatus || !peer.instanceId) return null;
 
@@ -386,14 +432,15 @@ function SyncStatusSection({ peer, syncStatus }) {
   const showBrain = categories.brain;
   const showMemory = categories.memory;
 
-  // Show snapshot category sync status from checksums
-  const checksums = cursor?.checksums || {};
-  const syncedSnapshots = SYNC_CATEGORY_META
-    .filter(m => m.key !== 'brain' && m.key !== 'memory')
-    .map(m => m.key)
-    .filter(cat => categories[cat] && checksums[cat]);
+  // Show snapshot category sync status for all enabled snapshot categories
+  const cursorChecksums = cursor?.checksums || {};
+  const remoteChecksums = remoteSyncSeqs?.checksums || {};
 
-  if (!showBrain && !showMemory && syncedSnapshots.length === 0) return null;
+  const enabledSnapshots = SNAPSHOT_CATEGORIES
+    .map(m => m.key)
+    .filter(cat => categories[cat]);
+
+  if (!showBrain && !showMemory && enabledSnapshots.length === 0) return null;
 
   return (
     <div className="mt-2 pt-2 border-t border-port-border/50">
@@ -423,17 +470,17 @@ function SyncStatusSection({ peer, syncStatus }) {
             cursorSeq={cursor?.memorySeq}
           />
         )}
-        {syncedSnapshots.map(cat => {
+        {enabledSnapshots.map(cat => {
           const meta = SYNC_CATEGORY_META.find(m => m.key === cat);
           if (!meta) return null;
-          const CatIcon = meta.icon;
           return (
-            <div key={cat} className="flex items-center gap-1.5 text-xs">
-              <CatIcon size={12} className="text-gray-500" />
-              <span className="text-gray-500">{meta.label}:</span>
-              <CheckCircle2 size={11} className="text-port-success" />
-              <span className="text-port-success">synced</span>
-            </div>
+            <SnapshotSyncBadge
+              key={cat}
+              label={meta.label}
+              icon={meta.icon}
+              cursorChecksum={cursorChecksums[cat]}
+              remoteChecksum={remoteChecksums[cat]}
+            />
           );
         })}
       </div>

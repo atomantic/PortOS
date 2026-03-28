@@ -17,7 +17,8 @@ import {
   generatePhasesInputSchema,
   acceptPhasesInputSchema,
   organizeGoalsInputSchema,
-  applyOrganizationInputSchema
+  applyOrganizationInputSchema,
+  checkInGoalInputSchema
 } from '../lib/identityValidation.js';
 import * as goalCalendarScheduler from '../services/goalCalendarScheduler.js';
 
@@ -54,6 +55,12 @@ router.put('/chronotype', asyncHandler(async (req, res) => {
   const data = validateRequest(chronotypeBehavioralInputSchema, req.body);
   const chronotype = await identityService.updateChronotypeBehavioral(data);
   res.json(chronotype);
+}));
+
+// GET /api/digital-twin/identity/chronotype/energy-schedule — Energy zones for day view
+router.get('/chronotype/energy-schedule', asyncHandler(async (req, res) => {
+  const schedule = await identityService.getEnergySchedule();
+  res.json(schedule);
 }));
 
 // =============================================================================
@@ -279,6 +286,13 @@ router.post('/goals/organize/apply', asyncHandler(async (req, res) => {
   const { organization } = validateRequest(applyOrganizationInputSchema, req.body);
   const result = await identityService.applyGoalOrganization(organization);
   res.json(result);
+}));
+
+// POST /api/digital-twin/identity/goals/:id/check-in — AI-powered goal check-in
+router.post('/goals/:id/check-in', asyncHandler(async (req, res) => {
+  const data = validateRequest(checkInGoalInputSchema, req.body);
+  const checkIn = await identityService.checkInGoal(req.params.id, data);
+  res.status(201).json(checkIn);
 }));
 
 // POST /api/digital-twin/identity/goals/:id/schedule — Create time blocks

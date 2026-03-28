@@ -45,6 +45,13 @@ const CATEGORY_META = {
 
 const STAR_LABELS = ['No criteria', 'Single submitter', 'Multiple submitters', 'Expert panel', 'Practice guideline'];
 
+const STATUS_FILTERS = [
+  { key: 'beneficial', label: 'Beneficial', active: 'bg-green-500/20 text-green-400 border border-green-500/30', inactive: 'bg-port-card border border-port-border text-green-400/60 hover:text-green-400' },
+  { key: 'typical', label: 'Typical', active: 'bg-blue-500/20 text-blue-400 border border-blue-500/30', inactive: 'bg-port-card border border-port-border text-blue-400/60 hover:text-blue-400' },
+  { key: 'concern', label: 'Concern', active: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30', inactive: 'bg-port-card border border-port-border text-yellow-400/60 hover:text-yellow-400' },
+  { key: 'major_concern', label: 'Major Concern', active: 'bg-red-500/20 text-red-400 border border-red-500/30', inactive: 'bg-port-card border border-port-border text-red-400/60 hover:text-red-400' }
+];
+
 const SEVERITY_LABELS = {
   pathogenic: { label: 'Pathogenic', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
   drug_response: { label: 'Drug Response', bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30' },
@@ -63,6 +70,9 @@ export default function GenomeTab() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [savingNotes, setSavingNotes] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const [showAllAttention, setShowAllAttention] = useState(false);
 
   // ClinVar state
   const [clinvarStatus, setClinvarStatus] = useState(null);
@@ -76,6 +86,7 @@ export default function GenomeTab() {
   const fileInputRef = useRef(null);
   const dropRef = useRef(null);
   const notesTimerRef = useRef({});
+  const jumpRef = useRef(null);
 
   const fetchSummary = useCallback(async () => {
     const [data, cvStatus] = await Promise.all([
@@ -90,6 +101,15 @@ export default function GenomeTab() {
   useEffect(() => {
     fetchSummary();
   }, [fetchSummary]);
+
+  useEffect(() => {
+    if (!jumpOpen) return;
+    const handleClickOutside = (e) => {
+      if (jumpRef.current && !jumpRef.current.contains(e.target)) setJumpOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [jumpOpen]);
 
   // Debounced notes save
   const handleNotesChange = useCallback((markerId, notes) => {
@@ -315,7 +335,7 @@ export default function GenomeTab() {
             ref={fileInputRef}
             type="file"
             accept=".txt,.tsv,.csv,.zip"
-            className="absolute w-0 h-0 opacity-0 overflow-hidden"
+            className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
             onChange={(e) => handleFileUpload(e.target.files[0])}
@@ -346,9 +366,28 @@ export default function GenomeTab() {
     grouped[cat].push(marker);
   }
 
-  // Sort categories by a defined order
+  // Status counts across all markers
+  const statusCounts = markers.reduce((acc, m) => {
+    acc[m.status] = (acc[m.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  // Attention-needed markers (concerns + major concerns), sorted by severity
+  const attentionMarkers = markers
+    .filter(m => m.status === 'major_concern' || m.status === 'concern')
+    .sort((a, b) => (a.status === 'major_concern' ? 0 : 1) - (b.status === 'major_concern' ? 0 : 1));
+
+  // Apply status filter to categories
+  const filteredGrouped = {};
+  for (const [cat, catMarkers] of Object.entries(grouped)) {
+    const filtered = statusFilter === 'all'
+      ? catMarkers
+      : catMarkers.filter(m => m.status === statusFilter);
+    if (filtered.length > 0) filteredGrouped[cat] = filtered;
+  }
+
   const categoryOrder = ['longevity', 'cardiovascular', 'tumor_suppression', 'cancer_breast', 'cancer_prostate', 'cancer_colorectal', 'cancer_lung', 'cancer_melanoma', 'cancer_bladder', 'cancer_digestive', 'cognitive_decline', 'mental_health', 'iron', 'methylation', 'nutrient', 'diabetes', 'gut_health', 'cognitive', 'caffeine', 'sleep', 'athletic', 'detox', 'inflammation', 'autoimmune', 'thyroid', 'bone_health', 'skin', 'eye_health', 'pharmacogenomics', 'hair', 'hearing', 'pain'];
-  const sortedCategories = Object.keys(grouped).sort((a, b) => {
+  const sortedCategories = Object.keys(filteredGrouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);
     const bi = categoryOrder.indexOf(b);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -356,13 +395,92 @@ export default function GenomeTab() {
 
   return (
     <div className="space-y-6">
-      {/* Stats bar */}
+      {/* Summary Dashboard */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="SNPs" value={summary.snpCount?.toLocaleString()} />
+        <StatCard label="SNPs Loaded" value={summary.snpCount?.toLocaleString()} />
+        <StatCard label="Markers Found" value={markers.length} />
+        <StatCard label="Categories" value={Object.keys(grouped).length} />
         <StatCard label="Build" value={summary.build} />
-        <StatCard label="Found Curated Markers" value={summary.markerCount || 0} statusCounts={summary.statusCounts} />
-        <StatCard label="Uploaded" value={summary.uploadedAt ? new Date(summary.uploadedAt).toLocaleDateString() : 'N/A'} />
       </div>
+
+      {/* Status overview — tappable filter pills */}
+      {markers.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              statusFilter === 'all'
+                ? 'bg-white/10 text-white border border-white/20'
+                : 'bg-port-card border border-port-border text-gray-400 hover:text-white'
+            }`}
+          >
+            All ({markers.length})
+          </button>
+          {STATUS_FILTERS.map(({ key, label, active, inactive }) => statusCounts[key] > 0 && (
+            <button
+              key={key}
+              onClick={() => setStatusFilter(statusFilter === key ? 'all' : key)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                statusFilter === key ? active : inactive
+              }`}
+            >
+              {statusCounts[key]} {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Attention Needed — surfaces concerns first */}
+      {statusFilter === 'all' && attentionMarkers.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-red-400 uppercase tracking-wide flex items-center gap-2">
+            <AlertTriangle size={14} />
+            Attention Needed ({attentionMarkers.length})
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {(showAllAttention ? attentionMarkers : attentionMarkers.slice(0, 6)).map(marker => {
+              const meta = CATEGORY_META[marker.category] || { emoji: '\u{1F9EC}', label: marker.category };
+              return (
+                <div key={marker.id} className={`p-3 rounded-lg border ${
+                  marker.status === 'major_concern'
+                    ? 'border-red-500/30 bg-red-500/5'
+                    : 'border-yellow-500/30 bg-yellow-500/5'
+                }`}>
+                  <div className="flex items-start gap-2">
+                    <span className="text-base leading-none mt-0.5">{meta.emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-white truncate">{marker.name}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                          marker.status === 'major_concern'
+                            ? 'bg-red-500/20 text-red-400'
+                            : 'bg-yellow-500/20 text-yellow-400'
+                        }`}>
+                          {marker.status === 'major_concern' ? 'Major' : 'Concern'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1 line-clamp-2">{marker.description}</p>
+                      <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-500">
+                        <span className="font-mono">{marker.gene}</span>
+                        <span className="font-mono">{marker.rsid}</span>
+                        {marker.genotype && <span className="px-1 bg-port-card rounded font-mono">{marker.genotype}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {!showAllAttention && attentionMarkers.length > 6 && (
+            <button
+              onClick={() => setShowAllAttention(true)}
+              className="text-xs text-port-accent hover:text-port-accent/80 transition-colors"
+            >
+              Show all {attentionMarkers.length} markers needing attention
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Actions row */}
       <div className="flex flex-wrap gap-2">
@@ -407,21 +525,62 @@ export default function GenomeTab() {
         </div>
       )}
 
+      {/* Category quick-jump (mobile-friendly) */}
+      {sortedCategories.length > 5 && (
+        <div className="relative" ref={jumpRef}>
+          <button
+            onClick={() => setJumpOpen(!jumpOpen)}
+            className="w-full flex items-center justify-between px-3 py-2 bg-port-card border border-port-border rounded text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            <span>Jump to category ({sortedCategories.length})</span>
+            <span className="text-xs">{jumpOpen ? '\u25B2' : '\u25BC'}</span>
+          </button>
+          {jumpOpen && (
+            <div className="absolute top-full left-0 right-0 mt-1 z-20 bg-port-card border border-port-border rounded-lg shadow-xl max-h-64 overflow-y-auto">
+              {sortedCategories.map(cat => {
+                const meta = CATEGORY_META[cat] || { emoji: '\u{1F9EC}', label: cat };
+                const catMarkers = filteredGrouped[cat];
+                const concerns = catMarkers.filter(m => m.status === 'major_concern' || m.status === 'concern').length;
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => {
+                      setJumpOpen(false);
+                      document.getElementById(`genome-cat-${cat}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-port-border/30 transition-colors"
+                  >
+                    <span className="flex items-center gap-2 text-sm">
+                      <span>{meta.emoji}</span>
+                      <span className="text-gray-300">{meta.label}</span>
+                    </span>
+                    <span className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-500">{catMarkers.length}</span>
+                      {concerns > 0 && <span className="text-yellow-400">{concerns} !</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Curated Markers by category */}
       {sortedCategories.length > 0 && (
         <div className="space-y-4">
-          <h3 className="text-lg font-semibold text-white">Curated Markers</h3>
           <div className="columns-1 md:columns-2 xl:columns-3 2xl:columns-4 gap-4 [column-fill:balance]">
             {sortedCategories.map(cat => {
               const meta = CATEGORY_META[cat] || { emoji: '\u{1F9EC}', label: cat, color: 'blue' };
               return (
-                <div key={cat} className="break-inside-avoid mb-4">
+                <div key={cat} id={`genome-cat-${cat}`} className="break-inside-avoid mb-4 scroll-mt-4">
                   <GenomeCategoryCard
                     category={cat}
                     label={meta.label}
                     emoji={meta.emoji}
                     color={meta.color}
-                    markers={grouped[cat]}
+                    markers={filteredGrouped[cat]}
+                    defaultExpanded={false}
                     onEditNotes={handleNotesChange}
                     onDeleteMarker={handleDeleteMarker}
                   />

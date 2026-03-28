@@ -9,6 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..');
 const CONFIG_FILE = resolve(PROJECT_ROOT, 'data', 'browser-config.json');
 const DEFAULT_PROFILE_DIR = resolve(PROJECT_ROOT, 'data', 'browser-profile');
+const DEFAULT_DOWNLOAD_DIR = resolve(PROJECT_ROOT, 'data', 'browser-downloads');
 
 const CDP_PORT = parseInt(process.env.CDP_PORT || '5556', 10);
 const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);
@@ -34,22 +35,62 @@ async function checkCdp() {
   const timeout = setTimeout(() => controller.abort(), 2000);
   const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/version`, { signal: controller.signal }).catch(() => null);
   clearTimeout(timeout);
-  return res?.ok ?? false;
+  if (!res?.ok) return null;
+  return res.json();
+}
+
+async function configureDownloadBehavior(downloadDir) {
+  const version = await checkCdp();
+  const wsUrl = version?.webSocketDebuggerUrl;
+  if (!wsUrl) return;
+
+  // CDP requires explicit Browser.setDownloadBehavior — without it headless Chrome silently drops downloads
+  // WebSocket is a global in Node.js 21+ (project targets Node 22+)
+  if (typeof WebSocket === 'undefined') {
+    console.log('⚠️ WebSocket not available — download configuration skipped (requires Node.js 21+)');
+    return;
+  }
+  await new Promise((resolve) => {
+    const ws = new WebSocket(wsUrl);
+    const timer = setTimeout(() => { ws.close(); resolve(); }, 5000);
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({
+        id: 1,
+        method: 'Browser.setDownloadBehavior',
+        params: { behavior: 'allow', downloadPath: downloadDir }
+      }));
+    });
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.id === 1) {
+        console.log(`📥 Downloads configured → ${downloadDir}`);
+        clearTimeout(timer);
+        ws.close();
+        resolve();
+      }
+    });
+    ws.addEventListener('error', () => { clearTimeout(timer); resolve(); });
+  });
 }
 
 async function launchBrowser() {
+  const config = await loadConfig();
+  const downloadDir = config.downloadDir || DEFAULT_DOWNLOAD_DIR;
+
   // Reuse existing Chrome if CDP is already reachable (e.g. after PM2 restart)
   if (await checkCdp()) {
     console.log(`♻️ Existing Chrome CDP found at ${CDP_HOST}:${CDP_PORT}, reusing`);
+    await mkdir(downloadDir, { recursive: true });
+    await configureDownloadBehavior(downloadDir);
     return;
   }
 
-  const config = await loadConfig();
   headlessMode = config.headless !== false;
   const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
   const chromePath = getChromePath();
 
   await mkdir(profileDir, { recursive: true });
+  await mkdir(downloadDir, { recursive: true });
 
   const args = [
     `--remote-debugging-port=${CDP_PORT}`,
@@ -81,6 +122,7 @@ async function launchBrowser() {
     await new Promise(r => setTimeout(r, 500));
     if (await checkCdp()) {
       console.log(`✅ Chrome launched, CDP available at ws://${CDP_HOST}:${CDP_PORT}`);
+      await configureDownloadBehavior(downloadDir);
       return;
     }
   }

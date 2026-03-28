@@ -7,6 +7,7 @@ import {
   AlertOctagon,
   Target,
   TrendingDown,
+  TrendingUp,
   Cpu,
   BookOpen,
   CheckCircle
@@ -23,6 +24,7 @@ const SEVERITY_STYLES = {
 const TYPE_ICONS = {
   goal_stall: Target,
   success_drop: TrendingDown,
+  cost_spike: TrendingUp,
   system_resource: Cpu,
   process_error: AlertOctagon,
   learning_health: BookOpen

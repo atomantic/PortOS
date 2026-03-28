@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, RotateCcw, ChevronDown, ChevronRight, AlertCircle, RefreshCw, Package } from 'lucide-react';
+import { Play, RotateCcw, ChevronDown, ChevronRight, AlertCircle, RefreshCw, Package, Info, GitMerge } from 'lucide-react';
 import toast from 'react-hot-toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
@@ -77,6 +77,174 @@ function IntervalBadge({ type, cronExpression }) {
   );
 }
 
+function PromptEditor({ config, promptValue, setPromptValue, editingPrompt, setEditingPrompt, handleSavePrompt, updating, activeApps }) {
+  const stages = config.taskMetadata?.pipeline?.stages;
+  const stagePrompts = config.stagePrompts;
+  const hasPipeline = stages?.length > 0 && stagePrompts?.length > 0;
+  const [activeTab, setActiveTab] = useState(0);
+
+  useEffect(() => {
+    if (activeTab >= (stages?.length || 1)) setActiveTab(0);
+  }, [stages?.length, activeTab]);
+
+  if (!hasPipeline) {
+    // Standard single prompt editor
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-sm text-gray-400">Task Prompt</label>
+          {!editingPrompt && (
+            <button onClick={() => setEditingPrompt(true)} className="text-xs text-port-accent hover:text-port-accent/80">Edit</button>
+          )}
+        </div>
+        {editingPrompt ? (
+          <div className="space-y-2">
+            <textarea
+              value={promptValue}
+              onChange={(e) => setPromptValue(e.target.value)}
+              disabled={updating}
+              rows={12}
+              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm font-mono"
+              placeholder="Enter task prompt"
+            />
+            <div className="flex gap-2">
+              <button onClick={handleSavePrompt} disabled={updating} className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors">Save Prompt</button>
+              <button onClick={() => { setPromptValue(config.prompt || ''); setEditingPrompt(false); }} disabled={updating} className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors">Cancel</button>
+            </div>
+            {activeApps.length > 0 && (
+              <p className="text-xs text-gray-500">
+                Use <code className="bg-port-border px-1 rounded">{'{appName}'}</code> and <code className="bg-port-border px-1 rounded">{'{repoPath}'}</code> as placeholders.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="bg-port-bg border border-port-border rounded px-3 py-2 text-xs text-gray-400 font-mono max-h-32 overflow-y-auto cursor-pointer hover:border-port-accent/50" onClick={() => setEditingPrompt(true)} title="Click to edit prompt">
+            <pre className="whitespace-pre-wrap">{promptValue || 'No prompt configured'}</pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Pipeline tabbed prompt viewer
+  return (
+    <div>
+      <label className="text-sm text-gray-400 block mb-2">Stage Prompts</label>
+      <div className="border border-port-border rounded-lg overflow-hidden">
+        <div className="flex border-b border-port-border bg-port-card">
+          {stages.map((stage, i) => (
+            <button
+              key={i}
+              onClick={() => setActiveTab(i)}
+              className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                activeTab === i
+                  ? 'text-purple-400 bg-purple-500/10 border-b-2 border-purple-400'
+                  : 'text-gray-400 hover:text-gray-300 hover:bg-port-border/30'
+              }`}
+            >
+              <span className="text-[10px] text-gray-500 mr-1">Stage {i + 1}</span>
+              {stage.name}
+              {stage.readOnly && <span className="ml-1 text-[10px] text-gray-500">(read-only)</span>}
+            </button>
+          ))}
+        </div>
+        <div className="bg-port-bg px-3 py-2 text-xs text-gray-400 font-mono max-h-64 overflow-y-auto">
+          <pre className="whitespace-pre-wrap">{stagePrompts[activeTab] || 'No prompt configured'}</pre>
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 mt-2">Stage prompts use the default templates. Edit the main task prompt to override all stages with a single prompt.</p>
+    </div>
+  );
+}
+
+function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
+  const stages = config.taskMetadata?.pipeline?.stages || [];
+
+  const handleStageUpdate = async (stageIndex, field, value) => {
+    setUpdating(true);
+    const updatedStages = stages.map((stage, i) => {
+      if (i !== stageIndex) return stage;
+      const updated = { ...stage };
+      if (value === '' || value === null) {
+        delete updated[field];
+      } else {
+        updated[field] = value;
+      }
+      // When provider changes, clear model (it may not be valid for new provider)
+      if (field === 'providerId') {
+        delete updated.model;
+      }
+      return updated;
+    });
+    const updatedMeta = {
+      ...config.taskMetadata,
+      pipeline: { ...config.taskMetadata.pipeline, stages: updatedStages }
+    };
+    await onUpdate(taskType, { taskMetadata: updatedMeta }).catch(() => {});
+    setUpdating(false);
+  };
+
+  return (
+    <div>
+      <h4 className="text-sm font-medium text-gray-400 mb-3">Pipeline Stages</h4>
+      <div className="space-y-3">
+        {stages.map((stage, i) => {
+          const stageProvider = providers?.find(p => p.id === stage.providerId);
+          const stageModels = stageProvider?.models || [];
+          return (
+            <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs font-medium text-purple-400">Stage {i + 1}</span>
+                {stage.readOnly && (
+                  <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">read-only</span>
+                )}
+                <span className="text-sm text-white font-medium">{stage.name}</span>
+                {i < stages.length - 1 && (
+                  <span className="text-gray-500 ml-auto text-xs">→ Stage {i + 2}</span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Provider</label>
+                  <select
+                    value={stage.providerId || ''}
+                    onChange={(e) => handleStageUpdate(i, 'providerId', e.target.value || null)}
+                    disabled={updating}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
+                  >
+                    <option value="">Default (task-level)</option>
+                    {providers?.map(provider => (
+                      <option key={provider.id} value={provider.id}>{provider.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">Model</label>
+                  <select
+                    value={stage.model || ''}
+                    onChange={(e) => handleStageUpdate(i, 'model', e.target.value || null)}
+                    disabled={updating}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
+                  >
+                    <option value="">Default (task-level)</option>
+                    {stage.model && !stageModels.includes(stage.model) && (
+                      <option value={stage.model}>{stage.model}</option>
+                    )}
+                    {stageModels.map(model => (
+                      <option key={model} value={model}>{model}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-gray-500 mt-2">Each stage runs as a separate agent. Configure different providers per stage (e.g., Codex for review, Claude for implementation).</p>
+    </div>
+  );
+}
+
 function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes }) {
   const [selectedType, setSelectedType] = useState(config.type);
   const [selectedProviderId, setSelectedProviderId] = useState(config.providerId || '');
@@ -135,9 +303,11 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
     setUpdating(false);
   };
 
+  const isPaused = !config.enabled;
+
   const handleToggleEnabled = async () => {
     setUpdating(true);
-    await onUpdate(taskType, { enabled: !config.enabled });
+    await onUpdate(taskType, { enabled: isPaused });
     setUpdating(false);
   };
 
@@ -180,14 +350,28 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <label className="text-sm text-gray-400">Enabled</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-sm text-gray-400">Global Pause</label>
+          <div className="group relative">
+            <Info size={14} className="text-gray-500 cursor-help" />
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-3 py-2 bg-gray-800 border border-port-border text-xs text-gray-300 rounded-lg shadow-lg w-56 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity z-50">
+              When paused, no scheduled runs will execute for this task — even if individual apps are enabled.
+            </div>
+          </div>
+        </div>
         <ToggleSwitch
-          enabled={config.enabled}
+          enabled={isPaused}
           onChange={handleToggleEnabled}
           disabled={updating}
-          ariaLabel={config.enabled ? 'Disable task' : 'Enable task'}
+          ariaLabel={isPaused ? 'Resume runs' : 'Pause all runs'}
         />
       </div>
+      {isPaused && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-port-warning/10 border border-port-warning/30 rounded text-xs text-port-warning">
+          <AlertCircle size={14} className="shrink-0" />
+          All scheduled runs are paused for this task
+        </div>
+      )}
 
       <div>
         <label className="text-sm text-gray-400 block mb-2">Interval Type</label>
@@ -216,90 +400,55 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         )}
       </div>
 
-      <div>
-        <label className="text-sm text-gray-400 block mb-2">Provider (optional)</label>
-        <select
-          value={selectedProviderId}
-          onChange={(e) => handleProviderChange(e.target.value)}
-          disabled={updating}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-        >
-          <option value="">Default (active provider)</option>
-          {providers?.map(provider => (
-            <option key={provider.id} value={provider.id}>{provider.name}</option>
-          ))}
-        </select>
-        <p className="text-xs text-gray-500 mt-1">Leave as default to use the currently active provider</p>
-      </div>
-
-      <div>
-        <label className="text-sm text-gray-400 block mb-2">Model (optional)</label>
-        <select
-          value={selectedModel}
-          onChange={(e) => handleModelChange(e.target.value)}
-          disabled={updating}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-        >
-          <option value="">Default model</option>
-          {selectedModel && !availableModels.includes(selectedModel) && (
-            <option value={selectedModel}>{selectedModel}</option>
-          )}
-          {availableModels.map(model => (
-            <option key={model} value={model}>{model}</option>
-          ))}
-        </select>
-        <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <label className="text-sm text-gray-400">Task Prompt</label>
-          {!editingPrompt && (
-            <button onClick={() => setEditingPrompt(true)} className="text-xs text-port-accent hover:text-port-accent/80">Edit</button>
-          )}
-        </div>
-        {editingPrompt ? (
-          <div className="space-y-2">
-            <textarea
-              value={promptValue}
-              onChange={(e) => setPromptValue(e.target.value)}
+      {!config.taskMetadata?.pipeline?.stages?.length && (
+        <>
+          <div>
+            <label className="text-sm text-gray-400 block mb-2">Provider (optional)</label>
+            <select
+              value={selectedProviderId}
+              onChange={(e) => handleProviderChange(e.target.value)}
               disabled={updating}
-              rows={12}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm font-mono"
-              placeholder="Enter task prompt"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={handleSavePrompt}
-                disabled={updating}
-                className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors"
-              >
-                Save Prompt
-              </button>
-              <button
-                onClick={() => { setPromptValue(config.prompt || ''); setEditingPrompt(false); }}
-                disabled={updating}
-                className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-            {activeApps.length > 0 && (
-              <p className="text-xs text-gray-500">
-                Use <code className="bg-port-border px-1 rounded">{'{appName}'}</code> and <code className="bg-port-border px-1 rounded">{'{repoPath}'}</code> as placeholders.
-              </p>
-            )}
+              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+            >
+              <option value="">Default (active provider)</option>
+              {providers?.map(provider => (
+                <option key={provider.id} value={provider.id}>{provider.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Leave as default to use the currently active provider</p>
           </div>
-        ) : (
-          <div
-            className="bg-port-bg border border-port-border rounded px-3 py-2 text-xs text-gray-400 font-mono max-h-32 overflow-y-auto cursor-pointer hover:border-port-accent/50"
-            onClick={() => setEditingPrompt(true)}
-            title="Click to edit prompt"
-          >
-            <pre className="whitespace-pre-wrap">{promptValue || 'No prompt configured'}</pre>
+
+          <div>
+            <label className="text-sm text-gray-400 block mb-2">Model (optional)</label>
+            <select
+              value={selectedModel}
+              onChange={(e) => handleModelChange(e.target.value)}
+              disabled={updating}
+              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+            >
+              <option value="">Default model</option>
+              {selectedModel && !availableModels.includes(selectedModel) && (
+                <option value={selectedModel}>{selectedModel}</option>
+              )}
+              {availableModels.map(model => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      <PromptEditor
+        config={config}
+        promptValue={promptValue}
+        setPromptValue={setPromptValue}
+        editingPrompt={editingPrompt}
+        setEditingPrompt={setEditingPrompt}
+        handleSavePrompt={handleSavePrompt}
+        updating={updating}
+        activeApps={activeApps}
+      />
 
       <div>
         <label className="text-sm text-gray-400 block mb-2">Agent Options</label>
@@ -631,6 +780,12 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {config.taskMetadata?.pipeline?.stages?.length > 0 && (
+            <span className={badge('purple')} title={config.taskMetadata.pipeline.stages.map(s => s.name).join(' → ')}>
+              <GitMerge size={11} className="inline mr-1" />
+              {config.taskMetadata.pipeline.stages.length}-stage
+            </span>
+          )}
           {totalCount > 0 && (
             <span className={badge(
               enabledCount === totalCount ? 'success' :
@@ -645,6 +800,17 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
 
       {expanded && (
         <div className="p-4 border-t border-port-border bg-port-bg/50 space-y-6">
+          {config.taskMetadata?.pipeline?.stages?.length > 0 && (
+            <PipelineStageConfig
+              taskType={taskType}
+              config={config}
+              providers={providers}
+              onUpdate={onUpdate}
+              updating={updating}
+              setUpdating={setUpdating}
+            />
+          )}
+
           <div>
             <h4 className="text-sm font-medium text-gray-400 mb-3">Global Defaults</h4>
             <GlobalConfigControls

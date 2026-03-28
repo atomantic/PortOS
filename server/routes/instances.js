@@ -53,15 +53,19 @@ router.get('/', asyncHandler(async (req, res) => {
   const [self, peers, syncStatus] = await Promise.all([
     instances.getSelf(),
     instances.getPeers(),
-    getSyncStatus()
+    getSyncStatus({ includeChecksums: true })
   ]);
   res.json({ self, peers, syncStatus });
 }));
 
-// GET /api/instances/sync-status — local sync sequences (used by peers during probe)
+// GET /api/instances/sync-status — local sync sequences + checksums (used by peers during probe)
 router.get('/sync-status', asyncHandler(async (req, res) => {
-  const status = await getSyncStatus();
-  res.json({ brainSeq: status.local.brainSeq, memorySeq: status.local.memorySeq });
+  const status = await getSyncStatus({ includeChecksums: true });
+  res.json({
+    brainSeq: status.local.brainSeq,
+    memorySeq: status.local.memorySeq,
+    checksums: status.local.checksums
+  });
 }));
 
 // GET /api/instances/self — get this instance's identity

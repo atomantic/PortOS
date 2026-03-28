@@ -4,7 +4,7 @@
  * Stores config in data/browser-config.json
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -15,6 +15,7 @@ const ECOSYSTEM_FILE = join(PATHS.root, 'ecosystem.config.cjs');
 export const browserEvents = new EventEmitter();
 
 const DEFAULT_PROFILE_DIR = PATHS.browserProfile;
+const DEFAULT_DOWNLOAD_DIR = PATHS.browserDownloads;
 
 const DEFAULT_CONFIG = {
   cdpPort: 5556,
@@ -22,7 +23,8 @@ const DEFAULT_CONFIG = {
   healthPort: 5557,
   autoConnect: true,
   headless: true,
-  userDataDir: DEFAULT_PROFILE_DIR
+  userDataDir: DEFAULT_PROFILE_DIR,
+  downloadDir: DEFAULT_DOWNLOAD_DIR
 };
 
 let cachedConfig = null;
@@ -233,15 +235,41 @@ export async function getCdpVersion() {
   return response.json();
 }
 
+// ---------- Downloads ----------
+
+export async function getDownloads() {
+  const config = await loadConfig();
+  const downloadDir = config.downloadDir || DEFAULT_DOWNLOAD_DIR;
+  const entries = await readdir(downloadDir).catch(() => []);
+  // Filter out hidden files and .crdownload (partial Chrome downloads)
+  const files = [];
+  for (const name of entries) {
+    if (name.startsWith('.') || name.endsWith('.crdownload')) continue;
+    const filePath = join(downloadDir, name);
+    const info = await stat(filePath).catch(() => null);
+    if (info?.isFile()) {
+      files.push({
+        name,
+        size: info.size,
+        modified: info.mtime.toISOString()
+      });
+    }
+  }
+  // Most recent first
+  files.sort((a, b) => b.modified.localeCompare(a.modified));
+  return { downloadDir, files };
+}
+
 // ---------- Full combined status ----------
 
 export async function getFullStatus() {
-  const [health, process, pages, version, config] = await Promise.all([
+  const [health, process, pages, version, config, downloads] = await Promise.all([
     getHealthStatus(),
     getProcessStatus(),
     getOpenPages().catch(() => []),
     getCdpVersion().catch(() => null),
-    getConfig()
+    getConfig(),
+    getDownloads().catch(() => ({ downloadDir: DEFAULT_DOWNLOAD_DIR, files: [] }))
   ]);
 
   return {
@@ -250,6 +278,7 @@ export async function getFullStatus() {
     pages,
     pageCount: pages.length,
     version,
-    config
+    config,
+    downloads
   };
 }

@@ -12,6 +12,8 @@ import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES, exists as notificationExists } from './notifications.js';
+import { getActiveProvider, getProviderById } from './providers.js';
+import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
 
 const DATA_DIR = join(PATHS.digitalTwin, 'autobiography');
 const STORIES_FILE = join(DATA_DIR, 'stories.json');
@@ -266,19 +268,24 @@ export function getPromptById(promptId) {
 /**
  * Save a story for a given prompt
  */
-export async function saveStory({ promptId, content }) {
+export async function saveStory({ promptId, content, parentStoryId, customPromptText }) {
   const data = await loadStories();
   const prompt = getPromptById(promptId);
 
+  // For follow-up stories, use custom prompt text from the follow-up question
+  const isFollowUp = !!parentStoryId;
+  const parentStory = isFollowUp ? data.stories.find(s => s.id === parentStoryId) : null;
+
   const story = {
     id: uuidv4(),
-    promptId,
-    themeId: prompt?.themeId || 'unknown',
-    themeLabel: prompt?.themeLabel || 'Unknown',
-    promptText: prompt?.text || '',
+    promptId: isFollowUp ? `followup-${parentStoryId}` : promptId,
+    themeId: isFollowUp ? (parentStory?.themeId || 'unknown') : (prompt?.themeId || 'unknown'),
+    themeLabel: isFollowUp ? (parentStory?.themeLabel || 'Unknown') : (prompt?.themeLabel || 'Unknown'),
+    promptText: customPromptText || prompt?.text || '',
     content,
     wordCount: content.split(/\s+/).filter(Boolean).length,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...(parentStoryId && { parentStoryId })
   };
 
   data.stories.push(story);
@@ -396,6 +403,110 @@ export async function updateConfig(updates) {
   await saveConfig(updated);
   console.log(`📖 Autobiography config updated: interval=${updated.intervalHours}h, enabled=${updated.enabled}`);
   return updated;
+}
+
+/**
+ * Generate LLM-powered follow-up questions for a story.
+ * Returns 2-3 deeper questions based on the story content.
+ */
+export async function generateFollowUps(storyId, providerId) {
+  const data = await loadStories();
+  const story = data.stories.find(s => s.id === storyId);
+  if (!story) return { error: 'Story not found' };
+
+  const provider = providerId
+    ? await getProviderById(providerId)
+    : await getActiveProvider();
+  if (!provider) return { error: 'No AI provider available' };
+
+  const model = provider.defaultModel;
+
+  // Build chain context — include parent stories for deeper follow-ups
+  const chainStories = [];
+  let current = story;
+  while (current) {
+    chainStories.unshift(current);
+    current = current.parentStoryId
+      ? data.stories.find(s => s.id === current.parentStoryId)
+      : null;
+  }
+
+  const chainContext = chainStories.map((s, i) =>
+    `${i === 0 ? 'Original prompt' : `Follow-up #${i}`}: ${s.promptText}\nResponse: ${s.content}`
+  ).join('\n\n');
+
+  const prompt = `You are helping someone write their autobiography by asking thoughtful follow-up questions. Based on the story they just wrote, generate exactly 3 follow-up questions that dig deeper into specific details, emotions, or connections they mentioned.
+
+Theme: ${story.themeLabel}
+
+${chainContext}
+
+Rules:
+- Each question should reference a specific detail from their most recent response
+- Questions should invite rich storytelling, not yes/no answers
+- Go deeper into emotions, sensory details, or cause-and-effect
+- Keep questions under 30 words each
+- If this is a follow-up chain, avoid repeating ground already covered
+
+Return a JSON array of exactly 3 strings, nothing else. Example:
+["Question 1?", "Question 2?", "Question 3?"]`;
+
+  const result = await callProviderAISimple(provider, model, prompt, {
+    temperature: 0.7,
+    max_tokens: 500
+  });
+
+  if (result.error) return { error: result.error };
+
+  let followUps;
+  try { followUps = parseLLMJSON(result.text); } catch { /* invalid JSON */ }
+  if (!Array.isArray(followUps) || followUps.length === 0) {
+    return { error: 'Failed to parse follow-up questions from AI response' };
+  }
+
+  // Store follow-ups on the story
+  story.followUpPrompts = followUps.slice(0, 3);
+  story.followUpsGeneratedAt = new Date().toISOString();
+  await saveStories(data);
+
+  console.log(`📖 Autobiography follow-ups generated for story ${storyId}: ${followUps.length} questions`);
+
+  return { followUps: story.followUpPrompts };
+}
+
+/**
+ * Get the chain of stories linked to a given story (parent + children)
+ */
+export async function getStoryChain(storyId) {
+  const data = await loadStories();
+
+  // Find all ancestors
+  const ancestors = [];
+  let current = data.stories.find(s => s.id === storyId);
+  while (current?.parentStoryId) {
+    const parent = data.stories.find(s => s.id === current.parentStoryId);
+    if (parent) ancestors.unshift(parent);
+    current = parent;
+  }
+
+  // Find the story itself
+  const story = data.stories.find(s => s.id === storyId);
+  if (!story) return [];
+
+  // Find all descendants recursively
+  const descendants = [];
+  const findChildren = (parentId) => {
+    const children = data.stories
+      .filter(s => s.parentStoryId === parentId)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    for (const child of children) {
+      descendants.push(child);
+      findChildren(child.id);
+    }
+  };
+  findChildren(storyId);
+
+  return [...ancestors, story, ...descendants];
 }
 
 /**

@@ -543,7 +543,13 @@ export function validateRequest(schema, data) {
 // TASK METADATA SANITIZATION
 // =============================================================================
 
-const ALLOWED_TASK_METADATA_KEYS = ['useWorktree', 'openPR', 'simplify', 'reviewLoop'];
+// Agent behavior flags that can be overridden per-pipeline-stage
+export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'simplify', 'reviewLoop'];
+
+// Absolute cap on total agent spawns per task (across all retry types)
+export const MAX_TOTAL_SPAWNS = 5;
+
+const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 
 /**
  * Sanitize taskMetadata to only allowed agent-option keys with boolean values.
@@ -559,6 +565,11 @@ export function sanitizeTaskMetadata(raw) {
       clean[key] = raw[key];
       hasKeys = true;
     }
+  }
+  // Pass through pipeline config (validated shape: object with stages array)
+  if (raw.pipeline && typeof raw.pipeline === 'object' && Array.isArray(raw.pipeline.stages)) {
+    clean.pipeline = raw.pipeline;
+    hasKeys = true;
   }
   return hasKeys ? { ...clean } : null;
 }

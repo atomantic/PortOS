@@ -34,7 +34,8 @@ export const NOTIFICATION_TYPES = {
   HEALTH_ISSUE: 'health_issue',
   BRIEFING_READY: 'briefing_ready',
   AUTOBIOGRAPHY_PROMPT: 'autobiography_prompt',
-  PLAN_QUESTION: 'plan_question'
+  PLAN_QUESTION: 'plan_question',
+  AGENT_WARNING: 'agent_warning'
 };
 
 // Priority levels

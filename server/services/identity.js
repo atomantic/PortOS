@@ -648,6 +648,99 @@ export async function updateChronotypeBehavioral(overrides) {
   return deriveChronotype();
 }
 
+/**
+ * Get structured energy zones for the day based on chronotype.
+ * Returns time blocks with zone type, start/end times, and display metadata.
+ */
+export async function getEnergySchedule() {
+  const chronotype = await getChronotype();
+  if (!chronotype?.recommendations) return { zones: [], type: null, confidence: 0 };
+
+  const rec = chronotype.recommendations;
+
+  const parseTime = (str) => {
+    const [h, m] = (str || '').split(':').map(Number);
+    const mins = h * 60 + (m || 0);
+    return Number.isFinite(mins) && mins >= 0 && mins <= 1440 ? mins : NaN;
+  };
+
+  const validMinutes = (...vals) => vals.every(v => Number.isFinite(v));
+
+  const zones = [];
+
+  // Wake-up zone
+  if (rec.wakeTime) {
+    const wake = parseTime(rec.wakeTime);
+    if (validMinutes(wake)) {
+      zones.push({ id: 'wake', label: 'Wake Up', startMin: wake, endMin: wake + 30, color: '#f59e0b', opacity: 0.12 });
+    }
+  }
+
+  // Exercise window (e.g., "06:30-08:00")
+  if (rec.exerciseWindow) {
+    const [exStart, exEnd] = rec.exerciseWindow.split('-').map(parseTime);
+    if (validMinutes(exStart, exEnd) && exEnd >= exStart) {
+      zones.push({ id: 'exercise', label: 'Exercise', startMin: exStart, endMin: exEnd, color: '#22c55e', opacity: 0.10 });
+    }
+  }
+
+  // Peak focus
+  if (rec.peakFocusStart && rec.peakFocusEnd) {
+    const start = parseTime(rec.peakFocusStart);
+    const end = parseTime(rec.peakFocusEnd);
+    if (validMinutes(start, end) && end >= start) {
+      zones.push({
+        id: 'peak-focus',
+        label: 'Peak Focus',
+        startMin: start,
+        endMin: end,
+        color: '#3b82f6',
+        opacity: 0.12
+      });
+    }
+  }
+
+  // Caffeine cutoff (marker, not a zone)
+  if (rec.caffeineCutoff) {
+    const cutoff = parseTime(rec.caffeineCutoff);
+    if (validMinutes(cutoff)) {
+      zones.push({ id: 'caffeine-cutoff', label: 'Caffeine Cutoff', startMin: cutoff, endMin: cutoff, color: '#ef4444', opacity: 0, marker: true });
+    }
+  }
+
+  // Last meal cutoff
+  if (rec.lastMealCutoff) {
+    const meal = parseTime(rec.lastMealCutoff);
+    if (validMinutes(meal)) {
+      zones.push({ id: 'meal-cutoff', label: 'Last Meal', startMin: meal, endMin: meal, color: '#f97316', opacity: 0, marker: true });
+    }
+  }
+
+  // Wind-down
+  if (rec.windDownStart && rec.sleepTime) {
+    const windStart = parseTime(rec.windDownStart);
+    const windEnd = parseTime(rec.sleepTime);
+    if (validMinutes(windStart, windEnd) && windEnd >= windStart) {
+      zones.push({
+        id: 'wind-down',
+        label: 'Wind Down',
+        startMin: windStart,
+        endMin: windEnd,
+        color: '#8b5cf6',
+        opacity: 0.10
+      });
+    }
+  }
+
+  return {
+    zones,
+    type: chronotype.type,
+    confidence: chronotype.confidence,
+    wakeTime: rec.wakeTime,
+    sleepTime: rec.sleepTime
+  };
+}
+
 // === Longevity Service Functions ===
 
 export async function getLongevity() {
@@ -1282,6 +1375,106 @@ export async function applyGoalOrganization(organization) {
   }
   console.log(`🎯 Applied organization to ${changed} goals`);
   return { applied: changed };
+}
+
+// =============================================================================
+// Goal AI Check-In
+// =============================================================================
+
+export async function checkInGoal(goalId, { providerId, model } = {}) {
+  const { getActiveProvider, getProviderById } = await import('./providers.js');
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goal = goals.goals.find(g => g.id === goalId);
+  if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+
+  const provider = providerId ? await getProviderById(providerId) : await getActiveProvider();
+  if (!provider) throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
+  const selectedModel = model ?? provider.defaultModel;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const velocity = computeGoalVelocity(goal);
+
+  // Calculate expected progress based on creation date and target date
+  let expectedProgress = null;
+  if (goal.targetDate) {
+    const created = new Date(goal.createdAt).getTime();
+    const target = new Date(goal.targetDate + 'T00:00:00').getTime();
+    const now = Date.now();
+    const elapsed = now - created;
+    const total = target - created;
+    expectedProgress = total > 0 ? Math.min(100, Math.round((elapsed / total) * 100)) : 100;
+  }
+
+  // Gather activity attendance if linked activities exist
+  let attendanceRate = null;
+  if (goal.linkedActivities?.length > 0) {
+    const totalRequired = goal.linkedActivities.reduce((sum, a) => sum + (a.requiredFrequency || 1), 0);
+    const recentEntries = (goal.progressLog || []).filter(e => {
+      const daysAgo = (Date.now() - new Date(e.date + 'T00:00:00').getTime()) / (1000 * 60 * 60 * 24);
+      return daysAgo <= 30;
+    });
+    attendanceRate = totalRequired > 0 ? Math.min(100, Math.round((recentEntries.length / (totalRequired * 4)) * 100)) : null;
+  }
+
+  const milestoneSummary = (goal.milestones || []).map(m =>
+    `- ${m.title}${m.completedAt ? ' (DONE)' : m.targetDate ? ` (due ${m.targetDate})` : ''}`
+  ).join('\n');
+
+  const recentProgress = (goal.progressLog || []).slice(-5).map(e =>
+    `- ${e.date}: ${e.note}${e.durationMinutes ? ` (${e.durationMinutes}min)` : ''}`
+  ).join('\n');
+
+  const prompt = `You are a goal coaching assistant doing a check-in assessment. Analyze the current state of this goal and provide honest, actionable feedback.
+
+Goal: ${goal.title}
+Description: ${goal.description || 'No description'}
+Category: ${goal.category}
+Horizon: ${goal.horizon}
+Current progress: ${goal.progress}%${expectedProgress != null ? `\nExpected progress by now: ${expectedProgress}%` : ''}
+Target date: ${goal.targetDate || 'None set'}
+Created: ${goal.createdAt?.slice(0, 10)}
+Today: ${today}${velocity ? `\nVelocity: ${velocity.percentPerMonth}%/month (${velocity.trend})${velocity.projectedCompletion ? `, projected completion: ${velocity.projectedCompletion}` : ''}` : ''}${attendanceRate != null ? `\nActivity attendance (30 days): ${attendanceRate}%` : ''}
+${milestoneSummary ? `\nMilestones:\n${milestoneSummary}` : ''}
+${recentProgress ? `\nRecent progress entries:\n${recentProgress}` : '\nNo recent progress logged.'}
+
+Respond with JSON only (no markdown fences). The response must be an object with:
+- "status": "on-track" | "behind" | "at-risk" — honest assessment of goal health
+- "assessment": string — 2-3 sentence assessment of where things stand
+- "recommendations": string[] — 2-4 specific, actionable next steps
+- "encouragement": string — 1 brief motivational sentence`;
+
+  const result = await callProviderAISimple(provider, selectedModel, prompt, { max_tokens: 1000, temperature: 0.5 });
+  if (result.error) throw new ServerError(`AI check-in failed: ${result.error}`, { status: 502, code: 'AI_ERROR' });
+
+  let parsed;
+  try {
+    parsed = parseLLMJSON(result.text);
+  } catch (e) {
+    throw new ServerError(`AI returned invalid check-in data: ${e.message}`, { status: 502, code: 'AI_PARSE_ERROR' });
+  }
+
+  const validStatuses = ['on-track', 'behind', 'at-risk'];
+  const checkIn = {
+    id: `ci-${uuidv4()}`,
+    date: today,
+    status: validStatuses.includes(parsed.status) ? parsed.status : 'behind',
+    actualProgress: goal.progress,
+    expectedProgress,
+    attendanceRate,
+    assessment: parsed.assessment || '',
+    recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.slice(0, 5) : [],
+    encouragement: parsed.encouragement || '',
+    createdAt: new Date().toISOString()
+  };
+
+  if (!Array.isArray(goal.checkIns)) goal.checkIns = [];
+  goal.checkIns.push(checkIn);
+  goal.updatedAt = new Date().toISOString();
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+
+  console.log(`📋 Check-in for "${goal.title}": ${checkIn.status} (${goal.progress}%${expectedProgress != null ? ` vs ${expectedProgress}% expected` : ''})`);
+  return checkIn;
 }
 
 // =============================================================================

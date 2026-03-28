@@ -19,7 +19,13 @@ const router = Router();
 // Validation schemas
 const saveStorySchema = z.object({
   promptId: z.string().min(1),
-  content: z.string().min(1).max(50000)
+  content: z.string().min(1).max(50000),
+  parentStoryId: z.string().optional(),
+  customPromptText: z.string().optional()
+});
+
+const generateFollowUpsSchema = z.object({
+  providerId: z.string().optional()
 });
 
 const updateStorySchema = z.object({
@@ -116,7 +122,12 @@ router.get('/stories', asyncHandler(async (req, res) => {
  */
 router.post('/stories', asyncHandler(async (req, res) => {
   const validated = validateRequest(saveStorySchema, req.body);
-  const story = await autobiographyService.saveStory(validated);
+  const story = await autobiographyService.saveStory({
+    promptId: validated.promptId,
+    content: validated.content,
+    parentStoryId: validated.parentStoryId,
+    customPromptText: validated.customPromptText
+  });
   res.json(story);
 }));
 
@@ -143,6 +154,32 @@ router.delete('/stories/:id', asyncHandler(async (req, res) => {
     throw new ServerError('Story not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json({ success: true, story });
+}));
+
+// =============================================================================
+// FOLLOW-UP CHAINS
+// =============================================================================
+
+/**
+ * POST /api/digital-twin/autobiography/stories/:id/follow-ups
+ * Generate LLM-powered follow-up questions for a story
+ */
+router.post('/stories/:id/follow-ups', asyncHandler(async (req, res) => {
+  const validated = validateRequest(generateFollowUpsSchema, req.body);
+  const result = await autobiographyService.generateFollowUps(req.params.id, validated.providerId);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 400, code: 'FOLLOW_UP_ERROR' });
+  }
+  res.json(result);
+}));
+
+/**
+ * GET /api/digital-twin/autobiography/stories/:id/chain
+ * Get the full chain of stories linked to a story (ancestors + descendants)
+ */
+router.get('/stories/:id/chain', asyncHandler(async (req, res) => {
+  const chain = await autobiographyService.getStoryChain(req.params.id);
+  res.json(chain);
 }));
 
 // =============================================================================

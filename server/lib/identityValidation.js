@@ -158,6 +158,8 @@ export const linkCalendarInputSchema = z.object({
 
 export const organizeGoalsInputSchema = aiProviderInputSchema;
 
+export const checkInGoalInputSchema = aiProviderInputSchema;
+
 export const applyOrganizationInputSchema = z.object({
   organization: z.array(z.object({
     id: z.string().min(1),

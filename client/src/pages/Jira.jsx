@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 
@@ -101,7 +102,6 @@ export default function Jira() {
         apiToken: formData.apiToken
       };
 
-      console.log('Saving JIRA instance:', payload);
       await api.post('/jira/instances', payload);
 
       toast.success(`JIRA instance "${payload.name}" saved successfully`);
@@ -183,14 +183,22 @@ export default function Jira() {
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
         <h1 className="text-xl sm:text-2xl font-bold text-white">JIRA Integration</h1>
-        {!editingInstance && (
-          <button
-            onClick={handleCreate}
-            className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded"
+        <div className="flex items-center gap-2">
+          <Link
+            to="/devtools/jira/reports"
+            className="px-4 py-2 border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded text-sm"
           >
-            + Add JIRA Instance
-          </button>
-        )}
+            Status Reports
+          </Link>
+          {!editingInstance && (
+            <button
+              onClick={handleCreate}
+              className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded"
+            >
+              + Add JIRA Instance
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Delete Confirmation Modal */}

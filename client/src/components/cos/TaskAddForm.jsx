@@ -494,7 +494,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             accept="image/*"
             multiple
             onChange={handleFileSelect}
-            className="absolute w-0 h-0 opacity-0 overflow-hidden"
+            className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
           />
@@ -512,7 +512,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             accept=".txt,.md,.json,.csv,.xml,.yaml,.yml,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.js,.ts,.jsx,.tsx,.py,.sh,.sql,.html,.css,.zip,.tar,.gz"
             multiple
             onChange={handleAttachmentSelect}
-            className="absolute w-0 h-0 opacity-0 overflow-hidden"
+            className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
           />

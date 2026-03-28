@@ -84,6 +84,60 @@ function mergeObjectLWW(local, remote, timestampField = 'updatedAt') {
   return { merged: local, changed: false };
 }
 
+/**
+ * Deep merge for derived files (longevity, chronotype) where timestamps
+ * are unreliable (regenerated on derivation). Merges nested marker objects
+ * as unions, keeps non-default scalar values, and uses LWW as final tiebreaker.
+ */
+function mergeDeepUnion(local, remote, timestampField = 'derivedAt') {
+  if (!local) return { merged: remote, changed: true };
+  if (!remote) return { merged: local, changed: false };
+
+  const merged = { ...local };
+  let changed = false;
+
+  for (const [key, remoteVal] of Object.entries(remote)) {
+    const localVal = local[key];
+
+    // Skip timestamp fields — set after merge
+    if (key === timestampField) continue;
+
+    // Nested objects (markers): union keys, local wins per-key conflicts
+    if (remoteVal && typeof remoteVal === 'object' && !Array.isArray(remoteVal)
+        && localVal && typeof localVal === 'object' && !Array.isArray(localVal)) {
+      const mergedObj = { ...localVal };
+      for (const [k, v] of Object.entries(remoteVal)) {
+        if (!(k in mergedObj)) {
+          mergedObj[k] = v;
+          changed = true;
+        }
+      }
+      merged[key] = mergedObj;
+      continue;
+    }
+
+    // Missing locally — take remote
+    if (localVal === undefined || localVal === null) {
+      merged[key] = remoteVal;
+      changed = true;
+      continue;
+    }
+
+    // Remote has non-default value, local has default — take remote
+    if (localVal === 0 && remoteVal !== 0) {
+      merged[key] = remoteVal;
+      changed = true;
+    }
+  }
+
+  // Use the newer timestamp
+  const localTs = local[timestampField] || '';
+  const remoteTs = remote[timestampField] || '';
+  merged[timestampField] = remoteTs > localTs ? remoteTs : localTs;
+
+  return { merged, changed };
+}
+
 // --- Category: Goals ---
 
 async function getGoalsSnapshot() {
@@ -192,10 +246,10 @@ async function applyCharacterRemote(remoteData) {
 // --- Category: Digital Twin ---
 
 const DIGITAL_TWIN_FILES = {
-  identity: { path: IDENTITY_FILE, timestampField: 'updatedAt' },
-  chronotype: { path: CHRONOTYPE_FILE, timestampField: 'updatedAt' },
-  longevity: { path: LONGEVITY_FILE, timestampField: 'updatedAt' },
-  feedback: { path: FEEDBACK_FILE, timestampField: 'updatedAt' }
+  identity: { path: IDENTITY_FILE, timestampField: 'updatedAt', merge: 'lww' },
+  chronotype: { path: CHRONOTYPE_FILE, timestampField: 'derivedAt', merge: 'deepUnion' },
+  longevity: { path: LONGEVITY_FILE, timestampField: 'derivedAt', merge: 'deepUnion' },
+  feedback: { path: FEEDBACK_FILE, timestampField: 'updatedAt', merge: 'lww' }
 };
 
 async function getDigitalTwinSnapshot() {
@@ -211,12 +265,13 @@ async function applyDigitalTwinRemote(remoteData) {
   await ensureDir(PATHS.digitalTwin);
 
   let totalApplied = 0;
-  for (const [key, { path, timestampField }] of Object.entries(DIGITAL_TWIN_FILES)) {
+  for (const [key, { path, timestampField, merge }] of Object.entries(DIGITAL_TWIN_FILES)) {
     const remoteFile = remoteData[key];
     if (!remoteFile) continue;
 
     const local = await readJSONFile(path, null);
-    const { merged, changed } = mergeObjectLWW(local, remoteFile, timestampField);
+    const mergeFn = merge === 'deepUnion' ? mergeDeepUnion : mergeObjectLWW;
+    const { merged, changed } = mergeFn(local, remoteFile, timestampField);
     if (changed) {
       await writeFile(path, JSON.stringify(merged, null, 2));
       totalApplied++;

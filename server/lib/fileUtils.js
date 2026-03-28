@@ -39,6 +39,7 @@ export const PATHS = {
   worktrees: join(__lib_dirname, '../../data/cos/worktrees'),
   repos: join(__lib_dirname, '../../data/repos'),
   browserProfile: join(__lib_dirname, '../../data/browser-profile'),
+  browserDownloads: join(__lib_dirname, '../../data/browser-downloads'),
   digests: join(__lib_dirname, '../../data/cos/digests'),
   promptSkills: join(__lib_dirname, '../../data/prompts/skills'),
   promptSkillsJobs: join(__lib_dirname, '../../data/prompts/skills/jobs'),
@@ -416,4 +417,27 @@ export function formatDuration(ms) {
     return `${hours}h ${remainingMins}m`;
   }
   return `${mins}m`;
+}
+
+/**
+ * Load a slashdo command markdown file, resolving !`cat ~/.claude/lib/...` includes.
+ * Optionally strips YAML frontmatter.
+ */
+export async function loadSlashdoFile(commandName, { stripFrontmatter = false } = {}) {
+  const cmdPath = join(PATHS.slashdo, 'commands/do', `${commandName}.md`);
+  let content = await readFile(cmdPath, 'utf-8').catch(() => null);
+  if (!content) return null;
+  if (stripFrontmatter) {
+    content = content.replace(/^---[\s\S]*?---\s*/, '');
+  }
+  const libDir = join(PATHS.slashdo, 'lib');
+  const matches = [...content.matchAll(/!`cat ~\/.claude\/lib\/([^`]+)`/g)];
+  const replacements = await Promise.all(matches.map(async (match) => {
+    const libContent = await readFile(join(libDir, match[1]), 'utf-8').catch(() => null);
+    return { pattern: match[0], content: libContent };
+  }));
+  for (const { pattern, content: libContent } of replacements) {
+    if (libContent) content = content.replace(pattern, libContent);
+  }
+  return content;
 }

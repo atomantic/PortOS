@@ -48,8 +48,8 @@ const COLOR_MAP = {
   zinc: 'border-zinc-500/40 bg-zinc-950/40'
 };
 
-export default function GenomeCategoryCard({ category: _category, label, emoji, color, markers, onEditNotes, onDeleteMarker }) {
-  const [expanded, setExpanded] = useState(true);
+export default function GenomeCategoryCard({ category: _category, label, emoji, color, markers, defaultExpanded = true, onEditNotes, onDeleteMarker }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [expandedMarker, setExpandedMarker] = useState(null);
 
   const statusSummary = markers.reduce((acc, m) => {
@@ -139,26 +139,36 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                         <span className="text-xs text-gray-500 font-mono">{marker.gene} &middot; {marker.rsid}</span>
                       </div>
 
-                      {/* Description */}
-                      <p className="text-sm text-gray-400 leading-relaxed">{marker.description}</p>
+                      {/* What this means — friendly description */}
+                      {marker.description && (
+                        <div className={`p-2.5 rounded-lg ${
+                          marker.status === 'beneficial' ? 'bg-green-500/5 border border-green-500/20' :
+                          marker.status === 'major_concern' ? 'bg-red-500/5 border border-red-500/20' :
+                          marker.status === 'concern' ? 'bg-yellow-500/5 border border-yellow-500/20' :
+                          'bg-port-card/50 border border-port-border/50'
+                        }`}>
+                          <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">What this means for you</span>
+                          <p className="text-sm text-gray-300 mt-1 leading-relaxed">{marker.description}</p>
+                        </div>
+                      )}
 
                       {/* Implications */}
                       {marker.implications && (
                         <div className="p-2 rounded bg-port-card border border-port-border">
-                          <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Implications</span>
-                          <p className="text-sm text-gray-300 mt-1">{marker.implications}</p>
+                          <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Details</span>
+                          <p className="text-sm text-gray-400 mt-1 leading-relaxed">{marker.implications}</p>
                         </div>
                       )}
 
                       {/* Location */}
                       <div className="flex gap-4 text-xs text-gray-500">
                         {marker.chromosome && <span>Chr {marker.chromosome}</span>}
-                        {marker.position && <span>Pos {marker.position}</span>}
+                        {marker.position && <span>Pos {marker.position?.toLocaleString()}</span>}
                       </div>
 
                       {/* Notes */}
                       <div>
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Notes</label>
+                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Your Notes</label>
                         <textarea
                           value={marker.notes || ''}
                           onChange={(e) => onEditNotes(marker.id, e.target.value)}
@@ -171,7 +181,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       {/* References */}
                       {marker.references?.length > 0 && (
                         <div>
-                          <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">References</span>
+                          <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Learn More</span>
                           <ul className="mt-1 space-y-1">
                             {marker.references.map((ref, i) => (
                               <li key={i}>

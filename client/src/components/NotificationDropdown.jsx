@@ -28,6 +28,11 @@ const NOTIFICATION_TYPE_CONFIG = {
     icon: HelpCircle,
     color: 'text-emerald-400',
     bgColor: 'bg-emerald-500/20'
+  },
+  agent_warning: {
+    icon: AlertTriangle,
+    color: 'text-yellow-400',
+    bgColor: 'bg-yellow-500/20'
   }
 };
 

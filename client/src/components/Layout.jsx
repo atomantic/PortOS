@@ -67,7 +67,8 @@ import {
   FilePen,
   MessageCircle,
   Swords,
-  Image as ImageIcon
+  Image as ImageIcon,
+  HardDrive
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -152,11 +153,13 @@ const navItems = [
       { to: '/devtools/history', label: 'History', icon: History },
       { to: '/instances', label: 'Instances', icon: Network },
       { to: '/devtools/jira', label: 'JIRA', icon: Ticket },
+      { to: '/devtools/jira/reports', label: 'JIRA Reports', icon: FileText },
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
       { to: '/shell', label: 'Shell', icon: SquareTerminal },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
+  { to: '/data', label: 'Data', icon: HardDrive, single: true },
   {
     label: 'Digital Twin',
     icon: Heart,
@@ -187,7 +190,7 @@ const navItems = [
       { to: '/meatspace/body', label: 'Body', icon: Scale },
       { to: '/meatspace/genome', label: 'Genome', icon: Dna },
       { to: '/meatspace/health', label: 'Health', icon: Heart },
-      { to: '/meatspace/import', label: 'Import', icon: Upload },
+      { to: '/meatspace/settings', label: 'Settings', icon: Settings },
       { to: '/meatspace/lifestyle', label: 'Lifestyle', icon: ClipboardList },
       { to: '/meatspace/nicotine', label: 'Nicotine', icon: Cigarette },
       { to: '/meatspace/overview', label: 'Overview', icon: Activity },

@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, RefreshCw, MapPin } from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
+import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap } from './calendarUtils';
 import { formatDateFull } from '../../utils/formatters';
 
@@ -220,6 +221,9 @@ export default function DayView({ accounts }) {
 
             {/* Events overlay */}
             <div className="absolute top-0 left-16 right-0 bottom-0">
+              {/* Chronotype energy zones (behind events) */}
+              <ChronotypeOverlay startHour={START_HOUR} pxPerHour={PX_PER_HOUR} />
+
               {timedEvents.map(event => {
                 const { top, height } = getEventPosition(event);
                 const key = eventKey(event);

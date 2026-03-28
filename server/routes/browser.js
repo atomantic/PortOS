@@ -16,7 +16,11 @@ const updateConfigSchema = z.object({
   healthPort: z.number().int().min(1024).max(65535).optional(),
   autoConnect: z.boolean().optional(),
   headless: z.boolean().optional(),
-  userDataDir: z.string().optional()
+  userDataDir: z.string().optional(),
+  downloadDir: z.string().refine(
+    v => !v || !v.includes('..'),
+    { message: 'downloadDir must not contain path traversal' }
+  ).optional()
 });
 
 // GET /api/browser - Full browser status
@@ -99,6 +103,12 @@ router.get('/logs', asyncHandler(async (req, res) => {
   const lines = parseInt(req.query.lines || '50', 10);
   const logs = await browserService.getRecentLogs(lines);
   res.json(logs);
+}));
+
+// GET /api/browser/downloads - List downloaded files
+router.get('/downloads', asyncHandler(async (req, res) => {
+  const downloads = await browserService.getDownloads();
+  res.json(downloads);
 }));
 
 export default router;

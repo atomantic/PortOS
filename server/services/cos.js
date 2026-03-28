@@ -23,7 +23,7 @@ import { generateProactiveTasks as generateMissionTasks, getStats as getMissionS
 import { generateTaskFromJob, recordJobExecution, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
 import { ensureDir, ensureDirs, formatDuration, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { sanitizeTaskMetadata } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '../lib/timezone.js';
@@ -43,6 +43,24 @@ const AGENTS_DIR = join(PATHS.cos, 'agents');
 const REPORTS_DIR = PATHS.reports;
 const SCRIPTS_DIR = PATHS.scripts;
 const ROOT_DIR = PATHS.root;
+
+// MAX_TOTAL_SPAWNS imported from validation.js (shared with subAgentSpawner.js)
+
+/**
+ * Block a task that has exceeded the max spawn limit. Returns true if blocked.
+ */
+async function blockIfExceedsMaxSpawns(task, taskType) {
+  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
+  if (totalSpawns < MAX_TOTAL_SPAWNS) return false;
+  emitLog('info', `🚫 Blocking task ${task.id} — exceeded max spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, { taskId: task.id });
+  await updateTask(task.id, {
+    status: 'blocked',
+    metadata: { ...task.metadata, blockedReason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, blockedCategory: 'max-spawns', blockedAt: new Date().toISOString() }
+  }, taskType).catch(err => {
+    emitLog('warn', `Failed to block task ${task.id}: ${err.message}`, { taskId: task.id });
+  });
+  return true;
+}
 
 /**
  * Emit a log event for UI display
@@ -827,6 +845,16 @@ async function resetOrphanedTasks() {
       .map(a => a.taskId)
   );
 
+  // Track tasks whose agents completed successfully — if handleAgentCompletion's
+  // updateTask call failed silently (e.g., file write race after server restart),
+  // we should complete the task here rather than treating it as orphaned.
+  const successfullyCompletedTaskIds = new Map();
+  for (const agent of Object.values(state.agents)) {
+    if (agent.status === 'completed' && agent.result?.success) {
+      successfullyCompletedTaskIds.set(agent.taskId, agent.id);
+    }
+  }
+
   emitLog('debug', `Running agents: ${runningAgentTaskIds.length}, recently completed: ${recentlyCompletedTaskIds.size}`, { taskIds: runningAgentTaskIds });
 
   // Route orphaned tasks through handleOrphanedTask for consistent retry counting,
@@ -840,6 +868,14 @@ async function resetOrphanedTasks() {
       // completed shortly; treating them as orphaned causes spurious retries
       if (recentlyCompletedTaskIds.has(task.id)) {
         emitLog('debug', `Skipping task ${task.id} — agent recently completed, awaiting task status update`, { taskId: task.id });
+        continue;
+      }
+      // If the agent completed successfully but task wasn't updated (silent updateTask failure),
+      // complete the task now instead of treating it as orphaned
+      const successAgentId = successfullyCompletedTaskIds.get(task.id);
+      if (successAgentId) {
+        emitLog('warn', `🔧 Task ${task.id} still in_progress but agent ${successAgentId} completed successfully — completing task now (missed update)`, { taskId: task.id, agentId: successAgentId });
+        await updateTask(task.id, { status: 'completed' }, task.taskType || (task.id.startsWith('sys-') ? 'internal' : 'user'));
         continue;
       }
       emitLog('info', `Found orphaned in_progress task ${task.id}, routing through retry handler`, { taskId: task.id });
@@ -1032,6 +1068,7 @@ export async function evaluateTasks() {
   const pendingUserTasks = userTaskData.grouped?.pending || [];
   for (const task of pendingUserTasks) {
     if (tasksToSpawn.length >= availableSlots) break;
+    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawnTask(userTask)) {
       const project = task.metadata?.app || '_self';
@@ -1052,6 +1089,8 @@ export async function evaluateTasks() {
     const autoApproved = cosTaskData.autoApproved || [];
     for (const task of autoApproved) {
       if (tasksToSpawn.length >= availableSlots) break;
+
+      if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
 
       // Check if task's app is on cooldown
       const appId = task.metadata?.app;
@@ -1272,7 +1311,7 @@ async function generateIdleReviewTask(state) {
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
 async function queueEligibleImprovementTasks(state, cosTaskData) {
-  const { getDueTasks, shouldRunTask, getNextTaskType } = await import('./taskSchedule.js');
+  const { getDueTasks, shouldRunTask, getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
   // Check unified improvement flag (with backward compat)
   const improvementEnabled = state.config.improvementEnabled ??
@@ -1332,6 +1371,8 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
       approvalRequired: false
     }, 'internal');
 
+    await recordExecution(`task:${nextType}`, app.id);
+
     emitLog('info', `Queued improvement task: ${nextType} for ${app.name}`, { taskId: newTask.id, appId: app.id });
     existingTaskTypes.add(taskKey);
     queued++;
@@ -1363,7 +1404,8 @@ function getSelfImprovementTaskDescription(taskType) {
     'error-handling': 'Improve error handling patterns and recovery logic',
     'typing': 'Add or fix TypeScript/JSDoc type annotations',
     'release-check': 'Verify release readiness (changelog, version, tests)',
-    'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)'
+    'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
+    'jira-status-report': 'Generate JIRA weekly status report'
   };
   return descriptions[taskType] || null;
 }
@@ -1387,7 +1429,8 @@ function getAppImprovementTaskDescription(taskType, app) {
     'mobile-responsive': `Check mobile responsiveness of ${app.name}`,
     'feature-ideas': `Implement a feature idea for ${app.name} aligned with GOALS.md and PLAN.md (worktree+PR)`,
     'release-check': `Verify release readiness for ${app.name}`,
-    'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${app.name} (worktree+PR)`
+    'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${app.name} (worktree+PR)`,
+    'jira-status-report': `Generate JIRA weekly status report for ${app.name}`
   };
   return descriptions[taskType] || null;
 }
@@ -1906,6 +1949,78 @@ Use model: claude-opus-4-5-20251101 for thorough security analysis`
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
+/**
+ * Check if a pipeline stage's precondition is met.
+ * Supports { fileExists: 'path' } and { fileNotExists: 'path' }.
+ * Paths are relative to repoPath.
+ */
+export function checkStagePrecondition(stage, repoPath) {
+  const pre = stage?.precondition;
+  if (!pre || !repoPath) return { passed: true };
+  if (pre.fileExists) {
+    const fullPath = join(repoPath, pre.fileExists);
+    if (!existsSync(fullPath)) return { passed: false, reason: `${pre.fileExists} does not exist` };
+  }
+  if (pre.fileNotExists) {
+    const fullPath = join(repoPath, pre.fileNotExists);
+    if (existsSync(fullPath)) return { passed: false, reason: `${pre.fileNotExists} already exists` };
+  }
+  return { passed: true };
+}
+
+/**
+ * Check stage 0 precondition after pipeline initialization.
+ * Returns true if the task should be skipped (precondition failed).
+ */
+function shouldSkipForPrecondition(metadata, app, analysisType) {
+  const stage0 = metadata.pipeline?.stages?.[0];
+  if (!stage0?.precondition) return false;
+  const check = checkStagePrecondition(stage0, app.repoPath);
+  if (!check.passed) {
+    emitLog('info', `⏭️ Skipping ${analysisType} for ${app.name}: ${check.reason}`, { appId: app.id, analysisType });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Initialize pipeline runtime state on metadata if pipeline stages are configured.
+ * Mutates the metadata object in place.
+ */
+function initializePipelineMetadata(metadata) {
+  if (!metadata.pipeline?.stages?.length) return;
+  metadata.pipeline = {
+    ...metadata.pipeline,
+    id: `pipeline-${Date.now().toString(36)}`,
+    currentStage: 0,
+    stageResults: [],
+    previousStageAgentId: null,
+    status: 'running'
+  };
+  const stage0 = metadata.pipeline.stages[0];
+  if (stage0.readOnly !== undefined) {
+    metadata.readOnly = stage0.readOnly;
+  }
+  // Propagate stage 0's provider/model so the first agent uses per-stage config
+  if (stage0.model) metadata.model = stage0.model;
+  if (stage0.providerId) {
+    metadata.provider = stage0.providerId;
+    metadata.providerId = stage0.providerId;
+  }
+  // Save task-level defaults and apply stage 0 overrides in one pass
+  // Read-only stages default flags to false to prevent worktree/PR/simplify on review-only stages
+  metadata.pipeline.taskDefaults = {};
+  const stageReadOnly = stage0.readOnly ?? false;
+  for (const flag of PIPELINE_BEHAVIOR_FLAGS) {
+    if (metadata[flag] !== undefined) metadata.pipeline.taskDefaults[flag] = metadata[flag];
+    if (flag in stage0) {
+      metadata[flag] = stage0[flag];
+    } else if (stageReadOnly) {
+      metadata[flag] = false;
+    }
+  }
+}
+
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata.
 // openPR is applied first since it implies useWorktree — this prevents defaultUseWorktree: false
 // from blocking defaultOpenPR: true when both are app-level defaults.
@@ -1990,16 +2105,7 @@ async function generateManagedAppImprovementTask(app, state) {
 
   emitLog('info', `Generating improvement task for ${app.name}: ${nextType} (${selectionReason})`, { appId: app.id, analysisType: nextType });
 
-  // Get the effective prompt (custom or default template)
-  const promptTemplate = await taskSchedule.getTaskPrompt(nextType);
-
-  // Replace template variables in the prompt
-  const description = promptTemplate
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id);
-
-  // Get interval settings to determine provider/model
+  // Get interval settings to determine provider/model and pipeline config
   const interval = await taskSchedule.getTaskInterval(nextType);
 
   const metadata = {
@@ -2011,7 +2117,7 @@ async function generateManagedAppImprovementTask(app, state) {
     comprehensiveImprovement: true
   };
 
-  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
+  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify, pipeline)
   const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
   if (sanitizedGlobalMeta) {
     Object.assign(metadata, sanitizedGlobalMeta);
@@ -2024,15 +2130,27 @@ async function generateManagedAppImprovementTask(app, state) {
     Object.assign(metadata, sanitizedAppMeta);
   }
 
+  initializePipelineMetadata(metadata);
+  if (shouldSkipForPrecondition(metadata, app, nextType)) return null;
+
+  const promptTemplate = metadata.pipeline?.stages
+    ? await taskSchedule.getStagePrompt(nextType, 0)
+    : await taskSchedule.getTaskPrompt(nextType);
+  const description = promptTemplate
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath)
+    .replace(/\{appId\}/g, app.id);
+
   applyAppWorktreeDefault(metadata, app);
 
-  // Use configured model/provider if specified, otherwise use default
   if (interval.providerId) {
+    metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
+  } else if (!metadata.provider) {
+    // Only default to Claude when no per-stage provider overrides the selection
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
@@ -2070,16 +2188,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
 
   emitLog('info', `Generating improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
 
-  // Get the effective prompt (custom or default template)
-  const promptTemplate = await taskSchedule.getTaskPrompt(taskType);
-
-  // Replace template variables in the prompt
-  const description = promptTemplate
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id);
-
-  // Get interval settings to determine provider/model
+  // Get interval settings to determine provider/model and pipeline config
   const interval = await taskSchedule.getTaskInterval(taskType);
 
   const metadata = {
@@ -2091,7 +2200,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
     comprehensiveImprovement: true
   };
 
-  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify)
+  // Apply sanitized task-type-specific metadata from schedule config (e.g., useWorktree, simplify, pipeline)
   const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
   if (sanitizedGlobalMeta) {
     Object.assign(metadata, sanitizedGlobalMeta);
@@ -2104,15 +2213,28 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
     Object.assign(metadata, sanitizedAppMeta);
   }
 
+  initializePipelineMetadata(metadata);
+  if (shouldSkipForPrecondition(metadata, app, taskType)) return null;
+
+  const promptTemplate = metadata.pipeline?.stages
+    ? await taskSchedule.getStagePrompt(taskType, 0)
+    : await taskSchedule.getTaskPrompt(taskType);
+  const description = promptTemplate
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath)
+    .replace(/\{appId\}/g, app.id);
+
   applyAppWorktreeDefault(metadata, app);
 
   // Use configured model/provider if specified, otherwise use default
   if (interval.providerId) {
+    metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
+  } else if (!metadata.provider) {
+    // Only default to Claude when no per-stage provider overrides the selection
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
@@ -3493,6 +3615,7 @@ async function dequeueNextTask() {
 
   for (const task of pendingUserTasks) {
     if (spawned >= availableSlots) break;
+    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawn(userTask)) continue;
     cosEvents.emit('task:ready', userTask);
@@ -3505,6 +3628,7 @@ async function dequeueNextTask() {
 
   for (const task of autoApproved) {
     if (spawned >= availableSlots) break;
+    if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
     const appId = task.metadata?.app;
     if (appId) {
       const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
@@ -3581,6 +3705,7 @@ export async function updateTask(taskId, updates, taskType = 'user') {
     : join(ROOT_DIR, state.config.cosTasksFile);
 
   if (!existsSync(filePath)) {
+    console.log(`⚠️ updateTask: file not found for ${taskId} (taskType=${taskType}, path=${filePath})`);
     return { error: 'Task file not found' };
   }
 
@@ -3589,6 +3714,7 @@ export async function updateTask(taskId, updates, taskType = 'user') {
 
   const taskIndex = tasks.findIndex(t => t.id === taskId);
   if (taskIndex === -1) {
+    console.log(`⚠️ updateTask: task ${taskId} not found in ${filePath} (taskType=${taskType}, parsed ${tasks.length} tasks, status update: ${updates.status || 'none'})`);
     return { error: 'Task not found' };
   }
 

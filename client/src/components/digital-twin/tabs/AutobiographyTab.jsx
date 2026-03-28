@@ -12,7 +12,10 @@ import {
   Send,
   Settings,
   SkipForward,
-  X
+  X,
+  Sparkles,
+  Link2,
+  MessageCircle
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from 'react-hot-toast';
@@ -41,6 +44,11 @@ export default function AutobiographyTab({ onRefresh }) {
 
   // Expanded story
   const [expandedStory, setExpandedStory] = useState(null);
+
+  // Follow-up state
+  const [followUps, setFollowUps] = useState(null); // { storyId, prompts[] }
+  const [generatingFollowUps, setGeneratingFollowUps] = useState(false);
+  const [parentStoryId, setParentStoryId] = useState(null); // when writing a follow-up
 
   const loadData = useCallback(async () => {
     const [statsData, storiesData, themesData, configData] = await Promise.all([
@@ -106,7 +114,10 @@ export default function AutobiographyTab({ onRefresh }) {
       return;
     }
     setSaving(true);
-    const result = await api.saveAutobiographyStory(currentPrompt.id, storyContent.trim())
+    const opts = parentStoryId
+      ? { parentStoryId, customPromptText: currentPrompt.text }
+      : {};
+    const result = await api.saveAutobiographyStory(currentPrompt.id, storyContent.trim(), opts)
       .catch((err) => { toast.error(err.message); return null; });
 
     if (result) {
@@ -114,10 +125,43 @@ export default function AutobiographyTab({ onRefresh }) {
       setWriting(false);
       setCurrentPrompt(null);
       setStoryContent('');
+      setParentStoryId(null);
+      // Show follow-ups from the saved story if it already has them, otherwise offer to generate
+      setFollowUps({ storyId: result.id, prompts: result.followUpPrompts || null });
+      setExpandedStory(result.id);
       loadData();
       onRefresh?.();
     }
     setSaving(false);
+  };
+
+  const handleGenerateFollowUps = async (storyId) => {
+    setGeneratingFollowUps(true);
+    const result = await api.generateAutobiographyFollowUps(storyId)
+      .catch((err) => { toast.error(err.message); return null; });
+
+    if (result?.followUps) {
+      setFollowUps({ storyId, prompts: result.followUps });
+      // Update the story in local state
+      setStories(prev => prev.map(s =>
+        s.id === storyId ? { ...s, followUpPrompts: result.followUps } : s
+      ));
+      toast.success('Follow-up questions generated');
+    }
+    setGeneratingFollowUps(false);
+  };
+
+  const startFollowUp = (parentId, questionText, themeId, themeLabel) => {
+    setParentStoryId(parentId);
+    setCurrentPrompt({
+      id: `followup-${parentId}`,
+      themeId,
+      themeLabel,
+      text: questionText
+    });
+    setWriting(true);
+    setStoryContent('');
+    setFollowUps(null);
   };
 
   const handleUpdateStory = async (storyId) => {
@@ -171,7 +215,7 @@ export default function AutobiographyTab({ onRefresh }) {
         {stats && (
           <div className="flex flex-wrap gap-3 text-sm text-gray-400">
             <span>{stats.totalStories} stories</span>
-            <span>{stats.totalWords.toLocaleString()} words</span>
+            <span>{(stats.totalWords ?? 0).toLocaleString()} words</span>
             <span>{stats.promptsRemaining} prompts remaining</span>
           </div>
         )}
@@ -230,18 +274,78 @@ export default function AutobiographyTab({ onRefresh }) {
         </div>
       )}
 
+      {/* Follow-up Suggestions (shown after saving a story) */}
+      {followUps && !writing && (
+        <div className="bg-port-card border border-amber-500/30 rounded-lg p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span className="text-sm font-medium text-amber-300">Go Deeper</span>
+            </div>
+            <button
+              onClick={() => setFollowUps(null)}
+              className="p-1 text-gray-500 hover:text-white"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {followUps.prompts ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-400">Click a question to continue writing about this story:</p>
+              {followUps.prompts.map((question, i) => {
+                const story = stories.find(s => s.id === followUps.storyId);
+                return (
+                  <button
+                    key={i}
+                    onClick={() => startFollowUp(
+                      followUps.storyId,
+                      question,
+                      story?.themeId || 'unknown',
+                      story?.themeLabel || 'Unknown'
+                    )}
+                    className="w-full text-left p-3 rounded-lg bg-port-bg border border-port-border hover:border-amber-500/50 transition-colors group"
+                  >
+                    <div className="flex items-start gap-2">
+                      <MessageCircle size={14} className="mt-0.5 text-amber-400/60 group-hover:text-amber-400 shrink-0" />
+                      <span className="text-sm text-gray-300 group-hover:text-white">{question}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <button
+              onClick={() => handleGenerateFollowUps(followUps.storyId)}
+              disabled={generatingFollowUps}
+              className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 text-amber-300 rounded text-sm hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+            >
+              {generatingFollowUps
+                ? <RefreshCw size={14} className="animate-spin" />
+                : <Sparkles size={14} />}
+              {generatingFollowUps ? 'Generating...' : 'Generate follow-up questions'}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Writing Mode */}
       {writing && currentPrompt && (
         <div className="bg-port-card border border-port-accent/30 rounded-lg p-6 space-y-4">
           <div className="flex items-start justify-between gap-4">
             <div>
+              {parentStoryId && (
+                <div className="flex items-center gap-1 mb-1">
+                  <Link2 size={12} className="text-amber-400" />
+                  <span className="text-xs text-amber-400">Follow-up</span>
+                </div>
+              )}
               <span className="text-xs font-medium text-port-accent uppercase tracking-wide">
                 {currentPrompt.themeLabel}
               </span>
               <p className="text-white text-lg mt-1">{currentPrompt.text}</p>
             </div>
             <button
-              onClick={() => { setWriting(false); setCurrentPrompt(null); setStoryContent(''); }}
+              onClick={() => { setWriting(false); setCurrentPrompt(null); setStoryContent(''); setParentStoryId(null); }}
               className="p-1 text-gray-500 hover:text-white"
             >
               <X size={16} />
@@ -339,6 +443,12 @@ export default function AutobiographyTab({ onRefresh }) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-xs font-medium text-port-accent">{story.themeLabel}</span>
+                  {story.parentStoryId && (
+                    <span className="flex items-center gap-0.5 text-xs text-amber-400">
+                      <Link2 size={10} />
+                      follow-up
+                    </span>
+                  )}
                   <span className="text-xs text-gray-500">{story.wordCount} words</span>
                   <span className="text-xs text-gray-600">
                     {new Date(story.createdAt).toLocaleDateString()}
@@ -379,7 +489,40 @@ export default function AutobiographyTab({ onRefresh }) {
                     <p className="text-sm text-white whitespace-pre-wrap leading-relaxed">
                       {story.content}
                     </p>
+
+                    {/* Follow-up prompts inline */}
+                    {story.followUpPrompts?.length > 0 && (
+                      <div className="mt-3 space-y-1.5">
+                        <p className="text-xs text-amber-400 flex items-center gap-1">
+                          <Sparkles size={12} />
+                          Follow-up questions
+                        </p>
+                        {story.followUpPrompts.map((q, i) => (
+                          <button
+                            key={i}
+                            onClick={() => startFollowUp(story.id, q, story.themeId, story.themeLabel)}
+                            className="w-full text-left p-2 rounded bg-port-bg/50 border border-port-border/50 hover:border-amber-500/40 transition-colors group"
+                          >
+                            <div className="flex items-start gap-2">
+                              <MessageCircle size={12} className="mt-0.5 text-amber-400/50 group-hover:text-amber-400 shrink-0" />
+                              <span className="text-xs text-gray-400 group-hover:text-gray-200">{q}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="flex items-center gap-2 justify-end pt-2 border-t border-port-border/50">
+                      {!story.followUpPrompts && (
+                        <button
+                          onClick={() => handleGenerateFollowUps(story.id)}
+                          disabled={generatingFollowUps}
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-amber-400/70 hover:text-amber-400 transition-colors disabled:opacity-50"
+                        >
+                          {generatingFollowUps ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                          Follow-ups
+                        </button>
+                      )}
                       <button
                         onClick={() => { setEditingStory(story.id); setEditContent(story.content); }}
                         className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"

@@ -4,6 +4,8 @@
 
 import express from 'express';
 import * as jiraService from '../services/jira.js';
+import * as jiraReports from '../services/jiraReports.js';
+import { getAppById } from '../services/apps.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const router = express.Router();
@@ -280,6 +282,82 @@ router.get('/instances/:instanceId/projects/:projectKey/epics', async (req, res,
       req.query.q || ''
     );
     res.json(epics);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================
+// JIRA Status Reports
+// ============================================================
+
+/**
+ * GET /api/jira/reports
+ * List all JIRA status reports, optionally filtered by appId
+ */
+router.get('/reports', async (req, res, next) => {
+  try {
+    const reports = await jiraReports.listReports(req.query.appId || null);
+    res.json(reports);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/jira/reports/generate
+ * Generate status report for a specific app or all JIRA-enabled apps
+ */
+router.post('/reports/generate', async (req, res, next) => {
+  try {
+    const { appId } = req.body;
+
+    if (appId) {
+      const app = await getAppById(appId);
+      if (!app) {
+        throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+      }
+      if (!app.jira?.enabled) {
+        throw new ServerError('JIRA is not enabled for this app', { status: 400, code: 'JIRA_NOT_ENABLED' });
+      }
+      const report = await jiraReports.generateReport(appId, app);
+      res.json(report);
+    } else {
+      const reports = await jiraReports.generateAllReports();
+      res.json(reports);
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/jira/reports/:appId/latest
+ * Get the latest report for an app
+ */
+router.get('/reports/:appId/latest', async (req, res, next) => {
+  try {
+    const report = await jiraReports.getLatestReport(req.params.appId);
+    if (!report) {
+      throw new ServerError('No reports found for this app', { status: 404, code: 'NOT_FOUND' });
+    }
+    res.json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/jira/reports/:appId/:date
+ * Get a specific report by app and date
+ */
+router.get('/reports/:appId/:date', async (req, res, next) => {
+  try {
+    const report = await jiraReports.getReport(req.params.appId, req.params.date);
+    if (!report) {
+      throw new ServerError('Report not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    res.json(report);
   } catch (error) {
     next(error);
   }

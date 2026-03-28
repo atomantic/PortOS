@@ -7,6 +7,7 @@
 
 import { writeFile } from 'fs/promises';
 import os from 'os';
+import net from 'net';
 import crypto from 'crypto';
 import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -110,9 +111,12 @@ export async function getPeers() {
 
 function validName(name, fallback) {
   if (!name || typeof name !== 'string') return fallback;
-  const lower = name.trim().toLowerCase();
-  if (['undefined', 'nan', 'null', ''].includes(lower)) return fallback;
+  if (!name.trim()) return fallback;
   return name.trim();
+}
+
+function isIPAddress(str) {
+  return net.isIP(str) !== 0;
 }
 
 // Default sync categories — all disabled until explicitly enabled per-peer
@@ -240,7 +244,7 @@ export async function probePeer(peer) {
     if (status === 'online') entry.version = remoteVersion;
     // Auto-update name from hostname if current name is just an IP address
     const remoteHostname = validName(lastHealth?.hostname, null);
-    if (remoteHostname && /^\d+\.\d+\.\d+\.\d+$/.test(entry.name)) {
+    if (remoteHostname && isIPAddress(entry.name)) {
       entry.name = remoteHostname;
     }
 
@@ -336,8 +340,11 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       existing.status = 'online';
       existing.instanceId = instanceId;
       existing.port = port;
+      // Only auto-update name if still an IP address (preserve user-set names)
       const sanitized = validName(name, null);
-      if (sanitized) existing.name = sanitized;
+      if (sanitized && isIPAddress(existing.name)) {
+        existing.name = sanitized;
+      }
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');

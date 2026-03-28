@@ -3,7 +3,7 @@ import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
   FileText, ChevronDown, ChevronRight, ExternalLink,
-  Mail, MessageSquare
+  Mail, MessageSquare, Download, FolderOpen
 } from 'lucide-react';
 import {
   getBrowserStatus, getBrowserConfig, updateBrowserConfig,
@@ -50,6 +50,7 @@ export default function BrowserPage() {
   const [config, setConfig] = useState(null);
   const [configDraft, setConfigDraft] = useState(null);
   const [navUrl, setNavUrl] = useState('');
+  const [showDownloads, setShowDownloads] = useState(true);
 
   const fetchStatus = useCallback(async () => {
     const data = await getBrowserStatus().catch(() => null);
@@ -503,6 +504,53 @@ export default function BrowserPage() {
               </div>
             )}
           </div>
+
+          {/* Downloads */}
+          <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
+            <button
+              onClick={() => setShowDownloads(s => !s)}
+              className="w-full flex items-center justify-between p-4 text-left hover:bg-port-border/30 transition-colors"
+            >
+              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                <Download size={20} className="text-port-accent" />
+                Downloads
+                {status?.downloads?.files?.length > 0 && (
+                  <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-port-accent/20 text-port-accent">
+                    {status.downloads.files.length}
+                  </span>
+                )}
+              </h3>
+              {showDownloads ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
+            </button>
+            {showDownloads && (
+              <div className="border-t border-port-border">
+                {status?.downloads?.downloadDir && (
+                  <div className="px-4 py-2 bg-port-bg/50 border-b border-port-border flex items-center gap-2 text-xs text-gray-500">
+                    <FolderOpen size={12} />
+                    <span className="font-mono truncate">{status.downloads.downloadDir}</span>
+                  </div>
+                )}
+                {!status?.downloads?.files || status.downloads.files.length === 0 ? (
+                  <div className="p-4 text-sm text-gray-500">No downloads</div>
+                ) : (
+                  <div className="divide-y divide-port-border">
+                    {status.downloads.files.map(file => (
+                      <div key={file.name} className="p-3 hover:bg-port-border/20 transition-colors">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-white truncate">{file.name}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {formatBytes(file.size)} &middot; {new Date(file.modified).toLocaleString()}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Sidebar */}
@@ -530,6 +578,10 @@ export default function BrowserPage() {
                 <span className={`text-sm font-medium ${status?.config?.autoConnect ? 'text-port-success' : 'text-gray-500'}`}>
                   {status?.config?.autoConnect ? 'Yes' : 'No'}
                 </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400 text-sm">Downloads</span>
+                <span className="text-sm font-medium text-port-success">{status?.downloads?.files?.length ?? 0} files</span>
               </div>
             </div>
           </div>

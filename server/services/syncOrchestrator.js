@@ -6,7 +6,8 @@
  * Maintains per-peer cursors and triggers sync on peer connect + interval.
  */
 
-import { writeFile, rename } from 'fs/promises';
+import { writeFile, rename, access } from 'fs/promises';
+import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
@@ -72,22 +73,60 @@ async function fetchPeer(peer, path) {
   }
 }
 
+/**
+ * Fetch an image from a peer if we don't have it locally.
+ * avatarPath is like "/data/images/uuid.png"
+ */
+async function syncImageFromPeer(peer, avatarPath) {
+  // Validate avatarPath is a safe relative image path under /data/images/
+  if (!avatarPath || avatarPath.includes('..') || !avatarPath.startsWith('/data/images/')) return;
+  const filename = avatarPath.split('/').pop();
+  if (!filename || !/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(filename)) return;
+  const localPath = join(PATHS.images, filename);
+
+  // Skip if we already have it
+  const exists = await access(localPath).then(() => true).catch(() => false);
+  if (exists) return;
+
+  const url = `http://${peer.address}:${peer.port}${avatarPath}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    await ensureDir(PATHS.images);
+    await writeFile(localPath, buffer);
+    console.log(`🔄 Synced avatar image: ${filename}`);
+  } catch {
+    // Non-critical — avatar will sync on next cycle
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // --- Status ---
 
 /**
- * Get sync status: local sequences + per-peer cursors
+ * Get sync status: local sequences + per-peer cursors + optional local checksums
  */
-export async function getSyncStatus() {
+export async function getSyncStatus({ includeChecksums = false } = {}) {
   const isPostgres = getBackendName() === 'postgres';
-  const [brainSeq, memorySeq, cursors] = await Promise.all([
+  const snapshotCategories = includeChecksums ? dataSync.getSupportedCategories() : [];
+  const [brainSeq, memorySeq, cursors, ...checksumResults] = await Promise.all([
     Promise.resolve(brainSyncLog.getCurrentSeq()),
     isPostgres ? memorySync.getMaxSequence() : Promise.resolve(null),
-    loadCursors()
+    loadCursors(),
+    ...snapshotCategories.map(cat => dataSync.getChecksum(cat).catch(() => null))
   ]);
-  return {
-    local: { brainSeq, memorySeq },
-    cursors
-  };
+  const local = { brainSeq, memorySeq };
+  if (includeChecksums) {
+    local.checksums = {};
+    for (let i = 0; i < snapshotCategories.length; i++) {
+      local.checksums[snapshotCategories[i]] = checksumResults[i]?.checksum ?? null;
+    }
+  }
+  return { local, cursors };
 }
 
 // --- Sync logic ---
@@ -232,6 +271,12 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums)
   if (!snapshot?.data) return { totalApplied: 0, checksum: null };
 
   const result = await dataSync.applyRemote(category, snapshot.data);
+
+  // After character sync, fetch avatar image if we don't have it locally
+  if (category === 'character' && snapshot.data?.avatarPath) {
+    await syncImageFromPeer(peer, snapshot.data.avatarPath);
+  }
+
   return { totalApplied: result.applied ? result.count : 0, checksum: snapshot.checksum };
 }
 

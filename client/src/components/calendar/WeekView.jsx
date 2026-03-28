@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
+import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap } from './calendarUtils';
 
 const START_HOUR = 6;
@@ -263,6 +264,11 @@ export default function WeekView({ accounts }) {
                 ))}
               </div>
             ))}
+
+            {/* Chronotype energy zones (behind events) */}
+            <div className="absolute top-0 bottom-0 left-14 right-0">
+              <ChronotypeOverlay startHour={START_HOUR} pxPerHour={PX_PER_HOUR} />
+            </div>
 
             {/* Events overlay per column */}
             <div className="absolute top-0 bottom-0 left-14 right-0 flex">

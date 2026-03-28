@@ -7,8 +7,8 @@ import {
   ClipboardList,
   Activity,
   Scale,
+  Settings,
   Stethoscope,
-  Upload
 } from 'lucide-react';
 
 export const TABS = [
@@ -19,7 +19,7 @@ export const TABS = [
   { id: 'body', label: 'Body', icon: Scale },
   { id: 'genome', label: 'Genome', icon: Dna },
   { id: 'health', label: 'Health', icon: Stethoscope },
-  { id: 'import', label: 'Import', icon: Upload },
+  { id: 'settings', label: 'Settings', icon: Settings },
   { id: 'lifestyle', label: 'Lifestyle', icon: ClipboardList },
   { id: 'nicotine', label: 'Nicotine', icon: Cigarette },
 ];

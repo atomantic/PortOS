@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { Upload, FileJson, HeartPulse, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload, Download, FileJson, HeartPulse, CheckCircle, AlertCircle } from 'lucide-react';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 
-export default function ImportTab({ onRefresh }) {
+export default function SettingsTab({ onRefresh }) {
   // JSON import state
   const [jsonImporting, setJsonImporting] = useState(false);
   const [jsonResult, setJsonResult] = useState(null);
@@ -100,8 +100,37 @@ export default function ImportTab({ onRefresh }) {
     // Success handled via WebSocket health:xml:complete event
   };
 
+  const handleMortalLoomExport = () => {
+    window.open('/api/meatspace/export/mortalloom', '_blank');
+  };
+
   return (
     <div className="space-y-6">
+      {/* MortalLoom Export */}
+      <div className="bg-port-card border border-port-border rounded-xl p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Download size={18} className="text-port-accent" />
+          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+            Export to MortalLoom
+          </h3>
+        </div>
+
+        <p className="text-sm text-gray-400 mb-2">
+          Export all MeatSpace data (goals, alcohol, nicotine, blood tests, eyes, body, epigenetics) as a MortalLoom-compatible JSON file.
+        </p>
+        <p className="text-xs text-gray-500 mb-4">
+          Apple Health data is not included — MortalLoom reads directly from Apple Health on your device.
+        </p>
+
+        <button
+          onClick={handleMortalLoomExport}
+          className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg hover:bg-port-accent/80 transition-colors"
+        >
+          <Download size={16} />
+          Download MortalLoom Export
+        </button>
+      </div>
+
       {/* Health Auto Export JSON Import */}
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <div className="flex items-center gap-2 mb-4">
@@ -124,7 +153,7 @@ export default function ImportTab({ onRefresh }) {
             type="file"
             accept=".json"
             onChange={handleJsonFileSelect}
-            className="absolute w-0 h-0 opacity-0 overflow-hidden"
+            className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
           />
@@ -212,7 +241,7 @@ export default function ImportTab({ onRefresh }) {
             type="file"
             accept=".xml,.zip"
             onChange={handleXmlFileSelect}
-            className="absolute w-0 h-0 opacity-0 overflow-hidden"
+            className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
           />

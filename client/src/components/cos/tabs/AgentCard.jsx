@@ -4,6 +4,7 @@ import {
   Trash2,
   CheckCircle,
   AlertCircle,
+  AlertTriangle,
   RotateCcw,
   Loader2,
   Skull,
@@ -98,6 +99,10 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
+  // Pipeline stage output: track which stage tab is active and cached outputs per stage agentId
+  const [activeStageTab, setActiveStageTab] = useState(null);
+  const [stageOutputs, setStageOutputs] = useState({});
+  const [loadingStageId, setLoadingStageId] = useState(null);
   const [processStats, setProcessStats] = useState(null);
   const [killing, setKilling] = useState(false);
   const [feedbackState, setFeedbackState] = useState(agent.feedback?.rating || null);
@@ -293,6 +298,50 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     return output.filter(o => o?.line?.startsWith('🔧')).length;
   }, [output]);
 
+  // Pipeline stage info: build stage list with agentIds from stageResults
+  const pipelineStages = useMemo(() => {
+    const pipeline = agent.metadata?.pipeline;
+    if (!pipeline?.stages || pipeline.stages.length < 2) return null;
+    const results = pipeline.stageResults || [];
+    return pipeline.stages.map((stage, idx) => {
+      const result = results.find(r => r.stage === idx);
+      return {
+        index: idx,
+        name: stage.name,
+        agentId: result?.agentId || (idx === pipeline.currentStage ? agent.id : null),
+        success: result?.success,
+        isCurrent: idx === (pipeline.currentStage ?? 0),
+        completed: !!result
+      };
+    });
+  }, [agent.metadata?.pipeline, agent.id]);
+
+  // Initialize activeStageTab to current stage when pipeline is detected
+  useEffect(() => {
+    if (pipelineStages && activeStageTab === null) {
+      const current = pipelineStages.find(s => s.isCurrent);
+      setActiveStageTab(current?.index ?? pipelineStages.length - 1);
+    }
+  }, [pipelineStages, activeStageTab]);
+
+  // Fetch output for a prior pipeline stage agent
+  const fetchStageOutput = useCallback(async (stageAgentId) => {
+    if (!stageAgentId || stageOutputs[stageAgentId] || loadingStageId) return;
+    setLoadingStageId(stageAgentId);
+    const data = await api.getCosAgent(stageAgentId).catch(() => null);
+    setStageOutputs(prev => ({ ...prev, [stageAgentId]: data?.output || [] }));
+    setLoadingStageId(null);
+  }, [stageOutputs, loadingStageId]);
+
+  // Auto-fetch stage output when switching to a prior stage tab
+  useEffect(() => {
+    if (!pipelineStages || activeStageTab === null) return;
+    const stage = pipelineStages[activeStageTab];
+    if (!stage?.isCurrent && stage?.agentId && !stageOutputs[stage.agentId]) {
+      fetchStageOutput(stage.agentId);
+    }
+  }, [activeStageTab, pipelineStages, stageOutputs, fetchStageOutput]);
+
   return (
     <div className={`bg-port-card border rounded-lg overflow-hidden ${
       completed
@@ -313,6 +362,11 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             {agent.metadata?.taskApp && (agent.metadata.taskAppName || agent.metadata.workspaceName) && !/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(agent.metadata.taskAppName || agent.metadata.workspaceName) && (
               <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded shrink-0" title={agent.metadata.workspacePath || agent.metadata.taskApp}>
                 {agent.metadata.taskAppName || agent.metadata.workspaceName}
+              </span>
+            )}
+            {agent.metadata?.pipeline?.stages?.length > 0 && (
+              <span className="px-1.5 py-0.5 text-xs bg-purple-500/20 text-purple-400 rounded shrink-0" title={agent.metadata.pipeline.stages[agent.metadata.pipeline.currentStage]?.name}>
+                Stage {(agent.metadata.pipeline.currentStage ?? 0) + 1}/{agent.metadata.pipeline.stages.length}
               </span>
             )}
             {isSystemAgent && (
@@ -609,6 +663,17 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
               )}
             </div>
+            {/* Cleanup warnings */}
+            {agent.result.warnings?.length > 0 && (
+              <div className="text-sm text-port-warning flex items-start gap-2">
+                <AlertTriangle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+                <div>
+                  {agent.result.warnings.map((w, i) => (
+                    <p key={i}>{w}</p>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Memory extraction status */}
             {agent.result.success && (
               <div className={`text-sm flex items-center gap-1 ${
@@ -707,16 +772,75 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
       {/* Expanded output view */}
       {expanded && (
         <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-hidden">
-          {loadingOutput ? (
-            <div className="flex items-center gap-2 text-gray-500 text-sm">
-              <Loader2 size={14} aria-hidden="true" className="animate-spin" />
-              Loading full output...
+          {/* Pipeline stage tabs */}
+          {pipelineStages && (
+            <div className="flex items-center gap-1 mb-2 overflow-x-auto">
+              {pipelineStages.map((stage) => {
+                const isActive = activeStageTab === stage.index;
+                return (
+                  <button
+                    key={stage.index}
+                    onClick={() => setActiveStageTab(stage.index)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded whitespace-nowrap transition-colors ${
+                      isActive
+                        ? 'bg-purple-500/20 text-purple-400'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-port-border/30'
+                    }`}
+                  >
+                    {stage.completed && (
+                      <span className={stage.success ? 'text-port-success' : 'text-port-error'}>
+                        {stage.success ? '●' : '✕'}
+                      </span>
+                    )}
+                    {stage.isCurrent && !stage.completed && (
+                      <span className="text-port-accent animate-pulse">●</span>
+                    )}
+                    {!stage.isCurrent && !stage.completed && (
+                      <span className="text-gray-600">○</span>
+                    )}
+                    {stage.name}
+                  </button>
+                );
+              })}
             </div>
-          ) : output.length > 0 ? (
-            <OutputBlocks output={output} />
-          ) : (
-            <div className="text-gray-500 text-sm">No output captured</div>
           )}
+          {/* Output content: show stage-specific output for pipeline agents */}
+          {(() => {
+            // For pipeline agents viewing a prior stage
+            const activeStage = pipelineStages?.[activeStageTab];
+            if (activeStage && !activeStage.isCurrent && activeStage.agentId) {
+              const stageOut = stageOutputs[activeStage.agentId];
+              if (loadingStageId === activeStage.agentId) {
+                return (
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Loader2 size={14} aria-hidden="true" className="animate-spin" />
+                    Loading stage output...
+                  </div>
+                );
+              }
+              if (stageOut && stageOut.length > 0) {
+                return <OutputBlocks output={stageOut} />;
+              }
+              return <div className="text-gray-500 text-sm">No output captured for this stage</div>;
+            }
+            // For pipeline agents viewing a future stage (not yet run)
+            if (activeStage && !activeStage.isCurrent && !activeStage.agentId) {
+              return <div className="text-gray-500 text-sm">This stage has not run yet</div>;
+            }
+            // Current stage or non-pipeline agent: existing behavior
+            if (loadingOutput) {
+              return (
+                <div className="flex items-center gap-2 text-gray-500 text-sm">
+                  <Loader2 size={14} aria-hidden="true" className="animate-spin" />
+                  Loading full output...
+                </div>
+              );
+            }
+            if (output.length > 0) {
+              return <OutputBlocks output={output} />;
+            }
+            return <div className="text-gray-500 text-sm">No output captured</div>;
+          })()}
         </div>
       )}
     </div>

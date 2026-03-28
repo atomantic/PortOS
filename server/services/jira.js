@@ -76,7 +76,7 @@ export async function deleteInstance(instanceId) {
 /**
  * Create axios client for JIRA instance
  */
-function createJiraClient(instance) {
+export function createJiraClient(instance) {
   if (instance.allowSelfSigned) {
     console.warn(`⚠️ JIRA instance ${instance.name || instance.id} using allowSelfSigned — TLS verification disabled`);
   }

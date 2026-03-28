@@ -64,7 +64,8 @@ function execGit(args, cwd, options = {}) {
  */
 export async function getStatus(dir) {
   const result = await execGit(['status', '--porcelain'], dir);
-  const lines = result.stdout.trim().split('\n').filter(Boolean);
+  // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
+  const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
 
   const files = lines.map(line => {
     const status = line.substring(0, 2);
@@ -582,6 +583,21 @@ export function hasChangelogDir(dir) {
  * @param {string} dir - Git repository directory
  * @returns {{ success: boolean, branch: string, stashed: boolean, conflict: boolean, error: string|null }}
  */
+/**
+ * Pop stash and clean up if the pop produces merge conflicts.
+ * Returns { conflict: boolean, stderr: string }
+ */
+async function popStashSafely(dir) {
+  const result = await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
+  const output = `${result.stdout || ''} ${result.stderr || ''}`;
+  if (output.includes('CONFLICT') || result.exitCode !== 0) {
+    await execGit(['checkout', '--', '.'], dir, { ignoreExitCode: true });
+    await execGit(['stash', 'drop'], dir, { ignoreExitCode: true });
+    return { conflict: true, stderr: result.stderr || '' };
+  }
+  return { conflict: false, stderr: '' };
+}
+
 export async function ensureLatest(dir) {
   const gitCheck = await isRepo(dir).catch(() => false);
   if (!gitCheck) return { success: true, branch: null, stashed: false, conflict: false, error: null, skipped: 'not-a-repo' };
@@ -627,13 +643,9 @@ export async function ensureLatest(dir) {
   if (mergeOk) {
     // Fast-forward succeeded
     if (stashed) {
-      const popResult = await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
-      const popOk = !popResult.stderr?.includes('CONFLICT');
-      if (!popOk) {
-        // Stash pop conflict — abort and report
-        await execGit(['checkout', '--', '.'], dir, { ignoreExitCode: true });
-        await execGit(['stash', 'drop'], dir, { ignoreExitCode: true });
-        return { success: false, branch: currentBranch, stashed: true, conflict: true, error: `stash pop conflict after fast-forward: ${popResult.stderr}` };
+      const { conflict, stderr } = await popStashSafely(dir);
+      if (conflict) {
+        return { success: false, branch: currentBranch, stashed: true, conflict: true, error: `stash pop conflict after fast-forward: ${stderr}` };
       }
     }
     return { success: true, branch: currentBranch, stashed, conflict: false, error: null };
@@ -647,7 +659,7 @@ export async function ensureLatest(dir) {
     // Rebase failed — abort and report conflict
     await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true });
     if (stashed) {
-      await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
+      await popStashSafely(dir);
     }
     return {
       success: false,
@@ -660,11 +672,9 @@ export async function ensureLatest(dir) {
 
   // Rebase succeeded
   if (stashed) {
-    const popResult = await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
-    if (popResult.stderr?.includes('CONFLICT')) {
-      await execGit(['checkout', '--', '.'], dir, { ignoreExitCode: true });
-      await execGit(['stash', 'drop'], dir, { ignoreExitCode: true });
-      return { success: false, branch: currentBranch, stashed: true, conflict: true, error: `stash pop conflict after rebase: ${popResult.stderr}` };
+    const { conflict, stderr } = await popStashSafely(dir);
+    if (conflict) {
+      return { success: false, branch: currentBranch, stashed: true, conflict: true, error: `stash pop conflict after rebase: ${stderr}` };
     }
   }
 

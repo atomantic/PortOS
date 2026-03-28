@@ -49,6 +49,7 @@ import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js
 import { getCachedDrill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
 import * as trainingService from '../services/meatspacePostTraining.js';
 import * as calendarService from '../services/meatspaceCalendar.js';
+import { getGoals } from '../services/identity.js';
 
 const router = Router();
 
@@ -863,14 +864,19 @@ router.delete('/life-events/:id', asyncHandler(async (req, res) => {
  * Transforms PortOS daily-log + files into MortalLoom AppData schema.
  */
 router.get('/export/mortalloom', asyncHandler(async (req, res) => {
-  const config = await meatspaceService.getConfig();
-  const bloodData = await healthService.getBloodTests();
-  const epiData = await healthService.getEpigeneticTests();
-  const eyeData = await healthService.getEyeExams();
-  const bodyHistory = await healthService.getBodyHistory();
-  const dailyLog = await readJSONFile(join(PATHS.meatspace, 'daily-log.json'), { entries: [] });
+  const [config, bloodData, epiData, eyeData, dailyLog, customDrinks, customNicotineProducts, goalsData] = await Promise.all([
+    meatspaceService.getConfig(),
+    healthService.getBloodTests(),
+    healthService.getEpigeneticTests(),
+    healthService.getEyeExams(),
+    readJSONFile(join(PATHS.meatspace, 'daily-log.json'), { entries: [] }),
+    alcoholService.getCustomDrinks(),
+    nicotineService.getCustomProducts(),
+    getGoals(),
+  ]);
 
-  // Profile
+  const entries = dailyLog?.entries || [];
+
   const profile = {
     birthDate: config.birthDate || null,
     biologicalSex: config.sex || null,
@@ -884,9 +890,8 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
     },
   };
 
-  // Alcohol drinks - flatten daily log entries into individual drinks
   const alcoholDrinks = [];
-  for (const entry of (dailyLog?.entries || [])) {
+  for (const entry of entries) {
     if (!entry.alcohol?.drinks) continue;
     for (const drink of entry.alcohol.drinks) {
       alcoholDrinks.push({
@@ -894,46 +899,41 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
         name: drink.name,
         oz: drink.oz,
         abv: drink.abv,
-        count: drink.count || 1,
+        count: Math.max(1, Math.round(drink.count || 1)),
         date: entry.date,
       });
     }
   }
 
-  // Nicotine entries - flatten daily log
   const nicotineEntries = [];
-  for (const entry of (dailyLog?.entries || [])) {
+  for (const entry of entries) {
     if (!entry.nicotine?.items) continue;
     for (const item of entry.nicotine.items) {
       nicotineEntries.push({
         id: crypto.randomUUID(),
         product: item.product,
         mgPerUnit: item.mgPerUnit,
-        count: item.count || 1,
+        count: Math.max(1, Math.round(item.count || 1)),
         date: entry.date,
       });
     }
   }
 
-  // Blood tests - PortOS stores markers flat on test object, MortalLoom nests under `markers`
   const bloodTests = (bloodData?.tests || []).map(test => {
     const { date, ...markers } = test;
-    return {
-      id: crypto.randomUUID(),
-      date,
-      markers,
-    };
+    return { id: crypto.randomUUID(), date, markers };
   });
 
-  // Body entries from daily log
-  const bodyEntries = bodyHistory.map(entry => ({
-    id: crypto.randomUUID(),
-    date: entry.date,
-    weightLbs: entry.weightLbs ?? null,
-    bodyFatPct: entry.fatPct ?? null,
-  }));
+  // Derive body entries from daily log (avoids re-reading the file via getBodyHistory)
+  const bodyEntries = entries
+    .filter(e => e.body && Object.keys(e.body).length > 0)
+    .map(e => ({
+      id: crypto.randomUUID(),
+      date: e.date,
+      weightLbs: e.body.weightLbs ?? null,
+      bodyFatPct: e.body.fatPct ?? null,
+    }));
 
-  // Epigenetic tests
   const epigeneticTests = (epiData?.tests || []).map(test => ({
     id: crypto.randomUUID(),
     date: test.date,
@@ -943,7 +943,6 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
     organScores: test.organScores ?? null,
   }));
 
-  // Eye exams
   const eyeExams = (eyeData?.exams || []).map(exam => ({
     id: crypto.randomUUID(),
     date: exam.date,
@@ -955,19 +954,59 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
     rightAxis: exam.rightAxis ?? null,
   }));
 
-  // Default alcohol presets (match MortalLoom defaults)
-  const alcoholPresets = [
-    { id: crypto.randomUUID(), name: 'Modelo Especial (12oz)', oz: 12, abv: 4.4 },
-    { id: crypto.randomUUID(), name: 'Nitro Guinness (14.9oz)', oz: 14.9, abv: 4.2 },
-    { id: crypto.randomUUID(), name: 'Old Fashioned (2oz)', oz: 2, abv: 40 },
-    { id: crypto.randomUUID(), name: 'Guinness 0 (14.9oz)', oz: 14.9, abv: 0.4 },
-    { id: crypto.randomUUID(), name: 'N/A Beer (12oz)', oz: 12, abv: 0.4 },
-  ];
+  const alcoholPresets = customDrinks.map(d => ({
+    id: crypto.randomUUID(),
+    name: d.name,
+    oz: d.oz,
+    abv: d.abv,
+  }));
 
-  // Nicotine presets
-  const nicotinePresets = [
-    { id: crypto.randomUUID(), name: 'Stokes Pick (5mg)', mgPerUnit: 5 },
-  ];
+  const nicotinePresets = customNicotineProducts.map(p => ({
+    id: crypto.randomUUID(),
+    name: p.name,
+    mgPerUnit: p.mgPerUnit,
+  }));
+
+  const GOAL_STATUS_MAP = { active: 'active', paused: 'paused', completed: 'completed', abandoned: 'abandoned', archived: 'completed' };
+  const goals = (goalsData?.goals || []).map(goal => {
+    const rawCheckIns = (goal.checkIns || []).map(ci => ({
+      id: crypto.randomUUID(),
+      date: ci.date?.slice(0, 10) ?? ci.timestamp?.slice(0, 10) ?? goal.createdAt?.slice(0, 10),
+      progressPct: ci.value ?? ci.progressPct ?? 0,
+      note: ci.note ?? '',
+    }));
+    // Fall back to progressHistory entries as check-ins when no explicit checkIns exist
+    const checkIns = rawCheckIns.length ? rawCheckIns : (goal.progressHistory || []).map(ph => ({
+      id: crypto.randomUUID(),
+      date: ph.date ?? ph.timestamp?.slice(0, 10),
+      progressPct: ph.value ?? 0,
+      note: '',
+    }));
+
+    const milestones = (goal.milestones || []).map(ms => ({
+      id: crypto.randomUUID(),
+      title: ms.title,
+      completed: !!ms.completedAt,
+      completedDate: ms.completedAt?.slice(0, 10) ?? null,
+    }));
+
+    const status = GOAL_STATUS_MAP[goal.status] ?? 'active';
+    const priority = goal.urgency >= 0.7 ? 'high' : goal.urgency >= 0.4 ? 'medium' : 'low';
+
+    return {
+      id: crypto.randomUUID(),
+      title: goal.title,
+      notes: goal.description ?? '',
+      createdDate: goal.createdAt?.slice(0, 10) ?? null,
+      targetDate: goal.targetDate?.slice(0, 10) ?? null,
+      completedDate: status === 'completed' ? (goal.updatedAt?.slice(0, 10) ?? null) : null,
+      checkIns,
+      milestones,
+      checkInIntervalDays: 7,
+      status,
+      priority,
+    };
+  });
 
   const exportData = {
     profile,
@@ -979,6 +1018,7 @@ router.get('/export/mortalloom', asyncHandler(async (req, res) => {
     eyeExams,
     epigeneticTests,
     bodyEntries,
+    goals,
   };
 
   res.setHeader('Content-Disposition', 'attachment; filename="MortalLoom-export.json"');

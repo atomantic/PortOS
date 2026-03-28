@@ -46,7 +46,30 @@ vi.mock('../lib/fileUtils.js', () => ({
     const parsed = JSON.parse(str);
     return parsed;
   }),
-  PATHS: { digitalTwin: '/tmp/test/digital-twin' }
+  PATHS: { digitalTwin: '/tmp/test/digital-twin' },
+  readJSONFile: vi.fn(() => null)
+}));
+
+vi.mock('./autobiography.js', () => ({
+  getStories: vi.fn(() => [])
+}));
+
+vi.mock('./genome.js', () => ({
+  getGenomeSummary: vi.fn(() => ({ uploaded: false }))
+}));
+
+vi.mock('./taste-questionnaire.js', () => ({
+  getTasteProfile: vi.fn(() => ({ sections: [] }))
+}));
+
+vi.mock('./identity.js', () => ({
+  getChronotype: vi.fn(() => null),
+  getLongevity: vi.fn(() => null),
+  getGoals: vi.fn(() => ({ goals: [] }))
+}));
+
+vi.mock('./socialAccounts.js', () => ({
+  getAllAccounts: vi.fn(() => [])
 }));
 
 // ============================================================================
@@ -832,12 +855,13 @@ Should mention core values.
   describe('getExportFormats', () => {
     it('should return all export formats', () => {
       const formats = getExportFormats();
-      expect(formats).toHaveLength(4);
+      expect(formats).toHaveLength(5);
       const ids = formats.map(f => f.id);
       expect(ids).toContain('system_prompt');
       expect(ids).toContain('claude_md');
       expect(ids).toContain('json');
       expect(ids).toContain('individual');
+      expect(ids).toContain('legacy_portrait');
     });
   });
 

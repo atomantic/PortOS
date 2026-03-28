@@ -8,7 +8,8 @@ import {
   FileJson,
   Files,
   RefreshCw,
-  Eye
+  Eye,
+  BookOpen
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from 'react-hot-toast';
@@ -87,7 +88,9 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
       : JSON.stringify(exportResult.content, null, 2);
 
     const extension = selectedFormat === 'json' ? 'json' : 'md';
-    const filename = `soul-export.${extension}`;
+    const filename = selectedFormat === 'legacy_portrait'
+      ? `legacy-portrait-${new Date().toISOString().slice(0, 10)}.md`
+      : `soul-export.${extension}`;
 
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -112,6 +115,8 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
         return FileJson;
       case 'individual':
         return Files;
+      case 'legacy_portrait':
+        return BookOpen;
       default:
         return FileText;
     }
@@ -330,6 +335,14 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
               <p>1. Each document is exported separately</p>
               <p>2. Use individual files for selective context injection</p>
               <p>3. Combine as needed for different use cases</p>
+            </div>
+          )}
+
+          {selectedFormat === 'legacy_portrait' && (
+            <div className="text-sm text-gray-400 space-y-2">
+              <p>1. Download the comprehensive identity portrait</p>
+              <p>2. Includes identity docs, traits, chronotype, taste, genome, goals, autobiography, and social presence</p>
+              <p>3. A durable, human-readable record — archive it, share it, or keep it as a time capsule</p>
             </div>
           )}
         </div>

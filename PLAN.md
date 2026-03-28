@@ -21,11 +21,11 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Future Ideas
 
-- **Chronotype-Aware Scheduling** — Genome sleep markers for peak-focus task scheduling
+- [x] **Chronotype-Aware Scheduling** — Genome sleep markers for peak-focus task scheduling
 - **Identity Context Injection** — Per-task-type digital twin preamble toggle
 - **Agent Confidence & Autonomy Levels** — Dynamic tiers based on success rates
 - **Content Calendar** — Unified calendar across platforms
-- **Proactive Insight Alerts** — Brain connections, success drops, goal stalls, cost spikes
+- [x] **Proactive Insight Alerts** — Brain connections, success drops, goal stalls, cost spikes
 - **Goal Decomposition Engine** — Auto-decompose goals into task sequences
 - **Knowledge Graph Visualization** — Extend BrainGraph 3D to full knowledge graph
 - [x] **Time Capsule Snapshots** — Periodic versioned digital twin archives
@@ -35,7 +35,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - **Workspace Contexts** — Project context syncing across shell, git, tasks
 - **Inline Code Review Annotations** — One-click fix from self-improvement findings
 - **Major Dependency Upgrades** — React 19, Zod 4, PM2 6, Vite 8
-- **Voice Capture for Brain** — Microphone + Web Speech API transcription
-- **RSS/Feed Ingestion** — Passive feed ingestion classified by interests
+- [x] **Voice Capture for Brain** — Microphone + Web Speech API transcription
+- [x] **RSS/Feed Ingestion** — Passive feed ingestion classified by interests
 - [x] **Ambient Dashboard Mode** — Live status board for wall-mounted displays
 - **Dynamic Skill Marketplace** — Self-generating skill templates from task patterns

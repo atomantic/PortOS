@@ -917,6 +917,28 @@ export const createGitBackup = (repoPath) => request('/standardize/backup', {
   body: JSON.stringify({ repoPath })
 });
 
+// Feeds - RSS/Atom Feed Ingestion
+export const getFeeds = () => request('/feeds');
+export const getFeedStats = () => request('/feeds/stats');
+export const getFeedItems = ({ feedId, unreadOnly } = {}) => {
+  const params = new URLSearchParams();
+  if (feedId) params.set('feedId', feedId);
+  if (unreadOnly) params.set('unreadOnly', 'true');
+  return request(`/feeds/items?${params}`);
+};
+export const addFeed = (url) => request('/feeds', {
+  method: 'POST',
+  body: JSON.stringify({ url })
+});
+export const removeFeed = (id) => request(`/feeds/${id}`, { method: 'DELETE' });
+export const refreshFeed = (id) => request(`/feeds/${id}/refresh`, { method: 'POST' });
+export const refreshAllFeeds = () => request('/feeds/refresh-all', { method: 'POST' });
+export const markFeedItemRead = (id) => request(`/feeds/items/${id}/read`, { method: 'POST' });
+export const markAllFeedItemsRead = (feedId) => {
+  const params = feedId ? `?feedId=${feedId}` : '';
+  return request(`/feeds/items/read-all${params}`, { method: 'POST' });
+};
+
 // Brain - Second Brain Feature
 export const getBrainSummary = () => request('/brain/summary');
 export const getBrainSettings = () => request('/brain/settings');
@@ -1266,10 +1288,11 @@ export const getAutobiographyPrompt = (exclude) =>
 export const getAutobiographyPromptById = (id) => request(`/digital-twin/autobiography/prompt/${id}`);
 export const getAutobiographyStories = (theme = null) =>
   request(`/digital-twin/autobiography/stories${theme ? `?theme=${theme}` : ''}`);
-export const saveAutobiographyStory = (promptId, content) => request('/digital-twin/autobiography/stories', {
-  method: 'POST',
-  body: JSON.stringify({ promptId, content })
-});
+export const saveAutobiographyStory = (promptId, content, { parentStoryId, customPromptText } = {}) =>
+  request('/digital-twin/autobiography/stories', {
+    method: 'POST',
+    body: JSON.stringify({ promptId, content, parentStoryId, customPromptText })
+  });
 export const updateAutobiographyStory = (id, content) => request(`/digital-twin/autobiography/stories/${id}`, {
   method: 'PUT',
   body: JSON.stringify({ content })
@@ -1280,6 +1303,13 @@ export const deleteAutobiographyStory = (id) => request(`/digital-twin/autobiogr
 export const triggerAutobiographyPrompt = () => request('/digital-twin/autobiography/trigger', {
   method: 'POST'
 });
+export const generateAutobiographyFollowUps = (storyId, providerId) =>
+  request(`/digital-twin/autobiography/stories/${storyId}/follow-ups`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId })
+  });
+export const getAutobiographyStoryChain = (storyId) =>
+  request(`/digital-twin/autobiography/stories/${storyId}/chain`);
 
 // Digital Twin - Assessment Analyzer
 export const analyzeAssessment = (content, providerId, model) =>
@@ -1381,6 +1411,7 @@ export const deleteEpigeneticIntervention = (id) => request(`/meatspace/genome/e
 export const getIdentityStatus = () => request('/digital-twin/identity');
 export const getCrossInsights = () => request('/digital-twin/identity/cross-insights');
 export const getChronotype = () => request('/digital-twin/identity/chronotype');
+export const getChronotypeEnergySchedule = () => request('/digital-twin/identity/chronotype/energy-schedule');
 export const deriveChronotype = () => request('/digital-twin/identity/chronotype/derive', { method: 'POST' });
 export const updateChronotypeBehavioral = (data) => request('/digital-twin/identity/chronotype', {
   method: 'PUT',
@@ -1644,6 +1675,15 @@ export const transitionJiraTicket = (instanceId, ticketId, transitionId, options
   ...options
 });
 
+// JIRA Status Reports
+export const getJiraReports = () => request('/jira/reports');
+export const generateJiraReport = (appId) => request('/jira/reports/generate', {
+  method: 'POST',
+  body: JSON.stringify(appId ? { appId } : {})
+});
+export const getJiraReport = (appId, date) => request(`/jira/reports/${appId}/${date}`);
+export const getLatestJiraReport = (appId) => request(`/jira/reports/${appId}/latest`);
+
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
 export const getBrowserConfig = () => request('/browser/config');
@@ -1659,6 +1699,7 @@ export const getBrowserProcess = () => request('/browser/process');
 export const getBrowserPages = () => request('/browser/pages');
 export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
+export const getBrowserDownloads = () => request('/browser/downloads');
 export const navigateBrowser = (url) => request('/browser/navigate', {
   method: 'POST',
   body: JSON.stringify({ url })
@@ -1745,6 +1786,14 @@ export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'D
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
+
+// Data Manager
+export const getDataOverview = () => request('/data');
+export const getDataCategory = (key) => request(`/data/${key}`);
+export const archiveDataCategory = (key, opts) => request(`/data/${key}/archive`, { method: 'POST', body: JSON.stringify(opts || {}) });
+export const purgeDataCategory = (key, opts) => request(`/data/${key}`, { method: 'DELETE', body: JSON.stringify(opts || {}) });
+export const getDataBackups = () => request('/data/backups');
+export const deleteDataBackup = (filename) => request(`/data/backups/${filename}`, { method: 'DELETE' });
 
 // GSD (Get Stuff Done) Integration
 export const getGsdProjects = () => request('/cos/gsd/projects');
@@ -1876,6 +1925,7 @@ export const generateGoalPhases = (goalId, options = {}) => request(`/digital-tw
 export const acceptGoalPhases = (goalId, phases) => request(`/digital-twin/identity/goals/${goalId}/accept-phases`, { method: 'POST', body: JSON.stringify({ phases }) });
 export const organizeGoals = (options = {}) => request('/digital-twin/identity/goals/organize', { method: 'POST', body: JSON.stringify(options) });
 export const applyGoalOrganization = (organization) => request('/digital-twin/identity/goals/organize/apply', { method: 'POST', body: JSON.stringify({ organization }) });
+export const checkInGoal = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/check-in`, { method: 'POST', body: JSON.stringify(options) });
 export const scheduleGoalTimeBlocks = (goalId) => request(`/digital-twin/identity/goals/${goalId}/schedule`, { method: 'POST' });
 export const removeGoalSchedule = (goalId) => request(`/digital-twin/identity/goals/${goalId}/schedule`, { method: 'DELETE' });
 export const rescheduleGoalTimeBlocks = (goalId) => request(`/digital-twin/identity/goals/${goalId}/reschedule`, { method: 'POST' });

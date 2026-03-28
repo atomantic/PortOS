@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { ThumbsUp, ThumbsDown, Loader2 } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import * as api from '../services/api';
 import OutputBlocks from '../components/cos/OutputBlocks';
@@ -22,6 +22,7 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
   const taskDesc = agentData?.metadata?.taskDescription || agentData?.taskId || 'Task';
   const shortDesc = taskDesc.length > 50 ? taskDesc.substring(0, 50) + '...' : taskDesc;
   const success = agentData?.result?.success;
+  const warnings = agentData?.result?.warnings;
 
   // Auto-dismiss timer: active when collapsed, cleared when expanded
   useEffect(() => {
@@ -65,6 +66,14 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
       <p className={`text-xs text-gray-400 ${expanded ? '' : 'truncate'}`} title={taskDesc}>
         {expanded ? taskDesc : shortDesc}
       </p>
+
+      {/* Cleanup warnings */}
+      {warnings?.length > 0 && (
+        <div className="flex items-start gap-1.5 text-yellow-400 text-xs bg-yellow-500/10 rounded px-2 py-1.5">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          <div>{warnings.map((w, i) => <p key={i}>{w}</p>)}</div>
+        </div>
+      )}
 
       {/* Expanded output */}
       {expanded && (
