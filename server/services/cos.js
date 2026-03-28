@@ -2130,7 +2130,8 @@ async function generateManagedAppImprovementTask(app, state) {
   }
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
+  } else if (!metadata.provider) {
+    // Only default to Claude when no per-stage provider overrides the selection
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
@@ -2213,7 +2214,8 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
   }
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
+  } else if (!metadata.provider) {
+    // Only default to Claude when no per-stage provider overrides the selection
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
