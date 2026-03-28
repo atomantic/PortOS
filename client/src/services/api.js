@@ -917,6 +917,28 @@ export const createGitBackup = (repoPath) => request('/standardize/backup', {
   body: JSON.stringify({ repoPath })
 });
 
+// Feeds - RSS/Atom Feed Ingestion
+export const getFeeds = () => request('/feeds');
+export const getFeedStats = () => request('/feeds/stats');
+export const getFeedItems = ({ feedId, unreadOnly } = {}) => {
+  const params = new URLSearchParams();
+  if (feedId) params.set('feedId', feedId);
+  if (unreadOnly) params.set('unreadOnly', 'true');
+  return request(`/feeds/items?${params}`);
+};
+export const addFeed = (url) => request('/feeds', {
+  method: 'POST',
+  body: JSON.stringify({ url })
+});
+export const removeFeed = (id) => request(`/feeds/${id}`, { method: 'DELETE' });
+export const refreshFeed = (id) => request(`/feeds/${id}/refresh`, { method: 'POST' });
+export const refreshAllFeeds = () => request('/feeds/refresh-all', { method: 'POST' });
+export const markFeedItemRead = (id) => request(`/feeds/items/${id}/read`, { method: 'POST' });
+export const markAllFeedItemsRead = (feedId) => {
+  const params = feedId ? `?feedId=${feedId}` : '';
+  return request(`/feeds/items/read-all${params}`, { method: 'POST' });
+};
+
 // Brain - Second Brain Feature
 export const getBrainSummary = () => request('/brain/summary');
 export const getBrainSettings = () => request('/brain/settings');
