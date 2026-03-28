@@ -102,7 +102,6 @@ export default function Jira() {
         apiToken: formData.apiToken
       };
 
-      console.log('Saving JIRA instance:', payload);
       await api.post('/jira/instances', payload);
 
       toast.success(`JIRA instance "${payload.name}" saved successfully`);

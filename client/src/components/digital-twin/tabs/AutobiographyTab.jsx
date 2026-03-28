@@ -215,7 +215,7 @@ export default function AutobiographyTab({ onRefresh }) {
         {stats && (
           <div className="flex flex-wrap gap-3 text-sm text-gray-400">
             <span>{stats.totalStories} stories</span>
-            <span>{stats.totalWords.toLocaleString()} words</span>
+            <span>{(stats.totalWords ?? 0).toLocaleString()} words</span>
             <span>{stats.promptsRemaining} prompts remaining</span>
           </div>
         )}

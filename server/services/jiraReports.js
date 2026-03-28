@@ -38,7 +38,7 @@ async function getSprintTickets(instance, projectKey) {
     }
   });
 
-  return response.data.issues.map(issue => ({
+  return (response.data?.issues || []).map(issue => ({
     ...mapIssue(issue, instance.baseUrl),
     created: issue.fields.created,
     resolved: issue.fields.resolution?.name || null
@@ -57,7 +57,7 @@ async function getRecentlyCompleted(instance, projectKey) {
     }
   });
 
-  return response.data.issues.map(issue => ({
+  return (response.data?.issues || []).map(issue => ({
     ...mapIssue(issue, instance.baseUrl),
     resolvedAt: issue.fields.resolutiondate
   }));
