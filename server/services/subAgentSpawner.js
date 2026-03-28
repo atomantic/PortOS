@@ -1211,21 +1211,22 @@ async function syncRunnerAgents() {
   const { getAllTasks } = await import('./cos.js');
   const allTasksData = await getAllTasks().catch(() => ({ user: {}, cos: {} }));
 
-  // Build a task lookup map from all task sources
+  // Build a task lookup map from all task sources, tagging each with its taskType
+  // so handleAgentCompletion updates the correct file after recovery
   const taskMap = new Map();
-  const addTasks = (groupedTasks) => {
+  const addTasks = (groupedTasks, taskType) => {
     if (!groupedTasks) return;
     for (const tasks of Object.values(groupedTasks)) {
       if (Array.isArray(tasks)) {
         for (const task of tasks) {
-          taskMap.set(task.id, task);
+          taskMap.set(task.id, { ...task, taskType });
         }
       }
     }
   };
 
-  addTasks(allTasksData.user?.grouped);
-  addTasks(allTasksData.cos?.grouped);
+  addTasks(allTasksData.user?.grouped, 'user');
+  addTasks(allTasksData.cos?.grouped, 'internal');
 
   let syncedCount = 0;
   for (const agent of agents) {
@@ -1234,9 +1235,11 @@ async function syncRunnerAgents() {
       // Try to find the task in our lookup map
       const task = taskMap.get(agent.taskId);
 
+      // Infer taskType for fallback: sys- prefix tasks are internal (CoS-generated)
+      const inferredType = agent.taskId?.startsWith('sys-') ? 'internal' : 'user';
       runnerAgents.set(agent.id, {
         taskId: agent.taskId,
-        task: task || { id: agent.taskId, description: 'Recovered from runner' },
+        task: task || { id: agent.taskId, taskType: inferredType, description: 'Recovered from runner' },
         runId: null, // Run tracking may be lost on restart
         model: null,
         hasStartedWorking: true,
@@ -1925,6 +1928,11 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
   }
 
   const { task, runId, model, executionId, laneName } = agent;
+
+  // Ensure taskType is set — recovered agents may lack it, causing updateTask to search the wrong file
+  if (task && !task.taskType) {
+    task.taskType = task.id?.startsWith('sys-') ? 'internal' : 'user';
+  }
 
   // Release execution lane
   if (laneName) {
@@ -3471,7 +3479,11 @@ export async function cleanupOrphanedAgents() {
           const stillAlive = await isPidAlive(agent.pid);
           if (stillAlive) {
             console.log(`🔄 Agent ${agent.id} (PID ${agent.pid}) still running, re-syncing to runner tracking`);
-            runnerAgents.set(agent.id, { id: agent.id, pid: agent.pid, taskId: agent.taskId });
+            const inferredType = agent.taskId?.startsWith('sys-') ? 'internal' : 'user';
+            runnerAgents.set(agent.id, {
+              id: agent.id, pid: agent.pid, taskId: agent.taskId,
+              task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' }
+            });
             continue;
           }
         }
