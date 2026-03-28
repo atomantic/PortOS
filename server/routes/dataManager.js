@@ -41,16 +41,16 @@ router.post('/:category/archive', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// DELETE /api/data/backups/:filename — delete a backup file (must precede /:category)
+router.delete('/backups/:filename', asyncHandler(async (req, res) => {
+  const result = await deleteBackup(req.params.filename);
+  res.json(result);
+}));
+
 // DELETE /api/data/:category — purge a category's contents
 router.delete('/:category', asyncHandler(async (req, res) => {
   const { subPath } = req.body || {};
   const result = await purgeCategory(req.params.category, { subPath });
-  res.json(result);
-}));
-
-// DELETE /api/data/backups/:filename — delete a backup file
-router.delete('/backups/:filename', asyncHandler(async (req, res) => {
-  const result = await deleteBackup(req.params.filename);
   res.json(result);
 }));
 

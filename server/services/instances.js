@@ -7,6 +7,7 @@
 
 import { writeFile } from 'fs/promises';
 import os from 'os';
+import net from 'net';
 import crypto from 'crypto';
 import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -115,7 +116,7 @@ function validName(name, fallback) {
 }
 
 function isIPAddress(str) {
-  return /^\d+\.\d+\.\d+\.\d+$/.test(str);
+  return net.isIP(str) !== 0;
 }
 
 // Default sync categories — all disabled until explicitly enabled per-peer

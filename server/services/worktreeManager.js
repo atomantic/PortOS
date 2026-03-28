@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { readdir, readFile, rm } from 'fs/promises';
+import { readdir, readFile, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
@@ -322,11 +322,12 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
       const branchName = wt.branch?.replace('refs/heads/', '') || '';
       // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
       // If merge fails, the branch is preserved for manual recovery.
-      await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
+      const result = await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
         .catch(err => {
           console.log(`⚠️ Failed to clean orphaned worktree ${agentId}: ${err.message}`);
+          return { removed: false };
         });
-      cleaned++;
+      if (result?.removed) cleaned++;
     }
   }
 

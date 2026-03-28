@@ -458,7 +458,8 @@ Return a JSON array of exactly 3 strings, nothing else. Example:
 
   if (result.error) return { error: result.error };
 
-  const followUps = parseLLMJSON(result.text);
+  let followUps;
+  try { followUps = parseLLMJSON(result.text); } catch { /* invalid JSON */ }
   if (!Array.isArray(followUps) || followUps.length === 0) {
     return { error: 'Failed to parse follow-up questions from AI response' };
   }
