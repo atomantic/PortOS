@@ -22,6 +22,7 @@
 - `/api/browser/downloads` endpoint for listing downloaded files
 - Genome markers: summary dashboard with tappable status filter pills, "Attention Needed" section surfacing concerns first, category quick-jump dropdown, categories collapsed by default for mobile
 - Genome markers: friendlier card UX with "What this means for you" framing, status-colored backgrounds, and renamed labels (Details, Your Notes, Learn More)
+- Voice capture for Brain — microphone button on inbox uses Web Speech API to transcribe speech into thoughts
 
 ## Changed
 

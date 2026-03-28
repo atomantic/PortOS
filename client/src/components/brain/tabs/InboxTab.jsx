@@ -23,6 +23,7 @@ import {
   getConfidenceColor
 } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
+import VoiceCapture from '../VoiceCapture';
 
 export default function InboxTab({ onRefresh, settings }) {
   const [inputText, setInputText] = useState('');
@@ -192,6 +193,10 @@ export default function InboxTab({ onRefresh, settings }) {
     }
   };
 
+  const handleVoiceTranscript = useCallback((text) => {
+    setInputText(prev => prev ? `${prev} ${text}` : text);
+  }, []);
+
   const classifyingEntries = entries.filter(e => e.status === 'classifying');
   const needsReviewEntries = entries.filter(e => e.status === 'needs_review');
   const filedEntries = entries.filter(e => e.status === 'filed' || e.status === 'corrected');
@@ -220,6 +225,7 @@ export default function InboxTab({ onRefresh, settings }) {
             className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
             disabled={sending}
           />
+          <VoiceCapture onTranscript={handleVoiceTranscript} disabled={sending} />
           <button
             type="submit"
             disabled={sending || !inputText.trim()}
@@ -234,7 +240,7 @@ export default function InboxTab({ onRefresh, settings }) {
           </button>
         </div>
         <p className="mt-2 text-xs text-gray-500">
-          Capture a thought. AI will classify and route it automatically.
+          Capture a thought — type or use the mic. AI will classify and route it automatically.
           {settings?.confidenceThreshold && (
             <span> Confidence threshold: {Math.round(settings.confidenceThreshold * 100)}%</span>
           )}
