@@ -1041,7 +1041,7 @@ export async function evaluateTasks() {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
         await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
-        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
+        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
         await taskSchedule.recordExecution(`task:${request.taskType}`);
@@ -2177,7 +2177,7 @@ async function generateManagedAppImprovementTask(app, state) {
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
-async function generateManagedAppImprovementTaskForType(taskType, app, state) {
+async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
@@ -2214,7 +2214,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state) {
   }
 
   initializePipelineMetadata(metadata);
-  if (shouldSkipForPrecondition(metadata, app, taskType)) return null;
+  if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(taskType, 0)
@@ -3587,7 +3587,7 @@ async function dequeueNextTask() {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
       await markAppReviewStarted(targetApp.id, `on-demand-${Date.now()}`);
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
-      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state);
+      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
     } else {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
