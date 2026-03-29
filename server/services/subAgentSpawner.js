@@ -8,7 +8,7 @@
 
 import { spawn, execSync } from 'child_process';
 import { join } from 'path';
-import { writeFile, mkdir, readFile, readdir, rm, stat } from 'fs/promises'; // mkdir kept for non-recursive use
+import { writeFile, mkdir, readFile, readdir, rm, stat, unlink } from 'fs/promises'; // mkdir kept for non-recursive use
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
@@ -1877,6 +1877,16 @@ async function handlePipelineProgression(task, agentId, success) {
     await updateTask(task.id, {
       metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'completed', stageResults: updatedResults } }
     }, task.taskType);
+    // Clean up pipeline artifacts (e.g., REVIEW.md left by stage 1)
+    if (task.metadata.repoPath) {
+      for (const stage of stages) {
+        const file = stage.precondition?.fileNotExists;
+        if (file) {
+          const filePath = join(task.metadata.repoPath, file);
+          await unlink(filePath).catch(() => {});
+        }
+      }
+    }
     emitLog('info', `✅ Pipeline ${pipeline.id} completed all ${stages.length} stages`, { pipelineId: pipeline.id });
     return;
   }

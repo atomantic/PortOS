@@ -7,6 +7,7 @@
 - Pipeline stage 2+ tasks stuck in queue forever — follow-up tasks were missing `id` and `status: 'pending'` fields when created with `raw: true`, making them invisible to the task evaluator
 - Pipeline tasks not marked completed after agent finishes — `app-improve-*` task IDs were misidentified as user tasks (expected `sys-` prefix), causing `updateTask` to look in the wrong file
 - Pipeline stage 2 tasks blocked by app cooldown — pipeline continuations now bypass the 30-minute app review cooldown
+- Pipeline artifacts (e.g., REVIEW.md) not cleaned up after final stage — automated cleanup now deletes `fileNotExists` precondition files when pipeline completes
 - Self-update failing with "exit code null" at npm-install step — PM2 watch restarted the server during `git checkout` (which changes `server/` files), breaking the stdout pipe to the update script. SIGPIPE killed the script before `|| true` could handle it, leaving the update incomplete. Added `trap '' PIPE` to ignore SIGPIPE so the script runs to completion.
 - Improved update error messages to show signal name (e.g., "killed by SIGPIPE") instead of opaque "exit code null"
 
