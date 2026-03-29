@@ -1092,9 +1092,10 @@ export async function evaluateTasks() {
 
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
 
-      // Check if task's app is on cooldown
+      // Check if task's app is on cooldown (pipeline continuations bypass cooldown)
       const appId = task.metadata?.app;
-      if (appId) {
+      const isPipelineContinuation = task.metadata?.pipeline?.currentStage > 0;
+      if (appId && !isPipelineContinuation) {
         const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
         if (onCooldown) {
           emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);

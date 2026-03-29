@@ -1986,7 +1986,8 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 
   // Ensure taskType is set — recovered agents may lack it, causing updateTask to search the wrong file
   if (task && !task.taskType) {
-    task.taskType = task.id?.startsWith('sys-') ? 'internal' : 'user';
+    const id = task.id || '';
+    task.taskType = (id.startsWith('sys-') || id.startsWith('app-improve-')) ? 'internal' : 'user';
   }
 
   // Release execution lane
