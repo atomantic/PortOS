@@ -7,7 +7,8 @@
 
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { cosEvents, getAgents } from './cos.js';
+import { cosEvents } from './cosEvents.js';
+import { getAgents } from './cosAgents.js';
 import { ensureDir, getDateString, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.cos;

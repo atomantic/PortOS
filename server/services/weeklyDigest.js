@@ -9,7 +9,8 @@
 import { writeFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { cosEvents, emitLog, getAgents, getAgentDates, getAgentsByDate } from './cos.js';
+import { cosEvents, emitLog } from './cosEvents.js';
+import { getAgents, getAgentDates, getAgentsByDate } from './cosAgents.js';
 import { ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
 
 const DIGESTS_DIR = PATHS.digests;

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import * as git from '../services/git.js';
 import * as appsService from '../services/apps.js';
-import { getAgents } from '../services/cos.js';
+import { getAgents } from '../services/cosAgents.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 /**

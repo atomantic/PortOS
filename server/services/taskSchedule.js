@@ -16,7 +16,7 @@
 import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { cosEvents, emitLog } from './cos.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, ensureDir, HOUR, loadSlashdoFile, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';

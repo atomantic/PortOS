@@ -24,19 +24,11 @@ export function emitLog(level, message, data = {}, prefix = '') {
     message,
     ...data
   }
-
-  // Emit for UI
-  cosEvents.emit('log', logEntry)
-
-  // Also log to console with appropriate emoji
-  const levelEmojis = {
-    info: 'i',
-    warn: '!',
-    error: 'x',
-    success: '+',
-    debug: '.'
+  // Debug messages go to socket only (UI), not console — set COS_LOG_LEVEL=debug to include them
+  if (level !== 'debug' || process.env.COS_LOG_LEVEL === 'debug') {
+    const emoji = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : level === 'debug' ? '🔍' : 'ℹ️'
+    const prefixStr = prefix ? ` ${prefix}` : ''
+    console.log(`${emoji}${prefixStr} ${message}`)
   }
-  const emoji = levelEmojis[level] || 'i'
-  const prefixStr = prefix ? `${prefix}: ` : ''
-  console.log(`[${logEntry.timestamp}] ${emoji} ${prefixStr}${message}`)
+  cosEvents.emit('log', logEntry)
 }
