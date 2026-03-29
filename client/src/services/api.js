@@ -16,7 +16,12 @@ async function request(endpoint, options = {}) {
     ...fetchOptions
   };
 
-  const response = await fetch(url, config);
+  const response = await fetch(url, config).catch(() => null);
+  if (!response) {
+    const msg = 'Server unreachable — check your connection and try again';
+    if (!silent) toast.error(msg);
+    throw new Error(msg);
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));

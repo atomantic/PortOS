@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
@@ -203,9 +203,17 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   }
 
   const contentType = getIconContentType(iconPath);
+  const iconStat = await stat(iconPath);
+  const etag = `W/"${iconStat.mtimeMs.toString(36)}-${iconStat.size.toString(36)}"`;
+
+  if (req.headers['if-none-match'] === etag) {
+    return res.status(304).end();
+  }
+
   const iconData = await readFile(iconPath);
   res.set('Content-Type', contentType);
   res.set('Cache-Control', 'public, max-age=3600');
+  res.set('ETag', etag);
   res.send(iconData);
 }));
 
@@ -547,7 +555,7 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
       const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
-        const child = spawn('npm', ['install'], { cwd: subDir, shell: true, windowsHide: true });
+        const child = spawn('npm', ['install'], { cwd: subDir, windowsHide: true });
         let stdout = '';
         let stderr = '';
         let settled = false;
@@ -570,7 +578,7 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
 
   const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const result = await new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: app.repoPath, shell: true, windowsHide: true });
+    const child = spawn(cmd, args, { cwd: app.repoPath, windowsHide: true });
     let stdout = '';
     let stderr = '';
     let settled = false;

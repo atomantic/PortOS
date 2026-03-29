@@ -8,6 +8,12 @@ import { extractJSONArray, safeJSONParse } from '../lib/fileUtils.js';
 
 const IS_WIN = process.platform === 'win32';
 
+// TTL cache for jlist results to reduce CLI churn during rapid UI refreshes
+const JLIST_TTL_MS = 400;
+const jlistCache = new Map();
+const jlistInflight = new Map();
+const cacheKey = (pm2Home) => pm2Home || '_default';
+
 // Resolve PM2 CLI binary path from our local dependency using require.resolve
 // to handle hoisted node_modules correctly.
 const require = createRequire(import.meta.url);
@@ -225,53 +231,40 @@ export async function deleteApp(name, pm2Home = null) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function getAppStatus(name, pm2Home = null) {
-  return new Promise((resolve) => {
-    const child = spawnPm2(['jlist'], {
-      env: buildEnv(pm2Home)
-    });
-    let stdout = '';
+  const processes = await fetchJlist(pm2Home);
+  const proc = processes.find(p => p.name === name);
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
+  if (!proc) {
+    return { name, status: 'not_found', pm2_env: null };
+  }
 
-    child.on('close', () => {
-      const processes = safeJSONParse(extractJSONArray(stdout), []);
-      const proc = processes.find(p => p.name === name);
-
-      if (!proc) {
-        return resolve({
-          name,
-          status: 'not_found',
-          pm2_env: null
-        });
-      }
-
-      resolve({
-        name: proc.name,
-        status: proc.pm2_env?.status || 'unknown',
-        pid: proc.pid,
-        pm_id: proc.pm_id,
-        cpu: proc.monit?.cpu || 0,
-        memory: proc.monit?.memory || 0,
-        uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
-        restarts: proc.pm2_env?.restart_time || 0,
-        createdAt: proc.pm2_env?.created_at || null
-      });
-    });
-
-    child.on('error', () => {
-      resolve({ name, status: 'error', pm2_env: null });
-    });
-  });
+  return {
+    name: proc.name,
+    status: proc.pm2_env?.status || 'unknown',
+    pid: proc.pid,
+    pm_id: proc.pm_id,
+    cpu: proc.monit?.cpu || 0,
+    memory: proc.monit?.memory || 0,
+    uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
+    restarts: proc.pm2_env?.restart_time || 0,
+    createdAt: proc.pm2_env?.created_at || null
+  };
 }
 
 /**
- * List all PM2 processes using CLI (avoids connection deadlocks)
+ * Fetch raw PM2 jlist output with TTL caching to reduce CLI churn.
  * @param {string} pm2Home Optional custom PM2_HOME path
+ * @returns {Promise<Array>} Raw process list from PM2
  */
-export async function listProcesses(pm2Home = null) {
-  return new Promise((resolve) => {
+function fetchJlist(pm2Home = null) {
+  const key = cacheKey(pm2Home);
+  const cached = jlistCache.get(key);
+  if (cached && Date.now() - cached.ts < JLIST_TTL_MS) return Promise.resolve(cached.data);
+
+  const inflight = jlistInflight.get(key);
+  if (inflight) return inflight;
+
+  const promise = new Promise((resolve) => {
     const child = spawnPm2(['jlist'], {
       env: buildEnv(pm2Home)
     });
@@ -283,23 +276,37 @@ export async function listProcesses(pm2Home = null) {
 
     child.on('close', () => {
       const list = safeJSONParse(extractJSONArray(stdout), []);
-      const processes = list.map(proc => ({
-        name: proc.name,
-        status: proc.pm2_env?.status || 'unknown',
-        pid: proc.pid,
-        pm_id: proc.pm_id,
-        cpu: proc.monit?.cpu || 0,
-        memory: proc.monit?.memory || 0,
-        uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
-        restarts: proc.pm2_env?.restart_time || 0
-      }));
-      resolve(processes);
+      jlistCache.set(key, { data: list, ts: Date.now() });
+      jlistInflight.delete(key);
+      resolve(list);
     });
 
     child.on('error', () => {
+      jlistInflight.delete(key);
       resolve([]);
     });
   });
+
+  jlistInflight.set(key, promise);
+  return promise;
+}
+
+/**
+ * List all PM2 processes using CLI (avoids connection deadlocks)
+ * @param {string} pm2Home Optional custom PM2_HOME path
+ */
+export async function listProcesses(pm2Home = null) {
+  const list = await fetchJlist(pm2Home);
+  return list.map(proc => ({
+    name: proc.name,
+    status: proc.pm2_env?.status || 'unknown',
+    pid: proc.pid,
+    pm_id: proc.pm_id,
+    cpu: proc.monit?.cpu || 0,
+    memory: proc.monit?.memory || 0,
+    uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
+    restarts: proc.pm2_env?.restart_time || 0
+  }));
 }
 
 /**

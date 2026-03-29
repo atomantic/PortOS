@@ -12,6 +12,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
 const UPLOADS_DIR = PATHS.uploads;
+const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'application/javascript', 'text/javascript', 'application/xml']);
 
 const router = Router();
 
@@ -218,6 +219,11 @@ router.get('/:filename', asyncHandler(async (req, res) => {
 
   const ext = getExtension(safeFilename);
   const mimeType = getMimeType(ext);
+
+  res.set('X-Content-Type-Options', 'nosniff');
+  if (RISKY_MIME_TYPES.has(mimeType)) {
+    res.set('Content-Disposition', `attachment; filename="${safeFilename}"`);
+  }
 
   res.type(mimeType).sendFile(filepath);
 }));
