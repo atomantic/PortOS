@@ -649,8 +649,15 @@ async function getDueJobs() {
     const timeSinceLastRun = now - lastRun
 
     if (timeSinceLastRun >= job.intervalMs) {
-      // If job has a scheduledTime, only mark due if we've passed that time today
-      if (!isScheduledTimeMet(job.scheduledTime, timezone)) continue
+      // If job has a scheduledTime, compute exact UTC target in user's timezone
+      if (job.scheduledTime) {
+        const [hours, minutes] = job.scheduledTime.split(':').map(Number)
+        const targetUtc = nextLocalTime(now - DAY, hours, minutes, timezone)
+        // Not due if today's scheduled time hasn't arrived yet
+        if (now < targetUtc) continue
+        // Already ran since this scheduled occurrence
+        if (lastRun >= targetUtc) continue
+      }
 
       // If job is weekdaysOnly, skip weekends
       if (job.weekdaysOnly && !isWeekday(timezone)) continue
@@ -1061,9 +1068,7 @@ async function getNextDueJob() {
 
     if (nextDue < earliestTime) {
       earliestTime = nextDue
-      const isDue = job.cronExpression
-        ? Date.now() >= nextDue
-        : Date.now() >= nextDue && isScheduledTimeMet(job.scheduledTime, timezone)
+      const isDue = Date.now() >= nextDue
       earliest = {
         jobId: job.id,
         jobName: job.name,

@@ -152,6 +152,10 @@ export const pullAndUpdateApp = (id) => request(`/apps/${id}/update`, { method: 
 export const buildApp = (id) => request(`/apps/${id}/build`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
+export const toggleAllAppTaskTypes = (id, enabled) => request(`/apps/${id}/task-types/all`, {
+  method: 'PUT',
+  body: JSON.stringify({ enabled })
+});
 export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}) => request(`/apps/${id}/task-types/${taskType}`, {
   method: 'PUT',
   body: JSON.stringify({ enabled, interval, taskMetadata })

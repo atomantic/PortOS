@@ -110,13 +110,42 @@ export default function AutomationTab({ appId, appName }) {
   }
 
   const taskTypes = schedule?.tasks ? Object.keys(schedule.tasks).sort() : [];
+  const allEnabled = taskTypes.length > 0 && taskTypes.every(t => (overrides[t] || {}).enabled === true);
+
+  const handleToggleAll = async () => {
+    const newEnabled = !allEnabled;
+    await api.toggleAllAppTaskTypes(appId, newEnabled).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    setOverrides(prev => {
+      const updated = { ...prev };
+      for (const t of taskTypes) {
+        updated[t] = { ...updated[t], enabled: newEnabled };
+      }
+      return updated;
+    });
+  };
 
   return (
     <div className="max-w-5xl space-y-4">
       <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-white">Task Type Overrides</h3>
-          <p className="text-sm text-gray-500">Per-app automation preferences for CoS task scheduling</p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Task Type Overrides</h3>
+            <p className="text-sm text-gray-500">Per-app automation preferences for CoS task scheduling</p>
+          </div>
+          <button
+            onClick={handleToggleAll}
+            className={`w-10 h-5 rounded-full transition-colors relative shrink-0 ${
+              allEnabled ? 'bg-port-success' : 'bg-gray-600'
+            }`}
+            title={allEnabled ? 'Disable all automations' : 'Enable all automations'}
+          >
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+              allEnabled ? 'left-5' : 'left-0.5'
+            }`} />
+          </button>
         </div>
         <button
           onClick={fetchData}
@@ -135,7 +164,7 @@ export default function AutomationTab({ appId, appName }) {
           {taskTypes.map(taskType => {
             const override = overrides[taskType] || {};
             const globalConfig = schedule.tasks[taskType] || {};
-            const isEnabled = override.enabled !== false;
+            const isEnabled = override.enabled === true;
             const overrideInterval = override.interval || null;
             const effectiveLabel = isCronExpression(overrideInterval)
               ? describeCron(overrideInterval) || 'cron'

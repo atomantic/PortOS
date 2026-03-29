@@ -322,6 +322,20 @@ router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
   res.json({ appId: app.id, appName: app.name, taskTypeOverrides: overrides });
 }));
 
+// PUT /api/apps/:id/task-types/all - Toggle all task types for an app
+router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const result = await appsService.toggleAllAppTaskTypes(req.params.id, enabled);
+  if (!result) {
+    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  console.log(`📋 ${enabled ? 'Enabled' : 'Disabled'} all task types for ${result.name}`);
+  res.json({ success: true, appId: result.id, taskTypeOverrides: result.taskTypeOverrides || {} });
+}));
+
 // PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
   const { enabled, interval, taskMetadata } = req.body;
