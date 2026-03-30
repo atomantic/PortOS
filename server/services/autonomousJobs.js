@@ -1054,9 +1054,11 @@ async function getNextDueJob() {
 
       // If job has scheduledTime, find next occurrence in user's timezone
       if (job.scheduledTime) {
-        const [hours, minutes] = job.scheduledTime.split(':').map(Number)
-        const candidate = nextLocalTime(nextDue, hours, minutes, timezone)
-        if (candidate > nextDue) nextDue = candidate
+        const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+        if (match) {
+          const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone)
+          if (candidate > nextDue) nextDue = candidate
+        }
       }
     }
 

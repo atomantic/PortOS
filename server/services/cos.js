@@ -2607,8 +2607,10 @@ function computeNextJobFireTime(job, timezone) {
   let nextDue = lastRun + job.intervalMs;
 
   if (job.scheduledTime) {
-    const [hours, minutes] = job.scheduledTime.split(':').map(Number);
-    nextDue = nextLocalTime(nextDue, hours, minutes, timezone);
+    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+    if (match) {
+      nextDue = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
+    }
   }
 
   // If weekdaysOnly, skip to next weekday (using local day-of-week)
