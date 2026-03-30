@@ -16,7 +16,12 @@ async function request(endpoint, options = {}) {
     ...fetchOptions
   };
 
-  const response = await fetch(url, config);
+  const response = await fetch(url, config).catch(() => null);
+  if (!response) {
+    const msg = 'Server unreachable — check your connection and try again';
+    if (!silent) toast.error(msg);
+    throw new Error(msg);
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
@@ -152,6 +157,10 @@ export const pullAndUpdateApp = (id) => request(`/apps/${id}/update`, { method: 
 export const buildApp = (id) => request(`/apps/${id}/build`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
+export const toggleAllAppTaskTypes = (id, enabled) => request(`/apps/${id}/task-types/all`, {
+  method: 'PUT',
+  body: JSON.stringify({ enabled })
+});
 export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}) => request(`/apps/${id}/task-types/${taskType}`, {
   method: 'PUT',
   body: JSON.stringify({ enabled, interval, taskMetadata })
@@ -676,6 +685,7 @@ export const reorderCosTasks = (taskIds) => request('/cos/tasks/reorder', {
 });
 export const approveCosTask = (id) => request(`/cos/tasks/${id}/approve`, { method: 'POST' });
 export const forceCosEvaluate = () => request('/cos/evaluate', { method: 'POST' });
+export const forceSpawnTask = (taskId) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST' });
 export const getCosHealth = () => request('/cos/health');
 export const forceHealthCheck = () => request('/cos/health/check', { method: 'POST' });
 export const getCosAgents = () => request('/cos/agents');

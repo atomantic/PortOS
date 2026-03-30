@@ -10,7 +10,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Backlog
 
-- [ ] **God file decomposition** — Split cos.js, subAgentSpawner.js, digital-twin.js, routes/scaffold.js, routes/cos.js, client/api.js into focused modules; resolve circular dependency
+- [ ] **God file decomposition** — cos.js done (→ cosState.js, cosAgents.js, cosReports.js, cosEvents.js; 31% reduction). Remaining: subAgentSpawner.js, digital-twin.js, routes/scaffold.js, routes/cos.js, client/api.js
 - [ ] **Test coverage** — Critical gaps: cos.js, cosRunnerClient.js, agentActionExecutor.js (~29% service, ~12% route coverage)
 - [ ] **M50 P9**: CoS Automation & Rules — Automated email classification, rule-based pre-filtering, email-to-task pipeline
 - [ ] **M50 P10**: Auto-Send with AI Review Gate — Per-account trust level, second LLM reviews drafts. See [Messages Security](./docs/features/messages-security.md)

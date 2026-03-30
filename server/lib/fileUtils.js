@@ -14,6 +14,11 @@ const __lib_filename = fileURLToPath(import.meta.url);
 const __lib_dirname = dirname(__lib_filename);
 
 /**
+ * MIME types that could execute scripts when served inline — force Content-Disposition: attachment
+ */
+export const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'application/javascript', 'text/javascript', 'application/xml']);
+
+/**
  * Base directories relative to project root
  */
 export const PATHS = {

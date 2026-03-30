@@ -38,7 +38,8 @@ vi.mock('../services/cos.js', () => ({
   getReport: vi.fn(),
   generateReport: vi.fn(),
   listScripts: vi.fn(),
-  getScript: vi.fn()
+  getScript: vi.fn(),
+  forceSpawnTask: vi.fn()
 }));
 
 // Mock the taskWatcher service
@@ -640,6 +641,45 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(appActivity.clearAppCooldown).toHaveBeenCalledWith('app-001');
+    });
+  });
+
+  describe('POST /api/cos/tasks/:id/spawn', () => {
+    it('should force-spawn a pending task', async () => {
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-001' });
+
+      const response = await request(app).post('/api/cos/tasks/task-001/spawn');
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-001');
+    });
+
+    it('should return 404 when task not found', async () => {
+      cos.forceSpawnTask.mockResolvedValue({ error: 'Task not found' });
+
+      const response = await request(app).post('/api/cos/tasks/bad-id/spawn');
+
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('NOT_FOUND');
+    });
+
+    it('should return 409 when task is not pending', async () => {
+      cos.forceSpawnTask.mockResolvedValue({ error: 'Task is completed, not pending' });
+
+      const response = await request(app).post('/api/cos/tasks/task-002/spawn');
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('TASK_NOT_PENDING');
+    });
+
+    it('should return 429 when no agent slots available', async () => {
+      cos.forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (3/3)' });
+
+      const response = await request(app).post('/api/cos/tasks/task-003/spawn');
+
+      expect(response.status).toBe(429);
+      expect(response.body.code).toBe('NO_CAPACITY');
     });
   });
 });

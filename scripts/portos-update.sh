@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ignore SIGPIPE: when PM2 restarts the server mid-update (watch detects
+# git-checkout file changes), the parent Node process dies and our stdout
+# pipe breaks.  Without this trap, SIGPIPE kills the script before
+# `|| true` can fire, leaving the update incomplete.
+trap '' PIPE
+
 # PortOS Auto-Update Script
 # Usage: bash scripts/portos-update.sh <tag>
 # Outputs structured STEP markers for progress tracking:

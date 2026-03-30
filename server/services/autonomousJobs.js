@@ -593,23 +593,6 @@ async function getEnabledJobs() {
 }
 
 /**
- * Check if the current time has passed a job's scheduledTime today.
- * scheduledTime is "HH:MM" in the user's configured timezone.
- * Returns true if no scheduledTime is set, or if current local time >= scheduledTime.
- * @param {string|null} scheduledTime - "HH:MM" or null/undefined
- * @param {string} timezone - IANA timezone string
- * @returns {boolean}
- */
-function isScheduledTimeMet(scheduledTime, timezone) {
-  if (!scheduledTime) return true
-  const [hours, minutes] = scheduledTime.split(':').map(Number)
-  const local = getLocalParts(new Date(), timezone)
-  const nowMinutes = local.hour * 60 + local.minute
-  const targetMinutes = hours * 60 + minutes
-  return nowMinutes >= targetMinutes
-}
-
-/**
  * Check if today is a weekday (Monday-Friday) in the user's timezone.
  * @param {string} timezone - IANA timezone string
  * @returns {boolean}
@@ -649,8 +632,26 @@ async function getDueJobs() {
     const timeSinceLastRun = now - lastRun
 
     if (timeSinceLastRun >= job.intervalMs) {
-      // If job has a scheduledTime, only mark due if we've passed that time today
-      if (!isScheduledTimeMet(job.scheduledTime, timezone)) continue
+      if (job.scheduledTime) {
+        const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+        if (!match) continue // skip jobs with invalid scheduledTime format
+        const hours = Number(match[1])
+        const minutes = Number(match[2])
+        // Compute today's scheduled UTC time in a DST-safe way.
+        // nextLocalTime finds the next occurrence AFTER the reference point.
+        // By searching from (now - 24h), we get today's occurrence if we haven't passed it yet,
+        // or yesterday's occurrence if we have. We then verify the candidate is on today's local date.
+        const nowFloored = now - (now % 60_000)
+        const localNow = getLocalParts(new Date(nowFloored), timezone)
+        let targetUtc = nextLocalTime(nowFloored - DAY, hours, minutes, timezone)
+        const targetLocal = getLocalParts(new Date(targetUtc), timezone)
+        // If the candidate landed on yesterday's date, advance to today's occurrence
+        if (targetLocal.day !== localNow.day || targetLocal.month !== localNow.month || targetLocal.year !== localNow.year) {
+          targetUtc = nextLocalTime(targetUtc + 1, hours, minutes, timezone)
+        }
+        if (now < targetUtc) continue
+        if (lastRun >= targetUtc) continue
+      }
 
       // If job is weekdaysOnly, skip weekends
       if (job.weekdaysOnly && !isWeekday(timezone)) continue
@@ -1053,17 +1054,17 @@ async function getNextDueJob() {
 
       // If job has scheduledTime, find next occurrence in user's timezone
       if (job.scheduledTime) {
-        const [hours, minutes] = job.scheduledTime.split(':').map(Number)
-        const candidate = nextLocalTime(nextDue, hours, minutes, timezone)
-        if (candidate > nextDue) nextDue = candidate
+        const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+        if (match) {
+          const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone)
+          if (candidate > nextDue) nextDue = candidate
+        }
       }
     }
 
     if (nextDue < earliestTime) {
       earliestTime = nextDue
-      const isDue = job.cronExpression
-        ? Date.now() >= nextDue
-        : Date.now() >= nextDue && isScheduledTimeMet(job.scheduledTime, timezone)
+      const isDue = Date.now() >= nextDue
       earliest = {
         jobId: job.id,
         jobName: job.name,
@@ -1312,7 +1313,6 @@ export {
   generateTaskFromJob,
   getJobStats,
   getNextDueJob,
-  isScheduledTimeMet,
   isWeekday,
   INTERVAL_OPTIONS,
   loadJobSkillTemplate,

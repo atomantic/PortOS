@@ -310,8 +310,8 @@ export async function getAppTaskTypeOverrides(id) {
  */
 export async function isTaskTypeEnabledForApp(id, taskType) {
   const overrides = await getAppTaskTypeOverrides(id);
-  // No override means inherit global (enabled); only disabled when explicitly false
-  return overrides[taskType]?.enabled !== false;
+  // No override means disabled — new task types must be explicitly enabled per app
+  return overrides[taskType]?.enabled === true;
 }
 
 /**
@@ -392,6 +392,30 @@ export async function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) 
   appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
 
   return { count: activeIds.length };
+}
+
+/**
+ * Toggle all task types for a single app to enabled or disabled
+ */
+export async function toggleAllAppTaskTypes(id, enabled) {
+  const data = await loadApps();
+  if (!data.apps[id]) return null;
+
+  await migrateTaskTypeOverrides(id);
+
+  const overrides = data.apps[id].taskTypeOverrides || {};
+  for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
+    const existing = overrides[taskType] || {};
+    overrides[taskType] = { ...existing, enabled };
+  }
+
+  data.apps[id].taskTypeOverrides = overrides;
+  delete data.apps[id].disabledTaskTypes;
+  data.apps[id].updatedAt = new Date().toISOString();
+  await saveApps(data);
+  appsEvents.emit('changed', { action: 'update-task-types', timestamp: Date.now() });
+
+  return { id, ...data.apps[id] };
 }
 
 /**

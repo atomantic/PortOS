@@ -63,22 +63,23 @@ export async function executeUpdate(tag, emit) {
       child.stderr.on('data', makeLineHandler());
     }
 
-    child.on('close', async (code) => {
+    child.on('close', async (code, signal) => {
       const success = code === 0;
+      const exitDetail = signal ? `killed by ${signal}` : `exit code ${code}`;
       await recordUpdateResult({
         version: tag.replace(/^v/, ''),
         success,
         completedAt: new Date().toISOString(),
-        log: success ? '' : `Process exited with code ${code}`
+        log: success ? '' : `Process ${exitDetail}`
       }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
       if (success) {
         emit('complete', 'done', `Update to ${tag} complete`);
       } else {
-        emit(lastStep, 'error', `Update failed at step "${lastStep}" (exit code ${code})`);
+        emit(lastStep, 'error', `Update failed at step "${lastStep}" (${exitDetail})`);
       }
       resolve(success
         ? { success: true }
-        : { success: false, failedStep: lastStep, errorMessage: `Update failed at step "${lastStep}" (exit code ${code})` }
+        : { success: false, failedStep: lastStep, errorMessage: `Update failed at step "${lastStep}" (${exitDetail})` }
       );
     });
 

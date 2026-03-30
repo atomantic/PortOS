@@ -7,12 +7,14 @@
  */
 
 import { spawn, execSync } from 'child_process';
-import { join } from 'path';
-import { writeFile, mkdir, readFile, readdir, rm, stat } from 'fs/promises'; // mkdir kept for non-recursive use
+import { join, relative, resolve, sep } from 'path';
+import { writeFile, mkdir, readFile, readdir, rm, stat, unlink } from 'fs/promises'; // mkdir kept for non-recursive use
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { cosEvents, registerAgent, updateAgent, completeAgent, appendAgentOutput, getConfig, updateTask, addTask, emitLog, getTaskById, checkStagePrecondition } from './cos.js';
+import { cosEvents, emitLog } from './cosEvents.js';
+import { registerAgent, updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
+import { getConfig, updateTask, addTask, getTaskById, checkStagePrecondition } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { isRunnerAvailable, spawnAgentViaRunner, terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, initCosRunnerConnection, onCosRunnerEvent, getActiveAgentsFromRunner, getRunnerHealth } from './cosRunnerClient.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
@@ -1292,7 +1294,7 @@ export async function spawnAgentForTask(task) {
     const laneResult = await waitForLane(laneName, agentId, { timeoutMs: 30000, metadata: { taskId: task.id } });
     if (!laneResult.success) {
       spawningTasks.delete(task.id);
-      emitLog('warning', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
+      emitLog('warn', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
       cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'lane-capacity', lane: laneName });
       return null;
     }
@@ -1300,7 +1302,7 @@ export async function spawnAgentForTask(task) {
     const laneResult = acquire(laneName, agentId, { taskId: task.id });
     if (!laneResult.success) {
       spawningTasks.delete(task.id);
-      emitLog('warning', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
+      emitLog('warn', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
       return null;
     }
   }
@@ -1335,7 +1337,7 @@ export async function spawnAgentForTask(task) {
   const providerAvailable = isProviderAvailable(provider.id);
   if (!providerAvailable) {
     const status = getProviderStatus(provider.id);
-    emitLog('warning', `Provider ${provider.id} unavailable: ${status.message}`, {
+    emitLog('warn', `Provider ${provider.id} unavailable: ${status.message}`, {
       taskId: task.id,
       providerId: provider.id,
       reason: status.reason
@@ -1377,7 +1379,7 @@ export async function spawnAgentForTask(task) {
       emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
       provider = userProvider;
     } else {
-      emitLog('warning', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
+      emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
     }
   }
 
@@ -1389,7 +1391,7 @@ export async function spawnAgentForTask(task) {
   if (selectedModel && provider.models && provider.models.length > 0) {
     const modelIsValid = provider.models.includes(selectedModel);
     if (!modelIsValid) {
-      emitLog('warning', `Model "${selectedModel}" not valid for provider "${provider.id}", falling back to provider default`, {
+      emitLog('warn', `Model "${selectedModel}" not valid for provider "${provider.id}", falling back to provider default`, {
         taskId: task.id,
         requestedModel: selectedModel,
         providerId: provider.id,
@@ -1436,7 +1438,7 @@ export async function spawnAgentForTask(task) {
   if (!isReadOnly) {
   // Pull latest from git before starting work (scripted — no LLM needed)
   const pullResult = await git.ensureLatest(workspacePath).catch(err => {
-    emitLog('warning', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
+    emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
     return { success: false, error: err.message };
   });
 
@@ -1445,7 +1447,7 @@ export async function spawnAgentForTask(task) {
   } else if (pullResult.conflict) {
     // Git conflict detected — create a high-priority task for an agent to resolve it,
     // then defer the original task so it retries after the conflict is fixed.
-    emitLog('warning', `🔀 Git conflict in ${workspacePath} (branch: ${pullResult.branch}): ${pullResult.error}`, {
+    emitLog('warn', `🔀 Git conflict in ${workspacePath} (branch: ${pullResult.branch}): ${pullResult.error}`, {
       taskId: task.id, workspace: workspacePath, branch: pullResult.branch
     });
 
@@ -1462,7 +1464,7 @@ export async function spawnAgentForTask(task) {
         + `Resolve the conflict, commit, and push so the blocked task can proceed.`,
       position: 'top'
     }, 'internal').catch(err => {
-      emitLog('warning', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
+      emitLog('warn', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
     });
 
     // Return the original task to pending so it retries after the conflict is resolved
@@ -1476,7 +1478,7 @@ export async function spawnAgentForTask(task) {
     });
   } else if (!pullResult.success) {
     // Non-conflict failure (network error, etc.) — log warning but proceed
-    emitLog('warning', `⚠️ Pre-task git pull error: ${pullResult.error}`, { taskId: task.id, workspace: workspacePath });
+    emitLog('warn', `⚠️ Pre-task git pull error: ${pullResult.error}`, { taskId: task.id, workspace: workspacePath });
   }
 
   // JIRA integration: create ticket + feature branch if app has JIRA enabled and task opted in
@@ -1733,7 +1735,7 @@ async function waitForRunnerStability() {
     await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
   }
 
-  emitLog('warning', 'Runner stability check timed out, proceeding anyway', {});
+  emitLog('warn', 'Runner stability check timed out, proceeding anyway', {});
   return false;
 }
 
@@ -1755,7 +1757,8 @@ async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provi
     startedAt: Date.now(),
     initializationTimeout: null,
     executionId,
-    laneName
+    laneName,
+    workspacePath
   };
   runnerAgents.set(agentId, agentInfo);
 
@@ -1877,6 +1880,20 @@ async function handlePipelineProgression(task, agentId, success) {
     await updateTask(task.id, {
       metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'completed', stageResults: updatedResults } }
     }, task.taskType);
+    // Clean up pipeline artifacts (e.g., REVIEW.md left by stage 1)
+    if (task.metadata.repoPath) {
+      const repoRoot = resolve(task.metadata.repoPath);
+      for (const stage of stages) {
+        const file = stage.precondition?.fileNotExists;
+        if (file) {
+          const filePath = resolve(repoRoot, file);
+          // Only delete files within the repo directory (prevent path traversal)
+          const rel = relative(repoRoot, filePath);
+          if (!rel || rel === '..' || rel.startsWith('..' + sep) || resolve(rel) === rel) continue;
+          await unlink(filePath).catch(() => {});
+        }
+      }
+    }
     emitLog('info', `✅ Pipeline ${pipeline.id} completed all ${stages.length} stages`, { pipelineId: pipeline.id });
     return;
   }
@@ -1902,6 +1919,8 @@ async function handlePipelineProgression(task, agentId, success) {
   if (task.metadata.app) prompt = prompt.replace(/\{appId\}/g, task.metadata.app);
 
   const nextTask = {
+    id: `${task.id || 'sys-pipeline'}-stage${nextStageIndex}-${Date.now().toString(36)}`,
+    status: 'pending',
     description: prompt,
     priority: task.priority || 'MEDIUM',
     metadata: {
@@ -1984,7 +2003,8 @@ async function handleAgentCompletion(agentId, exitCode, success, duration) {
 
   // Ensure taskType is set — recovered agents may lack it, causing updateTask to search the wrong file
   if (task && !task.taskType) {
-    task.taskType = task.id?.startsWith('sys-') ? 'internal' : 'user';
+    const id = task.id || '';
+    task.taskType = (id.startsWith('sys-') || id.startsWith('app-improve-')) ? 'internal' : 'user';
   }
 
   // Release execution lane
@@ -2407,6 +2427,31 @@ async function spawnDirectly(agentId, task, prompt, workspacePath, model, provid
 
   claudeProcess.stderr.on('data', async (data) => {
     const text = data.toString();
+    // Codex stderr: show thinking + tool names, skip config dump and command output
+    if (provider.id === 'codex') {
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('Reading prompt from stdin')) continue;
+        if (trimmed.startsWith('OpenAI Codex v')) continue;
+        if (trimmed.startsWith('succeeded in')) continue;
+        // Tool calls: show just the command, strip output after "succeeded"
+        if (trimmed.startsWith('exec ')) {
+          const match = trimmed.match(/^exec\s+\S+\s+-lc\s+(['"])(.*?)\1/);
+          const cmd = match ? match[2] : trimmed.split(' in /')[0];
+          const display = `🔧 ${cmd}`;
+          outputBuffer += display + '\n';
+          await appendAgentOutput(agentId, display);
+          continue;
+        }
+        // Skip long lines (command output like file contents, directory listings)
+        if (trimmed.length > 300) continue;
+        outputBuffer += trimmed + '\n';
+        await appendAgentOutput(agentId, trimmed);
+      }
+      await writeFile(outputFile, outputBuffer).catch(() => {});
+      return;
+    }
     outputBuffer += `[stderr] ${text}`;
     await writeFile(outputFile, outputBuffer).catch(() => {});
     await appendAgentOutput(agentId, `[stderr] ${text}`);

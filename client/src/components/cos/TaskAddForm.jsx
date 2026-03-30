@@ -209,17 +209,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     if (!result) return;
 
     toast.success('Task added');
-    setNewTask({ description: '', model: '', provider: '', app: defaultApp });
+    setNewTask(t => ({ ...t, description: '' }));
     setScreenshots([]);
     setAttachments([]);
-    setAddToTop(false);
-    setEnhancePrompt(false);
-    setCreateJiraTicket(false);
-    setUseWorktree(false);
-    setOpenPR(false);
-    setSimplify(true);
-    setReviewLoop(false);
-    setExpanded(false);
     setIsSubmitting(false);
     onTaskAdded?.();
   };
