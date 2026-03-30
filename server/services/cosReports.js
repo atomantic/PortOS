@@ -171,10 +171,12 @@ export async function getTodayActivity() {
   };
 }
 
+// Returns recently completed tasks from in-memory state only.
+// Agents older than the retention window are archived to date-bucketed dirs
+// and are not included here — use getAgentsByDate() for historical lookups.
 export async function getRecentTasks(limit = 10) {
   const state = await loadState();
 
-  // Get all completed agents, sorted by completion time (newest first)
   const completedAgents = Object.values(state.agents)
     .filter(a => a.status === 'completed' && a.completedAt)
     .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
