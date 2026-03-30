@@ -281,7 +281,20 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
   const result = await cos.forceSpawnTask(req.params.id);
   if (result.error) {
-    throw new ServerError(result.error, { status: 400, code: 'SPAWN_FAILED' });
+    const message = String(result.error);
+    let status = 400;
+    let code = 'SPAWN_FAILED';
+    if (/not found/i.test(message)) {
+      status = 404;
+      code = 'NOT_FOUND';
+    } else if (/not pending/i.test(message)) {
+      status = 409;
+      code = 'TASK_NOT_PENDING';
+    } else if (/no available agent slots/i.test(message)) {
+      status = 429;
+      code = 'NO_CAPACITY';
+    }
+    throw new ServerError(result.error, { status, code });
   }
   res.json(result);
 }));

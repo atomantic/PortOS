@@ -203,7 +203,8 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   }
 
   const contentType = getIconContentType(iconPath);
-  const iconStat = await stat(iconPath);
+  const iconStat = await stat(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (!iconStat) return res.status(404).json({ error: 'No app icon found' });
   const etag = `W/"${iconStat.mtimeMs.toString(36)}-${iconStat.size.toString(36)}"`;
 
   res.set('Content-Type', contentType);
@@ -211,11 +212,15 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   res.set('ETag', etag);
 
   const ifNoneMatch = req.headers['if-none-match'];
-  if (ifNoneMatch === etag || ifNoneMatch === '*') {
-    return res.status(304).end();
+  if (ifNoneMatch) {
+    const tags = ifNoneMatch.split(',').map(v => v.trim());
+    if (tags.includes('*') || tags.includes(etag)) {
+      return res.status(304).end();
+    }
   }
 
-  const iconData = await readFile(iconPath);
+  const iconData = await readFile(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (!iconData) return res.status(404).json({ error: 'No app icon found' });
   res.send(iconData);
 }));
 

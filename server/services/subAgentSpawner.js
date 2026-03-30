@@ -7,7 +7,7 @@
  */
 
 import { spawn, execSync } from 'child_process';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { writeFile, mkdir, readFile, readdir, rm, stat, unlink } from 'fs/promises'; // mkdir kept for non-recursive use
 import { existsSync } from 'fs';
 import { homedir } from 'os';
@@ -1882,10 +1882,13 @@ async function handlePipelineProgression(task, agentId, success) {
     }, task.taskType);
     // Clean up pipeline artifacts (e.g., REVIEW.md left by stage 1)
     if (task.metadata.repoPath) {
+      const repoRoot = resolve(task.metadata.repoPath);
       for (const stage of stages) {
         const file = stage.precondition?.fileNotExists;
         if (file) {
-          const filePath = join(task.metadata.repoPath, file);
+          const filePath = resolve(repoRoot, file);
+          // Only delete files within the repo directory (prevent path traversal)
+          if (!filePath.startsWith(repoRoot + '/')) continue;
           await unlink(filePath).catch(() => {});
         }
       }
