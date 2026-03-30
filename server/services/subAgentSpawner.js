@@ -7,7 +7,7 @@
  */
 
 import { spawn, execSync } from 'child_process';
-import { join, resolve } from 'path';
+import { join, relative, resolve } from 'path';
 import { writeFile, mkdir, readFile, readdir, rm, stat, unlink } from 'fs/promises'; // mkdir kept for non-recursive use
 import { existsSync } from 'fs';
 import { homedir } from 'os';
@@ -1888,7 +1888,8 @@ async function handlePipelineProgression(task, agentId, success) {
         if (file) {
           const filePath = resolve(repoRoot, file);
           // Only delete files within the repo directory (prevent path traversal)
-          if (!filePath.startsWith(repoRoot + '/')) continue;
+          const rel = relative(repoRoot, filePath);
+          if (!rel || rel.startsWith('..') || resolve(rel) === rel) continue;
           await unlink(filePath).catch(() => {});
         }
       }
@@ -1918,7 +1919,7 @@ async function handlePipelineProgression(task, agentId, success) {
   if (task.metadata.app) prompt = prompt.replace(/\{appId\}/g, task.metadata.app);
 
   const nextTask = {
-    id: `${task.id || 'sys'}-stage${nextStageIndex}-${Date.now().toString(36)}`,
+    id: `${task.id || 'sys-pipeline'}-stage${nextStageIndex}-${Date.now().toString(36)}`,
     status: 'pending',
     description: prompt,
     priority: task.priority || 'MEDIUM',
