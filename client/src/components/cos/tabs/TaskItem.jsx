@@ -388,7 +388,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
         <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
           {!editing && (
             <>
-              {task.status === 'pending' && (
+              {task.status === 'pending' && !task.approvalRequired && (
                 <button
                   onClick={async () => {
                     const result = await api.forceSpawnTask(task.id).catch(err => { toast.error(err.message); return null; });

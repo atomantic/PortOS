@@ -447,6 +447,7 @@ export async function forceSpawnTask(taskId) {
   const task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
   if (task.status !== 'pending') return { error: `Task is ${task.status}, not pending` };
+  if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
 
   const state = await loadState();
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
