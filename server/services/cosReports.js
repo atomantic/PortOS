@@ -116,10 +116,11 @@ export async function getTodayActivity() {
   const succeeded = todayAgents.filter(a => a.result?.success);
   const failed = todayAgents.filter(a => !a.result?.success);
 
-  // Calculate total time worked (sum of agent durations)
+  // Calculate total time worked (sum of agent durations, fallback to completedAt - startedAt)
   const totalDurationMs = todayAgents.reduce((sum, a) => {
-    const duration = a.result?.duration || 0;
-    return sum + duration;
+    const duration = a.result?.duration
+      || (a.completedAt && a.startedAt ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime() : 0);
+    return sum + (duration > 0 ? duration : 0);
   }, 0);
 
   // Get currently running agents
@@ -136,7 +137,8 @@ export async function getTodayActivity() {
       taskId: a.taskId,
       description: a.metadata?.taskDescription?.substring(0, 100) || a.taskId,
       taskType: a.metadata?.analysisType || a.metadata?.taskType || 'task',
-      duration: a.result?.duration || 0,
+      duration: a.result?.duration
+        || (a.completedAt && a.startedAt ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime() : 0),
       completedAt: a.completedAt
     }))
     .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))

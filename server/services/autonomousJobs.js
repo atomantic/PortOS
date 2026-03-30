@@ -633,7 +633,10 @@ async function getDueJobs() {
 
     if (timeSinceLastRun >= job.intervalMs) {
       if (job.scheduledTime) {
-        const [hours, minutes] = job.scheduledTime.split(':').map(Number)
+        const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+        if (!match) continue // skip jobs with invalid scheduledTime format
+        const hours = Number(match[1])
+        const minutes = Number(match[2])
         const targetUtc = nextLocalTime(now - DAY, hours, minutes, timezone)
         if (now < targetUtc) continue
         if (lastRun >= targetUtc) continue
