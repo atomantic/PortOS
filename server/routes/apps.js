@@ -557,7 +557,7 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
       const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
-        const child = spawn('npm', ['install'], { cwd: subDir, windowsHide: true });
+        const child = spawn(resolveCmd('npm'), ['install'], { cwd: subDir, windowsHide: true });
         let stdout = '';
         let stderr = '';
         let settled = false;
@@ -580,7 +580,7 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
 
   const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const result = await new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: app.repoPath, windowsHide: true });
+    const child = spawn(resolveCmd(cmd), args, { cwd: app.repoPath, windowsHide: true });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -672,6 +672,10 @@ const ALLOWED_BUILD_CMDS = new Set([
   'make',       // Make
   'cargo'       // Rust
 ]);
+
+// On Windows, Node-based CLI tools resolve to .cmd shims
+const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
+const resolveCmd = (cmd) => process.platform === 'win32' && WIN_CMD_SHIMS.has(cmd) ? `${cmd}.cmd` : cmd;
 
 // Allowlist of safe editor commands
 // Security: Only allow known-safe editor commands to prevent arbitrary code execution

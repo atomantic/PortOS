@@ -255,7 +255,7 @@ export async function getAppStatus(name, pm2Home = null) {
 /**
  * Fetch raw PM2 jlist output with TTL caching to reduce CLI churn.
  * @param {string} pm2Home Optional custom PM2_HOME path
- * @returns {Promise<Array>} Raw process list from PM2
+ * @returns {Promise<Array|null>} Raw process list from PM2, or null on error
  */
 function fetchJlist(pm2Home = null) {
   const key = cacheKey(pm2Home);

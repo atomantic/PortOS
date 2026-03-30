@@ -40,6 +40,11 @@ vi.mock('../services/appUpdater.js', () => ({
   updateApp: vi.fn()
 }));
 
+vi.mock('../services/appIconDetect.js', () => ({
+  detectAppIcon: vi.fn(),
+  getIconContentType: vi.fn()
+}));
+
 vi.mock('../services/cos.js', () => ({
   getAgents: vi.fn().mockResolvedValue([]),
   getAgentDates: vi.fn().mockResolvedValue([]),
@@ -57,6 +62,10 @@ import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import * as history from '../services/history.js';
 import * as streamingDetect from '../services/streamingDetect.js';
+import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
+import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 describe('Apps Routes', () => {
   let app;
@@ -542,6 +551,43 @@ describe('Apps Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  describe('GET /api/apps/:id/icon', () => {
+    const iconDir = join(tmpdir(), 'portos-test-icon');
+    const iconPath = join(iconDir, 'icon.png');
+    const mockApp = { id: 'app-001', name: 'Test App', appIconPath: iconPath, repoPath: '/tmp/test', pm2ProcessNames: [] };
+
+    beforeEach(() => {
+      mkdirSync(iconDir, { recursive: true });
+      writeFileSync(iconPath, 'fake-png-data');
+      appsService.getAppById.mockResolvedValue(mockApp);
+      getIconContentType.mockReturnValue('image/png');
+    });
+
+    afterAll(() => {
+      rmSync(iconDir, { recursive: true, force: true });
+    });
+
+    it('should return icon with ETag header', async () => {
+      const response = await request(app).get('/api/apps/app-001/icon');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['etag']).toBeDefined();
+      expect(response.headers['etag']).toMatch(/^W\//);
+      expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    });
+
+    it('should return 304 when If-None-Match matches ETag', async () => {
+      const first = await request(app).get('/api/apps/app-001/icon');
+      const etag = first.headers['etag'];
+
+      const second = await request(app)
+        .get('/api/apps/app-001/icon')
+        .set('If-None-Match', etag);
+
+      expect(second.status).toBe(304);
     });
   });
 });
