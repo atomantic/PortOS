@@ -232,6 +232,7 @@ export async function deleteApp(name, pm2Home = null) {
  */
 export async function getAppStatus(name, pm2Home = null) {
   const processes = await fetchJlist(pm2Home);
+  if (!processes) return { name, status: 'error', pm2_env: null };
   const proc = processes.find(p => p.name === name);
 
   if (!proc) {
@@ -274,16 +275,20 @@ function fetchJlist(pm2Home = null) {
       stdout += data.toString();
     });
 
-    child.on('close', () => {
+    child.on('close', (code) => {
+      jlistInflight.delete(key);
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
       const list = safeJSONParse(extractJSONArray(stdout), []);
       jlistCache.set(key, { data: list, ts: Date.now() });
-      jlistInflight.delete(key);
       resolve(list);
     });
 
     child.on('error', () => {
       jlistInflight.delete(key);
-      resolve([]);
+      resolve(null);
     });
   });
 
@@ -297,6 +302,7 @@ function fetchJlist(pm2Home = null) {
  */
 export async function listProcesses(pm2Home = null) {
   const list = await fetchJlist(pm2Home);
+  if (!list) return [];
   return list.map(proc => ({
     name: proc.name,
     status: proc.pm2_env?.status || 'unknown',

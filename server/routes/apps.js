@@ -206,14 +206,16 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const iconStat = await stat(iconPath);
   const etag = `W/"${iconStat.mtimeMs.toString(36)}-${iconStat.size.toString(36)}"`;
 
-  if (req.headers['if-none-match'] === etag) {
+  res.set('Content-Type', contentType);
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('ETag', etag);
+
+  const ifNoneMatch = req.headers['if-none-match'];
+  if (ifNoneMatch === etag || ifNoneMatch === '*') {
     return res.status(304).end();
   }
 
   const iconData = await readFile(iconPath);
-  res.set('Content-Type', contentType);
-  res.set('Cache-Control', 'public, max-age=3600');
-  res.set('ETag', etag);
   res.send(iconData);
 }));
 
