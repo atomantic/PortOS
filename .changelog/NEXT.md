@@ -10,6 +10,7 @@
 - Pipeline artifacts (e.g., REVIEW.md) not cleaned up after final stage — automated cleanup now deletes `fileNotExists` precondition files when pipeline completes
 - Self-update failing with "exit code null" at npm-install step — PM2 watch restarted the server during `git checkout` (which changes `server/` files), breaking the stdout pipe to the update script. SIGPIPE killed the script before `|| true` could handle it, leaving the update incomplete. Added `trap '' PIPE` to ignore SIGPIPE so the script runs to completion.
 - Improved update error messages to show signal name (e.g., "killed by SIGPIPE") instead of opaque "exit code null"
+- Setup falsely reporting "Setup Complete!" when native PostgreSQL is selected but not installed — now auto-runs `db.sh setup-native` to install and configure PostgreSQL via Homebrew, and exits with error if setup fails instead of silently continuing
 
 ### Added
 

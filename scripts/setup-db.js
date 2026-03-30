@@ -165,6 +165,33 @@ function promptStorageChoice(message, hint) {
   });
 }
 
+// Attempt full native PostgreSQL setup via db.sh setup-native
+function setupNativePostgres() {
+  const dbScript = join(rootDir, 'scripts', 'db.sh');
+  try {
+    console.log('🍺 Running native PostgreSQL setup...');
+    execFileSync('bash', [dbScript, 'setup-native'], { stdio: 'inherit', cwd: rootDir });
+    if (isNativeReady()) {
+      console.log('✅ System PostgreSQL ready on port 5432');
+      return true;
+    }
+  } catch (err) {
+    console.error(`⚠️  Native setup error: ${err.message}`);
+  }
+  return false;
+}
+
+// Exit with error when native PostgreSQL setup fails
+function exitNativeSetupFailed() {
+  if (process.platform === 'darwin') {
+    console.error('❌ Native PostgreSQL setup failed — try manually: brew install postgresql@17 && brew services start postgresql@17');
+  } else {
+    console.error('❌ Native PostgreSQL setup failed — install and start PostgreSQL');
+  }
+  console.log('   Then re-run: npm run setup');
+  process.exit(1);
+}
+
 async function handleDockerUnavailable(message, issue) {
   const hint = getDockerHints(issue);
   const choice = await promptStorageChoice(message, hint);
@@ -174,13 +201,13 @@ async function handleDockerUnavailable(message, issue) {
     setPgMode('native');
     if (isNativeReady()) {
       console.log('✅ System PostgreSQL ready on port 5432');
-    } else if (process.platform === 'darwin') {
-      console.log('⚠️  Native PostgreSQL not detected — try: brew install postgresql@17 && brew services start postgresql@17');
-      console.log('   Then re-run setup');
-    } else {
-      console.log('⚠️  Native PostgreSQL not detected — install and start PostgreSQL, then re-run setup');
+      process.exit(0);
     }
-    process.exit(0);
+    // Attempt automatic setup via db.sh setup-native (installs + configures)
+    if (setupNativePostgres()) {
+      process.exit(0);
+    }
+    exitNativeSetupFailed();
   }
 
   if (choice === 'file') {
@@ -212,21 +239,12 @@ if (mode === 'native') {
     process.exit(0);
   }
 
-  // Try to start via Homebrew
-  if (process.platform === 'darwin') {
-    try {
-      console.log('🍺 Starting PostgreSQL via Homebrew...');
-      execFileSync('brew', ['services', 'start', 'postgresql@17'], { stdio: 'pipe' });
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
-      if (isNativeReady()) {
-        console.log('✅ System PostgreSQL ready on port 5432');
-        process.exit(0);
-      }
-    } catch { /* fall through */ }
+  // Attempt automatic setup via db.sh (installs + starts + configures)
+  if (setupNativePostgres()) {
+    process.exit(0);
   }
 
-  console.warn('⚠️  Native PostgreSQL not running — run: scripts/db.sh setup-native');
-  process.exit(0);
+  exitNativeSetupFailed();
 }
 
 // Docker mode

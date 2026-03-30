@@ -24,7 +24,16 @@ npm install
 
 echo ""
 echo "Setting up data directory..."
-npm run setup
+if ! npm run setup; then
+    echo ""
+    echo "==================================="
+    echo "  Setup incomplete"
+    echo "==================================="
+    echo ""
+    echo "Fix the issue above, then re-run: ./setup.sh"
+    echo ""
+    exit 1
+fi
 
 echo ""
 
