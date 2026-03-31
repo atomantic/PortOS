@@ -81,22 +81,27 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ### Replacement Tasks
 
-- [ ] **PREREQ: Sync lock files** — Run `npm install` in root, `server/`, and `client/` after pinning exact versions to eliminate `invalid` warnings in `npm ls`
-- [ ] **`uuid`** — Add `server/lib/uuid.js` (`export const uuidv4 = () => crypto.randomUUID()`), update 40 import paths. Trivial. ~5 lines.
-- [x] **`cors`** — Replaced `cors()` in scaffold.js generated templates with inline CORS middleware; removed `cors` from generated package.json deps. PortOS itself already used inline headers. Note: package remains in lock file via socket.io.
-- [x] **`axios`** — Wrote `server/lib/httpClient.js` (fetch-based client factory, `AbortSignal.timeout`, self-signed TLS via `https.Agent`). Updated `services/jira.js`, `services/datadog.js`, `services/datadog.test.js`. Token-expiry interceptor inlined in jira.js.
-- [x] **`multer`** — Wrote `server/lib/multipart.js` (streaming multipart parser, no memory buffering, size limit, MIME filter, req.file compatible). Updated `routes/appleHealth.js`.
-- [ ] **`node-telegram-bot-api`** — Write `server/lib/telegramClient.js` (fetch-based Telegram Bot API wrapper: polling loop with offset, `getMe`, `sendMessage`, `editMessageText`, `answerCallbackQuery`, `stopPolling`, regex handler dispatch). Update `services/telegram.js`. ~110 lines.
-- [x] **`unzipper`** — Wrote `server/lib/zipStream.js` (streaming ZIP parser: local file header reader, `zlib.createInflateRaw` decompressor, entry emitter with `{ path, pipe, autodrain }`). Updated `routes/appleHealth.js`. **Note:** validate with real Apple Health ZIP before production use.
-- [ ] **`supertest`** — Write `server/tests/testHelper.js` (HTTP server lifecycle, fetch-based `request(app)` factory returning `.get/.post/.put/.delete` with `.send/.set`). Update 9 test files. ~45 lines.
-- [ ] **`geist`** — Copy font files to `client/public/fonts/`. Update CSS `url()` paths in `client/src/index.css`. Remove package. ~0 logic lines.
-- [ ] **`fflate`** (direct usage) — Replace `unzipSync` + `strFromU8` in `GenomeTab.jsx` with native `DecompressionStream` API (browser). Note: package stays in lock file via @react-three/drei.
-- [ ] **`globals`** — Inline `globals.browser` + `globals.node` as explicit object in `client/eslint.config.js`. Remove package. ~30 lines.
-- [ ] **`react-markdown`** — Write inline markdown parser in `MarkdownOutput.jsx`: regex pipeline for `# h1-6`, `**bold**`, `*italic*`, `` `code` ``, fenced code blocks, `- lists`, `| tables`, links, `> blockquotes`. ~55 lines.
-- [ ] **`react-diff-viewer-continued`** — Write inline Myers diff in `CrossDomainTab.jsx`: own LCS diff algorithm (~50 lines) + render spans with add/remove/unchanged styling. ~80 lines.
-- [ ] **`react-hot-toast`** — Write `client/src/components/ui/Toast.jsx`: `ToastContext`, `useToast` hook returning `{ success, error, info, dismiss }`, `<ToastContainer>` fixed bottom-right with queue management and auto-dismiss. Update `main.jsx` to use `<ToastContainer>`. Update 101 import sites from `react-hot-toast` → `./ui/Toast` (or relative path). ~100 lines new.
-- [ ] **`@dnd-kit/*`** — **Deferred** (borderline 300-line ceiling with accessibility). Write `client/src/lib/dragDrop.jsx` only if dnd-kit shows supply chain issues or needs a major version bump.
-- [ ] **`recharts`** — **Deferred** (total effort > 300 lines with 9-file rewrites). Write `client/src/lib/charts.jsx` as a focused future project.
+### Server (complete)
+- [x] **PREREQ: Sync lock files** — Done via `chore: sync root lock file to exact version pins`
+- [x] **`uuid`** — `server/lib/uuid.js` shim (`crypto.randomUUID()`); 40 import sites updated
+- [x] **`cors`** — Inline headers in `server/index.js`; scaffold templates use `CORS_SNIPPET` constant
+- [x] **`axios`** — `server/lib/httpClient.js` (fetch + AbortSignal.timeout + self-signed TLS via https.Agent); `jira.js`, `datadog.js`, `datadog.test.js` updated; token-expiry check inlined
+- [x] **`multer`** — `server/lib/multipart.js` (streaming multipart, no buffering, O(n) header parse)
+- [x] **`unzipper`** — `server/lib/zipStream.js` (streaming ZIP via zlib.createInflateRaw, DEFLATE + stored, data-descriptor support). **Validate with real Apple Health ZIP before next release.**
+
+### Server (remaining)
+- [ ] **`node-telegram-bot-api`** — `server/lib/telegramClient.js`: fetch-based polling loop, `getMe`, `sendMessage`, `editMessageText`, `answerCallbackQuery`, `stopPolling`, regex handler dispatch. Update `services/telegram.js`. ~110 lines.
+- [ ] **`supertest`** — `server/tests/testHelper.js`: HTTP server lifecycle + fetch-based `request(app)` wrapper. Update 9 test files. ~45 lines.
+
+### Client (remaining)
+- [x] **`geist`** — Fonts already self-hosted in `client/public/fonts/`; package removed
+- [x] **`globals`** — Inlined browser + node globals in `client/eslint.config.js`; package removed
+- [ ] **`fflate`** (direct usage) — Replace `unzipSync` + `strFromU8` in `GenomeTab.jsx` with native `DecompressionStream`. Package stays in lock file via @react-three/drei.
+- [ ] **`react-markdown`** — Inline regex parser in `MarkdownOutput.jsx`: h1–h6, bold, italic, code, fenced blocks, lists, tables, links, blockquotes. ~55 lines.
+- [ ] **`react-diff-viewer-continued`** — Inline Myers diff in `CrossDomainTab.jsx`: LCS algorithm + styled spans. ~80 lines.
+- [ ] **`react-hot-toast`** — `client/src/components/ui/Toast.jsx`: ToastContext + useToast + ToastContainer. Update 101 import sites. ~100 lines new.
+- [ ] **`@dnd-kit/*`** — **Deferred** (borderline 300-line ceiling with accessibility)
+- [ ] **`recharts`** — **Deferred** (total effort > 300 lines with 9-file rewrites)
 
 ---
 
