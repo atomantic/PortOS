@@ -37,10 +37,10 @@ const browserGlobals = {
 };
 
 const nodeGlobals = {
+  // process/Buffer are injected by Vite for compatibility; global/setImmediate for some polyfills
   process: 'readonly', Buffer: 'readonly', global: 'readonly',
-  __dirname: 'readonly', __filename: 'readonly',
-  require: 'readonly', module: 'writable', exports: 'writable',
   setImmediate: 'readonly', clearImmediate: 'readonly',
+  // __dirname, __filename, require, module, exports omitted — not valid in ESM browser bundles
 };
 
 export default [
