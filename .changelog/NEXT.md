@@ -30,6 +30,17 @@
 - God file decomposition: split `client/src/services/api.js` (2,016 lines) into 27 domain sub-modules with barrel re-export; no consumer imports changed
 - Block npm postinstall scripts by default via `.npmrc` `ignore-scripts=true`; `install:all` explicitly rebuilds trusted packages (`esbuild`, `node-pty`)
 - Move Digital Twin work to backlog; promote god file decomposition to Next Up in PLAN.md
+- God file decomposition: split `server/services/digital-twin.js` (2,970 lines) into 10 focused modules (`digital-twin-constants`, `digital-twin-helpers`, `digital-twin-meta`, `digital-twin-documents`, `digital-twin-testing`, `digital-twin-enrichment`, `digital-twin-export`, `digital-twin-context`, `digital-twin-analysis`, `digital-twin-import`, `digital-twin-status`); `digital-twin.js` is now a thin barrel re-export
+
+## Fixed
+- Bug: `providerOverride` was incorrectly passed as model argument in `processEnrichmentAnswer`; corrected to `modelOverride`
+- Dynamic `import()` of `safeJSONParse` inside `analyzeEnrichmentList` replaced with static top-level import
+- `loadMeta()` was called inside per-document loop in `analyzeAssessment`; hoisted out to load once
+
+## Changed
+- `getDocuments()` now parallelizes all `stat()` calls with `Promise.all`
+- `getAllTwinContent()` now parallelizes all `readFile()` calls with `Promise.all`
+- Added `extractJSON()` and `ensureDocumentInMeta()` helpers to `digital-twin-helpers.js`; three duplicate document-push blocks in enrichment module replaced with helper calls
 
 ## Fixed
 - JIRA report provider discovery now tries all available API providers instead of failing on first unreachable one
