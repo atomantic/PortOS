@@ -6,7 +6,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
-1. **God file decomposition** — routes/cos.js ✅, routes/scaffold.js ✅, client/api.js ✅. Remaining: services/digital-twin.js (2,970 lines), services/subAgentSpawner.js (3,820 lines)
+1. **God file decomposition** — routes/cos.js ✅, routes/scaffold.js ✅, client/api.js ✅, services/digital-twin.js ✅ (split into 10 focused modules). Remaining: services/subAgentSpawner.js (3,820 lines)
 
 ## Backlog
 
