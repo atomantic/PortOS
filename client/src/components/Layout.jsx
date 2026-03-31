@@ -68,7 +68,8 @@ import {
   MessageCircle,
   Swords,
   Image as ImageIcon,
-  HardDrive
+  HardDrive,
+  MessagesSquare
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -206,6 +207,7 @@ const navItems = [
       { to: '/messages/sync', label: 'Sync', icon: RefreshCw }
     ]
   },
+  { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare, single: true },
   {
     label: 'POST',
     icon: Zap,

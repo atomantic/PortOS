@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "baseUrl": "http://private-runtime",
+  "authToken": "",
+  "defaultSession": "main",
+  "label": "Local Operator Runtime",
+  "paths": {
+    "status": "/status",
+    "sessions": "/sessions",
+    "sessionMessages": "/sessions/:sessionId/messages",
+    "sendMessage": "/sessions/:sessionId/messages"
+  }
+}
