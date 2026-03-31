@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Cigarette, Plus, Trash2, Pencil, Check, X, Settings } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import NicotineChart from '../NicotineChart';

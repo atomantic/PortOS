@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Brain, RefreshCw, AlertCircle } from 'lucide-react';
 import * as api from '../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 
 const BIG_FIVE_LABELS = {
   O: { name: 'Openness', low: 'Practical', high: 'Curious' },

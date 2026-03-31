@@ -11,7 +11,7 @@ import {
   Search,
   AlertTriangle
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 import {
   MEMORY_TABS,

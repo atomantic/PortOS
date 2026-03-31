@@ -3,7 +3,7 @@ import {
   Sword, Star, Moon, ScrollText, Shield, Heart,
   Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
 import { generateAvatar } from '../services/api';
 import socket from '../services/socket';

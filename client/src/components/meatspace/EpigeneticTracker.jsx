@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import {
   Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
   Activity, Pill, Heart, CheckCircle, Calendar, FlameKindling

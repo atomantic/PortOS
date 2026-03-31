@@ -1,4 +1,4 @@
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 
 const API_BASE = '/api';
 

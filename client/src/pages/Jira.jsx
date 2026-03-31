@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import api from '../services/api';
 
 const TOKEN_LIFETIME_DAYS = 30;

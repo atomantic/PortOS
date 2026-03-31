@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import * as api from '../services/api';
 

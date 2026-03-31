@@ -14,7 +14,6 @@
     "express": "5.2.1",
     "googleapis": "171.4.0",
     "node-pty": "1.2.0-beta.10",
-    "node-telegram-bot-api": "0.67.0",
     "pg": "8.19.0",
     "pm2": "5.4.3",
     "portos-ai-toolkit": "0.8.0",
@@ -26,7 +25,6 @@
   },
   "devDependencies": {
     "@vitest/coverage-v8": "4.0.16",
-    "supertest": "7.1.4",
     "vitest": "4.0.16"
   }
 }

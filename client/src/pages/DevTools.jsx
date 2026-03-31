@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, RefreshCw, Activity, Image, X, XCircle, Cpu, MemoryStick, Terminal, Trash2, MessageSquarePlus, Info, Save, RotateCcw } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { formatTime, formatRuntime } from '../utils/formatters';

@@ -1,9 +1,60 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import {
   Upload, Download, RefreshCw, Trash2, Search, Dna, AlertTriangle, Save
 } from 'lucide-react';
-import { unzipSync, strFromU8 } from 'fflate';
+// Native ZIP parser — replaces fflate's unzipSync/strFromU8
+async function parseZipText(arrayBuffer, ext = '.txt') {
+  const data = new Uint8Array(arrayBuffer);
+  const view = new DataView(arrayBuffer);
+
+  // Locate EOCD record (search backwards from end, max 64KB comment)
+  let eocd = -1;
+  for (let i = data.length - 22; i >= Math.max(0, data.length - 65557); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd === -1) throw new Error('Invalid ZIP file');
+
+  const cdOffset = view.getUint32(eocd + 16, true);
+  const cdEntries = view.getUint16(eocd + 8, true);
+
+  // Parse central directory to find target entry
+  let pos = cdOffset;
+  for (let i = 0; i < cdEntries; i++) {
+    if (view.getUint32(pos, true) !== 0x02014b50) break;
+    const method = view.getUint16(pos + 10, true);
+    const compressedSize = view.getUint32(pos + 20, true);
+    const fnLen = view.getUint16(pos + 28, true);
+    const extraLen = view.getUint16(pos + 30, true);
+    const commentLen = view.getUint16(pos + 32, true);
+    const lhOffset = view.getUint32(pos + 42, true);
+    const filename = new TextDecoder().decode(data.slice(pos + 46, pos + 46 + fnLen));
+
+    if (filename.endsWith(ext)) {
+      const lhFnLen = view.getUint16(lhOffset + 26, true);
+      const lhExtraLen = view.getUint16(lhOffset + 28, true);
+      const dataStart = lhOffset + 30 + lhFnLen + lhExtraLen;
+      const compressed = data.slice(dataStart, dataStart + compressedSize);
+
+      if (method === 0) return { filename, content: new TextDecoder().decode(compressed) };
+      if (method === 8) {
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(compressed);
+        writer.close();
+        const chunks = [];
+        const reader = ds.readable.getReader();
+        for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); }
+        const out = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
+        let off = 0; for (const c of chunks) { out.set(c, off); off += c.length; }
+        return { filename, content: new TextDecoder().decode(out) };
+      }
+      throw new Error(`Unsupported ZIP compression method: ${method}`);
+    }
+    pos += 46 + fnLen + extraLen + commentLen;
+  }
+  throw new Error(`No ${ext} file found inside the zip`);
+}
 import * as api from '../../../services/api';
 import GenomeCategoryCard from '../GenomeCategoryCard';
 import EpigeneticTracker from '../EpigeneticTracker';
@@ -152,16 +203,15 @@ export default function GenomeTab() {
       // Read as ArrayBuffer, unzip, and extract the .txt file inside
       const reader = new FileReader();
       reader.onload = async (e) => {
-        const zipData = new Uint8Array(e.target.result);
-        const unzipped = unzipSync(zipData);
-        const txtFile = Object.keys(unzipped).find(name => name.endsWith('.txt'));
-        if (!txtFile) {
-          toast.error('No .txt file found inside the zip');
+        let parsed;
+        try {
+          parsed = await parseZipText(e.target.result);
+        } catch (err) {
+          toast.error(err.message || 'Failed to read zip');
           setUploading(false);
           return;
         }
-        const content = strFromU8(unzipped[txtFile]);
-        const result = await api.uploadGenomeFile(content, txtFile).catch(() => null);
+        const result = await api.uploadGenomeFile(parsed.content, parsed.filename).catch(() => null);
         if (result) {
           toast.success(`Genome uploaded: ${result.snpCount.toLocaleString()} SNPs found`);
           await fetchSummary();

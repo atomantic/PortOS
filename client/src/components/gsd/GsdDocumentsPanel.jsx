@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FileText, Pencil, Save, X } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import MarkdownOutput from '../cos/MarkdownOutput';
 import * as api from '../../services/api';

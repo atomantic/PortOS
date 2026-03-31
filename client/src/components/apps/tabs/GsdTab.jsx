@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { RefreshCw, Compass, CheckCircle, ArrowRight, FolderSearch, FileText, Map, Play, Terminal } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import GsdProjectHeader from '../../gsd/GsdProjectHeader';
 import PhaseCardList from '../../gsd/PhaseCardList';

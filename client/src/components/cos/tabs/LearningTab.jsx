@@ -19,7 +19,7 @@ import {
   RotateCcw,
   Crosshair
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 
 export default function LearningTab() {

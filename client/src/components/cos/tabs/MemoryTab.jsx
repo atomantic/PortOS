@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName } from '../../../utils/formatters';

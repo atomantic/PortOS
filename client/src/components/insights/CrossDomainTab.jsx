@@ -1,8 +1,55 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { RefreshCw, GitCompare } from 'lucide-react';
-import ReactDiffViewer from 'react-diff-viewer-continued';
 import { getInsightNarrative, refreshInsightNarrative } from '../../services/api';
 import { formatDate, timeAgo } from '../../utils/formatters';
+
+// Inline word-level diff using Myers LCS algorithm
+function lcs(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  const seq = [];
+  let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (a[i-1] === b[j-1]) { seq.unshift(a[i-1]); i--; j--; }
+    else if (dp[i-1][j] >= dp[i][j-1]) i--;
+    else j--;
+  }
+  return seq;
+}
+
+const InlineDiff = memo(function InlineDiff({ oldText, newText }) {
+  const oldWords = (oldText || '').split(/(\s+)/);
+  const newWords = (newText || '').split(/(\s+)/);
+  const common = new Set(lcs(oldWords, newWords));
+
+  const render = (words, added) => {
+    const spans = [];
+    let run = [];
+    words.forEach((w, i) => {
+      if (common.has(w)) {
+        if (run.length) { spans.push(<span key={i + 'r'} className={added ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}>{run.join('')}</span>); run = []; }
+        spans.push(w);
+      } else { run.push(w); }
+    });
+    if (run.length) spans.push(<span key="last" className={added ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}>{run.join('')}</span>);
+    return spans;
+  };
+
+  return (
+    <div className="font-mono text-xs p-4 space-y-2 bg-port-bg">
+      {oldText !== newText && (
+        <>
+          <div className="text-red-400 leading-relaxed">{render(oldWords, false)}</div>
+          <div className="text-green-400 leading-relaxed">{render(newWords, true)}</div>
+        </>
+      )}
+      {oldText === newText && <div className="text-gray-500">No changes.</div>}
+    </div>
+  );
+});
 
 export default function CrossDomainTab() {
   const [data, setData] = useState(null);
@@ -121,31 +168,7 @@ export default function CrossDomainTab() {
             </div>
           )}
           <div className="text-xs">
-            <ReactDiffViewer
-              oldValue={data.previousText}
-              newValue={data.text}
-              splitView={false}
-              useDarkTheme
-              hideLineNumbers
-              styles={{
-                variables: {
-                  dark: {
-                    diffViewerBackground: '#1a1a1a',
-                    addedBackground: '#1a3a1a',
-                    addedColor: '#22c55e',
-                    removedBackground: '#3a1a1a',
-                    removedColor: '#ef4444',
-                    wordAddedBackground: '#1d4d1d',
-                    wordRemovedBackground: '#4d1d1d',
-                    gutterBackground: '#0f0f0f',
-                    gutterColor: '#555',
-                    codeFoldBackground: '#111',
-                    codeFoldGutterBackground: '#111',
-                    codeFoldContentColor: '#888'
-                  }
-                }
-              }}
-            />
+            <InlineDiff oldText={data.previousText} newText={data.text} />
           </div>
         </div>
       )}

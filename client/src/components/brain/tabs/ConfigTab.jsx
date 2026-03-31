@@ -10,7 +10,7 @@ import {
   TrendingUp,
   CheckCircle
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 const DAYS_OF_WEEK = [
   'monday',

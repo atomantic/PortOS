@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import {
   FileText,
   RefreshCw,

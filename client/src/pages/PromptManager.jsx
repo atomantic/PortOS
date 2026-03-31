@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 

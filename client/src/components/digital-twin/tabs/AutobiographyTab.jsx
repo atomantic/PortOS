@@ -18,7 +18,7 @@ import {
   MessageCircle
 } from 'lucide-react';
 import * as api from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();

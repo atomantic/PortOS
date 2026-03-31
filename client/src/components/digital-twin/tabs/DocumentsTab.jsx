@@ -12,7 +12,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import * as api from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { timeAgo } from '../../../utils/formatters';

@@ -89,17 +89,17 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [x] **`multer`** — `server/lib/multipart.js` (streaming multipart, no buffering, O(n) header parse)
 - [x] **`unzipper`** — `server/lib/zipStream.js` (streaming ZIP via zlib.createInflateRaw, DEFLATE + stored, data-descriptor support). **Validate with real Apple Health ZIP before next release.**
 
-### Server (remaining)
-- [ ] **`node-telegram-bot-api`** — `server/lib/telegramClient.js`: fetch-based polling loop, `getMe`, `sendMessage`, `editMessageText`, `answerCallbackQuery`, `stopPolling`, regex handler dispatch. Update `services/telegram.js`. ~110 lines.
-- [ ] **`supertest`** — `server/tests/testHelper.js`: HTTP server lifecycle + fetch-based `request(app)` wrapper. Update 9 test files. ~45 lines.
+### Server (complete)
+- [x] **`node-telegram-bot-api`** — `server/lib/telegramClient.js`: fetch-based polling loop, `getMe`, `sendMessage`, `editMessageText`, `answerCallbackQuery`, `stopPolling`, regex handler dispatch. Updated `services/telegram.js`.
+- [x] **`supertest`** — `server/lib/testHelper.js`: HTTP server lifecycle + fetch-based `request(app)` wrapper. Updated 9 test files.
 
-### Client (remaining)
+### Client (complete)
 - [x] **`geist`** — Fonts already self-hosted in `client/public/fonts/`; package removed
 - [x] **`globals`** — Inlined browser + node globals in `client/eslint.config.js`; package removed
-- [ ] **`fflate`** (direct usage) — Replace `unzipSync` + `strFromU8` in `GenomeTab.jsx` with native `DecompressionStream`. Package stays in lock file via @react-three/drei.
-- [ ] **`react-markdown`** — Inline regex parser in `MarkdownOutput.jsx`: h1–h6, bold, italic, code, fenced blocks, lists, tables, links, blockquotes. ~55 lines.
-- [ ] **`react-diff-viewer-continued`** — Inline Myers diff in `CrossDomainTab.jsx`: LCS algorithm + styled spans. ~80 lines.
-- [ ] **`react-hot-toast`** — `client/src/components/ui/Toast.jsx`: ToastContext + useToast + ToastContainer. Update 101 import sites. ~100 lines new.
+- [x] **`fflate`** (direct usage) — Replaced `unzipSync` + `strFromU8` in `GenomeTab.jsx` with native `DecompressionStream` + inline ZIP parser using EOCD central directory.
+- [x] **`react-markdown`** — Inline regex parser in `MarkdownOutput.jsx`: h1–h6, bold, italic, code, fenced blocks, lists, tables, links, blockquotes.
+- [x] **`react-diff-viewer-continued`** — Inline Myers diff in `CrossDomainTab.jsx`: LCS algorithm + styled spans. `InlineDiff` wrapped with `React.memo`.
+- [x] **`react-hot-toast`** — `client/src/components/ui/Toast.jsx`: module-level store + listener set + `<Toaster>`. Updated 101 import sites.
 - [ ] **`@dnd-kit/*`** — **Deferred** (borderline 300-line ceiling with accessibility)
 - [ ] **`recharts`** — **Deferred** (total effort > 300 lines with 9-file rewrites)
 

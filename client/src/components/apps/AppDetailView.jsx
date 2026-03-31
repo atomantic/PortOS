@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';

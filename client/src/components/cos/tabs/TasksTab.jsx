@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Play, ChevronDown, ChevronRight } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import {
   DndContext,
   closestCenter,

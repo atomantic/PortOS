@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';

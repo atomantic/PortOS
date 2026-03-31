@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import { timeAgo } from '../components/feature-agents/constants';
 import { formatInterval } from '../components/cos/constants';
 

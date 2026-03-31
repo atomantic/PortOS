@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Wand2, Plus, RefreshCw } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import FeatureAgentCard from '../components/feature-agents/FeatureAgentCard';

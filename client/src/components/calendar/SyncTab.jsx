@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, AlertCircle, Trash2, TestTube, Calendar } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 

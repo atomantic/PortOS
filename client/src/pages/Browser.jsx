@@ -10,7 +10,7 @@ import {
   launchBrowser, stopBrowser, restartBrowser,
   getBrowserLogs, navigateBrowser
 } from '../services/api';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 
 const POLL_INTERVAL = 5000;
 

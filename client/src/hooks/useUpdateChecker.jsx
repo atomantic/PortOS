@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import * as api from '../services/api';
 

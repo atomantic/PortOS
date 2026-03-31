@@ -5,7 +5,7 @@
  * and conversational commands for PortOS.
  */
 
-import TelegramBot from 'node-telegram-bot-api';
+import { createTelegramBot } from '../lib/telegramClient.js';
 import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -115,7 +115,7 @@ export async function init(sendTestMessage = false) {
   // Ensure data directory exists once at init
   await ensureDir(CHECKINS_DIR);
 
-  bot = new TelegramBot(token, { polling: true });
+  bot = createTelegramBot(token, { polling: true });
   reconnectionAttempts = 0;
 
   // Validate token
