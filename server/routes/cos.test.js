@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import request from 'supertest';
+import { request } from '../lib/testHelper.js';
 import cosRoutes from './cos.js';
 
 // Mock the cos service
