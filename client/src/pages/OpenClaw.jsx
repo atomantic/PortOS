@@ -250,6 +250,12 @@ export default function OpenClaw() {
       scrollAnimationFrameRef.current = null;
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
     });
+    return () => {
+      if (scrollAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimationFrameRef.current);
+        scrollAnimationFrameRef.current = null;
+      }
+    };
   }, [messages]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);

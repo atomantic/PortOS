@@ -27,13 +27,12 @@ function pickFirst(...values) {
   return undefined;
 }
 
-function withLeadingSlash(path) {
-  if (!path) return '';
-  return path.startsWith('/') ? path : `/${path}`;
-}
-
 function joinUrl(baseUrl, path) {
-  return new URL(withLeadingSlash(path), baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString();
+  const normalizedBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  // Strip leading slashes from path so it joins relative to baseUrl's pathname
+  // (a leading slash would be treated as absolute, discarding any base path).
+  const relativePath = path ? path.replace(/^\/+/, '') : '';
+  return new URL(relativePath, normalizedBase).toString();
 }
 
 function parseUpstreamBody(text) {
