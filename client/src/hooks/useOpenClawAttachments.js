@@ -107,27 +107,30 @@ export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
       const next = await filesToAttachments(limitedFiles);
       const newBase64Chars = next.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
 
-      // Use the ref for live state — avoids stale-closure issues after the async read.
-      const liveAttachments = attachmentsRef.current;
-      const existingBase64Chars = liveAttachments.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
-      if (existingBase64Chars + newBase64Chars > MAX_ATTACHMENTS_TOTAL_BASE64_CHARS) {
-        next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-        const totalMB = Math.round((existingBase64Chars + newBase64Chars) * 0.75 / (1024 * 1024));
-        onError(`Combined attachments exceed the 50MB encoded total limit (~${totalMB}MB decoded).`);
-        return;
-      }
-
-      const liveRemaining = MAX_ATTACHMENTS - liveAttachments.length;
-      if (liveRemaining <= 0) {
-        next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-        onError(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
-        return;
-      }
-
-      const accepted = next.slice(0, liveRemaining);
-      next.slice(liveRemaining).forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-      setAttachments(prev => [...prev, ...accepted]);
-      onError('');
+      // Re-check limits inside the functional updater so the final state is always
+      // authoritative even when concurrent appendFiles calls are in-flight. A local
+      // variable captures the error (if any) from the synchronously-executed updater
+      // so we can call onError after setAttachments returns.
+      let pendingError = '';
+      setAttachments(current => {
+        const existingBase64Chars = current.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
+        if (existingBase64Chars + newBase64Chars > MAX_ATTACHMENTS_TOTAL_BASE64_CHARS) {
+          next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+          const totalMB = Math.round((existingBase64Chars + newBase64Chars) * 0.75 / (1024 * 1024));
+          pendingError = `Combined attachments exceed the 50MB encoded total limit (~${totalMB}MB decoded).`;
+          return current;
+        }
+        const remaining = MAX_ATTACHMENTS - current.length;
+        if (remaining <= 0) {
+          next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+          pendingError = `You can attach up to ${MAX_ATTACHMENTS} files per message.`;
+          return current;
+        }
+        const accepted = next.slice(0, remaining);
+        next.slice(remaining).forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+        return [...current, ...accepted];
+      });
+      onError(pendingError);
     } catch (err) {
       onError(err.message || 'Failed to prepare attachment');
     }
