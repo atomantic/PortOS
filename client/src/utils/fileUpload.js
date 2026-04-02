@@ -27,7 +27,8 @@ export function readFileAsBase64(file) {
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === 'string' ? reader.result : '';
-      resolve(result.includes(',') ? result.split(',').pop() : result);
+      const commaIndex = result.indexOf(',');
+      resolve(commaIndex !== -1 ? result.slice(commaIndex + 1) : result);
     };
     reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
     reader.readAsDataURL(file);
