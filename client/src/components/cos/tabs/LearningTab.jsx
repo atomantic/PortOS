@@ -300,12 +300,12 @@ export default function LearningTab() {
                   </div>
 
                   {[
-                    { items: confidence.levels.low, color: 'port-warning', Icon: ShieldAlert, title: 'Requires Approval', desc: 'These task types have low success rates and will require human approval before spawning' },
-                    { items: confidence.levels.high, color: 'port-success', Icon: ShieldCheck, title: 'High Confidence', desc: 'Consistently successful — auto-approved without hesitation' }
-                  ].filter(g => g.items?.length > 0).map(({ items, color, Icon, title, desc }) => (
-                    <div key={title} className={`bg-port-card border border-${color}/30 rounded-lg overflow-hidden`}>
-                      <div className={`px-4 py-2 bg-${color}/10 border-b border-port-border`}>
-                        <span className={`text-sm font-medium text-${color} flex items-center gap-2`}>
+                    { items: confidence.levels.low, borderClass: 'border-port-warning/30', bgClass: 'bg-port-warning/10', textClass: 'text-port-warning', Icon: ShieldAlert, title: 'Requires Approval', desc: 'These task types have low success rates and will require human approval before spawning' },
+                    { items: confidence.levels.high, borderClass: 'border-port-success/30', bgClass: 'bg-port-success/10', textClass: 'text-port-success', Icon: ShieldCheck, title: 'High Confidence', desc: 'Consistently successful — auto-approved without hesitation' }
+                  ].filter(g => g.items?.length > 0).map(({ items, borderClass, bgClass, textClass, Icon, title, desc }) => (
+                    <div key={title} className={`bg-port-card border ${borderClass} rounded-lg overflow-hidden`}>
+                      <div className={`px-4 py-2 ${bgClass} border-b border-port-border`}>
+                        <span className={`text-sm font-medium ${textClass} flex items-center gap-2`}>
                           <Icon size={14} />
                           {title} ({items.length})
                         </span>
@@ -317,7 +317,7 @@ export default function LearningTab() {
                             <span className="text-sm text-gray-300 font-mono">{t.taskType}</span>
                             <div className="flex items-center gap-3">
                               <span className="text-xs text-gray-500">{t.completed} runs</span>
-                              <span className={`text-sm text-${color} font-medium`}>{t.successRate}%</span>
+                              <span className={`text-sm ${textClass} font-medium`}>{t.successRate}%</span>
                             </div>
                           </div>
                         ))}
