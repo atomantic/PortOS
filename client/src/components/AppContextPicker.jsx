@@ -20,6 +20,7 @@ export default function AppContextPicker({
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
         className={selectClassName}
+        aria-label={label || placeholder}
       >
         {includeDefaultOption && <option value="">{placeholder}</option>}
         {apps.map(app => (

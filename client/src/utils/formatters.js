@@ -117,7 +117,7 @@ export function formatBytes(bytes, decimals = 1) {
 export function formatDateTime(value) {
   if (!value) return 'Unknown time';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 

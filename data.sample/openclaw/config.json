@@ -5,9 +5,7 @@
   "defaultSession": "main",
   "label": "Local Operator Runtime",
   "paths": {
-    "status": "/status",
-    "sessions": "/sessions",
-    "sessionMessages": "/sessions/:sessionId/messages",
-    "sendMessage": "/sessions/:sessionId/messages"
+    "toolsInvoke": "/tools/invoke",
+    "responses": "/v1/responses"
   }
 }

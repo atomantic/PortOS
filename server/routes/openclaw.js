@@ -21,6 +21,32 @@ const attachmentSchema = z.object({
   mimeType: z.string().trim().min(1).optional(),
   data: z.string().trim().min(1).optional(),
   url: z.string().trim().url().optional()
+}).superRefine((value, ctx) => {
+  const hasData = typeof value.data === 'string' && value.data.trim().length > 0;
+  const hasUrl = typeof value.url === 'string' && value.url.trim().length > 0;
+
+  if (!hasData && !hasUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Attachment must include either base64 data or url.'
+    });
+  }
+
+  if (value.sourceType === 'base64' && !hasData) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['data'],
+      message: 'Attachment with sourceType "base64" must include non-empty data.'
+    });
+  }
+
+  if (value.sourceType === 'url' && !hasUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['url'],
+      message: 'Attachment with sourceType "url" must include a valid url.'
+    });
+  }
 });
 
 const contextSchema = z.object({
@@ -146,7 +172,12 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
     if (tail) res.write(tail);
   } catch (err) {
     if (err?.name !== 'AbortError') {
-      console.error(`❌ OpenClaw stream error: ${err.message}`);
+      const errorPayload = {
+        error: 'Upstream stream error',
+        message: err instanceof Error ? err.message : String(err)
+      };
+      res.write(`event: error\ndata: ${JSON.stringify(errorPayload)}\n\n`);
+      console.error(`❌ OpenClaw stream error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   res.end();

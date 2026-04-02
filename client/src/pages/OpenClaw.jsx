@@ -246,17 +246,40 @@ export default function OpenClaw() {
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
+  const MAX_ATTACHMENTS = 8;
+  const MAX_ATTACHMENT_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
+
   const appendFiles = useCallback(async (files) => {
     if (!files || files.length === 0) return;
 
+    const currentCount = Array.isArray(attachments) ? attachments.length : 0;
+    const remainingSlots = MAX_ATTACHMENTS - currentCount;
+
+    if (remainingSlots <= 0) {
+      setMessagesError(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
+      return;
+    }
+
+    const limitedFiles = files.slice(0, remainingSlots);
+    const tooLargeFile = limitedFiles.find(
+      (file) => typeof file.size === 'number' && file.size > MAX_ATTACHMENT_FILE_SIZE
+    );
+
+    if (tooLargeFile) {
+      setMessagesError(
+        `"${tooLargeFile.name}" is too large. Maximum attachment size is ${Math.round(MAX_ATTACHMENT_FILE_SIZE / (1024 * 1024))}MB.`
+      );
+      return;
+    }
+
     try {
-      const next = await filesToAttachments(files);
+      const next = await filesToAttachments(limitedFiles);
       setAttachments(current => [...current, ...next]);
       setMessagesError('');
     } catch (err) {
       setMessagesError(err.message || 'Failed to prepare attachment');
     }
-  }, []);
+  }, [attachments]);
 
   const handleAttachmentSelect = async (event) => {
     const files = Array.from(event.target.files || []);
@@ -532,10 +555,14 @@ export default function OpenClaw() {
                       <button
                         key={session.id}
                         type="button"
-                        onClick={() => setSelectedSessionId(session.id)}
+                        disabled={sending}
+                        onClick={() => {
+                          if (sending || isActive) return;
+                          setSelectedSessionId(session.id);
+                        }}
                         className={`block w-full border-b border-port-border px-4 py-3 text-left transition-colors last:border-b-0 ${
                           isActive ? 'bg-port-accent/10 text-white' : 'text-gray-300 hover:bg-port-border/20 hover:text-white'
-                        }`}
+                        } ${sending ? 'cursor-not-allowed opacity-60' : ''}`}
                       >
                         <div className="truncate text-sm font-medium">{session.title || session.label || session.id}</div>
                         <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
@@ -563,10 +590,14 @@ export default function OpenClaw() {
                           <button
                             key={session.id}
                             type="button"
-                            onClick={() => setSelectedSessionId(session.id)}
+                            disabled={sending}
+                            onClick={() => {
+                              if (sending || isActive) return;
+                              setSelectedSessionId(session.id);
+                            }}
                             className={`block w-full border-t border-port-border/60 px-4 py-3 text-left transition-colors ${
                               isActive ? 'bg-port-accent/10 text-white' : 'text-gray-400 hover:bg-port-border/20 hover:text-white'
-                            }`}
+                            } ${sending ? 'cursor-not-allowed opacity-60' : ''}`}
                           >
                             <div className="truncate text-sm font-medium">{session.title || session.label || session.id}</div>
                             <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">

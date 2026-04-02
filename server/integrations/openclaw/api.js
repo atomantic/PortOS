@@ -133,7 +133,7 @@ async function loadConfig() {
     label: pickFirst(process.env.OPENCLAW_LABEL, fileConfig.label, 'OpenClaw Runtime'),
     defaultSession: pickFirst(process.env.OPENCLAW_DEFAULT_SESSION, fileConfig.defaultSession, null),
     defaultAgentId: pickFirst(process.env.OPENCLAW_DEFAULT_AGENT_ID, fileConfig.defaultAgentId, 'main'),
-    timeoutMs: Number.parseInt(String(pickFirst(process.env.OPENCLAW_TIMEOUT_MS, fileConfig.timeoutMs, DEFAULT_TIMEOUT_MS)), 10) || DEFAULT_TIMEOUT_MS,
+    timeoutMs: (() => { const raw = Number.parseInt(String(pickFirst(process.env.OPENCLAW_TIMEOUT_MS, fileConfig.timeoutMs, DEFAULT_TIMEOUT_MS)), 10); return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_TIMEOUT_MS; })(),
     paths: {
       ...DEFAULT_PATHS,
       ...(fileConfig.paths || {})
