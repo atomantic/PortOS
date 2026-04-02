@@ -12,6 +12,11 @@ import {
 
 const router = express.Router();
 
+// ~10 MB as base64 = ~13,333,333 chars (base64 expands 3 bytes → 4 chars)
+const ATTACHMENT_BASE64_MAX_CHARS = 13_333_333;
+// 50 MB combined base64 cap across all attachments in a single request
+const ATTACHMENTS_TOTAL_BASE64_MAX_CHARS = 50_000_000;
+
 const attachmentSchema = z.object({
   kind: z.enum(['image', 'file']).optional(),
   sourceType: z.enum(['base64', 'url']).optional(),
@@ -19,7 +24,7 @@ const attachmentSchema = z.object({
   filename: z.string().trim().min(1).optional(),
   mediaType: z.string().trim().min(1).optional(),
   mimeType: z.string().trim().min(1).optional(),
-  data: z.string().trim().min(1).optional(),
+  data: z.string().trim().min(1).max(ATTACHMENT_BASE64_MAX_CHARS, 'Attachment base64 data exceeds the 10 MB per-attachment limit.').optional(),
   url: z.string().trim().url().optional()
 }).superRefine((value, ctx) => {
   const hasData = typeof value.data === 'string' && value.data.trim().length > 0;
@@ -60,6 +65,16 @@ const sendMessageSchema = z.object({
   message: z.string().trim().min(1),
   context: contextSchema,
   attachments: z.array(attachmentSchema).max(8).optional()
+}).superRefine((value, ctx) => {
+  if (!value.attachments || value.attachments.length === 0) return;
+  const totalChars = value.attachments.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
+  if (totalChars > ATTACHMENTS_TOTAL_BASE64_MAX_CHARS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['attachments'],
+      message: `Combined attachment base64 data exceeds the 50 MB total limit (${Math.round(totalChars / 1_000_000)} MB submitted).`
+    });
+  }
 });
 
 router.get('/status', asyncHandler(async (req, res) => {

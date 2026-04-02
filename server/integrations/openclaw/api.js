@@ -120,13 +120,25 @@ async function loadConfig() {
   const envEnabled = parseBoolean(process.env.OPENCLAW_ENABLED);
   const enabled = pickFirst(envEnabled, fileConfig.enabled, true);
   const baseUrlRaw = pickFirst(process.env.OPENCLAW_BASE_URL, fileConfig.baseUrl, '');
-  const baseUrl = typeof baseUrlRaw === 'string' ? baseUrlRaw.trim() : '';
-  const configured = enabled !== false && Boolean(baseUrl);
+  let finalBaseUrl = typeof baseUrlRaw === 'string' ? baseUrlRaw.trim() : '';
+  let configured = enabled !== false && Boolean(finalBaseUrl);
+
+  if (configured && finalBaseUrl) {
+    try {
+      // Validate that baseUrl is a well-formed URL; invalid values should not mark the integration as configured.
+      // This avoids later failures in URL-joining logic that would otherwise surface as generic "unreachable" errors.
+      // eslint-disable-next-line no-new
+      new URL(finalBaseUrl);
+    } catch {
+      configured = false;
+      finalBaseUrl = '';
+    }
+  }
 
   return {
     enabled,
     configured,
-    baseUrl,
+    baseUrl: finalBaseUrl,
     authToken: pickFirst(process.env.OPENCLAW_AUTH_TOKEN, fileConfig.authToken, ''),
     authHeader: pickFirst(process.env.OPENCLAW_AUTH_HEADER, fileConfig.authHeader, 'Authorization'),
     authScheme: pickFirst(process.env.OPENCLAW_AUTH_SCHEME, fileConfig.authScheme, 'Bearer'),

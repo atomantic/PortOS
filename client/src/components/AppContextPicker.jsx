@@ -6,6 +6,7 @@ export default function AppContextPicker({
   onChange,
   label = 'App context',
   placeholder = 'PortOS (default)',
+  ariaLabel,
   includeDefaultOption = true,
   className = '',
   selectClassName = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]',
@@ -20,7 +21,7 @@ export default function AppContextPicker({
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
         className={selectClassName}
-        aria-label={label || placeholder}
+        aria-label={ariaLabel || label || placeholder}
       >
         {includeDefaultOption && <option value="">{placeholder}</option>}
         {apps.map(app => (

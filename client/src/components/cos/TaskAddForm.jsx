@@ -241,6 +241,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
                 label=""
                 placeholder="PortOS"
+                ariaLabel="Select app context"
                 showRepoPath={false}
                 selectClassName="w-full px-2 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
               />
