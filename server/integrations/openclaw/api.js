@@ -139,8 +139,10 @@ async function loadConfig() {
     configured,
     baseUrl: finalBaseUrl,
     authToken: pickFirst(process.env.OPENCLAW_AUTH_TOKEN, fileConfig.authToken, ''),
-    authHeader: pickFirst(process.env.OPENCLAW_AUTH_HEADER, fileConfig.authHeader, 'Authorization'),
-    authScheme: pickFirst(process.env.OPENCLAW_AUTH_SCHEME, fileConfig.authScheme, 'Bearer'),
+    // Use ?? instead of pickFirst so empty strings ('') are preserved as intentional values.
+    // authScheme='' means "token only" (no prefix), which getAuthHeaders() explicitly supports.
+    authHeader: process.env.OPENCLAW_AUTH_HEADER ?? fileConfig.authHeader ?? 'Authorization',
+    authScheme: process.env.OPENCLAW_AUTH_SCHEME ?? fileConfig.authScheme ?? 'Bearer',
     label: pickFirst(process.env.OPENCLAW_LABEL, fileConfig.label, 'OpenClaw Runtime'),
     defaultSession: pickFirst(process.env.OPENCLAW_DEFAULT_SESSION, fileConfig.defaultSession, null),
     defaultAgentId: pickFirst(process.env.OPENCLAW_DEFAULT_AGENT_ID, fileConfig.defaultAgentId, 'main'),
