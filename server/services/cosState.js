@@ -61,6 +61,12 @@ export const DEFAULT_CONFIG = {
       'typo-fix',
       'import-cleanup'
     ]
+  },
+  confidenceAutoApproval: {
+    enabled: true,
+    highThreshold: 80,
+    lowThreshold: 50,
+    minSamples: 5
   }
 };
 

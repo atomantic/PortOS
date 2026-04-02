@@ -109,6 +109,7 @@ export const getCosLearningSkipped = () => request('/cos/learning/skipped');
 export const getCosLearningPerformance = () => request('/cos/learning/performance');
 export const getCosLearningRouting = () => request('/cos/learning/routing');
 export const getCosLearningSummary = (options) => request('/cos/learning/summary', options);
+export const getCosLearningConfidence = () => request('/cos/learning/confidence');
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
 

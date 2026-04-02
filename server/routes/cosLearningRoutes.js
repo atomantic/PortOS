@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
+import { loadState } from '../services/cosState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -140,6 +141,22 @@ router.post('/learning/recalculate-model-tiers', asyncHandler(async (req, res) =
 router.post('/learning/recalculate-durations', asyncHandler(async (req, res) => {
   const result = await taskLearning.recalculateDurationStats();
   res.json({ success: true, ...result });
+}));
+
+// GET /api/cos/learning/confidence - Get confidence levels for all task types
+router.get('/learning/confidence', asyncHandler(async (req, res) => {
+  const state = await loadState();
+  const thresholds = state.config?.confidenceAutoApproval ?? {};
+  const confidence = await taskLearning.getConfidenceLevels(thresholds);
+  res.json(confidence);
+}));
+
+// GET /api/cos/learning/confidence/:taskType - Get confidence for specific task type
+router.get('/learning/confidence/:taskType', asyncHandler(async (req, res) => {
+  const state = await loadState();
+  const thresholds = state.config?.confidenceAutoApproval ?? {};
+  const confidence = await taskLearning.getTaskTypeConfidence(req.params.taskType, thresholds);
+  res.json(confidence);
 }));
 
 // ============================================================
