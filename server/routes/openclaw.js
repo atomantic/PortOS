@@ -149,51 +149,74 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
     });
   }
 
-  const { response } = await streamSessionMessage(sessionId, payload);
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-
-  const upstream = response.body;
-  if (!upstream) {
-    res.write('event: error\ndata: {"error":"No upstream stream body"}\n\n');
-    return res.end();
-  }
-
-  const reader = upstream.getReader();
-  const decoder = new TextDecoder();
+  const abortController = new AbortController();
   let clientDisconnected = false;
+  let reader;
 
-  req.on('close', async () => {
+  const handleClose = async () => {
     clientDisconnected = true;
-    try { await reader.cancel(); } catch { /* no-op */ }
-  });
+    abortController.abort();
+    if (reader) {
+      try { await reader.cancel(); } catch { /* no-op */ }
+    }
+  };
+
+  req.on('close', handleClose);
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done || clientDisconnected || res.writableEnded || res.destroyed) break;
-      if (value) {
-        const canContinue = res.write(decoder.decode(value, { stream: true }));
-        if (!canContinue) await new Promise(resolve => res.once('drain', resolve));
+    let streamResult;
+    try {
+      streamResult = await streamSessionMessage(sessionId, payload, { signal: abortController.signal });
+    } catch (err) {
+      if (clientDisconnected) return;
+      throw err;
+    }
+
+    if (clientDisconnected || res.writableEnded || res.destroyed) return;
+
+    const { response } = streamResult;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const upstream = response.body;
+    if (!upstream) {
+      res.write('event: error\ndata: {"error":"No upstream stream body"}\n\n');
+      return res.end();
+    }
+
+    reader = upstream.getReader();
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || clientDisconnected || res.writableEnded || res.destroyed) break;
+        if (value) {
+          const canContinue = res.write(decoder.decode(value, { stream: true }));
+          if (!canContinue) await new Promise(resolve => res.once('drain', resolve));
+        }
+      }
+      const tail = decoder.decode();
+      if (tail && !res.writableEnded && !res.destroyed) res.write(tail);
+    } catch (err) {
+      if (err?.name !== 'AbortError' && !clientDisconnected && !res.writableEnded && !res.destroyed) {
+        const errorPayload = {
+          error: 'Upstream stream error',
+          message: err instanceof Error ? err.message : String(err)
+        };
+        res.write(`event: error\ndata: ${JSON.stringify(errorPayload)}\n\n`);
+        console.error(`❌ OpenClaw stream error: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    const tail = decoder.decode();
-    if (tail && !res.writableEnded && !res.destroyed) res.write(tail);
-  } catch (err) {
-    if (err?.name !== 'AbortError' && !res.writableEnded && !res.destroyed) {
-      const errorPayload = {
-        error: 'Upstream stream error',
-        message: err instanceof Error ? err.message : String(err)
-      };
-      res.write(`event: error\ndata: ${JSON.stringify(errorPayload)}\n\n`);
-      console.error(`❌ OpenClaw stream error: ${err instanceof Error ? err.message : String(err)}`);
-    }
+
+    if (!res.writableEnded && !res.destroyed) res.end();
+  } finally {
+    req.off('close', handleClose);
   }
-  if (!res.writableEnded && !res.destroyed) res.end();
 }));
 
 export default router;

@@ -439,7 +439,11 @@ describe('OpenClaw Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.headers['content-type']).toContain('text/event-stream');
-      expect(openclawApi.streamSessionMessage).toHaveBeenCalledWith('main', expect.objectContaining({ message: 'Stream this' }));
+      expect(openclawApi.streamSessionMessage).toHaveBeenCalledWith(
+        'main',
+        expect.objectContaining({ message: 'Stream this' }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     it('should write an error SSE event when upstream body is null', async () => {

@@ -166,7 +166,7 @@ function getAuthHeaders(config) {
   };
 }
 
-async function openClawFetch(config, path, { method = 'GET', headers = {}, body, accept = 'application/json', timeoutMs } = {}) {
+async function openClawFetch(config, path, { method = 'GET', headers = {}, body, accept = 'application/json', timeoutMs, signal } = {}) {
   if (!config.configured) {
     throw new ServerError('OpenClaw is not configured', {
       status: 503,
@@ -183,7 +183,8 @@ async function openClawFetch(config, path, { method = 'GET', headers = {}, body,
         ...headers,
         ...(body ? { 'Content-Type': 'application/json' } : {})
       },
-      ...(body ? { body: JSON.stringify(body) } : {})
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {})
     }, timeoutMs ?? config.timeoutMs);
   } catch (err) {
     if (err?.name === 'AbortError') {
@@ -447,7 +448,7 @@ export async function sendSessionMessage(sessionId, { message, context, attachme
   };
 }
 
-export async function streamSessionMessage(sessionId, { message, context, attachments } = {}, handlers = {}) {
+export async function streamSessionMessage(sessionId, { message, context, attachments } = {}, { signal } = {}) {
   const config = await loadConfig();
   const response = await openClawFetch(config, config.paths.responses, {
     method: 'POST',
@@ -456,6 +457,7 @@ export async function streamSessionMessage(sessionId, { message, context, attach
       'x-openclaw-session-key': sessionId
     },
     timeoutMs: 0,
+    signal,
     body: {
       model: `openclaw:${config.defaultAgentId}`,
       user: sessionId,
