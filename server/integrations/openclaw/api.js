@@ -86,8 +86,7 @@ function normalizeSession(session) {
     label: pickFirst(session?.label, session?.displayName, session?.name, session?.title, id),
     status: pickFirst(session?.status, session?.state, null) || null,
     messageCount: pickFirst(session?.messageCount, session?.messagesCount, session?.count, null),
-    lastMessageAt: pickFirst(session?.lastMessageAt, session?.updatedAt, session?.lastActivityAt, session?.createdAt, null),
-    raw: session
+    lastMessageAt: pickFirst(session?.lastMessageAt, session?.updatedAt, session?.lastActivityAt, session?.createdAt, null)
   };
 }
 
@@ -97,8 +96,7 @@ function normalizeMessage(message, index = 0) {
     role: normalizeRole(pickFirst(message?.role, message?.author, message?.sender, message?.type)),
     content: extractMessageContent(pickFirst(message?.content, message?.text, message?.body, message?.message, message)),
     createdAt: pickFirst(message?.createdAt, message?.timestamp, message?.time, message?.date, null),
-    status: pickFirst(message?.status, message?.state, null),
-    raw: message
+    status: pickFirst(message?.status, message?.state, null)
   };
 }
 
@@ -437,8 +435,7 @@ export async function sendSessionMessage(sessionId, { message, context, attachme
     role: 'assistant',
     content: extractMessageContent(payload),
     createdAt: new Date().toISOString(),
-    status: payload?.status || 'completed',
-    raw: payload
+    status: payload?.status || 'completed'
   };
 
   return {
