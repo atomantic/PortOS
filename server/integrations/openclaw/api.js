@@ -474,7 +474,6 @@ export async function streamSessionMessage(sessionId, { message, context, attach
     config,
     response,
     stream: response.body,
-    contentType: response.headers.get('content-type') || '',
-    handlers
+    contentType: response.headers.get('content-type') || ''
   };
 }
