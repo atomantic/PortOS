@@ -63,7 +63,10 @@ export async function streamOpenClawMessage(sessionId, { message, context, attac
 
     for (const line of lines) {
       if (line.startsWith('event:')) eventName = line.slice(6).trim() || 'message';
-      if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+      if (line.startsWith('data:')) {
+        const raw = line.slice(5);
+        dataLines.push(raw.startsWith(' ') ? raw.slice(1) : raw);
+      }
     }
 
     if (dataLines.length === 0) return;

@@ -374,18 +374,29 @@ export async function listSessions() {
     };
   }
 
-  const payload = await invokeTool(config, 'sessions_list', {});
-  const sessions = (payload?.sessions || [])
-    .map(normalizeSession)
-    .filter(Boolean);
+  try {
+    const payload = await invokeTool(config, 'sessions_list', {});
+    const sessions = (payload?.sessions || [])
+      .map(normalizeSession)
+      .filter(Boolean);
 
-  return {
-    configured: true,
-    reachable: true,
-    label: config.label,
-    defaultSession: config.defaultSession,
-    sessions
-  };
+    return {
+      configured: true,
+      reachable: true,
+      label: config.label,
+      defaultSession: config.defaultSession,
+      sessions
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      reachable: false,
+      sessions: [],
+      defaultSession: config.defaultSession || null,
+      label: config.label,
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
 }
 
 export async function getSessionMessages(sessionId, { limit = 50 } = {}) {

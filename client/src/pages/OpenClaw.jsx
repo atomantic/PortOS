@@ -161,6 +161,7 @@ export default function OpenClaw() {
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
   const scrollAnimationFrameRef = useRef(null);
+  const dragCounterRef = useRef(0);
   const selectedSessionIdRef = useRef(selectedSessionId);
   const attachmentsRef = useRef(attachments);
   const runtimeState = useMemo(() => getRuntimeState(status), [status]);
@@ -207,24 +208,30 @@ export default function OpenClaw() {
         return;
       }
 
-      const sessionsData = await api.getOpenClawSessions();
-      const nextSessions = ensureDefaultSession(sessionsData?.sessions || [], statusData);
-      setSessions(nextSessions);
+      try {
+        const sessionsData = await api.getOpenClawSessions();
+        const nextSessions = ensureDefaultSession(sessionsData?.sessions || [], statusData);
+        setSessions(nextSessions);
 
-      const validIds = new Set(nextSessions.map(session => session.id).filter(Boolean));
-      const preferredSessionId = [
-        selectedSessionIdRef.current,
-        statusData.defaultSession,
-        nextSessions[0]?.id
-      ].find(id => id && (validIds.size === 0 || validIds.has(id)));
+        const validIds = new Set(nextSessions.map(session => session.id).filter(Boolean));
+        const preferredSessionId = [
+          selectedSessionIdRef.current,
+          statusData.defaultSession,
+          nextSessions[0]?.id
+        ].find(id => id && (validIds.size === 0 || validIds.has(id)));
 
-      setSelectedSessionId(preferredSessionId || statusData.defaultSession || '');
+        setSelectedSessionId(preferredSessionId || statusData.defaultSession || '');
+      } catch (sessErr) {
+        setSessions([]);
+        setSelectedSessionId('');
+        setPageError(sessErr instanceof Error ? sessErr.message : String(sessErr) || 'Failed to load sessions');
+      }
     } catch (err) {
       setStatus(null);
       setSessions([]);
       setSelectedSessionId('');
       setMessages([]);
-      setPageError(err.message || 'Failed to load OpenClaw status');
+      setPageError(err instanceof Error ? err.message : String(err) || 'Failed to load OpenClaw status');
     } finally {
       setStatusLoading(false);
       setSessionsLoading(false);
@@ -366,21 +373,24 @@ export default function OpenClaw() {
   const handleDragEnter = (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (event.dataTransfer?.types?.includes('Files')) setIsDragActive(true);
+    if (event.dataTransfer?.types?.includes('Files')) {
+      dragCounterRef.current += 1;
+      setIsDragActive(true);
+    }
   };
 
   const handleDragOver = (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
-    if (event.dataTransfer?.types?.includes('Files')) setIsDragActive(true);
   };
 
   const handleDragLeave = (event) => {
     event.preventDefault();
     event.stopPropagation();
-    const relatedTarget = event.relatedTarget;
-    if (!event.currentTarget.contains(relatedTarget)) {
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
       setIsDragActive(false);
     }
   };
@@ -388,6 +398,7 @@ export default function OpenClaw() {
   const handleDrop = async (event) => {
     event.preventDefault();
     event.stopPropagation();
+    dragCounterRef.current = 0;
     setIsDragActive(false);
     const files = Array.from(event.dataTransfer?.files || []);
     await appendFiles(files);

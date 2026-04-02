@@ -114,11 +114,13 @@ export function formatBytes(bytes, decimals = 1) {
  * @param {string|Date|null} value - ISO timestamp or Date object
  * @returns {string} Formatted date and time, or 'Unknown time' for invalid input
  */
+const _dateTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
 export function formatDateTime(value) {
   if (!value) return 'Unknown time';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Unknown time';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  return _dateTimeFormatter.format(date);
 }
 
 /**
