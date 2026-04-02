@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { readFileAsBase64 } from '../utils/fileUpload';
 
 const MAX_ATTACHMENTS = 8;
@@ -55,11 +55,24 @@ async function filesToAttachments(files) {
   }
 }
 
-export function useOpenClawAttachments({ sending, onError }) {
+export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
   const [attachments, setAttachments] = useState([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const dragCounterRef = useRef(0);
   const fileInputRef = useRef(null);
+  const attachmentsRef = useRef(attachments);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  // Revoke any remaining object URLs when the hook unmounts — owned here since
+  // previewUrls are created by this hook.
+  useEffect(() => {
+    return () => {
+      attachmentsRef.current.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+    };
+  }, []);
 
   const appendFiles = useCallback(async (files) => {
     if (!files || files.length === 0) return;

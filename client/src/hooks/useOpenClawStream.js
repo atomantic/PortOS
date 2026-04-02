@@ -18,25 +18,13 @@ function normalizeContent(content) {
 // the messagesError state and passes setMessagesError as onError.
 // onSendComplete is called after a successful send with { sessionId } so the component
 // can update session metadata (e.g. lastMessageAt) without the hook owning sessions state.
-export function useOpenClawStream({ selectedSessionId, attachments, setAttachments, composer, setComposer, context, apps, sending, setSending, onError, onSendComplete }) {
+export function useOpenClawStream({ selectedSessionId, attachments, setAttachments, composer, setComposer, context, apps, sending, setSending, onError = () => {}, onSendComplete = () => {} } = {}) {
   const [messages, setMessages] = useState([]);
   const [activityLabel, setActivityLabel] = useState('');
   const [messagesLoading, setMessagesLoading] = useState(false);
   const abortControllerRef = useRef(null);
   const scrollAnimationFrameRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const attachmentsRef = useRef(attachments);
-
-  useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
-
-  // Revoke any remaining object URLs when the hook unmounts
-  useEffect(() => {
-    return () => {
-      attachmentsRef.current.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-    };
-  }, []);
 
   useEffect(() => {
     if (!messagesEndRef.current) return;
