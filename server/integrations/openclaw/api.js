@@ -13,8 +13,9 @@ const DEFAULT_PATHS = {
 function parseBoolean(value) {
   if (typeof value === 'boolean') return value;
   if (typeof value !== 'string') return undefined;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
   return undefined;
 }
 
@@ -411,7 +412,7 @@ export async function getSessionMessages(sessionId, { limit = 50 } = {}) {
   }, sessionId);
   const messages = (payload?.messages || [])
     .map((message, index) => normalizeMessage(message, index))
-    .filter(message => message.content || message.role || message.createdAt);
+    .filter(message => message.content || message.createdAt);
 
   return {
     configured: true,
