@@ -106,9 +106,11 @@ export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
 
     try {
       const next = await filesToAttachments(limitedFiles);
-
-      const existingBase64Chars = attachments.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
       const newBase64Chars = next.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
+
+      // Use the ref for live state — avoids stale-closure issues after the async read.
+      const liveAttachments = attachmentsRef.current;
+      const existingBase64Chars = liveAttachments.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
       if (existingBase64Chars + newBase64Chars > MAX_ATTACHMENTS_TOTAL_BASE64_CHARS) {
         next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
         const totalMB = Math.round((existingBase64Chars + newBase64Chars) * 0.75 / (1024 * 1024));
@@ -116,27 +118,21 @@ export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
         return;
       }
 
-      setAttachments(current => {
-        // Re-check limits against actual current state to prevent race conditions if
-        // appendFiles is called concurrently before the previous async read resolves.
-        const currentBase64Chars = current.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
-        if (currentBase64Chars + newBase64Chars > MAX_ATTACHMENTS_TOTAL_BASE64_CHARS) {
-          next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-          return current;
-        }
-        const currentCount = Array.isArray(current) ? current.length : 0;
-        const remaining = MAX_ATTACHMENTS - currentCount;
-        if (remaining <= 0) {
-          next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-          return current;
-        }
-        return [...current, ...next.slice(0, remaining)];
-      });
+      const liveRemaining = MAX_ATTACHMENTS - liveAttachments.length;
+      if (liveRemaining <= 0) {
+        next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+        onError(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
+        return;
+      }
+
+      const accepted = next.slice(0, liveRemaining);
+      next.slice(liveRemaining).forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+      setAttachments(prev => [...prev, ...accepted]);
       onError('');
     } catch (err) {
       onError(err.message || 'Failed to prepare attachment');
     }
-  }, [attachments, sending, onError]);
+  }, [sending, onError]);
 
   const removeAttachment = (attachmentId) => {
     setAttachments(current => {
