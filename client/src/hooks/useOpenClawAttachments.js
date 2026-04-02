@@ -78,8 +78,7 @@ export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
     if (!files || files.length === 0) return;
     if (sending) return;
 
-    const currentCount = Array.isArray(attachments) ? attachments.length : 0;
-    const remainingSlots = MAX_ATTACHMENTS - currentCount;
+    const remainingSlots = MAX_ATTACHMENTS - attachmentsRef.current.length;
 
     if (remainingSlots <= 0) {
       onError(`You can attach up to ${MAX_ATTACHMENTS} files per message.`);
