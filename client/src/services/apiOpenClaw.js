@@ -75,16 +75,20 @@ export async function streamOpenClawMessage(sessionId, { message, context, attac
     emit(eventName, data);
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    const parts = buffer.split(/\r?\n\r?\n/);
-    buffer = parts.pop() || '';
-    for (const part of parts) flushEventBlock(part);
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() || '';
+      for (const part of parts) flushEventBlock(part);
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) flushEventBlock(buffer);
+  } finally {
+    await reader.cancel();
   }
-
-  buffer += decoder.decode();
-  if (buffer.trim()) flushEventBlock(buffer);
 }

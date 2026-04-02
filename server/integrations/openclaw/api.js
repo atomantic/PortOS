@@ -335,6 +335,11 @@ async function invokeTool(config, tool, args = {}, sessionKey = 'main') {
   return pickFirst(payload?.result?.details, payload?.result, payload?.details, payload);
 }
 
+export async function isConfigured() {
+  const config = await loadConfig();
+  return { configured: config.configured, enabled: config.enabled };
+}
+
 export async function getRuntimeStatus() {
   const config = await loadConfig();
   if (!config.configured) {

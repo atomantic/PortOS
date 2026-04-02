@@ -4,6 +4,7 @@ import { request } from '../lib/testHelper.js';
 import openclawRoutes from './openclaw.js';
 
 vi.mock('../integrations/openclaw/api.js', () => ({
+  isConfigured: vi.fn(),
   getRuntimeStatus: vi.fn(),
   listSessions: vi.fn(),
   getSessionMessages: vi.fn(),
@@ -118,7 +119,7 @@ describe('OpenClaw Routes', () => {
 
   describe('GET /api/openclaw/sessions/:id/messages', () => {
     it('should return messages for a session', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.getSessionMessages.mockResolvedValue({
         configured: true,
         reachable: true,
@@ -138,7 +139,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should respect limit query param', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.getSessionMessages.mockResolvedValue({
         configured: true,
         reachable: true,
@@ -152,7 +153,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should cap limit at 200', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.getSessionMessages.mockResolvedValue({
         configured: true,
         reachable: true,
@@ -166,7 +167,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return unconfigured response without calling getSessionMessages when not configured', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(UNCONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: false, enabled: true });
 
       const response = await request(app).get('/api/openclaw/sessions/main/messages');
 
@@ -177,7 +178,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should use default limit of 50 when limit is invalid', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.getSessionMessages.mockResolvedValue({
         configured: true,
         reachable: true,
@@ -197,7 +198,7 @@ describe('OpenClaw Routes', () => {
 
   describe('POST /api/openclaw/sessions/:id/messages', () => {
     it('should send a message and return the reply', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.sendSessionMessage.mockResolvedValue({
         ok: true,
         configured: true,
@@ -223,7 +224,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should pass context and attachments to the service', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.sendSessionMessage.mockResolvedValue({
         ok: true,
         configured: true,
@@ -269,7 +270,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return 503 when OpenClaw is not configured', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(UNCONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: false, enabled: true });
 
       const response = await request(app)
         .post('/api/openclaw/sessions/main/messages')
@@ -281,7 +282,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return 400 when attachment count exceeds 8', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
 
       const attachments = Array.from({ length: 9 }, (_, i) => ({
         sourceType: 'url',
@@ -298,7 +299,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return 400 when attachment has neither data nor url', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
 
       const response = await request(app)
         .post('/api/openclaw/sessions/main/messages')
@@ -312,7 +313,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return 400 when a base64 attachment exceeds the 10 MB per-attachment limit', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
 
       // 13,333,334 chars > ATTACHMENT_BASE64_MAX_CHARS (13,333,333)
       const oversizedData = 'A'.repeat(13_333_334);
@@ -330,7 +331,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return 400 when combined attachments exceed the 50 MB total limit', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
 
       // Use 6 attachments each at 9,000,000 chars (each individually under the ~13.3M per-attachment cap)
       // Combined = 54,000,000 chars > ATTACHMENTS_TOTAL_BASE64_MAX_CHARS (50,000,000).
@@ -358,7 +359,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should accept a valid base64 attachment within size limits', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.sendSessionMessage.mockResolvedValue({
         ok: true,
         configured: true,
@@ -386,7 +387,7 @@ describe('OpenClaw Routes', () => {
 
   describe('POST /api/openclaw/sessions/:id/messages/stream', () => {
     it('should return 503 when OpenClaw is not configured', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(UNCONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: false, enabled: true });
 
       const response = await request(app)
         .post('/api/openclaw/sessions/main/messages/stream')
@@ -407,7 +408,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should return 400 when a base64 attachment exceeds the per-attachment size limit', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
 
       const oversizedData = 'A'.repeat(13_333_334);
 
@@ -423,7 +424,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should stream SSE events when configured and upstream is available', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
 
       const sseChunks = ['data: {"type":"text_delta","text":"Hello"}\n\n', 'data: [DONE]\n\n'];
       let chunkIndex = 0;
@@ -452,7 +453,7 @@ describe('OpenClaw Routes', () => {
     });
 
     it('should write an error SSE event when upstream body is null', async () => {
-      openclawApi.getRuntimeStatus.mockResolvedValue(CONFIGURED_STATUS);
+      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
       openclawApi.streamSessionMessage.mockResolvedValue({ response: { ok: true, body: null } });
 
       const response = await request(app)

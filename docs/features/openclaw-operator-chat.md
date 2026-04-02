@@ -241,11 +241,14 @@ Actual endpoint/auth/session defaults should live in local, git-ignored config, 
 
 ```json
 {
-  "openclaw": {
-    "baseUrl": "http://100.x.x.x:PORT",
-    "authToken": "...",
-    "defaultSession": "main",
-    "label": "Local Operator Runtime"
+  "enabled": true,
+  "baseUrl": "http://100.x.x.x:PORT",
+  "authToken": "...",
+  "defaultSession": "main",
+  "label": "Local Operator Runtime",
+  "paths": {
+    "toolsInvoke": "/tools/invoke",
+    "responses": "/v1/responses"
   }
 }
 ```

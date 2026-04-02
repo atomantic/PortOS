@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
+  isConfigured,
   getRuntimeStatus,
   listSessions,
   getSessionMessages,
@@ -100,7 +101,7 @@ router.get('/sessions/:id/messages', asyncHandler(async (req, res) => {
   if (Number.isNaN(limit) || limit <= 0) limit = 50;
   if (limit > 200) limit = 200;
 
-  const status = await getRuntimeStatus();
+  const status = await isConfigured();
   if (!status.configured) {
     return res.json({
       configured: false,
@@ -121,7 +122,7 @@ router.post('/sessions/:id/messages', asyncHandler(async (req, res) => {
   }
 
   const payload = validateRequest(sendMessageSchema, req.body);
-  const status = await getRuntimeStatus();
+  const status = await isConfigured();
   if (!status.configured) {
     throw new ServerError('OpenClaw is not configured for this PortOS instance', {
       status: 503,
@@ -140,7 +141,7 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
   }
 
   const payload = validateRequest(sendMessageSchema, req.body);
-  const status = await getRuntimeStatus();
+  const status = await isConfigured();
   if (!status.configured) {
     throw new ServerError('OpenClaw is not configured for this PortOS instance', {
       status: 503,
