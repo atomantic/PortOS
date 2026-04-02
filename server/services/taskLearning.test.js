@@ -688,6 +688,7 @@ describe('TaskLearning - recalculateModelTierMetrics', () => {
 
 describe('TaskLearning - getTaskTypeConfidence', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     clearLearningCache();
   });
 
@@ -780,6 +781,7 @@ describe('TaskLearning - getTaskTypeConfidence', () => {
 
 describe('TaskLearning - getConfidenceLevels', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     clearLearningCache();
   });
 

@@ -83,7 +83,7 @@ export function clearLearningCache() {
  */
 async function loadLearningData() {
   if (_learningCache && (Date.now() - _learningCacheTime) < LEARNING_CACHE_TTL_MS) {
-    return _learningCache;
+    return structuredClone(_learningCache);
   }
 
   if (!existsSync(DATA_DIR)) {
@@ -91,7 +91,7 @@ async function loadLearningData() {
   }
 
   const data = await readJSONFile(LEARNING_FILE, structuredClone(DEFAULT_LEARNING_DATA));
-  _learningCache = data;
+  _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
   return data;
 }
@@ -115,7 +115,7 @@ async function saveLearningData(data) {
   const tmp = `${LEARNING_FILE}.tmp`;
   await writeFile(tmp, JSON.stringify(data, null, 2));
   await rename(tmp, LEARNING_FILE);
-  _learningCache = data;
+  _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
 }
 
