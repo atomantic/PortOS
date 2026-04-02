@@ -5,7 +5,7 @@ import {
   Flower2, CloudSun, ChevronDown, Eye, EyeOff
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 

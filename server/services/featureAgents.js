@@ -9,7 +9,7 @@
 import { writeFile, readFile, rename, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';

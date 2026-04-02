@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import request from 'supertest';
+import { request } from '../lib/testHelper.js';
 import toolsRoutes from './tools.js';
 
 vi.mock('../services/tools.js', () => ({

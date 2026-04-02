@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Wand2, ArrowLeft } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { TABS, VALID_TAB_IDS } from '../components/feature-agents/constants';

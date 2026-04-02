@@ -1,6 +1,6 @@
 import * as pty from 'node-pty';
 import os from 'os';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 
 // Store active shell sessions (persist across socket reconnects)
 const shellSessions = new Map();

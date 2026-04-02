@@ -16,7 +16,7 @@ import {
   FolderOpen,
   Tag
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 
 const LINK_TYPE_COLORS = {

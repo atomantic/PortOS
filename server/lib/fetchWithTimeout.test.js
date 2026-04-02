@@ -63,6 +63,22 @@ describe('fetchWithTimeout', () => {
     await expect(promise).rejects.toThrow('aborted');
   });
 
+  it('does not schedule a timeout when timeoutMs is 0', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockResponse = { ok: true, status: 200 };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse));
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+
+      const result = await fetchWithTimeout('http://example.com', {}, 0);
+      expect(result).toBe(mockResponse);
+      // setTimeout should not have been called for the abort timer
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('aborts immediately when caller signal is already aborted (fallback path)', async () => {
     // Force fallback path by temporarily removing AbortSignal.any
     const origDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, 'any');

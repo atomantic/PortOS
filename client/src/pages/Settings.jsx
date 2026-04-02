@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Plus, X, Eye, EyeOff, Trash2, Send, Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play, Image, Zap } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { formatBytes } from '../utils/formatters';
 import {

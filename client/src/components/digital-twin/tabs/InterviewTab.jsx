@@ -10,7 +10,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import * as api from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import InterviewAnalysisCard from '../InterviewAnalysisCard';

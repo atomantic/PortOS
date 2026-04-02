@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "baseUrl": "http://private-runtime",
+  "authToken": "",
+  "defaultSession": "main",
+  "label": "Local Operator Runtime",
+  "paths": {
+    "toolsInvoke": "/tools/invoke",
+    "responses": "/v1/responses"
+  }
+}

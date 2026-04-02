@@ -110,6 +110,20 @@ export function formatBytes(bytes, decimals = 1) {
 }
 
 /**
+ * Format a timestamp as a localized date+time string (e.g., "Apr 1, 2026, 1:30 PM")
+ * @param {string|Date|null} value - ISO timestamp or Date object
+ * @returns {string} Formatted date and time, or 'Unknown time' for invalid input
+ */
+const _dateTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+export function formatDateTime(value) {
+  if (!value) return 'Unknown time';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+  return _dateTimeFormatter.format(date);
+}
+
+/**
  * Get app name from app ID by looking up in apps array
  * @param {string|null} appId - The app ID to look up
  * @param {Array<{id: string, name: string}>} apps - Array of app objects

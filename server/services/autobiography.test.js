@@ -23,7 +23,7 @@ vi.mock('./notifications.js', () => ({
 
 // Mock uuid
 let uuidCounter = 0;
-vi.mock('uuid', () => ({
+vi.mock('../lib/uuid.js', () => ({
   v4: () => `test-uuid-${++uuidCounter}`
 }));
 

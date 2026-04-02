@@ -18,6 +18,24 @@ const ALLOWED_ATTACHMENT_EXTENSIONS = [
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 /**
+ * Read a File as a base64 string (without the data URL prefix)
+ * @param {File} file - File to read
+ * @returns {Promise<string>} Base64-encoded file contents
+ */
+export function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const commaIndex = result.indexOf(',');
+      resolve(commaIndex !== -1 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
  * Process and upload image files as screenshots
  *
  * @param {FileList|File[]} files - Files to process

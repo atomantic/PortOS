@@ -14,7 +14,7 @@ vi.mock('fs', () => ({
 }));
 
 // Mock uuid
-vi.mock('uuid', () => ({
+vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn().mockReturnValue('test-uuid-1234')
 }));
 

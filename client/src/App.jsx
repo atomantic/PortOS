@@ -62,6 +62,7 @@ const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDeta
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
+const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -131,6 +132,7 @@ export default function App() {
           <Route path="review" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           <Route path="messages/:tab" element={<Messages />} />
+          <Route path="openclaw" element={<OpenClawPage />} />
           <Route path="datadog" element={<Navigate to="/devtools/datadog" replace />} />
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />

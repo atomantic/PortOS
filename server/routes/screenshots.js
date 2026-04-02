@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, resolve } from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 

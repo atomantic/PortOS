@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Search, Plus, Wand2, X, Check, Star, Crown } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { layoutGoalNodes } from './goalTreeLayout';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';

@@ -17,7 +17,7 @@ import {
   X
 } from 'lucide-react';
 import * as api from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;

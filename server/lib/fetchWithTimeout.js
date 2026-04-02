@@ -8,7 +8,8 @@
  */
 export async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  const timeoutId = hasTimeout ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
   let signal = controller.signal;
   let abortHandler;
@@ -29,7 +30,7 @@ export async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
     const response = await fetch(url, { ...options, signal });
     return response;
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId !== null) clearTimeout(timeoutId);
     if (options.signal && abortHandler) {
       options.signal.removeEventListener('abort', abortHandler);
     }

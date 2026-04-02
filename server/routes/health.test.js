@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
-import request from 'supertest';
+import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
 
 vi.mock('../services/pm2.js', () => ({

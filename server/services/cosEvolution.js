@@ -12,7 +12,7 @@
 
 import { promises as fs } from 'fs'
 import path from 'path'
-import { v4 as uuidv4 } from 'uuid'
+import { v4 as uuidv4 } from '../lib/uuid.js'
 import { cosEvents } from './cosEvents.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { safeJSONParse, ensureDir, PATHS } from '../lib/fileUtils.js'

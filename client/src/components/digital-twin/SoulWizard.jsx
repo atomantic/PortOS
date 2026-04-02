@@ -12,7 +12,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import * as api from '../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 
 const WIZARD_STEPS = [
   {

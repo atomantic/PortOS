@@ -10,7 +10,7 @@
 import { readFile, writeFile, appendFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { ensureDir, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';

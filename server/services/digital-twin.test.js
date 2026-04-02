@@ -18,7 +18,7 @@ vi.mock('fs', () => ({
 }));
 
 let uuidCounter = 0;
-vi.mock('uuid', () => ({
+vi.mock('../lib/uuid.js', () => ({
   v4: () => `test-uuid-${++uuidCounter}`
 }));
 

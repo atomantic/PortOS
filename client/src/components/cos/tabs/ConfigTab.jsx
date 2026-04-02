@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
 import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS } from '../constants';

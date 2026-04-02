@@ -8,7 +8,7 @@ import {
   RefreshCcw, RefreshCcwDot, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,

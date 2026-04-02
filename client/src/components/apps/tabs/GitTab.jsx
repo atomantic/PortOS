@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, ArrowUpDown, Check, Trash2, GitMerge, Globe } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 

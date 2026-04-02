@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import { writeFile } from 'fs/promises';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { join } from 'path';
 import { PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';

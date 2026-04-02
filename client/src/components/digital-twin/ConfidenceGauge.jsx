@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Gauge, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
 import * as api from '../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 
 const DIMENSION_LABELS = {
   openness: 'Openness',

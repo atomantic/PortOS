@@ -12,7 +12,7 @@ import {
   Check
 } from 'lucide-react';
 import * as api from '../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import { ENRICHMENT_CATEGORIES } from './constants';
 import ScaleInput from './ScaleInput';
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2, RefreshCw } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
+import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
@@ -201,7 +202,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       })) : undefined,
       position: addToTop ? 'top' : 'bottom'
     }).catch(err => {
-      console.warn('Failed to add COS task:', err);
+      toast.error(err.message || 'Failed to add task');
       setIsSubmitting(false);
       return null;
     });
@@ -233,18 +234,18 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             aria-required="true"
           />
           <div className="flex gap-2">
-            <label htmlFor="compact-task-app" className="sr-only">Target application</label>
-            <select
-              id="compact-task-app"
-              value={newTask.app}
-              onChange={e => setNewTask(t => ({ ...t, app: e.target.value }))}
-              className="flex-1 sm:w-32 sm:flex-none px-2 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-            >
-              <option value="">PortOS</option>
-              {apps?.map(app => (
-                <option key={app.id} value={app.id}>{app.name}</option>
-              ))}
-            </select>
+            <div className="flex-1 sm:w-40 sm:flex-none">
+              <AppContextPicker
+                apps={apps}
+                value={newTask.app}
+                onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
+                label=""
+                placeholder="PortOS"
+                ariaLabel="Select app context"
+                showRepoPath={false}
+                selectClassName="w-full px-2 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+              />
+            </div>
             <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}
@@ -343,20 +344,14 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     return (
       <>
         {!compact && (
-          <div>
-            <label htmlFor="task-app" className="sr-only">Target application</label>
-            <select
-              id="task-app"
-              value={newTask.app}
-              onChange={e => setNewTask(t => ({ ...t, app: e.target.value }))}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-            >
-              <option value="">PortOS (default)</option>
-              {apps?.map(app => (
-                <option key={app.id} value={app.id}>{app.name}</option>
-              ))}
-            </select>
-          </div>
+          <AppContextPicker
+            apps={apps}
+            value={newTask.app}
+            onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
+            label="Target application"
+            placeholder="PortOS (default)"
+            showRepoPath
+          />
         )}
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-x-4 gap-y-2 sm:gap-4 sm:flex-wrap">
           <label className="flex items-center gap-2 cursor-pointer select-none min-h-[44px]">

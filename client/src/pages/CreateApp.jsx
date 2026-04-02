@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { CheckCircle, Circle, Loader, AlertCircle, Play, Wrench } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import IconPicker from '../components/IconPicker';
 import FolderPicker from '../components/FolderPicker';

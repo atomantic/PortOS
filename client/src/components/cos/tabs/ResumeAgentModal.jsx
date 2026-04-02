@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, RotateCcw, Image } from 'lucide-react';
 import { processScreenshotUploads } from '../../../utils/fileUpload';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 export default function ResumeAgentModal({ agent, taskType = 'user', providers, apps, onSubmit, onClose }) {
   const taskDescription = agent.metadata?.taskDescription || agent.taskId || 'Resume previous task';

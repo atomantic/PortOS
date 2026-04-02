@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Send, Loader2 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from './ui/Toast';
 import * as api from '../services/api';
 
 const URL_PATTERN = /^(https?:\/\/|git@)/i;

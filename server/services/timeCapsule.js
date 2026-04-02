@@ -9,7 +9,7 @@ import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;

@@ -13,7 +13,7 @@ import {
   Trash2
 } from 'lucide-react';
 import * as api from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 const SOURCE_ICONS = {
   goodreads: BookOpen,

@@ -41,8 +41,8 @@ export default defineConfig(({ mode }) => {
           manualChunks: {
             // Core React dependencies
             'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-            // Socket and toast dependencies
-            'vendor-realtime': ['socket.io-client', 'react-hot-toast'],
+            // Socket dependencies
+            'vendor-realtime': ['socket.io-client'],
             // Drag and drop library (only used in CoS)
             'vendor-dnd': ['@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
             // Icon library (largest dependency)

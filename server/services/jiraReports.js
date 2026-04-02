@@ -8,6 +8,8 @@ import { join } from 'path';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { getInstances, createJiraClient } from './jira.js';
 import { getActiveApps } from './apps.js';
+import { callProviderAISimple } from '../lib/aiProvider.js';
+import { getActiveProvider, getAllProviders } from './providers.js';
 
 const REPORTS_DIR = join(PATHS.data, 'jira-reports');
 
@@ -73,6 +75,100 @@ function ticketSummary(ticket, extraFields = []) {
 }
 
 /**
+ * Generate a narrative status summary using AI.
+ * Produces a human-readable summary suitable for status calls/emails,
+ * with ticket keys inline so the UI can link them.
+ * Falls back to a plain bullet list if AI is unavailable.
+ */
+async function generateNarrativeSummary(appName, completed, inProgress, blocked, todo) {
+  const sections = [];
+  if (completed.length > 0) {
+    sections.push(`COMPLETED (last 7 days):\n${completed.map(t => `- ${t.key}: ${t.summary}`).join('\n')}`);
+  }
+  if (inProgress.length > 0) {
+    sections.push(`IN PROGRESS:\n${inProgress.map(t => `- ${t.key}: ${t.summary}`).join('\n')}`);
+  }
+  if (blocked.length > 0) {
+    sections.push(`BLOCKED:\n${blocked.map(t => `- ${t.key}: ${t.summary} [${t.status}]`).join('\n')}`);
+  }
+  if (todo.length > 0) {
+    sections.push(`UP NEXT:\n${todo.slice(0, 10).map(t => `- ${t.key}: ${t.summary}`).join('\n')}`);
+  }
+
+  if (sections.length === 0) return '';
+
+  const ticketData = sections.join('\n\n');
+
+  // Collect candidate API providers (active first, then all others)
+  const candidates = [];
+  const [active, providersResult] = await Promise.all([
+    getActiveProvider().catch(() => null),
+    getAllProviders().catch(() => ({ providers: [] }))
+  ]);
+  if (active?.type === 'api') candidates.push(active);
+  const allProviders = Array.isArray(providersResult) ? providersResult : (providersResult?.providers || []);
+  for (const p of allProviders) {
+    if (p.type === 'api' && !candidates.some(c => c.id === p.id)) candidates.push(p);
+  }
+
+  if (candidates.length === 0) {
+    console.log('📊 No API provider available, using plain ticket list');
+    return buildPlainSummary(completed, inProgress, blocked, todo);
+  }
+
+  const prompt = `You are writing a personal weekly status update for a status call or email about the ${appName} project. Given the JIRA tickets below, write a concise narrative summary organized into sections.
+
+Rules:
+- Use these exact section headers with markdown bold: **Completed:**, **In Progress:**, **Blocked:**, **Up Next:**
+- Only include sections that have tickets
+- Write each item as a bullet point (- ) that describes what was actually done or is being worked on in plain language
+- Include the JIRA ticket key (e.g., PROJ-1234) at the end of each bullet in parentheses so it can be linked
+- Combine related tickets into single bullets when they're clearly part of the same effort
+- Be concise — this is for a quick status update, not a detailed report
+- Write in first person plural ("we") or passive voice, not "I"
+- Don't add commentary, intros, or sign-offs — just the bulleted sections
+
+Tickets:
+${ticketData}`;
+
+  // Try each provider until one succeeds
+  for (const provider of candidates) {
+    const aiResult = await callProviderAISimple(provider, provider.lightModel || provider.defaultModel, prompt, {
+      temperature: 0.3,
+      max_tokens: 1500
+    }).catch(err => ({ error: err.message }));
+
+    if (!aiResult.error) return aiResult.text.trim();
+    console.log(`📊 Provider ${provider.id} failed: ${aiResult.error}`);
+  }
+
+  console.log('📊 All API providers failed, using plain ticket list');
+  return buildPlainSummary(completed, inProgress, blocked, todo);
+}
+
+function buildPlainSummary(completed, inProgress, blocked, todo) {
+  const lines = [];
+  if (completed.length > 0) {
+    lines.push('**Completed:**');
+    for (const t of completed) lines.push(`- ${t.summary} (${t.key})`);
+  }
+  if (inProgress.length > 0) {
+    lines.push('', '**In Progress:**');
+    for (const t of inProgress) lines.push(`- ${t.summary} (${t.key})`);
+  }
+  if (blocked.length > 0) {
+    lines.push('', '**Blocked:**');
+    for (const t of blocked) lines.push(`- ${t.summary} [${t.status}] (${t.key})`);
+  }
+  if (todo.length > 0) {
+    lines.push('', '**Up Next:**');
+    for (const t of todo.slice(0, 10)) lines.push(`- ${t.summary} (${t.key})`);
+    if (todo.length > 10) lines.push(`- ...and ${todo.length - 10} more`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * Generate a status report for a single app
  */
 export async function generateReport(appId, app) {
@@ -101,38 +197,12 @@ export async function generateReport(appId, app) {
   const completedPoints = done.reduce((sum, t) => sum + (t.storyPoints || 0), 0);
   const inProgressPoints = inProgress.reduce((sum, t) => sum + (t.storyPoints || 0), 0);
 
-  // Build plain-text status summary for status calls/emails
-  const statusLines = [];
-  if (recentlyCompleted.length > 0) {
-    statusLines.push('**Completed (last 7 days):**');
-    for (const t of recentlyCompleted) {
-      statusLines.push(`- ${t.key}: ${t.summary}`);
-    }
-  }
-  if (inProgress.length > 0) {
-    statusLines.push('', '**In Progress:**');
-    for (const t of inProgress) {
-      statusLines.push(`- ${t.key}: ${t.summary}`);
-    }
-  }
+  // Generate AI-powered narrative status summary
   const blocked = sprintTickets.filter(t =>
     t.status?.toLowerCase().includes('block') ||
     (t.priority === 'Highest' && t.statusCategory === 'To Do')
   );
-  if (blocked.length > 0) {
-    statusLines.push('', '**Blocked / Needs Attention:**');
-    for (const t of blocked) {
-      statusLines.push(`- ${t.key}: ${t.summary} [${t.status}]`);
-    }
-  }
-  if (todo.length > 0) {
-    statusLines.push('', '**Up Next:**');
-    for (const t of todo.slice(0, 10)) {
-      statusLines.push(`- ${t.key}: ${t.summary}`);
-    }
-    if (todo.length > 10) statusLines.push(`- ...and ${todo.length - 10} more`);
-  }
-  const statusSummary = statusLines.join('\n');
+  const statusSummary = await generateNarrativeSummary(app.name, recentlyCompleted, inProgress, blocked, todo);
 
   const report = {
     appId,

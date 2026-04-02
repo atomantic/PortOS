@@ -3,9 +3,8 @@
  * Supports multiple JIRA instances with Personal Access Tokens
  */
 
-import axios from 'axios';
-import https from 'https';
 import fs from 'fs/promises';
+import { createHttpClient } from '../lib/httpClient.js';
 import path from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
@@ -74,37 +73,40 @@ export async function deleteInstance(instanceId) {
 }
 
 /**
- * Create axios client for JIRA instance
+ * Create HTTP client for JIRA instance
  */
 export function createJiraClient(instance) {
   if (instance.allowSelfSigned) {
     console.warn(`⚠️ JIRA instance ${instance.name || instance.id} using allowSelfSigned — TLS verification disabled`);
   }
 
-  const client = axios.create({
+  const base = createHttpClient({
     baseURL: instance.baseUrl,
     headers: {
       'Authorization': `Bearer ${instance.apiToken}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    httpsAgent: instance.allowSelfSigned ? new https.Agent({
-      rejectUnauthorized: false
-    }) : undefined,
-    timeout: 30000
+    timeout: 30000,
+    allowSelfSigned: instance.allowSelfSigned
   });
 
   // Detect expired token (JIRA returns HTML login page instead of JSON)
-  client.interceptors.response.use(response => {
-    if (typeof response.data === 'string' && response.data.includes('<!DOCTYPE')) {
+  const checkToken = res => {
+    if (typeof res.data === 'string' && res.data.includes('<!DOCTYPE')) {
       const err = new Error('JIRA token expired — received login page instead of JSON. Regenerate your PAT.');
       err.status = 401;
       throw err;
     }
-    return response;
-  });
+    return res;
+  };
 
-  return client;
+  return {
+    get: (...args) => base.get(...args).then(checkToken),
+    post: (...args) => base.post(...args).then(checkToken),
+    put: (...args) => base.put(...args).then(checkToken),
+    delete: (...args) => base.delete(...args).then(checkToken)
+  };
 }
 
 /**

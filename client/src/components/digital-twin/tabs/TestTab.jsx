@@ -16,7 +16,7 @@ import {
   TrendingUp
 } from 'lucide-react';
 import * as api from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 import { TEST_STATUS } from '../constants';
 import { timeAgo } from '../../../utils/formatters';

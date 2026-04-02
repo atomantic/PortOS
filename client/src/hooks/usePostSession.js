@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN } from '../components/meatspace/post/constants';
 
 function computeSessionScoreFromResults(results) {

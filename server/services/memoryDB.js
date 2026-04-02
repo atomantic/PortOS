@@ -7,7 +7,7 @@
  * Same exported interface as memory.js so routes/consumers don't change.
  */
 
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import { cosEvents } from './cos.js';
 import * as notifications from './notifications.js';

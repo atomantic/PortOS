@@ -1822,6 +1822,12 @@ export async function deleteTemplateTask(templateId) {
 export async function triggerOnDemandTask(taskType, appId = null) {
   const schedule = await loadSchedule();
 
+  // Reject if the task type is disabled
+  const interval = schedule.tasks[taskType];
+  if (interval && !interval.enabled) {
+    return { error: `Task type '${taskType}' is disabled` };
+  }
+
   if (!schedule.onDemandRequests) {
     schedule.onDemandRequests = [];
   }

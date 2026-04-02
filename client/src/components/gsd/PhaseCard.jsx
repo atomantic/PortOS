@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Play, CheckCircle, Circle, Clock, FileText, Search, ShieldCheck } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../ui/Toast';
 import MarkdownOutput from '../cos/MarkdownOutput';
 import * as api from '../../services/api';
 

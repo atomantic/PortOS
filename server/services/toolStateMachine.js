@@ -5,7 +5,7 @@
  * Provides structured error recovery and execution tracking.
  */
 
-import { v4 as uuidv4 } from 'uuid'
+import { v4 as uuidv4 } from '../lib/uuid.js'
 import { cosEvents } from './cosEvents.js'
 
 // Tool execution states

@@ -9,7 +9,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { digitalTwinEvents } from './digital-twin.js';
 

@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getGenomeSummary } from './genome.js';

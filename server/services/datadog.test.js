@@ -19,18 +19,16 @@ vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn()
 }));
 
-vi.mock('axios', () => ({
-  default: {
-    create: vi.fn(() => ({
-      get: vi.fn(),
-      post: vi.fn()
-    }))
-  }
+vi.mock('../lib/httpClient.js', () => ({
+  createHttpClient: vi.fn(() => ({
+    get: vi.fn(),
+    post: vi.fn()
+  }))
 }));
 
 import { writeFile, mkdir } from 'fs/promises';
 import { readJSONFile } from '../lib/fileUtils.js';
-import axios from 'axios';
+import { createHttpClient } from '../lib/httpClient.js';
 import {
   getInstances,
   upsertInstance,
@@ -180,7 +178,7 @@ describe('DataDog Service', () => {
       });
 
       const mockClient = { get: vi.fn().mockResolvedValue({}) };
-      axios.create.mockReturnValue(mockClient);
+      createHttpClient.mockReturnValue(mockClient);
 
       const result = await testConnection('test-dd');
       expect(result).toEqual({ success: true });
@@ -198,7 +196,7 @@ describe('DataDog Service', () => {
           message: 'Request failed'
         })
       };
-      axios.create.mockReturnValue(mockClient);
+      createHttpClient.mockReturnValue(mockClient);
 
       const result = await testConnection('test-dd');
       expect(result).toEqual({ success: false, error: 'Invalid API key' });
@@ -218,7 +216,7 @@ describe('DataDog Service', () => {
       const mockClient = {
         post: vi.fn().mockResolvedValue({ data: { data: [] } })
       };
-      axios.create.mockReturnValue(mockClient);
+      createHttpClient.mockReturnValue(mockClient);
 
       await searchErrors('test-dd', 'my service', 'staging env');
 
@@ -235,7 +233,7 @@ describe('DataDog Service', () => {
       const mockClient = {
         post: vi.fn().mockResolvedValue({ data: { data: [] } })
       };
-      axios.create.mockReturnValue(mockClient);
+      createHttpClient.mockReturnValue(mockClient);
 
       await searchErrors('test-dd', 'my-service" status:warn', 'prod" OR env:dev');
 

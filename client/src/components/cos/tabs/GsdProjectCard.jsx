@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import GsdConcernsPanel from './GsdConcernsPanel';
 import PhaseTimeline from '../../gsd/PhaseTimeline';

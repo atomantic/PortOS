@@ -20,7 +20,7 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => false)
 }));
 
-vi.mock('uuid', () => ({
+vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn(() => 'mock-uuid')
 }));
 

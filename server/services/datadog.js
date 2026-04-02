@@ -3,8 +3,8 @@
  * Supports multiple DataDog instances with API/App key authentication
  */
 
-import axios from 'axios';
 import fs from 'fs/promises';
+import { createHttpClient } from '../lib/httpClient.js';
 import path from 'path';
 import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
@@ -74,11 +74,8 @@ export async function deleteInstance(instanceId) {
   await saveInstances(config);
 }
 
-/**
- * Create axios client for DataDog instance
- */
 function createDatadogClient(instance) {
-  return axios.create({
+  return createHttpClient({
     baseURL: `https://${instance.site}`,
     headers: {
       'DD-API-KEY': instance.apiKey,

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain } from 'lucide-react';
 import { updatePostConfig, getProviders } from '../../../services/api';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 const DRILL_META = {
   'doubling-chain': {

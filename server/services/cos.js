@@ -17,12 +17,12 @@ import { join } from 'path';
 import { exec, execFile } from 'child_process';
 import { execPm2 } from './pm2.js';
 import { promisify } from 'util';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
-import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
+import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats, parseCronToNextRun } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks, getStats as getMissionStats } from './missions.js';
 import { generateTaskFromJob, recordJobExecution, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
@@ -1250,6 +1250,21 @@ async function generateSelfImprovementTask(state) {
 }
 
 /**
+ * Resolve auto-approval for a task based on confidence scoring.
+ * Returns { autoApproved, approvalRequired } ready to spread into task objects.
+ */
+async function resolveConfidenceApproval(state, taskTypeKey, logLabel) {
+  const config = state?.config?.confidenceAutoApproval ?? {};
+  if (config.enabled === false) return { autoApproved: true, approvalRequired: false };
+
+  const confidence = await getTaskTypeConfidence(taskTypeKey, config);
+  if (!confidence.autoApprove) {
+    emitLog('info', `🔒 ${logLabel} requires approval (${confidence.reason})`, {}, '[Confidence]');
+  }
+  return { autoApproved: confidence.autoApprove, approvalRequired: !confidence.autoApprove };
+}
+
+/**
  * Helper function to generate a self-improvement task for a specific type
  * Used by both normal rotation and on-demand task requests
  */
@@ -1282,6 +1297,8 @@ async function generateSelfImprovementTaskForType(taskType, state, taskDescripti
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
+  const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`);
+
   const task = {
     id: `self-improve-${taskType}-${Date.now().toString(36)}`,
     status: 'pending',
@@ -1290,7 +1307,7 @@ async function generateSelfImprovementTaskForType(taskType, state, taskDescripti
     description,
     metadata,
     taskType: 'internal',
-    autoApproved: true
+    ...approval
   };
 
   return task;
@@ -1793,6 +1810,8 @@ async function generateManagedAppImprovementTask(app, state) {
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
+  const approval = await resolveConfidenceApproval(state, `app-improve:${nextType}`, `Task app-improve:${nextType} for ${app.name}`);
+
   const task = {
     id: `app-improve-${app.id}-${nextType}-${Date.now().toString(36)}`,
     status: 'pending',
@@ -1801,7 +1820,7 @@ async function generateManagedAppImprovementTask(app, state) {
     description,
     metadata,
     taskType: 'internal',
-    autoApproved: true
+    ...approval
   };
 
   return task;
@@ -1877,6 +1896,8 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     metadata.model = 'claude-opus-4-5-20251101';
   }
 
+  const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
+
   const task = {
     id: `app-improve-${app.id}-${taskType}-${Date.now().toString(36)}`,
     status: 'pending',
@@ -1885,7 +1906,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     description,
     metadata,
     taskType: 'internal',
-    autoApproved: true
+    ...approval
   };
 
   return task;
@@ -2251,6 +2272,7 @@ async function dequeueNextTask() {
 
   // Priority 0: On-demand task requests
   const taskScheduleMod = await import('./taskSchedule.js');
+  const taskSchedule = await taskScheduleMod.loadSchedule();
   const onDemandRequests = await taskScheduleMod.getOnDemandRequests();
 
   for (const request of onDemandRequests) {
@@ -2260,6 +2282,13 @@ async function dequeueNextTask() {
     const improvEnabled = state.config.improvementEnabled ??
       (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
     if (!improvEnabled) {
+      await taskScheduleMod.clearOnDemandRequest(request.id);
+      continue;
+    }
+
+    // Skip if the task type was disabled after queuing
+    if (!taskSchedule.tasks[request.taskType]?.enabled) {
+      emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;
     }
@@ -2325,6 +2354,12 @@ async function dequeueNextTask() {
   for (const task of autoApproved) {
     if (spawned >= availableSlots) break;
     if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
+    // Skip improvement tasks whose type was disabled after queuing
+    const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
+    if (analysisType && !taskSchedule.tasks[analysisType]?.enabled) {
+      emitLog('info', `System task skipped — task type '${analysisType}' is disabled`, { taskId: task.id });
+      continue;
+    }
     const appId = task.metadata?.app;
     if (appId) {
       const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);

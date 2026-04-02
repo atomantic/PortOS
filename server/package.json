@@ -11,27 +11,20 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "axios": "^1.7.9",
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "googleapis": "^171.4.0",
-    "multer": "^2.0.2",
-    "node-pty": "^1.2.0-beta.10",
-    "node-telegram-bot-api": "^0.67.0",
-    "pg": "^8.19.0",
-    "pm2": "^5.4.3",
-    "portos-ai-toolkit": "^0.8.0",
-    "sax": "^1.4.4",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3",
-    "unzipper": "^0.12.3",
-    "uuid": "^11.0.3",
-    "ws": "^8.18.0",
-    "zod": "^3.24.1"
+    "express": "5.2.1",
+    "googleapis": "171.4.0",
+    "node-pty": "1.2.0-beta.10",
+    "pg": "8.19.0",
+    "pm2": "5.4.3",
+    "portos-ai-toolkit": "0.8.0",
+    "sax": "1.4.4",
+    "socket.io": "4.8.3",
+    "socket.io-client": "4.8.3",
+    "ws": "8.18.0",
+    "zod": "3.24.1"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.0.16",
-    "supertest": "^7.1.4",
-    "vitest": "^4.0.16"
+    "@vitest/coverage-v8": "4.0.16",
+    "vitest": "4.0.16"
   }
 }

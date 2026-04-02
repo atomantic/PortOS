@@ -24,7 +24,7 @@ import {
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
 import MarkdownOutput from '../MarkdownOutput';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {

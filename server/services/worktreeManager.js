@@ -16,6 +16,8 @@ import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
+// Lockfiles that npm/yarn/pnpm modify as a side-effect — safe to discard during worktree cleanup
+const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
 /**
  * Execute a git command and return stdout
@@ -125,9 +127,22 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     return { merged: false, removed: false, uncommittedSaved: false, warnings };
   }
   if (dirtyFiles) {
-    console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected, aborting cleanup to avoid data loss`);
-    warnings.push(`Worktree preserved — uncommitted changes detected in ${worktreePath}`);
-    return { merged: false, removed: false, uncommittedSaved: false, warnings };
+    // Discard auto-generated lockfile changes that agents don't intend to commit
+    // (e.g., npm install resolving ^version to exact version in package-lock.json)
+    const dirtyList = dirtyFiles.split('\n').filter(l => l.trim());
+    const lockfileChanges = dirtyList.filter(line =>
+      AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f))
+    );
+    if (lockfileChanges.length > 0 && lockfileChanges.length === dirtyList.length) {
+      // Extract filepath from porcelain output (XY<space>path), handling trimmed first-line
+      const lockfilePaths = lockfileChanges.map(line => line.replace(/^\s*\S+\s+/, ''));
+      console.log(`🧹 Discarding ${lockfileChanges.length} auto-generated lockfile change(s) in worktree ${agentId}`);
+      await execGit(['checkout', '--', ...lockfilePaths], worktreePath);
+    } else {
+      console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected, aborting cleanup to avoid data loss`);
+      warnings.push(`Worktree preserved — uncommitted changes detected in ${worktreePath}`);
+      return { merged: false, removed: false, uncommittedSaved: false, warnings };
+    }
   }
 
   let merged = false;

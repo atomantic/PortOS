@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import {
   getGitHubRepos,
   syncGitHubRepos,

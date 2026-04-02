@@ -10,7 +10,7 @@ import {
   CheckCircle,
   Clock
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from '../../ui/Toast';
 
 import { timeAgo } from '../../../utils/formatters';
 

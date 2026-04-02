@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import {
   FileText,
   RefreshCw,
@@ -33,28 +33,23 @@ function ReportCard({ report, onClick, isSelected }) {
   );
 }
 
-function buildStatusText(report) {
-  const lines = [];
-  const { tickets } = report;
-  if (tickets.recentlyCompleted?.length > 0) {
-    lines.push('**Completed (last 7 days):**');
-    for (const t of tickets.recentlyCompleted) lines.push(`- ${t.key}: ${t.summary}`);
-  }
-  if (tickets.inProgress?.length > 0) {
-    lines.push('', '**In Progress:**');
-    for (const t of tickets.inProgress) lines.push(`- ${t.key}: ${t.summary}`);
-  }
-  if (tickets.todo?.length > 0) {
-    lines.push('', '**Up Next:**');
-    const shown = tickets.todo.slice(0, 10);
-    for (const t of shown) lines.push(`- ${t.key}: ${t.summary}`);
-    if (tickets.todo.length > 10) lines.push(`- ...and ${tickets.todo.length - 10} more`);
-  }
-  return lines.join('\n');
-}
+const TICKET_KEY_RE = /^[A-Z]+-\d+$/;
+const TICKET_KEY_SPLIT_RE = /([A-Z]+-\d+)/g;
 
 function ReportDetail({ report }) {
   const [copied, setCopied] = useState(false);
+
+  const ticketUrls = useMemo(() => {
+    const urls = {};
+    if (report?.tickets) {
+      for (const group of Object.values(report.tickets)) {
+        for (const t of group || []) {
+          if (t.key && t.url) urls[t.key] = t.url;
+        }
+      }
+    }
+    return urls;
+  }, [report]);
 
   if (!report) {
     return (
@@ -64,17 +59,7 @@ function ReportDetail({ report }) {
     );
   }
 
-  const statusText = report.statusSummary || buildStatusText(report);
-
-  // Build ticket key → URL lookup from report data
-  const ticketUrls = {};
-  if (report.tickets) {
-    for (const group of Object.values(report.tickets)) {
-      for (const t of group || []) {
-        if (t.key && t.url) ticketUrls[t.key] = t.url;
-      }
-    }
-  }
+  const statusText = report.statusSummary || '';
 
   const handleCopy = async () => {
     const plain = statusText.replace(/\*\*/g, '');
@@ -104,25 +89,26 @@ function ReportDetail({ report }) {
       {statusText.trim() ? (
         <div className="text-sm text-gray-300 leading-relaxed">
           {statusText.split('\n').map((line, i) => {
-            if (line.startsWith('**') && line.endsWith('**')) {
+            if (line.startsWith('**') && line.includes('**')) {
               return <div key={i} className="text-white font-semibold mt-4 first:mt-0 mb-1">{line.replace(/\*\*/g, '')}</div>;
             }
             if (line.startsWith('- ')) {
-              const ticketMatch = line.match(/^- ([A-Z]+-\d+): (.+)/);
-              if (ticketMatch) {
-                const url = ticketUrls[ticketMatch[1]];
-                return (
-                  <div key={i} className="pl-3 py-0.5">
-                    {url ? (
-                      <a href={url} target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline font-mono text-xs">{ticketMatch[1]}</a>
-                    ) : (
-                      <span className="text-port-accent font-mono text-xs">{ticketMatch[1]}</span>
-                    )}
-                    <span className="text-gray-300 ml-1.5">{ticketMatch[2]}</span>
-                  </div>
-                );
-              }
-              return <div key={i} className="pl-3 py-0.5 text-gray-400">{line.slice(2)}</div>;
+              const parts = line.slice(2).split(TICKET_KEY_SPLIT_RE);
+              return (
+                <div key={i} className="pl-3 py-0.5 text-gray-300">
+                  {parts.map((part, j) => {
+                    if (TICKET_KEY_RE.test(part)) {
+                      const url = ticketUrls[part];
+                      return url ? (
+                        <a key={j} href={url} target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline font-mono text-xs">{part}</a>
+                      ) : (
+                        <span key={j} className="text-port-accent font-mono text-xs">{part}</span>
+                      );
+                    }
+                    return <span key={j}>{part}</span>;
+                  })}
+                </div>
+              );
             }
             return line ? <div key={i}>{line}</div> : <div key={i} className="h-2" />;
           })}

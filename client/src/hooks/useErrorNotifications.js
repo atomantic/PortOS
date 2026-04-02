@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import toast from 'react-hot-toast';
+import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 
 /**

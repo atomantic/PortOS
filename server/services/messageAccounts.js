@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 
 const ACCOUNTS_FILE = join(PATHS.messages, 'accounts.json');

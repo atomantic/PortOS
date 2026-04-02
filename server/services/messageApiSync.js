@@ -4,7 +4,7 @@
  * Falls back to Playwright scraping if token extraction fails.
  */
 
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { getToken } from './messageTokenExtractor.js';
 

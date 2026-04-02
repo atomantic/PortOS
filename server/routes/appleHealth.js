@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
-import multer from 'multer';
-import { Parse as unzipParse } from 'unzipper';
+import { uploadSingle } from '../lib/multipart.js';
+import { parseZip } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { healthIngestSchema } from '../lib/appleHealthValidation.js';
@@ -29,14 +29,7 @@ const isXml = (file) =>
   file.mimetype === 'application/xml' ||
   file.originalname.endsWith('.xml');
 
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, tmpdir()),
-    filename: (req, file, cb) => {
-      const ext = isZip(file) ? '.zip' : '.xml';
-      cb(null, `apple-health-${Date.now()}${ext}`);
-    }
-  }),
+const uploadXml = uploadSingle('file', {
   limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2GB max
   fileFilter: (req, file, cb) => {
     if (isXml(file) || isZip(file)) {
@@ -107,8 +100,8 @@ router.get('/correlation', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/health/import/xml
-// Accepts Apple Health export.xml or ZIP via multipart upload (multer diskStorage — no OOM on 500MB+)
-router.post('/import/xml', upload.single('file'), asyncHandler(async (req, res) => {
+// Accepts Apple Health export.xml or ZIP via multipart upload (streaming — no OOM on 500MB+)
+router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   let filePath = req.file?.path;
   if (!filePath) throw new ServerError('No file uploaded', { status: 400, code: 'BAD_REQUEST' });
@@ -126,7 +119,7 @@ router.post('/import/xml', upload.single('file'), asyncHandler(async (req, res) 
       const settle = (fn) => (...args) => { if (!settled) { settled = true; fn(...args); } };
 
       createReadStream(filePath)
-        .pipe(unzipParse())
+        .pipe(parseZip())
         .on('entry', (entry) => {
           if (entry.path === 'apple_health_export/export.xml' || entry.path === 'export.xml') {
             foundXml = true;

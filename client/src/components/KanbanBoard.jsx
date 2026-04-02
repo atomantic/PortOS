@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { GripVertical } from 'lucide-react';
-import toast from 'react-hot-toast';
+import toast from './ui/Toast';
 import * as api from '../services/api';
 
 const COLUMNS = ['To Do', 'In Progress', 'Done'];
