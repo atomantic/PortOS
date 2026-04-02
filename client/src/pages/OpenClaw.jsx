@@ -98,6 +98,22 @@ function getAttachmentKind(file) {
   return file.type.startsWith('image/') ? 'image' : 'file';
 }
 
+const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['image/'];
+const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+  'text/plain', 'text/markdown', 'text/x-markdown',
+  'application/json', 'text/csv', 'application/csv', 'text/x-csv',
+  'application/pdf'
+]);
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.csv', '.pdf']);
+
+function isAllowedAttachmentType(file) {
+  if (ALLOWED_ATTACHMENT_MIME_PREFIXES.some(p => file.type?.startsWith(p))) return true;
+  const mimeBase = file.type ? file.type.split(';')[0].trim().toLowerCase() : '';
+  if (mimeBase && ALLOWED_ATTACHMENT_MIME_TYPES.has(mimeBase)) return true;
+  const ext = file.name ? `.${file.name.split('.').pop().toLowerCase()}` : '';
+  return ALLOWED_ATTACHMENT_EXTENSIONS.has(ext);
+}
+
 function normalizeContent(content) {
   if (typeof content === 'string') return content;
   if (!content) return '';
@@ -316,6 +332,12 @@ export default function OpenClaw() {
       setMessagesError(
         `"${tooLargeFile.name}" is too large. Maximum attachment size is ${Math.round(MAX_ATTACHMENT_FILE_SIZE / (1024 * 1024))}MB.`
       );
+      return;
+    }
+
+    const disallowedFile = limitedFiles.find(file => !isAllowedAttachmentType(file));
+    if (disallowedFile) {
+      setMessagesError(`"${disallowedFile.name}" is not a supported file type. Allowed: images, .txt, .md, .json, .csv, .pdf`);
       return;
     }
 

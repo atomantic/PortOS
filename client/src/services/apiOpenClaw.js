@@ -19,7 +19,8 @@ export async function streamOpenClawMessage(sessionId, { message, context, attac
   const response = await fetch(`${API_BASE}/openclaw/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream'
     },
     body: JSON.stringify({ message, context, attachments }),
     signal

@@ -176,7 +176,10 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
     while (true) {
       const { done, value } = await reader.read();
       if (done || clientDisconnected || res.writableEnded || res.destroyed) break;
-      if (value) res.write(decoder.decode(value, { stream: true }));
+      if (value) {
+        const canContinue = res.write(decoder.decode(value, { stream: true }));
+        if (!canContinue) await new Promise(resolve => res.once('drain', resolve));
+      }
     }
     const tail = decoder.decode();
     if (tail && !res.writableEnded && !res.destroyed) res.write(tail);
