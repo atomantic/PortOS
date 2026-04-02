@@ -110,21 +110,29 @@ function normalizeContent(content) {
 }
 
 async function filesToAttachments(files) {
-  return Promise.all(files.map(async (file) => {
-    const kind = getAttachmentKind(file);
-    const mediaType = file.type || 'application/octet-stream';
-    const base64 = await readFileAsBase64(file);
-    return {
-      id: `attachment-${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
-      name: file.name,
-      filename: file.name,
-      mediaType,
-      kind,
-      size: file.size,
-      data: base64,
-      previewUrl: kind === 'image' ? URL.createObjectURL(file) : ''
-    };
-  }));
+  const createdPreviewUrls = [];
+  try {
+    return await Promise.all(files.map(async (file) => {
+      const kind = getAttachmentKind(file);
+      const mediaType = file.type || 'application/octet-stream';
+      const base64 = await readFileAsBase64(file);
+      const previewUrl = kind === 'image' ? URL.createObjectURL(file) : '';
+      if (previewUrl) createdPreviewUrls.push(previewUrl);
+      return {
+        id: `attachment-${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name,
+        filename: file.name,
+        mediaType,
+        kind,
+        size: file.size,
+        data: base64,
+        previewUrl
+      };
+    }));
+  } catch (err) {
+    createdPreviewUrls.forEach(url => URL.revokeObjectURL(url));
+    throw err;
+  }
 }
 
 export default function OpenClaw() {
@@ -280,6 +288,7 @@ export default function OpenClaw() {
 
   const appendFiles = useCallback(async (files) => {
     if (!files || files.length === 0) return;
+    if (sending) return;
 
     const currentCount = Array.isArray(attachments) ? attachments.length : 0;
     const remainingSlots = MAX_ATTACHMENTS - currentCount;
@@ -333,7 +342,7 @@ export default function OpenClaw() {
     } catch (err) {
       setMessagesError(err.message || 'Failed to prepare attachment');
     }
-  }, [attachments]);
+  }, [attachments, sending]);
 
   const handleAttachmentSelect = async (event) => {
     const files = Array.from(event.target.files || []);

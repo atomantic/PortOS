@@ -156,11 +156,12 @@ async function loadConfig() {
 
 function getAuthHeaders(config) {
   if (!config.authToken) return {};
+  const headerName = config.authHeader || 'Authorization';
   const headerValue = config.authScheme === null || config.authScheme === ''
     ? config.authToken
     : `${config.authScheme} ${config.authToken}`;
   return {
-    [config.authHeader]: headerValue
+    [headerName]: headerValue
   };
 }
 
