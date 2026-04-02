@@ -64,21 +64,43 @@ const DEFAULT_LEARNING_DATA = {
   }
 };
 
+// In-memory cache for learning data — avoids redundant disk reads during
+// evaluation cycles where multiple functions read the same file.
+let _learningCache = null;
+let _learningCacheTime = 0;
+const LEARNING_CACHE_TTL_MS = 5000;
+
 /**
- * Load learning data from file
+ * Clear the learning data cache. Exposed for testing.
+ */
+export function clearLearningCache() {
+  _learningCache = null;
+  _learningCacheTime = 0;
+}
+
+/**
+ * Load learning data from file (cached for 5s)
  */
 async function loadLearningData() {
+  if (_learningCache && (Date.now() - _learningCacheTime) < LEARNING_CACHE_TTL_MS) {
+    return _learningCache;
+  }
+
   if (!existsSync(DATA_DIR)) {
     await ensureDir(DATA_DIR);
   }
 
-  return readJSONFile(LEARNING_FILE, { ...DEFAULT_LEARNING_DATA });
+  const data = await readJSONFile(LEARNING_FILE, { ...DEFAULT_LEARNING_DATA });
+  _learningCache = data;
+  _learningCacheTime = Date.now();
+  return data;
 }
 
 /**
  * Save learning data to file
  */
 async function saveLearningData(data) {
+  _learningCache = null;
   data.lastUpdated = new Date().toISOString();
 
   // Prune task types with fewer than 2 completions and last seen > 30 days ago
@@ -1738,5 +1760,89 @@ export async function getLearningSummary() {
       ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
       : null,
     totalCompleted: data.totals.completed
+  };
+}
+
+/**
+ * Pure classifier — returns { tier, autoApprove } for a given metrics object.
+ * Shared by getTaskTypeConfidence() and getConfidenceLevels().
+ */
+function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50, minSamples = 5 } = {}) {
+  const completed = metrics?.completed ?? 0;
+  const successRate = metrics?.successRate ?? 0;
+
+  if (completed < minSamples) return { tier: 'new', autoApprove: true };
+  if (successRate >= highThreshold) return { tier: 'high', autoApprove: true };
+  if (successRate >= lowThreshold) return { tier: 'medium', autoApprove: true };
+  return { tier: 'low', autoApprove: false };
+}
+
+/**
+ * Calculate confidence tier for a specific task type based on learning data.
+ *
+ * @param {string} taskType - The task type to evaluate
+ * @param {Object} [thresholds] - Override default thresholds
+ * @returns {Promise<Object>} Confidence assessment
+ */
+export async function getTaskTypeConfidence(taskType, thresholds = {}) {
+  const data = await loadLearningData();
+  const metrics = data.byTaskType[taskType];
+  const { tier, autoApprove } = classifyConfidenceTier(metrics, thresholds);
+
+  const reasons = {
+    new: `Fewer than ${thresholds.minSamples ?? 5} completions — auto-approve by default`,
+    high: `${metrics?.successRate}% success across ${metrics?.completed} runs — high confidence`,
+    medium: `${metrics?.successRate}% success — acceptable confidence`,
+    low: `${metrics?.successRate}% success after ${metrics?.completed} attempts — requires approval`
+  };
+
+  return {
+    taskType,
+    tier,
+    autoApprove,
+    successRate: metrics?.successRate ?? null,
+    completed: metrics?.completed ?? 0,
+    reason: reasons[tier]
+  };
+}
+
+/**
+ * Get confidence levels for all tracked task types.
+ * Returns a summary suitable for display in the Learning tab UI.
+ *
+ * @param {Object} [thresholds] - Override default thresholds
+ * @returns {Promise<Object>} All task types grouped by confidence tier
+ */
+export async function getConfidenceLevels(thresholds = {}) {
+  const data = await loadLearningData();
+  const levels = { high: [], medium: [], low: [], new: [] };
+
+  for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    const { tier, autoApprove } = classifyConfidenceTier(metrics, thresholds);
+    levels[tier].push({
+      taskType,
+      successRate: metrics.successRate ?? 0,
+      completed: metrics.completed || 0,
+      autoApprove,
+      lastCompleted: metrics.lastCompleted
+    });
+  }
+
+  for (const tier of Object.values(levels)) {
+    tier.sort((a, b) => b.successRate - a.successRate);
+  }
+
+  const { highThreshold = 80, lowThreshold = 50, minSamples = 5 } = thresholds;
+  return {
+    levels,
+    thresholds: { highThreshold, lowThreshold, minSamples },
+    summary: {
+      high: levels.high.length,
+      medium: levels.medium.length,
+      low: levels.low.length,
+      new: levels.new.length,
+      total: Object.values(levels).reduce((sum, arr) => sum + arr.length, 0),
+      requireApproval: levels.low.length
+    }
   };
 }

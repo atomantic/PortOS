@@ -78,7 +78,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 - [x] **Chronotype-Aware Scheduling** — Genome sleep markers for peak-focus task scheduling
 - **Identity Context Injection** — Per-task-type digital twin preamble toggle
-- **Agent Confidence & Autonomy Levels** — Dynamic tiers based on success rates
+- [x] **Agent Confidence & Autonomy Levels** — Dynamic tiers based on success rates
 - **Content Calendar** — Unified calendar across platforms
 - [x] **Proactive Insight Alerts** — Brain connections, success drops, goal stalls, cost spikes
 - **Goal Decomposition Engine** — Auto-decompose goals into task sequences

@@ -35,7 +35,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 import { readFile, writeFile } from 'fs/promises';
-import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier, recalculateModelTierMetrics } from './taskLearning.js';
+import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier, recalculateModelTierMetrics, clearLearningCache } from './taskLearning.js';
 
 const makeLearningData = (overrides = {}) => ({
   version: 1,
@@ -96,6 +96,7 @@ describe('TaskLearning - resetTaskTypeLearning', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLearningCache();
     savedData = null;
     writeFile.mockImplementation(async (_path, content) => {
       savedData = JSON.parse(content);
@@ -191,6 +192,7 @@ describe('TaskLearning - resetTaskTypeLearning', () => {
 describe('TaskLearning - getSkippedTaskTypes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLearningCache();
   });
 
   it('should return task types with <30% success and 5+ attempts', async () => {
@@ -360,6 +362,7 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLearningCache();
     savedData = null;
     writeFile.mockImplementation(async (_path, content) => {
       savedData = JSON.parse(content);
@@ -426,6 +429,7 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
 describe('TaskLearning - getRoutingAccuracy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLearningCache();
   });
 
   it('should return routing accuracy matrix with misroutes', async () => {
@@ -491,6 +495,7 @@ describe('TaskLearning - getRoutingAccuracy', () => {
 describe('TaskLearning - suggestModelTier with routing signals', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLearningCache();
   });
 
   it('should suggest avoiding failing tiers', async () => {
@@ -558,6 +563,7 @@ describe('TaskLearning - recalculateModelTierMetrics', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearLearningCache();
     savedData = null;
     writeFile.mockImplementation(async (_path, content) => {
       savedData = JSON.parse(content);

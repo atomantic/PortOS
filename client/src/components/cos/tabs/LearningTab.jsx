@@ -17,7 +17,11 @@ import {
   ChevronRight,
   Database,
   RotateCcw,
-  Crosshair
+  Crosshair,
+  Shield,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldQuestion
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -28,10 +32,12 @@ export default function LearningTab() {
   const [skipped, setSkipped] = useState(null);
   const [durations, setDurations] = useState(null);
   const [routing, setRouting] = useState(null);
+  const [confidence, setConfidence] = useState(null);
   const [loading, setLoading] = useState(true);
   const [backfilling, setBackfilling] = useState(false);
   const [resettingType, setResettingType] = useState(null);
   const [expandedSections, setExpandedSections] = useState({
+    confidence: true,
     taskTypes: true,
     skipped: true,
     durations: false,
@@ -42,18 +48,20 @@ export default function LearningTab() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [learningData, performanceData, skippedData, durationsData, routingData] = await Promise.all([
+    const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData] = await Promise.all([
       api.getCosLearning().catch(() => null),
       api.getCosLearningPerformance().catch(() => null),
       api.getCosLearningSkipped().catch(() => null),
       api.getCosLearningDurations().catch(() => null),
-      api.getCosLearningRouting().catch(() => null)
+      api.getCosLearningRouting().catch(() => null),
+      api.getCosLearningConfidence().catch(() => null)
     ]);
     setLearning(learningData);
     setPerformance(performanceData);
     setSkipped(skippedData);
     setDurations(durationsData);
     setRouting(routingData);
+    setConfidence(confidenceData);
     setLoading(false);
   }, []);
 
@@ -238,6 +246,86 @@ export default function LearningTab() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Confidence & Autonomy */}
+          {confidence?.summary && (
+            <div>
+              <button
+                onClick={() => toggleSection('confidence')}
+                className="flex items-center gap-2 w-full text-left mb-3"
+              >
+                {expandedSections.confidence ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                <Shield size={16} className="text-port-accent" />
+                <span className="font-medium text-white">Confidence & Autonomy</span>
+                <span className="text-xs text-gray-500">
+                  ({confidence.summary.total} task types)
+                </span>
+                {confidence.summary.requireApproval > 0 && (
+                  <span className="text-xs bg-port-warning/20 text-port-warning px-1.5 py-0.5 rounded ml-auto">
+                    {confidence.summary.requireApproval} require approval
+                  </span>
+                )}
+              </button>
+              {expandedSections.confidence && (
+                <div className="space-y-3">
+                  {/* Confidence Summary */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="bg-port-card border border-port-success/30 rounded-lg p-3 text-center">
+                      <ShieldCheck size={16} className="text-port-success mx-auto mb-1" />
+                      <div className="text-lg font-bold text-port-success">{confidence.summary.high}</div>
+                      <div className="text-xs text-gray-500">High Confidence</div>
+                    </div>
+                    <div className="bg-port-card border border-port-accent/30 rounded-lg p-3 text-center">
+                      <Shield size={16} className="text-port-accent mx-auto mb-1" />
+                      <div className="text-lg font-bold text-port-accent">{confidence.summary.medium}</div>
+                      <div className="text-xs text-gray-500">Medium</div>
+                    </div>
+                    <div className="bg-port-card border border-port-warning/30 rounded-lg p-3 text-center">
+                      <ShieldAlert size={16} className="text-port-warning mx-auto mb-1" />
+                      <div className="text-lg font-bold text-port-warning">{confidence.summary.low}</div>
+                      <div className="text-xs text-gray-500">Low (Approval)</div>
+                    </div>
+                    <div className="bg-port-card border border-port-border rounded-lg p-3 text-center">
+                      <ShieldQuestion size={16} className="text-gray-400 mx-auto mb-1" />
+                      <div className="text-lg font-bold text-gray-400">{confidence.summary.new}</div>
+                      <div className="text-xs text-gray-500">New (No Data)</div>
+                    </div>
+                  </div>
+
+                  {/* Thresholds Info */}
+                  <div className="text-xs text-gray-500 bg-port-card border border-port-border rounded-lg px-3 py-2">
+                    Thresholds: High &ge; {confidence.thresholds.highThreshold}% &middot; Low &lt; {confidence.thresholds.lowThreshold}% &middot; Min samples: {confidence.thresholds.minSamples}
+                  </div>
+
+                  {[
+                    { items: confidence.levels.low, color: 'port-warning', Icon: ShieldAlert, title: 'Requires Approval', desc: 'These task types have low success rates and will require human approval before spawning' },
+                    { items: confidence.levels.high, color: 'port-success', Icon: ShieldCheck, title: 'High Confidence', desc: 'Consistently successful — auto-approved without hesitation' }
+                  ].filter(g => g.items?.length > 0).map(({ items, color, Icon, title, desc }) => (
+                    <div key={title} className={`bg-port-card border border-${color}/30 rounded-lg overflow-hidden`}>
+                      <div className={`px-4 py-2 bg-${color}/10 border-b border-port-border`}>
+                        <span className={`text-sm font-medium text-${color} flex items-center gap-2`}>
+                          <Icon size={14} />
+                          {title} ({items.length})
+                        </span>
+                        <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+                      </div>
+                      <div className="divide-y divide-port-border">
+                        {items.map((t) => (
+                          <div key={t.taskType} className="px-4 py-2 flex items-center justify-between">
+                            <span className="text-sm text-gray-300 font-mono">{t.taskType}</span>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs text-gray-500">{t.completed} runs</span>
+                              <span className={`text-sm text-${color} font-medium`}>{t.successRate}%</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
