@@ -119,6 +119,7 @@ Step "npm-install" "running" "Installing all dependencies..."
 Safe-Install -Dir "." -Label "root"
 Safe-Install -Dir "client" -Label "client"
 Safe-Install -Dir "server" -Label "server"
+Safe-Install -Dir "autofixer" -Label "autofixer"
 
 # Run trusted install scripts skipped by ignore-scripts=true in .npmrc
 Write-SafeHost "🔧 Rebuilding esbuild & node-pty..." -ForegroundColor Yellow
