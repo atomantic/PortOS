@@ -128,12 +128,13 @@ if [ -z "$TAG" ]; then
   exit 1
 fi
 
-# Write completion marker atomically via Node for safe JSON encoding
-node -e "
-  const fs = require('fs');
-  const marker = JSON.stringify({ version: '$TAG', completedAt: new Date().toISOString() });
-  fs.writeFileSync('$ROOT_DIR/data/update-complete.json.tmp', marker);
-" && mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
+# Write completion marker atomically via Node (version passed as env var to avoid injection)
+TAG="$TAG" ROOT_DIR="$ROOT_DIR" node -e '
+  const fs = require("fs");
+  const path = require("path");
+  const marker = JSON.stringify({ version: process.env.TAG, completedAt: new Date().toISOString() });
+  fs.writeFileSync(path.join(process.env.ROOT_DIR, "data", "update-complete.json.tmp"), marker);
+' && mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
 
 # Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
 step "restart" "running" "Restarting PortOS..."

@@ -19,7 +19,7 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
  *
  * @param {string} tag - The release tag that triggered the update (for logging)
  * @param {function} emit - Callback (step, status, message) for progress
- * @returns {Promise<{success: boolean, failedStep?: string, errorMessage?: string}>}
+ * @returns {Promise<{success: boolean, version?: string, failedStep?: string, errorMessage?: string}>}
  */
 export async function executeUpdate(tag, emit) {
   const isWindows = process.platform === 'win32';

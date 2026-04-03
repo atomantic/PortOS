@@ -6,7 +6,11 @@ vi.mock('child_process', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { root: '/mock' }
+  PATHS: { root: '/mock', data: '/mock/data' }
+}));
+
+vi.mock('fs/promises', () => ({
+  readFile: vi.fn()
 }));
 
 vi.mock('./updateChecker.js', () => ({
@@ -14,6 +18,7 @@ vi.mock('./updateChecker.js', () => ({
 }));
 
 import { spawn } from 'child_process';
+import { readFile } from 'fs/promises';
 import { recordUpdateResult } from './updateChecker.js';
 import { executeUpdate } from './updateExecutor.js';
 
@@ -28,6 +33,8 @@ function createMockChild() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: marker file not found (tests that need it override this)
+  readFile.mockRejectedValue(new Error('ENOENT'));
 });
 
 describe('executeUpdate', () => {
@@ -117,6 +124,19 @@ describe('executeUpdate', () => {
     const pullRunning = emits.find(e => e[0] === 'git-pull' && e[1] === 'running');
     expect(pullRunning[2]).toBe('Pulling latest changes');
     expect(pullRunning[2]).not.toMatch(/\r/);
+  });
+
+  it('returns actual version from completion marker on success', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    readFile.mockResolvedValue(JSON.stringify({ version: '2.0.0', completedAt: '2026-01-01T00:00:00Z' }));
+
+    const promise = executeUpdate('v1.0.0', () => {});
+    child.emit('close', 0);
+    const result = await promise;
+
+    expect(result.success).toBe(true);
+    expect(result.version).toBe('2.0.0');
   });
 
   it('handles spawn error', async () => {
