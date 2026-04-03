@@ -10,10 +10,26 @@ Write-Host "  PortOS Update" -ForegroundColor Cyan
 Write-Host "===================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Safe write helper — suppresses broken-pipe IOExceptions when the parent
+# Node process dies mid-update (mirrors the bash SIGPIPE trap)
+function Write-SafeHost {
+    param([string]$Text)
+    try {
+        Write-Host $Text
+    } catch {
+        if ($_.Exception -is [System.IO.IOException] -or
+            $_.Exception.InnerException -is [System.IO.IOException] -or
+            $_.Exception.ToString() -like "*The pipe has been ended*") {
+            return
+        }
+        throw
+    }
+}
+
 # Step output helper (parsed by updateExecutor for UI progress)
 function Step {
     param([string]$Name, [string]$Status, [string]$Message)
-    Write-Host "STEP:${Name}:${Status}:${Message}"
+    Write-SafeHost "STEP:${Name}:${Status}:${Message}"
 }
 
 # Resilient npm install — retries once after cleaning node_modules on failure
@@ -122,10 +138,15 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$RootDir\data\update-complete.json.tmp", $marker, $utf8NoBom)
 Move-Item -Force "$RootDir\data\update-complete.json.tmp" "$RootDir\data\update-complete.json"
 
-# Restart PM2 apps
+# Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
 Step "restart" "running" "Restarting PortOS..."
 npm run pm2:restart
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    if (Test-Path "$RootDir\data\update-complete.json") {
+        Remove-Item -Force "$RootDir\data\update-complete.json"
+    }
+    exit $LASTEXITCODE
+}
 Step "restart" "done" "PortOS restarted"
 Write-Host ""
 

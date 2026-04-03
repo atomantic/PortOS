@@ -23,7 +23,9 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 export async function executeUpdate(tag, emit) {
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'powershell' : 'bash';
-  const args = isWindows ? ['-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH];
+  const args = isWindows
+    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1]
+    : [UPDATE_SH];
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
@@ -43,7 +45,7 @@ export async function executeUpdate(tag, emit) {
         buffer += data.toString();
         let newlineIdx;
         while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.slice(0, newlineIdx);
+          const line = buffer.slice(0, newlineIdx).replace(/\r$/, '');
           buffer = buffer.slice(newlineIdx + 1);
           const match = line.match(/STEP:([^:]+):([^:]+):(.+)/);
           if (match) {

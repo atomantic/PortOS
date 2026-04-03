@@ -111,14 +111,23 @@ npm run build
 step "build" "done" "Client built"
 echo ""
 
+# Determine post-update version from package.json (fail if unreadable)
+TAG=$(node -e 'const pkg = JSON.parse(require("fs").readFileSync("package.json","utf8")); if (typeof pkg.version !== "string") process.exit(1); process.stdout.write(pkg.version.trim());')
+if [ -z "$TAG" ]; then
+  echo "❌ Failed to determine package version from package.json"
+  exit 1
+fi
+
 # Write completion marker atomically before restart so server reads it on boot
-TAG=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' package.json | head -1)
 echo "{\"version\":\"${TAG}\",\"completedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$ROOT_DIR/data/update-complete.json.tmp"
 mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
 
-# Restart PM2 apps
+# Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
 step "restart" "running" "Restarting PortOS..."
-npm run pm2:restart
+if ! npm run pm2:restart; then
+  rm -f "$ROOT_DIR/data/update-complete.json"
+  exit 1
+fi
 step "restart" "done" "PortOS restarted"
 echo ""
 

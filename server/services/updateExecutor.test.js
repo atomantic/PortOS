@@ -44,7 +44,7 @@ describe('executeUpdate', () => {
 
       expect(spawn).toHaveBeenCalledWith(
         'powershell',
-        expect.arrayContaining(['-ExecutionPolicy', 'Bypass', '-File']),
+        expect.arrayContaining(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']),
         expect.any(Object)
       );
     } finally {
@@ -97,6 +97,26 @@ describe('executeUpdate', () => {
     expect(recordUpdateResult).toHaveBeenCalledWith(
       expect.objectContaining({ success: false })
     );
+  });
+
+  it('handles CRLF line endings from Windows PowerShell', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+
+    const emits = [];
+    const promise = executeUpdate('v1.0.0', (...args) => emits.push(args));
+
+    // Simulate CRLF output (Windows PowerShell)
+    child.stdout.emit('data', Buffer.from('STEP:git-pull:running:Pulling latest changes\r\n'));
+    child.stdout.emit('data', Buffer.from('STEP:git-pull:done:Latest changes pulled\r\n'));
+
+    child.emit('close', 0);
+    await promise;
+
+    // Messages should not contain trailing \r
+    const pullRunning = emits.find(e => e[0] === 'git-pull' && e[1] === 'running');
+    expect(pullRunning[2]).toBe('Pulling latest changes');
+    expect(pullRunning[2]).not.toMatch(/\r/);
   });
 
   it('handles spawn error', async () => {
