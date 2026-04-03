@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { readFile } from 'fs/promises';
+import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { recordUpdateResult } from './updateChecker.js';
@@ -84,12 +84,23 @@ export async function executeUpdate(tag, emit) {
         }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
       }
       if (success) {
-        // Read the actual version from the completion marker written by the script
+        // Read the actual version from the completion marker written by the script.
+        // Also record the result here as a fallback — if PM2 restart doesn't kill
+        // this process, the boot-time marker handler won't run and updateInProgress
+        // would stay stuck. Recording here + on boot is idempotent.
         let actualVersion;
+        const markerPath = join(PATHS.data, 'update-complete.json');
         try {
-          const marker = JSON.parse(await readFile(join(PATHS.data, 'update-complete.json'), 'utf-8'));
+          const marker = JSON.parse(await readFile(markerPath, 'utf-8'));
           actualVersion = marker.version;
-        } catch { /* marker may not be readable yet */ }
+          await recordUpdateResult({
+            version: marker.version,
+            success: true,
+            completedAt: marker.completedAt || new Date().toISOString(),
+            log: ''
+          });
+          await unlink(markerPath).catch(() => {});
+        } catch { /* marker may not be readable yet — boot handler will cover it */ }
         emit('complete', 'done', 'Update complete — restarting');
         resolve({ success: true, version: actualVersion });
       } else {

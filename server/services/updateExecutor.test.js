@@ -10,7 +10,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 vi.mock('fs/promises', () => ({
-  readFile: vi.fn()
+  readFile: vi.fn(),
+  unlink: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('./updateChecker.js', () => ({
@@ -126,7 +127,7 @@ describe('executeUpdate', () => {
     expect(pullRunning[2]).not.toMatch(/\r/);
   });
 
-  it('returns actual version from completion marker on success', async () => {
+  it('returns actual version from completion marker and records result on success', async () => {
     const child = createMockChild();
     spawn.mockReturnValue(child);
     readFile.mockResolvedValue(JSON.stringify({ version: '2.0.0', completedAt: '2026-01-01T00:00:00Z' }));
@@ -137,6 +138,9 @@ describe('executeUpdate', () => {
 
     expect(result.success).toBe(true);
     expect(result.version).toBe('2.0.0');
+    expect(recordUpdateResult).toHaveBeenCalledWith(
+      expect.objectContaining({ version: '2.0.0', success: true })
+    );
   });
 
   it('handles spawn error', async () => {
