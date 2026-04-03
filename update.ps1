@@ -124,8 +124,11 @@ Safe-Install -Dir "autofixer" -Label "autofixer"
 # Run trusted install scripts skipped by ignore-scripts=true in .npmrc
 Write-SafeHost "🔧 Rebuilding esbuild & node-pty..." -ForegroundColor Yellow
 Invoke-Logged node client/node_modules/esbuild/install.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Invoke-Logged node server/node_modules/esbuild/install.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Invoke-Logged npm rebuild node-pty --prefix server
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-SafeHost ""
 
 # Verify critical dependencies exist
