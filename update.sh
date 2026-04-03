@@ -9,16 +9,21 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 mkdir -p "$ROOT_DIR/data"
 
-echo "==================================="
-echo "  PortOS Update"
-echo "==================================="
-echo ""
+# Safe echo — swallows EPIPE so broken stdout doesn't trip set -e
+log() {
+  echo "$@" 2>/dev/null || true
+}
 
 # Step output helper (parsed by updateExecutor for UI progress)
 step() {
   local name="$1" status="$2" message="$3"
-  echo "STEP:$name:$status:$message" || true
+  log "STEP:$name:$status:$message"
 }
+
+log "==================================="
+log "  PortOS Update"
+log "==================================="
+log ""
 
 # Resilient npm install — retries once after cleaning node_modules on failure
 # Handles ENOTEMPTY and other transient npm bugs
@@ -27,18 +32,18 @@ safe_install() {
   local label="${dir}"
   [ "$dir" = "." ] && label="root"
 
-  echo "📦 Installing deps ($label)..."
+  log "📦 Installing deps ($label)..."
   if (cd "$dir" && npm install 2>&1); then
     return 0
   fi
 
-  echo "⚠️  npm install failed for $label — cleaning node_modules and retrying..."
+  log "⚠️  npm install failed for $label — cleaning node_modules and retrying..."
   rm -rf "$dir/node_modules"
   if (cd "$dir" && npm install 2>&1); then
     return 0
   fi
 
-  echo "❌ npm install failed for $label after retry"
+  log "❌ npm install failed for $label after retry"
   return 1
 }
 
@@ -46,37 +51,37 @@ safe_install() {
 step "git-pull" "running" "Pulling latest changes..."
 git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
-echo ""
+log ""
 
 # Stop PM2 apps to release file locks before updating
 step "pm2-stop" "running" "Stopping PortOS apps..."
 npm run pm2:stop 2>/dev/null || true
 step "pm2-stop" "done" "Apps stopped"
-echo ""
+log ""
 
 # Update dependencies with retry logic
 step "npm-install" "running" "Installing all dependencies..."
 safe_install .
 safe_install client
 safe_install server
-echo ""
+log ""
 
 # Verify critical dependencies exist
 if [ ! -f "client/node_modules/vite/bin/vite.js" ]; then
-  echo "❌ Critical dependency missing: client/node_modules/vite"
-  echo "   Try running: npm run install:all"
+  log "❌ Critical dependency missing: client/node_modules/vite"
+  log "   Try running: npm run install:all"
   exit 1
 fi
 step "npm-install" "done" "Dependencies installed"
 
 # Run setup (data dirs + browser deps)
-echo "Ensuring data & browser setup..."
+log "Ensuring data & browser setup..."
 npm run setup
-echo ""
+log ""
 
 # Ghostty sync (if installed)
 node scripts/setup-ghostty.js
-echo ""
+log ""
 
 # Run data migrations
 step "migrations" "running" "Running data migrations..."
@@ -87,40 +92,43 @@ step "migrations" "done" "Migrations complete"
 
 # Check for slash-do (optional, used by the PR Reviewer schedule task)
 if ! command -v slash-do >/dev/null 2>&1; then
-  echo "slash-do is not installed. It is used by the PR Reviewer schedule task."
+  log "slash-do is not installed. It is used by the PR Reviewer schedule task."
   if [ -t 0 ]; then
     read -p "Install slash-do now? [y/N] " -n 1 -r
-    echo ""
+    log ""
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-      echo "Installing slash-do..."
+      log "Installing slash-do..."
       if ! npm install -g slash-do@latest; then
-        echo "⚠️  Failed to install slash-do. Continuing without it."
+        log "⚠️  Failed to install slash-do. Continuing without it."
       fi
     else
-      echo "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
+      log "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
     fi
   else
-    echo "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
+    log "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
   fi
-  echo ""
+  log ""
 fi
 
 # Build UI assets for production serving
 step "build" "running" "Building client..."
 npm run build
 step "build" "done" "Client built"
-echo ""
+log ""
 
 # Determine post-update version from package.json (fail if unreadable)
 TAG=$(node -e 'const pkg = JSON.parse(require("fs").readFileSync("package.json","utf8")); if (typeof pkg.version !== "string") process.exit(1); process.stdout.write(pkg.version.trim());')
 if [ -z "$TAG" ]; then
-  echo "❌ Failed to determine package version from package.json"
+  log "❌ Failed to determine package version from package.json"
   exit 1
 fi
 
-# Write completion marker atomically before restart so server reads it on boot
-echo "{\"version\":\"${TAG}\",\"completedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$ROOT_DIR/data/update-complete.json.tmp"
-mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
+# Write completion marker atomically via Node for safe JSON encoding
+node -e "
+  const fs = require('fs');
+  const marker = JSON.stringify({ version: '$TAG', completedAt: new Date().toISOString() });
+  fs.writeFileSync('$ROOT_DIR/data/update-complete.json.tmp', marker);
+" && mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
 
 # Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
 step "restart" "running" "Restarting PortOS..."
@@ -129,9 +137,9 @@ if ! npm run pm2:restart; then
   exit 1
 fi
 step "restart" "done" "PortOS restarted"
-echo ""
+log ""
 
-echo "==================================="
-echo "  ✅ Update Complete!"
-echo "==================================="
-echo ""
+log "==================================="
+log "  ✅ Update Complete!"
+log "==================================="
+log ""
