@@ -131,7 +131,11 @@ Step "build" "done" "Client built"
 Write-Host ""
 
 # Write completion marker atomically before restart so server reads it on boot
-$Tag = (Get-Content package.json | ConvertFrom-Json).version
+$Tag = (Get-Content package.json -Raw | ConvertFrom-Json).version
+if (-not $Tag) {
+    Write-Host "❌ Failed to determine package version from package.json" -ForegroundColor Red
+    exit 1
+}
 $completedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $marker = "{`"version`":`"$Tag`",`"completedAt`":`"$completedAt`"}"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
