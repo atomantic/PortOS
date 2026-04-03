@@ -85,22 +85,24 @@ export async function executeUpdate(tag, emit) {
       }
       if (success) {
         // Read the actual version from the completion marker written by the script.
-        // Also record the result here as a fallback — if PM2 restart doesn't kill
-        // this process, the boot-time marker handler won't run and updateInProgress
-        // would stay stuck. Recording here + on boot is idempotent.
-        let actualVersion;
+        // Always record a success result so updateInProgress gets cleared even if
+        // PM2 restart doesn't kill this process. Falls back to the triggering tag
+        // when the marker isn't readable yet.
+        let actualVersion = tag.replace(/^v/, '');
+        let completedAt = new Date().toISOString();
         const markerPath = join(PATHS.data, 'update-complete.json');
         try {
           const marker = JSON.parse(await readFile(markerPath, 'utf-8'));
-          actualVersion = marker.version;
-          await recordUpdateResult({
-            version: marker.version,
-            success: true,
-            completedAt: marker.completedAt || new Date().toISOString(),
-            log: ''
-          });
+          actualVersion = marker.version || actualVersion;
+          completedAt = marker.completedAt || completedAt;
           await unlink(markerPath).catch(() => {});
-        } catch { /* marker may not be readable yet — boot handler will cover it */ }
+        } catch { /* marker may not be readable yet — fall back to triggering tag */ }
+        await recordUpdateResult({
+          version: actualVersion,
+          success: true,
+          completedAt,
+          log: ''
+        }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
         emit('complete', 'done', 'Update complete — restarting');
         resolve({ success: true, version: actualVersion });
       } else {

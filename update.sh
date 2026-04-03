@@ -9,6 +9,11 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 mkdir -p "$ROOT_DIR/data"
 
+# Log file for external command output — keeps noisy git/npm/node output
+# off the parent pipe so broken-pipe errors don't abort the update
+UPDATE_LOG="$ROOT_DIR/data/update.log"
+: > "$UPDATE_LOG"
+
 # Safe echo — swallows EPIPE so broken stdout doesn't trip set -e
 log() {
   echo "$@" 2>/dev/null || true
@@ -18,6 +23,13 @@ log() {
 step() {
   local name="$1" status="$2" message="$3"
   log "STEP:$name:$status:$message"
+}
+
+# Run an external command, routing stdout/stderr to the log file so
+# broken-pipe errors from the parent Node process don't abort the update.
+# Returns the command's exit code.
+run() {
+  "$@" >> "$UPDATE_LOG" 2>&1
 }
 
 log "==================================="
@@ -33,13 +45,13 @@ safe_install() {
   [ "$dir" = "." ] && label="root"
 
   log "📦 Installing deps ($label)..."
-  if (cd "$dir" && npm install 2>&1); then
+  if (cd "$dir" && run npm install); then
     return 0
   fi
 
   log "⚠️  npm install failed for $label — cleaning node_modules and retrying..."
   rm -rf "$dir/node_modules"
-  if (cd "$dir" && npm install 2>&1); then
+  if (cd "$dir" && run npm install); then
     return 0
   fi
 
@@ -52,15 +64,15 @@ safe_install() {
 step "git-pull" "running" "Pulling latest changes..."
 if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
   log "⚠️  Detached HEAD detected — checking out main branch"
-  git checkout main
+  run git checkout main
 fi
-git pull --rebase --autostash
+run git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
 log ""
 
 # Stop PM2 apps to release file locks before updating
 step "pm2-stop" "running" "Stopping PortOS apps..."
-npm run pm2:stop 2>/dev/null || true
+run npm run pm2:stop || true
 step "pm2-stop" "done" "Apps stopped"
 log ""
 
@@ -81,17 +93,17 @@ step "npm-install" "done" "Dependencies installed"
 
 # Run setup (data dirs + browser deps)
 log "Ensuring data & browser setup..."
-npm run setup
+run npm run setup
 log ""
 
 # Ghostty sync (if installed)
-node scripts/setup-ghostty.js
+run node scripts/setup-ghostty.js || true
 log ""
 
 # Run data migrations
 step "migrations" "running" "Running data migrations..."
 if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then
-  node "$ROOT_DIR/scripts/run-migrations.js"
+  run node "$ROOT_DIR/scripts/run-migrations.js"
 fi
 step "migrations" "done" "Migrations complete"
 
@@ -103,7 +115,7 @@ if ! command -v slash-do >/dev/null 2>&1; then
     log ""
     if [[ $REPLY =~ ^[Yy]$ ]]; then
       log "Installing slash-do..."
-      if ! npm install -g slash-do@latest; then
+      if ! run npm install -g slash-do@latest; then
         log "⚠️  Failed to install slash-do. Continuing without it."
       fi
     else
@@ -117,7 +129,7 @@ fi
 
 # Build UI assets for production serving
 step "build" "running" "Building client..."
-npm run build
+run npm run build
 step "build" "done" "Client built"
 log ""
 
@@ -138,7 +150,7 @@ TAG="$TAG" ROOT_DIR="$ROOT_DIR" node -e '
 
 # Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
 step "restart" "running" "Restarting PortOS..."
-if ! npm run pm2:restart; then
+if ! run npm run pm2:restart; then
   rm -f "$ROOT_DIR/data/update-complete.json"
   exit 1
 fi

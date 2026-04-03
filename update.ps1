@@ -5,6 +5,11 @@ $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RootDir
 New-Item -ItemType Directory -Force -Path "$RootDir\data" | Out-Null
 
+# Log file for external command output — keeps noisy git/npm/node output
+# off the parent pipe so broken-pipe errors don't abort the update
+$UpdateLog = Join-Path $RootDir "data\update.log"
+"" | Set-Content -Path $UpdateLog
+
 # Safe write helper — suppresses broken-pipe IOExceptions when the parent
 # Node process dies mid-update (mirrors the bash SIGPIPE trap)
 function Write-SafeHost {
@@ -34,6 +39,16 @@ function Step {
     Write-SafeHost "STEP:${Name}:${Status}:${Message}"
 }
 
+# Run an external command, routing stdout/stderr to the log file so
+# broken-pipe errors from the parent Node process don't abort the update
+function Invoke-Logged {
+    param([Parameter(ValueFromRemainingArguments)]$CmdArgs)
+    $cmd = $CmdArgs[0]
+    $args = @()
+    if ($CmdArgs.Count -gt 1) { $args = $CmdArgs[1..($CmdArgs.Count - 1)] }
+    & $cmd @args >> $UpdateLog 2>&1
+}
+
 Write-SafeHost "===================================" -ForegroundColor Cyan
 Write-SafeHost "  PortOS Update" -ForegroundColor Cyan
 Write-SafeHost "===================================" -ForegroundColor Cyan
@@ -45,7 +60,7 @@ function Safe-Install {
 
     Write-SafeHost "📦 Installing deps ($Label)..." -ForegroundColor Yellow
     Push-Location $Dir
-    npm install 2>&1
+    Invoke-Logged npm install
     if ($LASTEXITCODE -eq 0) { Pop-Location; return }
 
     Write-SafeHost "⚠️  npm install failed for $Label — cleaning node_modules and retrying..." -ForegroundColor Yellow
@@ -54,7 +69,7 @@ function Safe-Install {
         Remove-Item -Recurse -Force "$Dir/node_modules" -ErrorAction SilentlyContinue
     }
     Push-Location $Dir
-    npm install 2>&1
+    Invoke-Logged npm install
     if ($LASTEXITCODE -eq 0) { Pop-Location; return }
 
     Pop-Location
@@ -68,17 +83,17 @@ Step "git-pull" "running" "Pulling latest changes..."
 $headRef = git symbolic-ref -q HEAD 2>$null
 if (-not $headRef) {
     Write-SafeHost "⚠️  Detached HEAD detected — checking out main branch" -ForegroundColor Yellow
-    git checkout main
+    Invoke-Logged git checkout main
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-git pull --rebase --autostash
+Invoke-Logged git pull --rebase --autostash
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Step "git-pull" "done" "Latest changes pulled"
 Write-SafeHost ""
 
 # Stop PM2 apps to release file locks before updating
 Step "pm2-stop" "running" "Stopping PortOS apps..."
-npm run pm2:stop 2>$null
+Invoke-Logged npm run pm2:stop
 Step "pm2-stop" "done" "Apps stopped"
 Write-SafeHost ""
 
@@ -99,19 +114,19 @@ Step "npm-install" "done" "Dependencies installed"
 
 # Run setup (data dirs + browser deps)
 Write-SafeHost "Ensuring data & browser setup..." -ForegroundColor Yellow
-npm run setup
+Invoke-Logged npm run setup
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-SafeHost ""
 
 # Ghostty sync (if installed)
-node scripts/setup-ghostty.js
+Invoke-Logged node scripts/setup-ghostty.js
 Write-SafeHost ""
 
 # Run data migrations
 Step "migrations" "running" "Running data migrations..."
 $migrationsScript = Join-Path $RootDir "scripts\run-migrations.js"
 if (Test-Path $migrationsScript) {
-    node $migrationsScript
+    Invoke-Logged node $migrationsScript
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 Step "migrations" "done" "Migrations complete"
@@ -124,7 +139,7 @@ if (-not $slashDoFound) {
         $reply = Read-Host "Install slash-do now? [y/N]"
         if ($reply -match "^[Yy]$") {
             Write-SafeHost "Installing slash-do..." -ForegroundColor Yellow
-            npm install -g slash-do@latest 2>&1
+            Invoke-Logged npm install -g slash-do@latest
             if ($LASTEXITCODE -ne 0) {
                 Write-SafeHost "⚠️  Failed to install slash-do. Continuing without it." -ForegroundColor Red
             }
@@ -139,7 +154,7 @@ if (-not $slashDoFound) {
 
 # Build UI assets for production serving
 Step "build" "running" "Building client..."
-npm run build
+Invoke-Logged npm run build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Step "build" "done" "Client built"
 Write-SafeHost ""
@@ -159,7 +174,7 @@ Move-Item -Force "$RootDir\data\update-complete.json.tmp" "$RootDir\data\update-
 
 # Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
 Step "restart" "running" "Restarting PortOS..."
-npm run pm2:restart
+Invoke-Logged npm run pm2:restart
 if ($LASTEXITCODE -ne 0) {
     if (Test-Path "$RootDir\data\update-complete.json") {
         Remove-Item -Force "$RootDir\data\update-complete.json"

@@ -78,7 +78,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
     // /api/system/health after receiving the 'restart' step.
     if (io) {
       if (result.success) {
-        io.emit('portos:update:complete', { success: true, newVersion: result.version || tag.replace(/^v/, '') });
+        io.emit('portos:update:complete', { success: true, newVersion: result.version || tag.replace(/^v/, ''), versionKnown: !!result.version });
       } else {
         io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
       }
