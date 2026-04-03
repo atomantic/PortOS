@@ -72,9 +72,8 @@ export async function executeUpdate(tag, emit) {
     child.on('close', async (code, signal) => {
       const success = code === 0;
       const exitDetail = signal ? `killed by ${signal}` : `exit code ${code}`;
-      // On success the update script writes data/update-complete.json with
-      // the actual post-pull version; the server reads it on boot to record
-      // the result. We only record here on failure (when the marker won't exist).
+      // Record result for both success and failure so updateInProgress gets
+      // cleared even if PM2 restart doesn't kill this process.
       if (!success) {
         await recordUpdateResult({
           version: tag.replace(/^v/, ''),
