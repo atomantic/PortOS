@@ -52,11 +52,6 @@ router.post('/execute', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
   }
 
-  // Reject unsupported platforms before locking, so the flag isn't left stuck
-  if (process.platform === 'win32') {
-    throw new ServerError('Auto-update is not supported on Windows', { status: 400, code: 'UNSUPPORTED_PLATFORM' });
-  }
-
   // Atomic check-and-set: rejects if already in progress, preventing concurrent updates
   const acquired = await updateChecker.setUpdateInProgress(true);
   if (!acquired) {

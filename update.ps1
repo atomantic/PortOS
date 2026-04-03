@@ -1,10 +1,20 @@
 # PortOS Update Script for Windows PowerShell
 $ErrorActionPreference = "Stop"
 
+$RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $RootDir
+New-Item -ItemType Directory -Force -Path "$RootDir\data" | Out-Null
+
 Write-Host "===================================" -ForegroundColor Cyan
 Write-Host "  PortOS Update" -ForegroundColor Cyan
 Write-Host "===================================" -ForegroundColor Cyan
 Write-Host ""
+
+# Step output helper (parsed by updateExecutor for UI progress)
+function Step {
+    param([string]$Name, [string]$Status, [string]$Message)
+    Write-Host "STEP:${Name}:${Status}:${Message}"
+}
 
 # Resilient npm install — retries once after cleaning node_modules on failure
 function Safe-Install {
@@ -30,18 +40,20 @@ function Safe-Install {
 }
 
 # Pull latest
-Write-Host "Pulling latest changes..." -ForegroundColor Yellow
+Step "git-pull" "running" "Pulling latest changes..."
 git pull --rebase --autostash
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Step "git-pull" "done" "Latest changes pulled"
 Write-Host ""
 
 # Stop PM2 apps to release file locks before updating
-Write-Host "Stopping PortOS apps..." -ForegroundColor Yellow
+Step "pm2-stop" "running" "Stopping PortOS apps..."
 npm run pm2:stop 2>$null
+Step "pm2-stop" "done" "Apps stopped"
 Write-Host ""
 
 # Update dependencies with retry logic
-Write-Host "Updating dependencies..." -ForegroundColor Yellow
+Step "npm-install" "running" "Installing all dependencies..."
 Safe-Install -Dir "." -Label "root"
 Safe-Install -Dir "client" -Label "client"
 Safe-Install -Dir "server" -Label "server"
@@ -53,6 +65,7 @@ if (-not (Test-Path "client/node_modules/vite/bin/vite.js")) {
     Write-Host "   Try running: npm run install:all"
     exit 1
 }
+Step "npm-install" "done" "Dependencies installed"
 
 # Run setup (data dirs + browser deps)
 Write-Host "Ensuring data & browser setup..." -ForegroundColor Yellow
@@ -63,6 +76,15 @@ Write-Host ""
 # Ghostty sync (if installed)
 node scripts/setup-ghostty.js
 Write-Host ""
+
+# Run data migrations
+Step "migrations" "running" "Running data migrations..."
+$migrationsScript = Join-Path $RootDir "scripts\run-migrations.js"
+if (Test-Path $migrationsScript) {
+    node $migrationsScript
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+Step "migrations" "done" "Migrations complete"
 
 # Check for slash-do (optional, used by the PR Reviewer schedule task)
 $slashDoFound = Get-Command slash-do -ErrorAction SilentlyContinue
@@ -86,15 +108,24 @@ if (-not $slashDoFound) {
 }
 
 # Build UI assets for production serving
-Write-Host "Building UI assets..." -ForegroundColor Yellow
+Step "build" "running" "Building client..."
 npm run build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Step "build" "done" "Client built"
 Write-Host ""
 
+# Write completion marker atomically before restart so server reads it on boot
+$Tag = (Get-Content package.json | ConvertFrom-Json).version
+$completedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$marker = "{`"version`":`"$Tag`",`"completedAt`":`"$completedAt`"}"
+$marker | Out-File -Encoding utf8 -FilePath "$RootDir\data\update-complete.json.tmp"
+Move-Item -Force "$RootDir\data\update-complete.json.tmp" "$RootDir\data\update-complete.json"
+
 # Restart PM2 apps
-Write-Host "Restarting PortOS..." -ForegroundColor Yellow
+Step "restart" "running" "Restarting PortOS..."
 npm run pm2:restart
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Step "restart" "done" "PortOS restarted"
 Write-Host ""
 
 Write-Host "===================================" -ForegroundColor Green

@@ -8,8 +8,8 @@ import socket from '../../../services/socket';
 
 const STEP_LABELS = {
   starting: 'Starting update',
-  'git-fetch': 'Fetching tags',
-  'git-checkout': 'Checking out release',
+  'git-pull': 'Pulling latest changes',
+  'pm2-stop': 'Stopping apps',
   'npm-install': 'Installing dependencies',
   migrations: 'Running migrations',
   build: 'Building client',

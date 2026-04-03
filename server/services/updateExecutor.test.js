@@ -31,14 +31,22 @@ beforeEach(() => {
 });
 
 describe('executeUpdate', () => {
-  it('returns failure on Windows', async () => {
+  it('spawns powershell on Windows', async () => {
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
     try {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-      const emits = [];
-      const result = await executeUpdate('v1.0.0', (...args) => emits.push(args));
-      expect(result.success).toBe(false);
-      expect(emits[0][1]).toBe('error');
+      const child = createMockChild();
+      spawn.mockReturnValue(child);
+
+      const promise = executeUpdate('v1.0.0', () => {});
+      child.emit('close', 0);
+      await promise;
+
+      expect(spawn).toHaveBeenCalledWith(
+        'powershell',
+        expect.arrayContaining(['-ExecutionPolicy', 'Bypass', '-File']),
+        expect.any(Object)
+      );
     } finally {
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, 'platform', originalPlatformDescriptor);
@@ -54,16 +62,15 @@ describe('executeUpdate', () => {
     const promise = executeUpdate('v1.0.0', (...args) => emits.push(args));
 
     // Simulate STEP output
-    child.stdout.emit('data', Buffer.from('STEP:git-fetch:running:Fetching tags\n'));
-    child.stdout.emit('data', Buffer.from('STEP:git-fetch:done:Tags fetched\n'));
+    child.stdout.emit('data', Buffer.from('STEP:git-pull:running:Pulling latest changes\n'));
+    child.stdout.emit('data', Buffer.from('STEP:git-pull:done:Latest changes pulled\n'));
 
     child.emit('close', 0);
     const result = await promise;
 
     expect(result.success).toBe(true);
-    // Should have starting + git-fetch running + git-fetch done = 3 step emits
-    expect(emits.some(e => e[0] === 'git-fetch' && e[1] === 'running')).toBe(true);
-    expect(emits.some(e => e[0] === 'git-fetch' && e[1] === 'done')).toBe(true);
+    expect(emits.some(e => e[0] === 'git-pull' && e[1] === 'running')).toBe(true);
+    expect(emits.some(e => e[0] === 'git-pull' && e[1] === 'done')).toBe(true);
   });
 
   it('records update result on close', async () => {

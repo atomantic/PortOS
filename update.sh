@@ -1,10 +1,24 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+# Ignore SIGPIPE: when PM2 restarts the server mid-update (watch detects
+# git changes), the parent Node process dies and our stdout pipe breaks.
+trap '' PIPE
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT_DIR"
+mkdir -p "$ROOT_DIR/data"
 
 echo "==================================="
 echo "  PortOS Update"
 echo "==================================="
 echo ""
+
+# Step output helper (parsed by updateExecutor for UI progress)
+step() {
+  local name="$1" status="$2" message="$3"
+  echo "STEP:$name:$status:$message"
+}
 
 # Resilient npm install — retries once after cleaning node_modules on failure
 # Handles ENOTEMPTY and other transient npm bugs
@@ -29,17 +43,19 @@ safe_install() {
 }
 
 # Pull latest
-echo "Pulling latest changes..."
+step "git-pull" "running" "Pulling latest changes..."
 git pull --rebase --autostash
+step "git-pull" "done" "Latest changes pulled"
 echo ""
 
 # Stop PM2 apps to release file locks before updating
-echo "Stopping PortOS apps..."
+step "pm2-stop" "running" "Stopping PortOS apps..."
 npm run pm2:stop 2>/dev/null || true
+step "pm2-stop" "done" "Apps stopped"
 echo ""
 
 # Update dependencies with retry logic
-echo "Updating dependencies..."
+step "npm-install" "running" "Installing all dependencies..."
 safe_install .
 safe_install client
 safe_install server
@@ -51,6 +67,7 @@ if [ ! -f "client/node_modules/vite/bin/vite.js" ]; then
   echo "   Try running: npm run install:all"
   exit 1
 fi
+step "npm-install" "done" "Dependencies installed"
 
 # Run setup (data dirs + browser deps)
 echo "Ensuring data & browser setup..."
@@ -60,6 +77,13 @@ echo ""
 # Ghostty sync (if installed)
 node scripts/setup-ghostty.js
 echo ""
+
+# Run data migrations
+step "migrations" "running" "Running data migrations..."
+if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then
+  node "$ROOT_DIR/scripts/run-migrations.js"
+fi
+step "migrations" "done" "Migrations complete"
 
 # Check for slash-do (optional, used by the PR Reviewer schedule task)
 if ! command -v slash-do >/dev/null 2>&1; then
@@ -82,13 +106,20 @@ if ! command -v slash-do >/dev/null 2>&1; then
 fi
 
 # Build UI assets for production serving
-echo "Building UI assets..."
+step "build" "running" "Building client..."
 npm run build
+step "build" "done" "Client built"
 echo ""
 
+# Write completion marker atomically before restart so server reads it on boot
+TAG=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' package.json | head -1)
+echo "{\"version\":\"${TAG}\",\"completedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "$ROOT_DIR/data/update-complete.json.tmp"
+mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
+
 # Restart PM2 apps
-echo "Restarting PortOS..."
+step "restart" "running" "Restarting PortOS..."
 npm run pm2:restart
+step "restart" "done" "PortOS restarted"
 echo ""
 
 echo "==================================="

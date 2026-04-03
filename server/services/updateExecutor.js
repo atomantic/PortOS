@@ -3,29 +3,27 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { recordUpdateResult } from './updateChecker.js';
 
-const SCRIPT_PATH = join(PATHS.root, 'scripts', 'portos-update.sh');
+const UPDATE_SH = join(PATHS.root, 'update.sh');
+const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 
 /**
  * Execute the PortOS update script for a given release tag.
- * Spawns the script detached so it survives the Node process dying.
+ * Spawns update.sh (or update.ps1 on Windows) detached so it survives
+ * the Node process dying during the PM2 restart phase.
  *
  * @param {string} tag - The git tag to update to (e.g. "v1.27.0")
  * @param {function} emit - Callback (step, status, message) for progress
  * @returns {Promise<{success: boolean, failedStep?: string, errorMessage?: string}>}
  */
 export async function executeUpdate(tag, emit) {
-  if (process.platform === 'win32') {
-    const msg = 'Auto-update execution is not supported on Windows — the update script requires bash';
-    emit('starting', 'error', msg);
-    return { success: false, failedStep: 'starting', errorMessage: msg };
-  }
+  const isWindows = process.platform === 'win32';
+  const cmd = isWindows ? 'powershell' : 'bash';
+  const args = isWindows ? ['-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH];
 
-  // The route sets updateInProgress synchronously before calling us,
-  // so skip the redundant write here (it's already true)
   emit('starting', 'running', `Starting update to ${tag}...`);
 
   return new Promise((resolve) => {
-    const child = spawn('bash', [SCRIPT_PATH, tag], {
+    const child = spawn(cmd, args, {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: PATHS.root
