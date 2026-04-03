@@ -156,7 +156,15 @@ export async function initSpawner() {
   }
 
   cosEvents.on('task:ready', async (task) => {
-    await spawnAgentForTask(task);
+    try {
+      await spawnAgentForTask(task);
+    } catch (err) {
+      emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+      const jobId = task.metadata?.jobId;
+      if (jobId) {
+        cosEvents.emit('job:spawn-failed', { jobId });
+      }
+    }
   });
 
   cosEvents.on('agent:terminate', async (agentId) => {

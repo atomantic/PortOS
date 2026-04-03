@@ -8,9 +8,10 @@ import socket from '../../../services/socket';
 
 const STEP_LABELS = {
   starting: 'Starting update',
-  'git-fetch': 'Fetching tags',
-  'git-checkout': 'Checking out release',
+  'git-pull': 'Pulling latest changes',
+  'pm2-stop': 'Stopping apps',
   'npm-install': 'Installing dependencies',
+  setup: 'Running setup',
   migrations: 'Running migrations',
   build: 'Building client',
   restart: 'Restarting PortOS',
@@ -35,6 +36,7 @@ export default function UpdateTab() {
   const [polling, setPolling] = useState(false);
   const pollRef = useRef(null);
   const targetVersionRef = useRef(null);
+  const preUpdateVersionRef = useRef(null);
 
   const fetchStatus = useCallback(async () => {
     const data = await api.getUpdateStatus().catch(() => null);
@@ -68,10 +70,13 @@ export default function UpdateTab() {
       }
     };
 
-    const handleComplete = ({ success, newVersion }) => {
+    const handleComplete = ({ success, newVersion, versionKnown }) => {
       setUpdating(false);
       if (success) {
-        targetVersionRef.current = newVersion;
+        // Use server-reported actual version when available; fall back to target
+        if (versionKnown && newVersion) {
+          targetVersionRef.current = newVersion;
+        }
         setPolling(true);
         toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
       }
@@ -108,10 +113,14 @@ export default function UpdateTab() {
       const ok = await api.checkHealth()
         .catch(() => null);
 
-      if (ok?.version === targetVersionRef.current) {
+      // Accept either an exact target match or any version different from
+      // the pre-update version (git pull may land on a newer version than
+      // the release tag that triggered the update)
+      const preUpdateVersion = preUpdateVersionRef.current;
+      if (ok?.version && (ok.version === targetVersionRef.current || (preUpdateVersion && ok.version !== preUpdateVersion))) {
         clearInterval(pollRef.current);
         setPolling(false);
-        toast.success(`Updated to v${targetVersionRef.current}`, { id: 'portos-update-restart' });
+        toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
         setTimeout(() => window.location.reload(), 1000);
         return;
       }
@@ -141,6 +150,7 @@ export default function UpdateTab() {
     if (status?.latestRelease?.version) {
       targetVersionRef.current = status.latestRelease.version;
     }
+    preUpdateVersionRef.current = status?.currentVersion || null;
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);

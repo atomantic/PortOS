@@ -2692,11 +2692,15 @@ const spawningJobTimeouts = new Map();
 
 function addSpawningJob(jobId) {
   spawningJobIds.add(jobId);
-  // Auto-clear after 5 minutes if spawn never completes
+  // Auto-clear after 5 minutes if spawn never completes, and re-register the timer
   if (spawningJobTimeouts.has(jobId)) clearTimeout(spawningJobTimeouts.get(jobId));
   spawningJobTimeouts.set(jobId, setTimeout(() => {
     spawningJobIds.delete(jobId);
     spawningJobTimeouts.delete(jobId);
+    emitLog('warn', `Job ${jobId} spawning timed out after 5m, re-registering schedule`, { jobId });
+    registerSingleJobSchedule(jobId).catch(err =>
+      console.error(`❌ Failed to re-register job schedule after spawn timeout for ${jobId}: ${err.message}`)
+    );
   }, 5 * 60 * 1000));
 }
 
@@ -2933,6 +2937,14 @@ async function init() {
     // Re-register with updated lastRun so the next timer has the correct delay
     await registerSingleJobSchedule(jobId).catch(err =>
       console.error(`❌ Failed to re-register job schedule for ${jobId}: ${err.message}`)
+    );
+  });
+
+  cosEvents.on('job:spawn-failed', async ({ jobId }) => {
+    emitLog('warn', `Job spawn failed, re-registering schedule: ${jobId}`, { jobId });
+    clearSpawningJob(jobId);
+    await registerSingleJobSchedule(jobId).catch(err =>
+      console.error(`❌ Failed to re-register job schedule after spawn failure for ${jobId}: ${err.message}`)
     );
   });
 

@@ -52,11 +52,6 @@ router.post('/execute', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
   }
 
-  // Reject unsupported platforms before locking, so the flag isn't left stuck
-  if (process.platform === 'win32') {
-    throw new ServerError('Auto-update is not supported on Windows', { status: 400, code: 'UNSUPPORTED_PLATFORM' });
-  }
-
   // Atomic check-and-set: rejects if already in progress, preventing concurrent updates
   const acquired = await updateChecker.setUpdateInProgress(true);
   if (!acquired) {
@@ -73,15 +68,17 @@ router.post('/execute', asyncHandler(async (req, res) => {
   };
 
   // Don't await — respond immediately, progress streams via socket.
-  // The update script emits STEP:restart:running when it reaches the PM2
-  // restart phase, which triggers the client's health polling.
+  // The update script runs `git pull --rebase` to get the latest code,
+  // so the actual post-update version may differ from `tag` if new commits
+  // landed after the release. The script writes the true version to
+  // data/update-complete.json, which the server reads on boot.
   executeUpdate(tag, emit).then(result => {
     // Note: this .then() may never fire if the update script's PM2 restart
     // kills this server process first. The client handles this by polling
     // /api/system/health after receiving the 'restart' step.
     if (io) {
       if (result.success) {
-        io.emit('portos:update:complete', { success: true, newVersion: tag.replace(/^v/, '') });
+        io.emit('portos:update:complete', { success: true, newVersion: result.version || tag.replace(/^v/, ''), versionKnown: !!result.version });
       } else {
         io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
       }
