@@ -68,10 +68,13 @@ export default function UpdateTab() {
       }
     };
 
-    const handleComplete = ({ success, newVersion }) => {
+    const handleComplete = ({ success, newVersion, versionKnown }) => {
       setUpdating(false);
       if (success) {
-        targetVersionRef.current = newVersion;
+        // Use server-reported actual version when available; fall back to target
+        if (versionKnown && newVersion) {
+          targetVersionRef.current = newVersion;
+        }
         setPolling(true);
         toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
       }
@@ -108,10 +111,14 @@ export default function UpdateTab() {
       const ok = await api.checkHealth()
         .catch(() => null);
 
-      if (ok?.version === targetVersionRef.current) {
+      // Accept either an exact target match or any version different from
+      // the pre-update version (git pull may land on a newer version than
+      // the release tag that triggered the update)
+      const preUpdateVersion = status?.currentVersion;
+      if (ok?.version && (ok.version === targetVersionRef.current || (preUpdateVersion && ok.version !== preUpdateVersion))) {
         clearInterval(pollRef.current);
         setPolling(false);
-        toast.success(`Updated to v${targetVersionRef.current}`, { id: 'portos-update-restart' });
+        toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
         setTimeout(() => window.location.reload(), 1000);
         return;
       }
