@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { recordUpdateResult } from './updateChecker.js';
@@ -83,14 +84,18 @@ export async function executeUpdate(tag, emit) {
         }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
       }
       if (success) {
+        // Read the actual version from the completion marker written by the script
+        let actualVersion;
+        try {
+          const marker = JSON.parse(await readFile(join(PATHS.data, 'update-complete.json'), 'utf-8'));
+          actualVersion = marker.version;
+        } catch { /* marker may not be readable yet */ }
         emit('complete', 'done', 'Update complete — restarting');
+        resolve({ success: true, version: actualVersion });
       } else {
         emit(lastStep, 'error', `Update failed at step "${lastStep}" (${exitDetail})`);
+        resolve({ success: false, failedStep: lastStep, errorMessage: `Update failed at step "${lastStep}" (${exitDetail})` });
       }
-      resolve(success
-        ? { success: true }
-        : { success: false, failedStep: lastStep, errorMessage: `Update failed at step "${lastStep}" (${exitDetail})` }
-      );
     });
 
     child.on('error', async (err) => {

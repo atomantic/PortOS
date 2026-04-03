@@ -47,8 +47,13 @@ safe_install() {
   return 1
 }
 
-# Pull latest
+# Pull latest — ensure we're on a branch first (old updater may have left
+# the repo in detached HEAD after checking out a tag)
 step "git-pull" "running" "Pulling latest changes..."
+if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
+  log "⚠️  Detached HEAD detected — checking out main branch"
+  git checkout main
+fi
 git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
 log ""

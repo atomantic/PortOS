@@ -62,8 +62,15 @@ function Safe-Install {
     exit 1
 }
 
-# Pull latest
+# Pull latest — ensure we're on a branch first (old updater may have left
+# the repo in detached HEAD after checking out a tag)
 Step "git-pull" "running" "Pulling latest changes..."
+$headRef = git symbolic-ref -q HEAD 2>$null
+if (-not $headRef) {
+    Write-SafeHost "⚠️  Detached HEAD detected — checking out main branch" -ForegroundColor Yellow
+    git checkout main
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 git pull --rebase --autostash
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Step "git-pull" "done" "Latest changes pulled"
