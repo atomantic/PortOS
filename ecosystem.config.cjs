@@ -54,6 +54,7 @@ module.exports = {
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
       watch: ['server'],
+      watch_delay: 300000, // 5 min delay before restarting on file changes
       ignore_watch: ['**/node_modules', '**/*.test.js', '**/*package-lock*'],
       max_memory_restart: '2G'
     },

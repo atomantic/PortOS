@@ -10,6 +10,7 @@
 
 ## Changed
 
+- PM2 file watch restart delay set to 5 minutes to prevent rapid restarts during development
 - Triggering agent operations (do:push, do:review, etc.) from the app overview page now navigates to the CoS agents page so the user can watch the agent run
 
 ## Fixed
