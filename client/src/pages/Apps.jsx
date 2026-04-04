@@ -10,7 +10,7 @@ import ActivityLog from '../components/apps/ActivityLog';
 import { useAppOperation } from '../hooks/useAppOperation';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { NON_PM2_TYPES } from '../components/apps/constants';
+import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
 
 export default function Apps() {
   const [apps, setApps] = useState([]);
@@ -248,9 +248,7 @@ export default function Apps() {
                         )}
                         {isNonPm2 ? (
                           <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded">
-                            {app.type === 'ios-native' ? '📱 iOS' :
-                             app.type === 'macos-native' ? '🖥️ macOS' :
-                             app.type === 'swift' ? '🐦 Swift' : '🔨 Xcode'}
+                            {getAppTypeLabel(app.type)}
                           </span>
                         ) : (
                           <StatusBadge status={app.overallStatus} size="sm" />
