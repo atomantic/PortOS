@@ -13,7 +13,7 @@ const SIZES = {
   }
 };
 
-export default function ToggleSwitch({ enabled, onChange, disabled, ariaLabel, size = 'md', activeColor = 'bg-port-accent', className = '' }) {
+export default function ToggleSwitch({ enabled, onChange, disabled, ariaLabel, size = 'md', activeColor = 'bg-port-accent', className = '', tabIndex }) {
   const s = SIZES[size] || SIZES.md;
   return (
     <button
@@ -22,6 +22,7 @@ export default function ToggleSwitch({ enabled, onChange, disabled, ariaLabel, s
       aria-checked={enabled}
       onClick={onChange}
       disabled={disabled}
+      tabIndex={tabIndex}
       className={`relative inline-flex ${s.track} items-center rounded-full transition-colors shrink-0 ${
         enabled ? activeColor : 'bg-gray-600'
       } ${disabled ? 'opacity-50' : ''} ${className}`}

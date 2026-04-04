@@ -2656,9 +2656,20 @@ function computeNextJobFireTime(job, timezone) {
     return next.getTime();
   }
 
-  // Pure interval fallback (no scheduledTime, no cronExpression)
+  // Interval fallback: lastRun + intervalMs, then align to scheduledTime if set
   const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0;
   let nextDue = lastRun + job.intervalMs;
+
+  // Restore scheduledTime alignment for interval-mode jobs (e.g. weekly at 00:00).
+  // nextLocalTime advances nextDue to the next occurrence of HH:MM in the user's timezone,
+  // preventing drift when a run occurs slightly late.
+  if (job.scheduledTime) {
+    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+    if (match) {
+      const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
+      if (candidate > nextDue) nextDue = candidate;
+    }
+  }
 
   if (job.weekdaysOnly) {
     const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone);

@@ -461,8 +461,14 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
             return (
               <div
                 key={field}
-                className="flex items-center justify-between gap-3 min-h-[44px] cursor-pointer rounded px-2 -mx-2 hover:bg-port-card/30 active:bg-port-card/50"
+                role="button"
+                tabIndex={updating ? -1 : 0}
+                aria-disabled={updating}
+                aria-pressed={enabled}
+                aria-label={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                className={`flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
                 onClick={handleToggle}
+                onKeyDown={(e) => { if (!updating && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleToggle(); } }}
               >
                 <div className="min-w-0 flex-1">
                   <span className="text-sm text-white">{label}</span>
@@ -470,9 +476,10 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
                 </div>
                 <ToggleSwitch
                   enabled={enabled}
-                  onChange={(e) => { e.stopPropagation(); handleToggle(); }}
+                  onChange={(e) => e.stopPropagation()}
                   disabled={updating}
-                  ariaLabel={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                  tabIndex={-1}
+                  ariaLabel={undefined}
                 />
               </div>
             );
