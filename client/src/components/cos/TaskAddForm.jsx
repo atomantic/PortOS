@@ -201,11 +201,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         mimeType: a.mimeType
       })) : undefined,
       position: addToTop ? 'top' : 'bottom'
-    }).catch(err => {
-      toast.error(err.message || 'Failed to add task');
-      setIsSubmitting(false);
-      return null;
-    });
+    }).catch(() => null);
+
+    setIsSubmitting(false);
+    setIsEnhancing(false);
 
     if (!result) return;
 
@@ -213,7 +212,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     setNewTask(t => ({ ...t, description: '' }));
     setScreenshots([]);
     setAttachments([]);
-    setIsSubmitting(false);
     onTaskAdded?.();
   };
 
