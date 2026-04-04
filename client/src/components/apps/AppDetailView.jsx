@@ -7,7 +7,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
-import { APP_DETAIL_TABS } from './constants';
+import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel } from './constants';
 import OverviewTab from './tabs/OverviewTab';
 import TasksTab from './tabs/TasksTab';
 import AutomationTab from './tabs/AutomationTab';
@@ -153,7 +153,13 @@ export default function AppDetailView() {
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-xl font-bold text-white truncate">{app.name}</h1>
-              <StatusBadge status={app.overallStatus || 'unknown'} size="sm" />
+              {NON_PM2_TYPES.has(app.type) ? (
+                <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded">
+                  {getAppTypeLabel(app.type)}
+                </span>
+              ) : (
+                <StatusBadge status={app.overallStatus || 'unknown'} size="sm" />
+              )}
             </div>
             {app.pm2ProcessNames?.length > 0 && (
               <div className="text-xs text-gray-500 mt-1">
@@ -162,7 +168,8 @@ export default function AppDetailView() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            {/* Start/Stop/Restart */}
+            {/* Start/Stop/Restart - only for PM2 apps */}
+            {!NON_PM2_TYPES.has(app.type) && (
             <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
               {app.overallStatus === 'online' ? (
                 <>
@@ -194,6 +201,7 @@ export default function AppDetailView() {
                 </button>
               )}
             </div>
+            )}
             {/* Launch UI */}
             {app.uiPort && app.overallStatus === 'online' && (
               <button
