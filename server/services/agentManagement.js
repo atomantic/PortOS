@@ -12,6 +12,7 @@ import { updateTask, addTask, getTaskById } from './cos.js';
 import { terminateAgentViaRunner, killAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { unregisterSpawnedAgent } from './agents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { isInternalTaskId } from '../lib/taskParser.js';
 import { activeAgents, runnerAgents, userTerminatedAgents, useRunner } from './agentState.js';
 import { cleanupAgentWorktree, syncRunnerAgents } from './agentLifecycle.js';
 import { cleanupOrphanedWorktrees } from './worktreeManager.js';
@@ -300,7 +301,7 @@ export async function cleanupOrphanedAgents() {
           const stillAlive = await isPidAlive(agent.pid);
           if (stillAlive) {
             console.log(`🔄 Agent ${agent.id} (PID ${agent.pid}) still running, re-syncing to runner tracking`);
-            const inferredType = agent.taskId?.startsWith('sys-') ? 'internal' : 'user';
+            const inferredType = isInternalTaskId(agent.taskId) ? 'internal' : 'user';
             runnerAgents.set(agent.id, {
               id: agent.id, pid: agent.pid, taskId: agent.taskId,
               task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' }

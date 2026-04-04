@@ -28,6 +28,13 @@
  * - [ ] #sys-002 | MEDIUM | APPROVAL | Needs user approval
  */
 
+// Canonical prefix lists — add new prefixes here, not in scattered startsWith checks
+const INTERNAL_PREFIXES = ['sys-', 'app-improve-'];
+const ALL_KNOWN_PREFIXES = ['task-', ...INTERNAL_PREFIXES];
+
+export const hasKnownPrefix = (id) => ALL_KNOWN_PREFIXES.some(p => id?.startsWith(p));
+export const isInternalTaskId = (id) => INTERNAL_PREFIXES.some(p => id?.startsWith(p));
+
 const STATUS_MAP = {
   '[ ]': 'pending',
   '[~]': 'in_progress',
@@ -56,7 +63,7 @@ function parseTaskLine(line) {
     const statusKey = `[${statusChar}]`;
 
     return {
-      id: id.startsWith('task-') || id.startsWith('sys-') ? id : `task-${id}`,
+      id: hasKnownPrefix(id) ? id : `task-${id}`,
       status: STATUS_MAP[statusKey] || 'pending',
       priority: priority.toUpperCase(),
       priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
@@ -76,7 +83,7 @@ function parseTaskLine(line) {
   const statusKey = `[${statusChar}]`;
 
   return {
-    id: id.startsWith('task-') || id.startsWith('sys-') ? id : `task-${id}`,
+    id: hasKnownPrefix(id) ? id : `task-${id}`,
     status: STATUS_MAP[statusKey] || 'pending',
     priority: priority.toUpperCase(),
     priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
@@ -308,7 +315,7 @@ export function updateTaskStatus(tasks, taskId, newStatus, metadata = {}) {
  */
 export function addTask(tasks, { id, priority = 'MEDIUM', description, metadata = {} }) {
   const newTask = {
-    id: id.startsWith('task-') ? id : `task-${id}`,
+    id: hasKnownPrefix(id) ? id : `task-${id}`,
     status: 'pending',
     priority: priority.toUpperCase(),
     priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
@@ -332,7 +339,7 @@ export function removeTask(tasks, taskId) {
  */
 function isCriticalAutoFix(task) {
   const desc = (task.description || '').toLowerCase();
-  const isSysTask = task.id?.startsWith('sys-');
+  const isSysTask = isInternalTaskId(task.id);
   const isCritical = task.priority === 'CRITICAL';
   const isHighPriorityFix = task.priority === 'HIGH' && (
     desc.includes('fix critical error') ||

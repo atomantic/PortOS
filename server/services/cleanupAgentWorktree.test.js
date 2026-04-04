@@ -159,7 +159,8 @@ vi.mock('./git.js', () => ({
   push: vi.fn(),
   getRepoBranches: vi.fn(),
   createPR: vi.fn(),
-  generatePRDescription: vi.fn()
+  generatePRDescription: vi.fn(),
+  deleteBranch: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('./runner.js', () => ({
@@ -170,8 +171,8 @@ vi.mock('./runner.js', () => ({
 
 // --- Import the function under test and the mocked dependencies ---
 
-import { cleanupAgentWorktree } from './subAgentSpawner.js';
-import { getAgent } from './cos.js';
+import { cleanupAgentWorktree, spawnMergeRecoveryTask } from './subAgentSpawner.js';
+import { getAgent, addTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import * as git from './git.js';
 
@@ -250,6 +251,19 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     expect(git.createPR).toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('should silently clean up worktree when createPR fails with "No commits between"', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: false, error: 'GraphQL: No commits between main and cos/task-abc123 (createPullRequest)' });
+
+    const warnings = await cleanupAgentWorktree('agent-1', true, { openPR: true, description: 'Test task' });
+
+    expect(git.createPR).toHaveBeenCalled();
+    // Agent made no changes — delete remote branch and clean up silently without a warning
+    expect(git.deleteBranch).toHaveBeenCalledWith('/mock/workspace', 'cos/task-abc123', { remote: true });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    expect(warnings).toHaveLength(0);
   });
 
   it('should use auto-merge path when openPR is false (success)', async () => {
@@ -371,5 +385,132 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     expect(git.push).not.toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
+  });
+});
+
+describe('spawnMergeRecoveryTask', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addTask.mockResolvedValue({ id: 'task-recovery' });
+  });
+
+  it('should create a recovery task when merge failure warning is present', async () => {
+    const warnings = ['Auto-merge failed for branch cos/task-abc123/agent-1 — branch preserved for manual recovery'];
+    const task = { id: 'task-original', description: 'Fix deps', metadata: { app: 'sparsetree' } };
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'SparseTree', '/mock/workspace');
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.stringContaining('[Recovery]'),
+        priority: 'HIGH',
+        app: 'sparsetree',
+        context: expect.stringContaining('cos/task-abc123/agent-1'),
+        useWorktree: false,
+      }),
+      'user'
+    );
+  });
+
+  it('should include branch name and repo path in recovery context', async () => {
+    const warnings = ['Auto-merge failed for branch feature/my-branch — branch preserved for manual recovery'];
+    const task = { id: 'task-1', description: 'Original task', metadata: { app: 'myapp' } };
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
+
+    const call = addTask.mock.calls[0];
+    expect(call[0].context).toContain('feature/my-branch');
+    expect(call[0].context).toContain('/mock/workspace');
+    expect(call[0].context).toContain('agent-1');
+    expect(call[0].description).toContain('feature/my-branch');
+    expect(call[0].description).toContain('MyApp');
+  });
+
+  it('should not create a task when no merge failure warning exists', async () => {
+    const warnings = ['Worktree cleanup failed: some other error'];
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', '/mock/workspace');
+
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should not create a task when warnings array is empty', async () => {
+    await spawnMergeRecoveryTask([], 'agent-1', {}, 'TestApp', '/mock/workspace');
+
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should not create a task when sourceWorkspace is undefined', async () => {
+    const warnings = ['Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved'];
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', undefined);
+
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should not create a task when sourceWorkspace is null', async () => {
+    const warnings = ['Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved'];
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', null);
+
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should handle addTask failure gracefully', async () => {
+    addTask.mockRejectedValue(new Error('write failed'));
+    const warnings = ['Auto-merge failed for branch cos/task-abc/agent-1 — branch preserved'];
+
+    // Should not throw
+    await spawnMergeRecoveryTask(warnings, 'agent-1', { metadata: {} }, 'TestApp', '/mock/workspace');
+  });
+
+  it('should use "unknown" for task description when not provided', async () => {
+    const warnings = ['Auto-merge failed for branch cos/branch-1 — branch preserved'];
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', { metadata: {} }, 'TestApp', '/mock/workspace');
+
+    const call = addTask.mock.calls[0];
+    expect(call[0].context).toContain('original task: unknown');
+  });
+
+  it('should create a PR recovery task when a PR creation failure warning is present', async () => {
+    const warnings = ['PR creation failed for branch cos/task-xyz/agent-1: GraphQL: some error. Worktree preserved for manual PR creation.'];
+    const task = { id: 'task-original', description: 'Add feature', metadata: { app: 'myapp' } };
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.stringContaining('[Recovery]'),
+        priority: 'HIGH',
+        app: 'myapp',
+        context: expect.stringContaining('cos/task-xyz/agent-1'),
+        useWorktree: false,
+      }),
+      'user'
+    );
+  });
+
+  it('should include branch name and workspace in PR recovery context', async () => {
+    const warnings = ['PR creation failed for branch feature/my-pr-branch: gh exited with code 1. Worktree preserved for manual PR creation.'];
+    const task = { id: 'task-1', description: 'Original task', metadata: { app: 'myapp' } };
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', task, 'MyApp', '/mock/workspace');
+
+    const call = addTask.mock.calls[0];
+    expect(call[0].context).toContain('feature/my-pr-branch');
+    expect(call[0].context).toContain('/mock/workspace');
+    expect(call[0].description).toContain('feature/my-pr-branch');
+    expect(call[0].description).toContain('MyApp');
+  });
+
+  it('should not create a PR recovery task when sourceWorkspace is missing', async () => {
+    const warnings = ['PR creation failed for branch cos/task-xyz/agent-1: some error. Worktree preserved for manual PR creation.'];
+
+    await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', null);
+
+    expect(addTask).not.toHaveBeenCalled();
   });
 });

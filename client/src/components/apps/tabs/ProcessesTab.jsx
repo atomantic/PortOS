@@ -19,12 +19,12 @@ const formatUptime = (ms) => {
   return `${hours}h ${mins}m`;
 };
 
-const getStatusColor = (status) => {
+const getStatusClasses = (status) => {
   switch (status) {
-    case 'online': return 'bg-port-success';
-    case 'stopped': return 'bg-gray-500';
-    case 'errored': return 'bg-port-error';
-    default: return 'bg-port-warning';
+    case 'online': return { badge: 'bg-port-success/15 text-port-success', dot: 'bg-port-success' };
+    case 'stopped': return { badge: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' };
+    case 'errored': return { badge: 'bg-port-error/15 text-port-error', dot: 'bg-port-error' };
+    default: return { badge: 'bg-port-warning/15 text-port-warning', dot: 'bg-port-warning' };
   }
 };
 
@@ -201,10 +201,12 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                       <span className="font-medium text-white">{proc.name}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-2 px-2 py-1 rounded text-xs ${getStatusColor(proc.status)} bg-opacity-20`}>
-                        <span className={`w-2 h-2 rounded-full ${getStatusColor(proc.status)}`} />
-                        {proc.status}
-                      </span>
+                      {(() => { const sc = getStatusClasses(proc.status); return (
+                        <span className={`inline-flex items-center gap-2 px-2 py-1 rounded text-xs ${sc.badge}`}>
+                          <span className={`w-2 h-2 rounded-full ${sc.dot}`} />
+                          {proc.status}
+                        </span>
+                      ); })()}
                     </td>
                     <td className="px-4 py-3 text-gray-400 font-mono text-sm">{proc.pid || '-'}</td>
                     <td className="px-4 py-3 text-gray-400">{proc.cpu ? `${proc.cpu}%` : '-'}</td>

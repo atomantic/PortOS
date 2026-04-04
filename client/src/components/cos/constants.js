@@ -57,6 +57,20 @@ export const AGENT_OPTIONS = [
   { field: 'reviewLoop', label: 'Review Loop', shortLabel: 'RL', description: 'After the agent opens a PR during its run, keep iterating on review feedback until checks pass. Only applies when Open PR is not enabled (manual PR creation by agent).' }
 ];
 
+// Returns the Tailwind className string for an agent option toggle button.
+// effective: whether the option is on (global + override resolved)
+// hasOverride: whether there's an explicit per-app override set
+export function agentOptionButtonClass(effective, hasOverride) {
+  if (effective) {
+    return hasOverride
+      ? 'bg-port-accent text-white border-port-accent font-semibold'
+      : 'bg-port-accent/40 text-port-accent border-port-accent/50 font-semibold';
+  }
+  return hasOverride
+    ? 'bg-gray-700 text-gray-400 border-gray-500'
+    : 'bg-transparent text-gray-600 border-gray-700/50';
+}
+
 // Compute new taskMetadata after toggling a field in a per-app override.
 // Returns null when all overrides are cleared (inherit everything).
 // Enforces invariant: openPR implies useWorktree (turning on openPR forces

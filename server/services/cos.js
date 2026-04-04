@@ -19,7 +19,7 @@ import { execPm2 } from './pm2.js';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
-import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown } from '../lib/taskParser.js';
+import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
 import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
@@ -513,7 +513,7 @@ async function resetOrphanedTasks() {
       const successAgentId = successfullyCompletedTaskIds.get(task.id);
       if (successAgentId) {
         emitLog('warn', `🔧 Task ${task.id} still in_progress but agent ${successAgentId} completed successfully — completing task now (missed update)`, { taskId: task.id, agentId: successAgentId });
-        await updateTask(task.id, { status: 'completed' }, task.taskType || (task.id.startsWith('sys-') ? 'internal' : 'user'));
+        await updateTask(task.id, { status: 'completed' }, task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user'));
         continue;
       }
       emitLog('info', `Found orphaned in_progress task ${task.id}, routing through retry handler`, { taskId: task.id });
@@ -2158,7 +2158,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
 
     // Create the new task
     newTask = {
-      id: id.startsWith('task-') || id.startsWith('sys-') ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
+      id: hasKnownPrefix(id) ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
       status: 'pending',
       priority: (taskData.priority || 'MEDIUM').toUpperCase(),
       priorityValue: PRIORITY_VALUES[taskData.priority?.toUpperCase()] || 2,
@@ -2627,30 +2627,50 @@ export async function approveTask(taskId) {
  * @returns {number} Timestamp (ms) of next fire time
  */
 function computeNextJobFireTime(job, timezone) {
-  if (job.cronExpression) {
+  // Convert scheduledTime (HH:MM) + interval to a cron expression so parseCronToNextRun
+  // handles all "next occurrence after lastRun" logic without drift issues.
+  // Only synthesize a daily/weekday cron for strictly daily or weekdaysOnly jobs.
+  // Weekly/biweekly/sub-daily interval jobs fall through to the interval path below,
+  // which correctly computes lastRun + intervalMs without scheduling them every day.
+  // e.g. { interval: 'daily', scheduledTime: '04:30' } → '30 4 * * *'
+  let cronExpr = job.cronExpression;
+  const isDailyCronCandidate = job.interval === 'daily' || job.weekdaysOnly;
+  if (!cronExpr && job.scheduledTime && isDailyCronCandidate) {
+    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+    if (match) {
+      const dayField = job.weekdaysOnly ? '1-5' : '*';
+      cronExpr = `${Number(match[2])} ${Number(match[1])} * * ${dayField}`;
+    }
+  }
+
+  if (cronExpr) {
     const from = job.lastRun ? new Date(job.lastRun) : new Date();
-    const next = parseCronToNextRun(job.cronExpression, from, timezone);
+    const next = parseCronToNextRun(cronExpr, from, timezone);
     if (!next) {
       throw new Error(
         `Invalid cron expression for autonomous job` +
         (job.id ? ` "${job.id}"` : '') +
-        `: ${job.cronExpression}`
+        `: ${cronExpr}`
       );
     }
     return next.getTime();
   }
 
+  // Interval fallback: lastRun + intervalMs, then align to scheduledTime if set
   const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0;
   let nextDue = lastRun + job.intervalMs;
 
+  // Restore scheduledTime alignment for interval-mode jobs (e.g. weekly at 00:00).
+  // nextLocalTime advances nextDue to the next occurrence of HH:MM in the user's timezone,
+  // preventing drift when a run occurs slightly late.
   if (job.scheduledTime) {
     const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
     if (match) {
-      nextDue = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
+      const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
+      if (candidate > nextDue) nextDue = candidate;
     }
   }
 
-  // If weekdaysOnly, skip to next weekday (using local day-of-week)
   if (job.weekdaysOnly) {
     const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone);
     if (dayOfWeek === 0) nextDue += 24 * 60 * 60 * 1000; // Sunday → Monday
@@ -2864,12 +2884,19 @@ async function scheduleNextImprovementCheck() {
   const upcoming = await taskSchedule.getUpcomingTasks(1);
 
   // Default: check again in 1 hour if nothing scheduled
-  let delayMs = 60 * 60 * 1000;
+  // Cap at 1 hour so per-app cron tasks (e.g. feature-ideas at 1am) are always checked
+  // on time — getUpcomingTasks only sees global tasks, not per-app schedules
+  const MAX_CHECK_INTERVAL = 60 * 60 * 1000;
+  let delayMs = MAX_CHECK_INTERVAL;
   let description = 'Periodic improvement check (1h)';
 
   if (upcoming.length > 0 && upcoming[0].status === 'scheduled' && upcoming[0].eligibleIn > 0) {
-    delayMs = upcoming[0].eligibleIn;
-    description = `Next improvement: ${upcoming[0].taskType} in ${upcoming[0].eligibleInFormatted}`;
+    delayMs = Math.min(upcoming[0].eligibleIn, MAX_CHECK_INTERVAL);
+    const effectiveFormatted = formatDuration(delayMs);
+    const capNote = upcoming[0].eligibleIn > MAX_CHECK_INTERVAL
+      ? ` (capped from ${upcoming[0].eligibleInFormatted})`
+      : '';
+    description = `Next improvement: ${upcoming[0].taskType} in ${effectiveFormatted}${capNote}`;
   }
 
   scheduleEvent({

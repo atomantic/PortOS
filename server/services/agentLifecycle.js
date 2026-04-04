@@ -16,6 +16,7 @@ import { spawnAgentViaRunner, getActiveAgentsFromRunner, getRunnerHealth } from 
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
 import { isProviderAvailable, markProviderUsageLimit, markProviderRateLimited, getFallbackProvider, getProviderStatus } from './providerStatus.js';
 import { PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { isInternalTaskId } from '../lib/taskParser.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
@@ -87,8 +88,7 @@ export async function syncRunnerAgents() {
     if (!runnerAgents.has(agent.id)) {
       const task = taskMap.get(agent.taskId);
 
-      // Infer taskType for fallback: sys- prefix tasks are internal (CoS-generated)
-      const inferredType = agent.taskId?.startsWith('sys-') ? 'internal' : 'user';
+      const inferredType = isInternalTaskId(agent.taskId) ? 'internal' : 'user';
       runnerAgents.set(agent.id, {
         taskId: agent.taskId,
         task: task || { id: agent.taskId, taskType: inferredType, description: 'Recovered from runner' },
@@ -829,7 +829,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   // Ensure taskType is set — recovered agents may lack it
   if (task && !task.taskType) {
     const id = task.id || '';
-    task.taskType = (id.startsWith('sys-') || id.startsWith('app-improve-')) ? 'internal' : 'user';
+    task.taskType = isInternalTaskId(id) ? 'internal' : 'user';
   }
 
   // Release execution lane
@@ -1058,6 +1058,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       }).catch(err => {
         emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
       });
+
+      void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
+        emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
+      });
     }
   }
 
@@ -1114,6 +1118,24 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
 
       if (!prResult?.success) {
         const reason = prResult?.error || 'unknown error (createPR returned null or threw)';
+
+        // "No commits between X and Y" means the agent made no code changes.
+        // Clean up the worktree silently — nothing to review or merge.
+        // Also delete the remote branch (it was pushed before PR creation).
+        if (reason.includes('No commits between')) {
+          emitLog('info', `🌳 No commits on ${worktreeBranch} vs ${targetBranch} — agent made no changes, cleaning up`, { agentId });
+          await git.deleteBranch(sourceWorkspace, worktreeBranch, { remote: true }).catch(err => {
+            emitLog('warn', `🌳 Remote branch delete failed for ${worktreeBranch}: ${err.message}`, { agentId });
+            warnings.push(`Remote branch delete failed for ${worktreeBranch}: ${err.message}`);
+          });
+          const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+            emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
+            return { warnings: [`Worktree cleanup failed for ${agentId}: ${err.message}`] };
+          });
+          warnings.push(...(result?.warnings || []));
+          return warnings;
+        }
+
         emitLog('error', `🌳 PR creation failed for ${worktreeBranch}: ${reason}`, { agentId, branchName: worktreeBranch });
         warnings.push(`PR creation failed for branch ${worktreeBranch}: ${reason}. Worktree preserved for manual PR creation.`);
         return warnings;
@@ -1146,4 +1168,59 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
   });
   warnings.push(...(result?.warnings || []));
   return warnings;
+}
+
+/**
+ * Auto-create a recovery task when a worktree merge or PR creation fails, so stale
+ * branches don't accumulate in managed app repos and block future agent work.
+ */
+export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, sourceWorkspace) {
+  let staleBranch = null;
+  let isMergeFail = false;
+
+  for (const w of cleanupWarnings) {
+    const mergeMatch = w.match(/Auto-merge failed for branch (\S+)/);
+    if (mergeMatch) { staleBranch = mergeMatch[1]; isMergeFail = true; break; }
+
+    const prMatch = w.match(/PR creation failed for branch (\S+?):/);
+    if (prMatch) { staleBranch = prMatch[1]; break; }
+  }
+
+  if (!staleBranch || !sourceWorkspace) return;
+
+  const appId = task?.metadata?.app;
+
+  if (isMergeFail) {
+    addTask({
+      description: `[Recovery] Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
+      priority: 'HIGH',
+      app: appId,
+      context: `An agent failed to auto-merge branch "${staleBranch}" back to main in ${sourceWorkspace}. `
+        + `Resolve this by: (1) checking if the branch's changes are already on main (superseded by other commits), `
+        + `and if so, delete the branch with "git branch -D ${staleBranch}"; `
+        + `(2) if the changes are NOT on main, attempt "git merge ${staleBranch} --no-edit" from main, resolve any conflicts, and commit; `
+        + `(3) after merging or determining the branch is stale, delete it with "git branch -D ${staleBranch}". `
+        + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
+      useWorktree: false,
+    }, 'user').catch(err => {
+      emitLog('warn', `Failed to create merge recovery task: ${err.message}`, { agentId, staleBranch });
+    });
+    emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
+  } else {
+    // PR creation failed — spawn an agent to investigate and retry
+    addTask({
+      description: `[Recovery] Investigate and retry failed PR for branch ${staleBranch} in ${appName}`,
+      priority: 'HIGH',
+      app: appId,
+      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated PR creation failed. `
+        + `Investigate by: (1) checking if a PR already exists for this branch: "gh pr list --head ${staleBranch}"; `
+        + `(2) if no PR exists, review the branch changes and create one: "gh pr create --head ${staleBranch} --base main --title '...' --body '...'"; `
+        + `(3) if the branch is stale or changes are already on main, delete the remote branch: "git push origin --delete ${staleBranch}". `
+        + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
+      useWorktree: false,
+    }, 'user').catch(err => {
+      emitLog('warn', `Failed to create PR recovery task: ${err.message}`, { agentId, staleBranch });
+    });
+    emitLog('info', `🔧 Auto-created PR recovery task for branch ${staleBranch}`, { agentId, appName });
+  }
 }

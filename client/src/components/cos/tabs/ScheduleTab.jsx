@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { Play, RotateCcw, ChevronDown, ChevronRight, AlertCircle, RefreshCw, Package, Info, GitMerge } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AppIcon from '../../AppIcon';
 import CronInput from '../../CronInput';
-import { AGENT_OPTIONS, toggleAppMetadataOverride } from '../constants';
+import { AGENT_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import ToggleSwitch from '../../ToggleSwitch';
 
@@ -455,19 +455,31 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         <div className="space-y-2">
           {AGENT_OPTIONS.map(({ field, label, description }) => {
             const enabled = config.taskMetadata?.[field] ?? false;
+            const handleToggle = () => {
+              if (!updating) onUpdate(taskType, { taskMetadata: toggleMetadataField(config.taskMetadata, field) });
+            };
             return (
-              <div key={field} className="flex items-center justify-between gap-3">
+              <button
+                key={field}
+                type="button"
+                disabled={updating}
+                aria-pressed={enabled}
+                aria-label={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
+                onClick={handleToggle}
+              >
                 <div className="min-w-0 flex-1">
                   <span className="text-sm text-white">{label}</span>
                   <p className="text-xs text-gray-500">{description}</p>
                 </div>
                 <ToggleSwitch
                   enabled={enabled}
-                  onChange={() => onUpdate(taskType, { taskMetadata: toggleMetadataField(config.taskMetadata, field) })}
+                  onChange={undefined}
                   disabled={updating}
-                  ariaLabel={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                  tabIndex={-1}
+                  ariaLabel={undefined}
                 />
-              </div>
+              </button>
             );
           })}
         </div>
@@ -571,7 +583,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
   );
 }
 
-function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, override, onUpdate }) {
+const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
   const [cronEditing, setCronEditing] = useState(false);
   const isEnabled = override?.enabled === true;
@@ -611,76 +623,87 @@ function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata,
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-3 py-2 px-3 rounded hover:bg-port-card/30">
-      <div className="flex items-center gap-2 min-w-0 flex-1">
+    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3 py-2 px-3 rounded hover:bg-port-card/30">
+      <div className="flex items-center gap-2 min-w-0 w-full sm:w-auto sm:flex-1">
         <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={16} className="text-gray-400 shrink-0" />
-        <span className="text-sm text-white truncate">{app.name}</span>
-      </div>
-
-      <div className="flex items-center gap-1">
-        <select
-          value={cronEditing || hasCron ? 'cron' : (currentInterval || '')}
-          onChange={(e) => handleIntervalChange(e.target.value)}
-          disabled={updating}
-          className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
-        >
-          <option value="">Inherit ({INTERVAL_LABELS[globalIntervalType] || globalIntervalType})</option>
-          <option value="rotation">Rotation</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="once">Once</option>
-          <option value="on-demand">On Demand</option>
-          <option value="cron">Cron</option>
-        </select>
-        {cronEditing ? (
-          <CronInput
-            value={hasCron ? currentInterval : '0 7 * * *'}
-            onSave={handleCronSave}
-            onCancel={() => setCronEditing(false)}
-          />
-        ) : hasCron ? (
-          <button
-            onClick={() => setCronEditing(true)}
-            className="px-2 py-1 text-xs text-gray-400 font-mono bg-port-bg border border-port-border rounded hover:border-port-accent cursor-pointer"
-            title={describeCron(currentInterval)}
-          >
-            {currentInterval}
-          </button>
-        ) : null}
-      </div>
-
-      {AGENT_OPTIONS.map(({ field, label, shortLabel }) => {
-        const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
-        const hasOverride = override?.taskMetadata?.[field] !== undefined;
-        return (
-          <button
-            key={field}
-            onClick={() => handleMetaToggle(field)}
+        <span className="text-sm text-white truncate flex-1">{app.name}</span>
+        <div className="sm:hidden">
+          <ToggleSwitch
+            enabled={isEnabled}
+            onChange={handleToggle}
             disabled={updating}
-            aria-pressed={effective}
-            aria-label={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
-            className={`text-xs px-2 py-1.5 rounded transition-colors shrink-0 min-h-[40px] min-w-[40px] ${
-              effective
-                ? hasOverride ? 'bg-port-accent/30 text-port-accent' : 'bg-port-accent/15 text-port-accent/60'
-                : hasOverride ? 'bg-gray-600/50 text-gray-400' : 'bg-gray-600/25 text-gray-500'
-            }`}
-            title={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
-          >
-            {shortLabel}
-          </button>
-        );
-      })}
+            size="sm"
+            ariaLabel={`${isEnabled ? 'Disable' : 'Enable'} ${taskType} for ${app.name}`}
+          />
+        </div>
+      </div>
 
-      <ToggleSwitch
-        enabled={isEnabled}
-        onChange={handleToggle}
-        disabled={updating}
-        size="sm"
-        ariaLabel={`${isEnabled ? 'Disable' : 'Enable'} ${taskType} for ${app.name}`}
-      />
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1">
+          <select
+            value={cronEditing || hasCron ? 'cron' : (currentInterval || '')}
+            onChange={(e) => handleIntervalChange(e.target.value)}
+            disabled={updating}
+            className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
+          >
+            <option value="">Inherit ({INTERVAL_LABELS[globalIntervalType] || globalIntervalType})</option>
+            <option value="rotation">Rotation</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="once">Once</option>
+            <option value="on-demand">On Demand</option>
+            <option value="cron">Cron</option>
+          </select>
+          {cronEditing ? (
+            <CronInput
+              value={hasCron ? currentInterval : '0 7 * * *'}
+              onSave={handleCronSave}
+              onCancel={() => setCronEditing(false)}
+            />
+          ) : hasCron ? (
+            <button
+              onClick={() => setCronEditing(true)}
+              className="px-2 py-1 text-xs text-gray-400 font-mono bg-port-bg border border-port-border rounded hover:border-port-accent cursor-pointer"
+              title={describeCron(currentInterval)}
+            >
+              {currentInterval}
+            </button>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-1">
+          {AGENT_OPTIONS.map(({ field, label, shortLabel }) => {
+            const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
+            const hasOverride = override?.taskMetadata?.[field] !== undefined;
+            return (
+              <button
+                key={field}
+                onClick={() => handleMetaToggle(field)}
+                disabled={updating}
+                aria-pressed={effective}
+                aria-label={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+                className={`text-xs px-2 py-1.5 rounded transition-colors shrink-0 min-h-[40px] min-w-[40px] border ${agentOptionButtonClass(effective, hasOverride)}`}
+                title={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+              >
+                {shortLabel}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="hidden sm:block">
+          <ToggleSwitch
+            enabled={isEnabled}
+            onChange={handleToggle}
+            disabled={updating}
+            size="sm"
+            ariaLabel={`${isEnabled ? 'Disable' : 'Enable'} ${taskType} for ${app.name}`}
+          />
+        </div>
+      </div>
     </div>
   );
-}
+});
 
 function PerAppOverrideList({ taskType, config, apps, onUpdateOverride, onBulkToggleOverride }) {
   const [bulkUpdating, setBulkUpdating] = useState(false);

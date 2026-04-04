@@ -5,7 +5,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import CronInput from '../../CronInput';
 import ToggleSwitch from '../../ToggleSwitch';
 import * as api from '../../../services/api';
-import { AGENT_OPTIONS, toggleAppMetadataOverride } from '../../cos/constants';
+import { AGENT_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 
 const INTERVAL_OPTIONS = [
@@ -217,11 +217,7 @@ export default function AutomationTab({ appId, appName }) {
                           onClick={() => handleMetaToggle(taskType, field, globalConfig.taskMetadata)}
                           aria-pressed={effective}
                           aria-label={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
-                          className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                            effective
-                              ? hasOverride ? 'bg-port-accent/30 text-port-accent' : 'bg-port-accent/15 text-port-accent/60'
-                              : hasOverride ? 'bg-gray-600/50 text-gray-400' : 'bg-gray-600/25 text-gray-500'
-                          }`}
+                          className={`text-xs px-1.5 py-0.5 rounded transition-colors border ${agentOptionButtonClass(effective, hasOverride)}`}
                           title={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
                         >
                           {shortLabel}

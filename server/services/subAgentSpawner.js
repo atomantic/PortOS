@@ -25,7 +25,7 @@ export { createAgentRun, completeAgentRun, checkForTaskCommit, extractErrorFromO
 export { ERROR_PATTERNS, analyzeAgentFailure, createInvestigationTask, API_ACCESS_ERROR_CATEGORIES, maybeCreateInvestigationTask, resolveFailedTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 export { buildAgentPrompt, getAppWorkspace, getAppDataForTask, generateJiraTitle, createJiraTicketForTask, getClaudeMdContext, buildCompactionSection, detectSkillTemplate, loadSkillTemplate } from './agentPromptBuilder.js';
 export { spawnDirectly, createStreamJsonParser, summarizeToolInput, safeParse, buildCliSpawnConfig, isClaudeCliProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
-export { syncRunnerAgents, spawnAgentForTask, waitForRunnerStability, spawnViaRunner, extractFinalSummary, extractPipelineOutputSummary, handlePipelineProgression, handleAgentCompletion, cleanupAgentWorktree } from './agentLifecycle.js';
+export { syncRunnerAgents, spawnAgentForTask, waitForRunnerStability, spawnViaRunner, extractFinalSummary, extractPipelineOutputSummary, handlePipelineProgression, handleAgentCompletion, cleanupAgentWorktree, spawnMergeRecoveryTask } from './agentLifecycle.js';
 export { terminateAgent, getActiveAgents, killAgent, getAgentProcessStats, killAllAgents, isPidAlive, cleanupOrphanedAgents, handleOrphanedTask } from './agentManagement.js';
 export { processAgentCompletion } from './agentCompletion.js';
 
