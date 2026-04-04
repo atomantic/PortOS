@@ -85,7 +85,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
 
   const meta = SLASHDO_COMMANDS[command];
   const description = `Run /do:${command} — ${meta.description}`;
-  const taskData = { description, app, context: content, useWorktree: true, openPR: true, simplify: false, reviewLoop: false };
+  const taskData = { description, app, context: content, useWorktree: false, openPR: false, simplify: false, reviewLoop: false };
   const result = await cos.addTask(taskData, 'user');
 
   if (result?.duplicate) {
