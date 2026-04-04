@@ -51,7 +51,7 @@ Your job is to complete the assigned task independently and efficiently.
 ## Git Hygiene (CRITICAL)
 
 - **Before starting work**, run `git status` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
-- **NEVER use `git stash`** in any form (`git stash push`, `git stash pop`, `--autostash`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead.
+- **NEVER use `git stash`** commands (`git stash push`, `git stash pop`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead.
 - **Only commit files YOU changed** for this task. Never use `git add -A` or `git add .` — always stage specific files by name.
 - **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.
 

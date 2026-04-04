@@ -106,6 +106,10 @@ export function initSocket(io) {
 
       if (backup.success) {
         emit('backup', 'done', { message: `Backup branch: ${backup.branch}`, branch: backup.branch });
+      } else if (backup.code === 'DIRTY_WORKTREE') {
+        emit('backup', 'error', { message: backup.reason });
+        socket.emit('standardize:complete', { success: false, error: backup.reason });
+        return;
       } else {
         emit('backup', 'skipped', { message: backup.reason || 'No git repository' });
       }
