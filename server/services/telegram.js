@@ -382,7 +382,10 @@ async function forwardNotification(notification) {
 
   if (isMemoryApproval) {
     const memory = await peekMemory(notification.metadata.memoryId).catch(() => null);
-    const fullContent = memory?.summary || memory?.content || notification.description || '';
+    const raw = memory?.summary || memory?.content || notification.description || '';
+    // Telegram messages are capped at 4096 chars; leave room for title/priority/markup
+    const MAX_CONTENT = 3500;
+    const fullContent = raw.length > MAX_CONTENT ? raw.slice(0, MAX_CONTENT) + '...' : raw;
     if (fullContent) lines.push(escapeHtml(fullContent));
     opts.reply_markup = JSON.stringify({
       inline_keyboard: [[

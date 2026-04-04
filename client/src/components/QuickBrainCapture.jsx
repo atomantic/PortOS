@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Send } from 'lucide-react';
 import toast from './ui/Toast';
@@ -9,7 +9,7 @@ const DOMAIN_PATTERN = /^\S+\.\S+$/;
 
 export default function QuickBrainCapture() {
   const [input, setInput] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const isUrl = useMemo(() => {
     const trimmed = input.trim();
@@ -20,10 +20,10 @@ export default function QuickBrainCapture() {
   const handleSubmit = async (e) => {
     e?.preventDefault();
     const text = input.trim();
-    if (!text || submitting) return;
+    if (!text || submittingRef.current) return;
 
-    // Guard against rapid double-submit
-    setSubmitting(true);
+    // Synchronous ref lock prevents duplicate requests from rapid clicks/Enter
+    submittingRef.current = true;
     // Clear input immediately so user can keep typing
     setInput('');
 
@@ -52,7 +52,7 @@ export default function QuickBrainCapture() {
         toast.success(result.message || 'Thought captured');
       }
     }
-    setSubmitting(false);
+    submittingRef.current = false;
   };
 
   return (
