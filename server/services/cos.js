@@ -2646,7 +2646,12 @@ function computeNextJobFireTime(job, timezone) {
   if (job.scheduledTime) {
     const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
     if (match) {
-      nextDue = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
+      // Subtract a tolerance window before searching so that execution drift
+      // (job ran a few minutes after the scheduled time) doesn't cause
+      // nextLocalTime to skip past today's window and land on the next day.
+      // Tolerance: 10% of interval, capped at 2 hours.
+      const tolerance = Math.min(job.intervalMs * 0.1, 2 * 60 * 60_000);
+      nextDue = nextLocalTime(nextDue - tolerance, Number(match[1]), Number(match[2]), timezone);
     }
   }
 
@@ -2864,11 +2869,14 @@ async function scheduleNextImprovementCheck() {
   const upcoming = await taskSchedule.getUpcomingTasks(1);
 
   // Default: check again in 1 hour if nothing scheduled
-  let delayMs = 60 * 60 * 1000;
+  // Cap at 1 hour so per-app cron tasks (e.g. feature-ideas at 1am) are always checked
+  // on time — getUpcomingTasks only sees global tasks, not per-app schedules
+  const MAX_CHECK_INTERVAL = 60 * 60 * 1000;
+  let delayMs = MAX_CHECK_INTERVAL;
   let description = 'Periodic improvement check (1h)';
 
   if (upcoming.length > 0 && upcoming[0].status === 'scheduled' && upcoming[0].eligibleIn > 0) {
-    delayMs = upcoming[0].eligibleIn;
+    delayMs = Math.min(upcoming[0].eligibleIn, MAX_CHECK_INTERVAL);
     description = `Next improvement: ${upcoming[0].taskType} in ${upcoming[0].eligibleInFormatted}`;
   }
 
