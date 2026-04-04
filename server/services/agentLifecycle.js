@@ -1059,7 +1059,9 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
       });
 
-      spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace);
+      void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
+        emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
+      });
     }
   }
 
@@ -1119,8 +1121,12 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
 
         // "No commits between X and Y" means the agent made no code changes.
         // Clean up the worktree silently — nothing to review or merge.
+        // Also delete the remote branch (it was pushed before PR creation).
         if (reason.includes('No commits between')) {
           emitLog('info', `🌳 No commits on ${worktreeBranch} vs ${targetBranch} — agent made no changes, cleaning up`, { agentId });
+          await git.deleteBranch(sourceWorkspace, worktreeBranch, { remote: true }).catch(err => {
+            emitLog('warn', `🌳 Remote branch delete failed for ${worktreeBranch}: ${err.message}`, { agentId });
+          });
           await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
             emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
           });

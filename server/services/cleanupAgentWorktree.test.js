@@ -159,7 +159,8 @@ vi.mock('./git.js', () => ({
   push: vi.fn(),
   getRepoBranches: vi.fn(),
   createPR: vi.fn(),
-  generatePRDescription: vi.fn()
+  generatePRDescription: vi.fn(),
+  deleteBranch: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('./runner.js', () => ({
@@ -259,7 +260,8 @@ describe('cleanupAgentWorktree - openPR path', () => {
     const warnings = await cleanupAgentWorktree('agent-1', true, { openPR: true, description: 'Test task' });
 
     expect(git.createPR).toHaveBeenCalled();
-    // Agent made no changes — clean up silently without a warning
+    // Agent made no changes — delete remote branch and clean up silently without a warning
+    expect(git.deleteBranch).toHaveBeenCalledWith('/mock/workspace', 'cos/task-abc123', { remote: true });
     expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
     expect(warnings).toHaveLength(0);
   });
