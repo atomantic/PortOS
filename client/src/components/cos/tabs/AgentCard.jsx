@@ -771,7 +771,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
 
       {/* Expanded output view */}
       {expanded && (
-        <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-hidden">
+        <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-[60vh]">
           {/* Pipeline stage tabs */}
           {pipelineStages && (
             <div className="flex items-center gap-1 mb-2 overflow-x-auto">
@@ -819,7 +819,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 );
               }
               if (stageOut && stageOut.length > 0) {
-                return <OutputBlocks output={stageOut} />;
+                return <OutputBlocks key={activeStage.agentId} output={stageOut} />;
               }
               return <div className="text-gray-500 text-sm">No output captured for this stage</div>;
             }
