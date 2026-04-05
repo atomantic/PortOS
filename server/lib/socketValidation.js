@@ -59,10 +59,9 @@ export const appStandardizeSchema = z.object({
 });
 
 // app:deploy — app ID and optional flags for Xcode deploy
-// Must match VALID_FLAGS in appDeployer.js
-const ALLOWED_DEPLOY_FLAGS = ['--ios', '--macos', '--all', '--skip-tests'];
-const appDeployFlagSchema = z.enum(ALLOWED_DEPLOY_FLAGS, {
-  errorMap: () => ({ message: `flag must be one of: ${ALLOWED_DEPLOY_FLAGS.join(', ')}` })
+import { DEPLOY_FLAGS } from '../services/appDeployer.js';
+const appDeployFlagSchema = z.enum(DEPLOY_FLAGS, {
+  errorMap: () => ({ message: `flag must be one of: ${DEPLOY_FLAGS.join(', ')}` })
 });
 
 export const appDeploySchema = z.object({
