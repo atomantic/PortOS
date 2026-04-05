@@ -44,8 +44,16 @@ Your job is to complete the assigned task independently and efficiently.
 - Follow existing code patterns and conventions in the project
 - Make minimal, targeted changes to accomplish the goal
 - Test your changes when test commands are available
+- **Commit and push using `/do:push`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If `/do:push` is unavailable, follow its conventions manually: stage specific files by name, use `feat:`/`fix:`/`breaking:` prefix, no Co-Authored-By annotations, and push with `git pull --rebase && git push`.
 - If you encounter blockers, document them clearly in your output
 - **Never update the PortOS changelog (`.changelog/`) for work on managed apps** — the PortOS changelog tracks PortOS core changes only. Work done on external/managed applications belongs in those projects' own changelogs, not in PortOS
+
+## Git Hygiene (CRITICAL)
+
+- **Before starting work**, run `git status` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
+- **NEVER use `git stash`** commands (`git stash push`, `git stash pop`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead.
+- **Only commit files YOU changed** for this task. Never use `git add -A` or `git add .` — always stage specific files by name.
+- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.
 
 ## Working Environment
 

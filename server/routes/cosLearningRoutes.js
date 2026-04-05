@@ -187,6 +187,21 @@ router.get('/digest/text', asyncHandler(async (req, res) => {
   res.type('text/plain').send(text);
 }));
 
+// GET /api/cos/digest/compare - Compare two weeks (must be before :weekId)
+router.get('/digest/compare', asyncHandler(async (req, res) => {
+  const { week1, week2 } = req.query;
+
+  if (!week1 || !week2) {
+    throw new ServerError('Both week1 and week2 query parameters are required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const comparison = await weeklyDigest.compareWeeks(week1, week2);
+  if (!comparison) {
+    throw new ServerError('One or both weeks not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(comparison);
+}));
+
 // GET /api/cos/digest/:weekId - Get digest for specific week
 router.get('/digest/:weekId', asyncHandler(async (req, res) => {
   const { weekId } = req.params;
@@ -208,21 +223,6 @@ router.post('/digest/generate', asyncHandler(async (req, res) => {
   const { weekId } = req.body;
   const digest = await weeklyDigest.generateWeeklyDigest(weekId || null);
   res.json(digest);
-}));
-
-// GET /api/cos/digest/compare - Compare two weeks
-router.get('/digest/compare', asyncHandler(async (req, res) => {
-  const { week1, week2 } = req.query;
-
-  if (!week1 || !week2) {
-    throw new ServerError('Both week1 and week2 query parameters are required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  const comparison = await weeklyDigest.compareWeeks(week1, week2);
-  if (!comparison) {
-    throw new ServerError('One or both weeks not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(comparison);
 }));
 
 export default router;

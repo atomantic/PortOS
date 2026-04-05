@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Send, Loader2 } from 'lucide-react';
+import { Send } from 'lucide-react';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 
@@ -9,7 +9,8 @@ const DOMAIN_PATTERN = /^\S+\.\S+$/;
 
 export default function QuickBrainCapture() {
   const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const isUrl = useMemo(() => {
     const trimmed = input.trim();
@@ -20,9 +21,13 @@ export default function QuickBrainCapture() {
   const handleSubmit = async (e) => {
     e?.preventDefault();
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || submittingRef.current) return;
 
-    setSending(true);
+    // Synchronous ref lock prevents duplicate requests from rapid clicks/Enter
+    submittingRef.current = true;
+    setIsSubmitting(true);
+    // Clear input immediately so user can keep typing
+    setInput('');
 
     if (isUrl) {
       let url = text;
@@ -35,24 +40,24 @@ export default function QuickBrainCapture() {
         } else {
           toast.error(err.message || 'Failed to save link');
         }
+        setInput(prev => prev || text);
         return null;
       });
       if (result) {
         toast.success(result.isGitHubRepo ? 'GitHub repo added' : 'Link saved');
-        setInput('');
       }
     } else {
       const result = await api.captureBrainThought(text).catch(err => {
         toast.error(err.message || 'Failed to capture thought');
+        setInput(prev => prev || text);
         return null;
       });
       if (result) {
         toast.success(result.message || 'Thought captured');
-        setInput('');
       }
     }
-
-    setSending(false);
+    submittingRef.current = false;
+    setIsSubmitting(false);
   };
 
   return (
@@ -75,10 +80,10 @@ export default function QuickBrainCapture() {
         />
         <button
           type="submit"
-          disabled={!input.trim() || sending}
+          disabled={!input.trim() || isSubmitting}
           className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
         >
-          {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          <Send size={14} />
         </button>
       </form>
       {input.trim() && (

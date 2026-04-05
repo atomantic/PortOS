@@ -24,6 +24,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [showTemplateSave, setShowTemplateSave] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const fileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
 
@@ -152,12 +153,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   };
 
   const handleAddTask = async () => {
-    if (isSubmitting) return;
+    if (submittingRef.current) return;
     if (!newTask.description.trim()) {
       toast.error('Description is required');
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
 
     let finalDescription = newTask.description;
@@ -203,17 +205,21 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       position: addToTop ? 'top' : 'bottom'
     }).catch(err => {
       toast.error(err.message || 'Failed to add task');
-      setIsSubmitting(false);
       return null;
     });
 
+    submittingRef.current = false;
+    setIsSubmitting(false);
+    setIsEnhancing(false);
+
     if (!result) return;
 
-    toast.success('Task added');
+    // Only clear form inputs after successful submission
     setNewTask(t => ({ ...t, description: '' }));
     setScreenshots([]);
     setAttachments([]);
-    setIsSubmitting(false);
+
+    toast.success('Task added');
     onTaskAdded?.();
   };
 
@@ -331,6 +337,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) { e.preventDefault(); handleAddTask(); } }}
             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />

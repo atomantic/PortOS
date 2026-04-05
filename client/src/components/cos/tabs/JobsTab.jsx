@@ -45,6 +45,42 @@ const JOB_TYPE_OPTIONS = [
   { value: 'shell', label: 'Shell Command' }
 ];
 
+const BRIEFING_CONFIG_OPTIONS = [
+  { key: 'dailyJoke', label: 'Daily Joke', desc: 'Include a short joke to start the day' },
+  { key: 'dailyQuote', label: 'Daily Quote', desc: 'Include an inspirational quote related to focus areas' },
+  { key: 'dailyImage', label: 'Daily Image', desc: 'Generate an image via Stable Diffusion (requires image gen API)' }
+];
+
+function BriefingConfig({ config, onChange }) {
+  return (
+    <div className="space-y-2">
+      <span className="text-xs text-gray-400">Briefing Enrichments</span>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        {BRIEFING_CONFIG_OPTIONS.map(opt => (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => onChange(opt.key, !config[opt.key])}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-left text-sm transition-colors ${
+              config[opt.key]
+                ? 'border-port-accent/50 bg-port-accent/10 text-white'
+                : 'border-port-border bg-port-bg text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            <span className={`w-3 h-3 rounded-sm border shrink-0 ${
+              config[opt.key] ? 'bg-port-accent border-port-accent' : 'border-gray-600'
+            }`} />
+            <div>
+              <div className="font-medium">{opt.label}</div>
+              <div className="text-xs opacity-60">{opt.desc}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function normalizeJobPayload(formData) {
   const payload = { ...formData };
   if (payload.type !== 'shell' && payload.type !== 'script') {
@@ -182,6 +218,9 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
     // Always initialize shell fields so switching type to 'shell' during editing works
     base.command = job.command || '';
     base.triggerAction = job.triggerAction || 'log-only';
+    if (job.id === 'job-daily-briefing') {
+      base.config = { dailyJoke: false, dailyQuote: false, dailyImage: false, ...job.config };
+    }
     setEditData(base);
     setEditing(true);
     setExpanded(true);
@@ -343,6 +382,12 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                 )}
               </div>
               <ScheduleFields data={editData} onChange={(key, val) => setEditData(d => ({ ...d, [key]: val }))} />
+              {editData.config && (
+                <BriefingConfig
+                  config={editData.config}
+                  onChange={(key, val) => setEditData(d => ({ ...d, config: { ...d.config, [key]: val } }))}
+                />
+              )}
               {editData.type === 'shell' ? (
                 <>
                   <textarea
@@ -398,12 +443,20 @@ function JobCard({ job, onToggle, onTrigger, onDelete, onUpdate }) {
                   <code className="text-emerald-300 bg-port-bg px-2 py-1 rounded font-mono">{job.command}</code>
                 </div>
               )}
-              <div className="flex gap-4 text-xs text-gray-500">
+              <div className="flex flex-wrap gap-4 text-xs text-gray-500">
                 <span>Priority: <span className="text-gray-300">{job.priority}</span></span>
                 {!isShell && <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>}
                 {isShell && <span>Action: <span className="text-gray-300">{job.triggerAction || 'log-only'}</span></span>}
                 <span>Created: <span className="text-gray-300">{job.createdAt ? new Date(job.createdAt).toLocaleDateString() : '—'}</span></span>
               </div>
+              {job.config && BRIEFING_CONFIG_OPTIONS.some(o => job.config[o.key]) && (
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="text-gray-500">Enrichments:</span>
+                  {BRIEFING_CONFIG_OPTIONS.filter(o => job.config[o.key]).map(o => (
+                    <span key={o.key} className="px-2 py-0.5 bg-port-accent/10 text-port-accent rounded">{o.label}</span>
+                  ))}
+                </div>
+              )}
               {isShell && job.lastOutput && (
                 <details className="group">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">

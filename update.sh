@@ -70,6 +70,12 @@ run git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
 log ""
 
+# Update submodules (slash-do and any others)
+step "submodules" "running" "Updating submodules..."
+run git submodule update --init --recursive
+step "submodules" "done" "Submodules updated"
+log ""
+
 # Stop PM2 apps to release file locks before updating
 step "pm2-stop" "running" "Stopping PortOS apps..."
 run npm run pm2:stop || true

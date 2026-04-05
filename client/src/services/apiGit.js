@@ -82,3 +82,8 @@ export const checkoutRemoteBranch = (path, branch) => request('/git/checkout-rem
   method: 'POST',
   body: JSON.stringify({ path, branch })
 });
+export const getSubmodules = () => request('/git/submodules/status');
+export const updateSubmodule = (path) => request('/git/submodules/update', {
+  method: 'POST',
+  body: JSON.stringify({ path })
+});

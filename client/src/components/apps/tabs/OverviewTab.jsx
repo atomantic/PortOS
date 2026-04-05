@@ -6,6 +6,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import KanbanBoard from '../../KanbanBoard';
 import EditAppModal from '../EditAppModal';
 import ActivityLog from '../ActivityLog';
+import SlashDoPanel from '../SlashDoPanel';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import * as api from '../../../services/api';
 
@@ -175,6 +176,9 @@ export default function OverviewTab({ app, onRefresh }) {
           )}
         </div>
       )}
+
+      {/* Agent Operations */}
+      <SlashDoPanel appId={app.id} appType={app.type} />
 
       {/* Quick Actions */}
       <div className="flex flex-wrap gap-2 pt-2">

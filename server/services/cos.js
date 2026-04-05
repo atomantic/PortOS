@@ -1525,7 +1525,7 @@ Use model: claude-opus-4-5-20251101 for clear documentation`,
 
     'feature-ideas': `[Self-Improvement] Implement a Feature Idea
 
-You are working in a git worktree on a feature branch. Your goal is to implement ONE feature and open a PR.
+Your goal is to implement ONE feature.
 
 ## Research Phase
 

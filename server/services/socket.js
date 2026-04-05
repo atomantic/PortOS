@@ -31,10 +31,12 @@ import {
   shellSessionIdSchema,
   shellStopSchema,
   appUpdateSchema,
-  appStandardizeSchema
+  appStandardizeSchema,
+  appDeploySchema
 } from '../lib/socketValidation.js';
 import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
+import * as appDeployer from './appDeployer.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -104,6 +106,10 @@ export function initSocket(io) {
 
       if (backup.success) {
         emit('backup', 'done', { message: `Backup branch: ${backup.branch}`, branch: backup.branch });
+      } else if (backup.code === 'DIRTY_WORKTREE') {
+        emit('backup', 'error', { message: backup.reason });
+        socket.emit('standardize:complete', { success: false, error: backup.reason });
+        return;
       } else {
         emit('backup', 'skipped', { message: backup.reason || 'No git repository' });
       }
@@ -111,7 +117,7 @@ export function initSocket(io) {
       // Step 3: Apply changes
       emit('apply', 'running', { message: 'Writing ecosystem.config.cjs...' });
 
-      const result = await pm2Standardizer.applyStandardization(repoPath, analysis)
+      const result = await pm2Standardizer.applyStandardization(repoPath, analysis, { skipBackup: true })
         .catch(err => ({ success: false, errors: [err.message] }));
 
       if (result.errors?.length > 0) {
@@ -125,11 +131,11 @@ export function initSocket(io) {
         filesModified: result.filesModified
       });
 
-      // Complete
+      // Complete — use backup branch from step 2 since step 3 skips backup
       socket.emit('standardize:complete', {
         success: true,
         result: {
-          backupBranch: result.backupBranch,
+          backupBranch: backup.branch || null,
           filesModified: result.filesModified,
           processes: analysis.proposedChanges.processes
         }
@@ -384,6 +390,45 @@ export function initSocket(io) {
         }
       });
       console.log(`✅ Socket standardize complete for ${app.name}`);
+    });
+
+    // App deploy handler — streams real-time output from deploy.sh
+    socket.on('app:deploy', async (rawData) => {
+      const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
+      if (!data) return;
+
+      let app;
+      try {
+        app = await appsService.getAppById(data.appId);
+      } catch (err) {
+        socket.emit('app:deploy:error', { message: `Failed to look up app: ${err.message}` });
+        return;
+      }
+      if (!app) {
+        socket.emit('app:deploy:error', { message: 'App not found' });
+        return;
+      }
+
+      if (!appDeployer.hasDeployScript(app)) {
+        socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
+        return;
+      }
+
+      console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
+      const emit = (type, payload) => {
+        socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
+      };
+
+      let result;
+      try {
+        result = await appDeployer.deployApp(app, data.flags, emit);
+      } catch (err) {
+        console.error(`❌ Deploy error for ${app.name}: ${err.message}`);
+        socket.emit('app:deploy:error', { message: err.message });
+        return;
+      }
+      socket.emit('app:deploy:complete', { success: result.success, code: result.code });
+      console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
     });
 
     // Shell session handlers

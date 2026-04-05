@@ -58,6 +58,17 @@ export const appStandardizeSchema = z.object({
   appId: z.string().min(1, 'appId is required')
 });
 
+// app:deploy — app ID and optional flags for Xcode deploy
+import { DEPLOY_FLAGS } from '../services/appDeployer.js';
+const appDeployFlagSchema = z.enum(DEPLOY_FLAGS, {
+  errorMap: () => ({ message: `flag must be one of: ${DEPLOY_FLAGS.join(', ')}` })
+});
+
+export const appDeploySchema = z.object({
+  appId: z.string().min(1, 'appId is required'),
+  flags: z.array(appDeployFlagSchema).max(20, 'no more than 20 flags are allowed').default([])
+});
+
 // =============================================================================
 // VALIDATION HELPER
 // =============================================================================

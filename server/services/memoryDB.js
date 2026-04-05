@@ -122,6 +122,12 @@ export async function createMemory(data, embedding = null) {
 /**
  * Get a memory by ID
  */
+export async function peekMemory(id) {
+  const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
+  if (result.rows.length === 0) return null;
+  return rowToMemory(result.rows[0]);
+}
+
 export async function getMemory(id) {
   const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
   if (result.rows.length === 0) return null;

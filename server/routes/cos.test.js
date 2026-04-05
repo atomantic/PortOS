@@ -33,13 +33,21 @@ vi.mock('../services/cos.js', () => ({
   getAgentProcessStats: vi.fn(),
   deleteAgent: vi.fn(),
   clearCompletedAgents: vi.fn(),
+  submitAgentFeedback: vi.fn(),
+  sendBtwToAgent: vi.fn(),
+  getFeedbackStats: vi.fn(),
   listReports: vi.fn(),
   getTodayReport: vi.fn(),
   getReport: vi.fn(),
   generateReport: vi.fn(),
+  listBriefings: vi.fn(),
+  getLatestBriefing: vi.fn(),
+  getBriefing: vi.fn(),
   listScripts: vi.fn(),
   getScript: vi.fn(),
-  forceSpawnTask: vi.fn()
+  forceSpawnTask: vi.fn(),
+  getTodayActivity: vi.fn(),
+  getRecentTasks: vi.fn()
 }));
 
 // Mock the taskWatcher service
@@ -57,10 +65,29 @@ vi.mock('../services/appActivity.js', () => ({
   clearAppCooldown: vi.fn()
 }));
 
+// Mock the claudeChangelog service
+vi.mock('../services/claudeChangelog.js', () => ({
+  checkChangelog: vi.fn(),
+  getCachedChangelog: vi.fn()
+}));
+
+// Mock the taskEnhancer service
+vi.mock('../services/taskEnhancer.js', () => ({
+  enhanceTaskPrompt: vi.fn()
+}));
+
+// Mock the subAgentSpawner service
+vi.mock('../services/subAgentSpawner.js', () => ({
+  loadSlashdoCommand: vi.fn()
+}));
+
 // Import mocked modules
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
+import * as claudeChangelog from '../services/claudeChangelog.js';
+import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
+import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 
 describe('CoS Routes', () => {
   let app;
@@ -680,6 +707,341 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(429);
       expect(response.body.code).toBe('NO_CAPACITY');
+    });
+  });
+
+  // ============================================================
+  // Task Routes — additional coverage
+  // ============================================================
+
+  describe('GET /api/cos/tasks/user', () => {
+    it('should return user tasks', async () => {
+      cos.getUserTasks.mockResolvedValue({ tasks: [{ id: 't1' }], grouped: {} });
+
+      const response = await request(app).get('/api/cos/tasks/user');
+
+      expect(response.status).toBe(200);
+      expect(response.body.tasks).toHaveLength(1);
+    });
+  });
+
+  describe('GET /api/cos/tasks/internal', () => {
+    it('should return internal tasks', async () => {
+      cos.getCosTasks.mockResolvedValue({ tasks: [], grouped: {} });
+
+      const response = await request(app).get('/api/cos/tasks/internal');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('tasks');
+    });
+  });
+
+  describe('POST /api/cos/tasks/refresh', () => {
+    it('should force refresh tasks', async () => {
+      taskWatcher.refreshTasks.mockResolvedValue({ user: [], cos: [] });
+
+      const response = await request(app).post('/api/cos/tasks/refresh');
+
+      expect(response.status).toBe(200);
+      expect(taskWatcher.refreshTasks).toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/cos/tasks/enhance', () => {
+    it('should enhance a task prompt', async () => {
+      enhanceTaskPrompt.mockResolvedValue({ enhanced: 'Better description' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/enhance')
+        .send({ description: 'Fix bug', context: 'app-001' });
+
+      expect(response.status).toBe(200);
+      expect(enhanceTaskPrompt).toHaveBeenCalledWith('Fix bug', 'app-001');
+    });
+
+    it('should return 400 if description is missing', async () => {
+      const response = await request(app)
+        .post('/api/cos/tasks/enhance')
+        .send({});
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/cos/tasks/slashdo', () => {
+    it('should create a task from a slashdo command', async () => {
+      loadSlashdoCommand.mockResolvedValue('command content');
+      cos.addTask.mockResolvedValue({ id: 'task-sd1', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'push', app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.id).toBe('task-sd1');
+      expect(loadSlashdoCommand).toHaveBeenCalledWith('push');
+    });
+
+    it('should return 400 for invalid command', async () => {
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'invalid', app: 'my-app' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 400 if app is missing', async () => {
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'push' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 409 for duplicate task', async () => {
+      loadSlashdoCommand.mockResolvedValue('command content');
+      cos.addTask.mockResolvedValue({ duplicate: true, status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'push', app: 'my-app' });
+
+      expect(response.status).toBe(409);
+    });
+  });
+
+  describe('POST /api/cos/tasks (duplicate)', () => {
+    it('should return 409 for duplicate task', async () => {
+      cos.addTask.mockResolvedValue({ duplicate: true, status: 'running' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks')
+        .send({ description: 'Duplicate task' });
+
+      expect(response.status).toBe(409);
+    });
+  });
+
+  // ============================================================
+  // Agent Routes — additional coverage
+  // ============================================================
+
+  describe('DELETE /api/cos/agents/completed', () => {
+    it('should clear completed agents', async () => {
+      cos.clearCompletedAgents.mockResolvedValue({ cleared: 3 });
+
+      const response = await request(app).delete('/api/cos/agents/completed');
+
+      expect(response.status).toBe(200);
+      expect(response.body.cleared).toBe(3);
+    });
+  });
+
+  describe('POST /api/cos/agents/:id/feedback', () => {
+    it('should submit positive feedback', async () => {
+      cos.submitAgentFeedback.mockResolvedValue({ success: true });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/feedback')
+        .send({ rating: 'positive', comment: 'Great work' });
+
+      expect(response.status).toBe(200);
+      expect(cos.submitAgentFeedback).toHaveBeenCalledWith('agent-001', { rating: 'positive', comment: 'Great work' });
+    });
+
+    it('should return 400 for invalid rating', async () => {
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/feedback')
+        .send({ rating: 'invalid' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 404 if agent not found', async () => {
+      cos.submitAgentFeedback.mockResolvedValue({ error: 'Agent not found' });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-999/feedback')
+        .send({ rating: 'negative' });
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/cos/agents/:id/btw', () => {
+    it('should send btw message to agent', async () => {
+      cos.sendBtwToAgent.mockResolvedValue({ success: true });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/btw')
+        .send({ message: 'Additional context here' });
+
+      expect(response.status).toBe(200);
+      expect(cos.sendBtwToAgent).toHaveBeenCalledWith('agent-001', 'Additional context here');
+    });
+
+    it('should return 400 for empty message', async () => {
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/btw')
+        .send({ message: '' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 400 for missing message', async () => {
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/btw')
+        .send({});
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 400 for message over 5000 chars', async () => {
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/btw')
+        .send({ message: 'x'.repeat(5001) });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 404 if agent not found', async () => {
+      cos.sendBtwToAgent.mockResolvedValue({ error: 'Agent not found' });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-999/btw')
+        .send({ message: 'hello' });
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/cos/feedback/stats', () => {
+    it('should return feedback statistics', async () => {
+      cos.getFeedbackStats.mockResolvedValue({ total: 10, positive: 7, negative: 2, neutral: 1 });
+
+      const response = await request(app).get('/api/cos/feedback/stats');
+
+      expect(response.status).toBe(200);
+      expect(response.body.total).toBe(10);
+    });
+  });
+
+  // ============================================================
+  // Report Routes — additional coverage
+  // ============================================================
+
+  describe('POST /api/cos/reports/generate', () => {
+    it('should generate a report', async () => {
+      cos.generateReport.mockResolvedValue({ date: '2026-02-25', summary: {} });
+
+      const response = await request(app)
+        .post('/api/cos/reports/generate')
+        .send({ date: '2026-02-25' });
+
+      expect(response.status).toBe(200);
+      expect(cos.generateReport).toHaveBeenCalledWith('2026-02-25');
+    });
+  });
+
+  describe('GET /api/cos/briefings', () => {
+    it('should list all briefings', async () => {
+      cos.listBriefings.mockResolvedValue(['2026-02-25', '2026-02-24']);
+
+      const response = await request(app).get('/api/cos/briefings');
+
+      expect(response.status).toBe(200);
+      expect(response.body.briefings).toHaveLength(2);
+    });
+  });
+
+  describe('GET /api/cos/briefings/latest', () => {
+    it('should return latest briefing', async () => {
+      cos.getLatestBriefing.mockResolvedValue({ date: '2026-02-25', content: 'Latest' });
+
+      const response = await request(app).get('/api/cos/briefings/latest');
+
+      expect(response.status).toBe(200);
+      expect(response.body.date).toBe('2026-02-25');
+    });
+  });
+
+  describe('GET /api/cos/briefings/:date', () => {
+    it('should return briefing by date', async () => {
+      cos.getBriefing.mockResolvedValue({ date: '2026-02-24', content: 'Briefing' });
+
+      const response = await request(app).get('/api/cos/briefings/2026-02-24');
+
+      expect(response.status).toBe(200);
+    });
+
+    it('should return 404 if briefing not found', async () => {
+      cos.getBriefing.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/cos/briefings/1999-01-01');
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/cos/claude-changelog', () => {
+    it('should return changelog', async () => {
+      claudeChangelog.checkChangelog.mockResolvedValue({ entries: [], lastChecked: Date.now() });
+
+      const response = await request(app).get('/api/cos/claude-changelog');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('entries');
+    });
+  });
+
+  describe('GET /api/cos/claude-changelog/cached', () => {
+    it('should return cached changelog', async () => {
+      claudeChangelog.getCachedChangelog.mockResolvedValue({ entries: [], cached: true });
+
+      const response = await request(app).get('/api/cos/claude-changelog/cached');
+
+      expect(response.status).toBe(200);
+    });
+  });
+
+  describe('GET /api/cos/scripts', () => {
+    it('should list scripts', async () => {
+      cos.listScripts.mockResolvedValue([{ name: 'backup.sh' }]);
+
+      const response = await request(app).get('/api/cos/scripts');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+    });
+  });
+
+  describe('GET /api/cos/scripts/:name', () => {
+    it('should return script content', async () => {
+      cos.getScript.mockResolvedValue({ name: 'backup.sh', content: '#!/bin/bash' });
+
+      const response = await request(app).get('/api/cos/scripts/backup.sh');
+
+      expect(response.status).toBe(200);
+      expect(response.body.name).toBe('backup.sh');
+    });
+
+    it('should return 404 if script not found', async () => {
+      cos.getScript.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/cos/scripts/missing.sh');
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/cos/activity/today', () => {
+    it('should return today activity summary', async () => {
+      cos.getTodayActivity.mockResolvedValue({ stats: { completed: 5 } });
+
+      const response = await request(app).get('/api/cos/activity/today');
+
+      expect(response.status).toBe(200);
+      expect(response.body.stats.completed).toBe(5);
     });
   });
 });

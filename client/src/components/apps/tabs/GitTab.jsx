@@ -76,6 +76,9 @@ ${mergeStep}. **Merge**: Once approved and CI passes, merge with \`gh pr merge -
 - Parse repo owner/name from \`gh repo view --json owner,name\``;
 }
 
+const iconBtnCls = 'p-1.5 min-h-[40px] min-w-[40px] flex items-center justify-center';
+const touchBtnCls = 'min-h-[40px]';
+
 export default function GitTab({ appId: _appId, appName, repoPath }) {
   const [gitInfo, setGitInfo] = useState(null);
   const [diff, setDiff] = useState('');
@@ -170,11 +173,10 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
     if (result) {
       const parts = [];
       for (const [key, val] of Object.entries(result)) {
-        if (key !== 'stashed' && key !== 'stashRestored' && key !== 'currentBranch' && val) {
+        if (key !== 'currentBranch' && val) {
           parts.push(`${key}: ${val}`);
         }
       }
-      if (result.stashed) parts.push(result.stashRestored ? 'stash restored' : 'stash conflict');
       toast.success(`Branches updated — ${parts.join(', ')}`);
     }
     await loadGitInfo();
@@ -554,7 +556,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                   {branches.map((branch) => (
                     <div
                       key={branch.name}
-                      className={`flex items-center justify-between py-2 px-2 rounded-lg ${branch.current ? 'bg-port-accent/10 border border-port-accent/30' : 'hover:bg-port-bg'}`}
+                      className={`flex flex-wrap items-center justify-between gap-y-1 py-2 px-2 rounded-lg ${branch.current ? 'bg-port-accent/10 border border-port-accent/30' : 'hover:bg-port-bg'}`}
                     >
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         {branch.current ? (
@@ -578,7 +580,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                           <button
                             onClick={() => handleCheckout(branch.name)}
                             disabled={checkingOut === branch.name}
-                            className="p-1.5 text-gray-400 hover:text-white hover:bg-port-bg rounded disabled:opacity-50"
+                            className={`${iconBtnCls} text-gray-400 hover:text-white hover:bg-port-bg rounded disabled:opacity-50`}
                             title="Checkout"
                           >
                             {checkingOut === branch.name ? (
@@ -592,7 +594,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                           <button
                             onClick={() => handlePush(branch.name)}
                             disabled={pushing === branch.name}
-                            className="p-1.5 text-gray-400 hover:text-port-success hover:bg-port-bg rounded disabled:opacity-50"
+                            className={`${iconBtnCls} text-gray-400 hover:text-port-success hover:bg-port-bg rounded disabled:opacity-50`}
                             title="Push"
                           >
                             {pushing === branch.name ? (
@@ -606,7 +608,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                           <button
                             onClick={() => handleSync(branch.name)}
                             disabled={syncing === branch.name}
-                            className="p-1.5 text-gray-400 hover:text-port-accent hover:bg-port-bg rounded disabled:opacity-50"
+                            className={`${iconBtnCls} text-gray-400 hover:text-port-accent hover:bg-port-bg rounded disabled:opacity-50`}
                             title="Sync (pull & push)"
                           >
                             {syncing === branch.name ? (
@@ -618,17 +620,17 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                         )}
                         {!branch.current && (
                           mergeConfirm === branch.name ? (
-                            <div className="flex items-center gap-1">
+                            <div className="flex flex-wrap items-center gap-1">
                               <button
                                 onClick={() => handleMerge(branch.name)}
                                 disabled={merging === branch.name}
-                                className="px-2 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
+                                className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50`}
                               >
                                 {merging === branch.name ? 'Merging...' : 'Confirm'}
                               </button>
                               <button
                                 onClick={() => setMergeConfirm(null)}
-                                className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                                className={`px-2 py-1 ${touchBtnCls} text-xs text-gray-400 hover:text-white`}
                               >
                                 Cancel
                               </button>
@@ -636,7 +638,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                           ) : (
                             <button
                               onClick={() => setMergeConfirm(branch.name)}
-                              className="p-1.5 text-gray-400 hover:text-port-accent hover:bg-port-bg rounded"
+                              className={`${iconBtnCls} text-gray-400 hover:text-port-accent hover:bg-port-bg rounded`}
                               title={`Merge ${branch.name} into current branch`}
                             >
                               <GitMerge size={14} />
@@ -656,7 +658,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
 
           {/* Remote Branches */}
           <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div className="flex items-center gap-2">
                 <Globe size={16} className="text-gray-400" />
                 <h3 className="text-sm font-medium text-gray-400">Remote Branches</h3>
@@ -664,29 +666,29 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                   <span className="text-xs text-gray-500">({remoteBranches.length})</span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {mergedBranchCount > 0 && !cleanupConfirm && (
                   <button
                     onClick={() => setCleanupConfirm(true)}
                     disabled={cleaningUp}
-                    className="flex items-center gap-1 text-xs text-port-warning hover:text-port-error disabled:opacity-50"
+                    className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-warning hover:text-port-error disabled:opacity-50`}
                   >
                     <Trash2 size={12} />
                     {cleaningUp ? 'Cleaning...' : `Clean ${mergedBranchCount} merged`}
                   </button>
                 )}
                 {cleanupConfirm && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
                     <button
                       onClick={handleCleanupMerged}
                       disabled={cleaningUp}
-                      className="px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
+                      className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                     >
                       {cleaningUp ? 'Deleting...' : `Delete ${mergedBranchCount} merged`}
                     </button>
                     <button
                       onClick={() => setCleanupConfirm(false)}
-                      className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                      className={`px-2 py-1 ${touchBtnCls} text-xs text-gray-400 hover:text-white`}
                     >
                       Cancel
                     </button>
@@ -695,7 +697,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                 <button
                   onClick={loadRemoteBranches}
                   disabled={loadingRemote}
-                  className="text-xs text-port-accent hover:underline disabled:opacity-50"
+                  className={`text-xs ${touchBtnCls} text-port-accent hover:underline disabled:opacity-50`}
                 >
                   {loadingRemote ? 'Refreshing...' : 'Refresh'}
                 </button>
@@ -708,82 +710,81 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                 {remoteBranches.map((rb) => (
                   <div
                     key={rb.fullRef}
-                    className={`flex items-center justify-between py-2 px-2 rounded-lg hover:bg-port-bg ${rb.isDefault ? 'bg-port-accent/5' : ''}`}
+                    className={`py-2 px-2 rounded-lg hover:bg-port-bg ${rb.isDefault ? 'bg-port-accent/5' : ''}`}
                   >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <GitBranch size={14} className={rb.isDefault ? 'text-port-accent shrink-0' : 'text-gray-500 shrink-0'} />
-                      <span className={`text-sm truncate ${rb.isDefault ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
-                        {rb.name}
-                      </span>
-                      {rb.merged && !rb.isDefault && (
-                        <span className="flex items-center gap-1 text-xs text-port-success px-1.5 py-0.5 bg-port-success/10 rounded shrink-0">
-                          <GitMerge size={10} />
-                          merged
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <GitBranch size={14} className={rb.isDefault ? 'text-port-accent shrink-0' : 'text-gray-500 shrink-0'} />
+                        <span className={`text-sm truncate ${rb.isDefault ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
+                          {rb.name}
                         </span>
-                      )}
-                      {rb.hasLocal && (
-                        <span className="text-xs text-gray-500 shrink-0">local</span>
-                      )}
+                        {rb.merged && !rb.isDefault && (
+                          <span className="flex items-center gap-1 text-xs text-port-success px-1.5 py-0.5 bg-port-success/10 rounded shrink-0">
+                            <GitMerge size={10} />
+                            merged
+                          </span>
+                        )}
+                        {rb.hasLocal && (
+                          <span className="text-xs text-gray-500 shrink-0">local</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {rb.lastCommitDate && (
+                          <span className="text-xs text-gray-500 hidden sm:inline">
+                            {new Date(rb.lastCommitDate).toLocaleDateString()}
+                          </span>
+                        )}
+                        {!rb.hasLocal && (
+                          <button
+                            onClick={() => handleCheckoutRemote(rb.name)}
+                            disabled={checkingOutRemote === rb.name}
+                            className={`${iconBtnCls} text-gray-400 hover:text-port-success hover:bg-port-bg rounded disabled:opacity-50`}
+                            title="Checkout locally"
+                          >
+                            {checkingOutRemote === rb.name ? (
+                              <RefreshCw size={14} className="animate-spin" />
+                            ) : (
+                              <Download size={14} />
+                            )}
+                          </button>
+                        )}
+                        {!rb.isDefault && deleteConfirm !== rb.name && (
+                          <button
+                            onClick={() => setDeleteConfirm(rb.name)}
+                            className={`${iconBtnCls} text-gray-500 hover:text-port-error hover:bg-port-bg rounded`}
+                            title="Delete branch"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {rb.lastCommitDate && (
-                        <span className="text-xs text-gray-500">
-                          {new Date(rb.lastCommitDate).toLocaleDateString()}
-                        </span>
-                      )}
-                      {!rb.hasLocal && (
+                    {!rb.isDefault && deleteConfirm === rb.name && (
+                      <div className="flex flex-wrap items-center gap-1 mt-2 pl-6">
                         <button
-                          onClick={() => handleCheckoutRemote(rb.name)}
-                          disabled={checkingOutRemote === rb.name}
-                          className="p-1.5 text-gray-400 hover:text-port-success hover:bg-port-bg rounded disabled:opacity-50"
-                          title="Checkout locally"
+                          onClick={() => handleDeleteBranch(rb.name, { local: rb.hasLocal, remote: true })}
+                          disabled={deleting === rb.name}
+                          className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                         >
-                          {checkingOutRemote === rb.name ? (
-                            <RefreshCw size={14} className="animate-spin" />
-                          ) : (
-                            <Download size={14} />
-                          )}
+                          {deleting === rb.name ? 'Deleting...' : rb.hasLocal ? 'Delete both' : 'Delete remote'}
                         </button>
-                      )}
-                      {!rb.isDefault && (
-                        <>
-                          {deleteConfirm === rb.name ? (
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => handleDeleteBranch(rb.name, { local: rb.hasLocal, remote: true })}
-                                disabled={deleting === rb.name}
-                                className="px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
-                              >
-                                {deleting === rb.name ? 'Deleting...' : rb.hasLocal ? 'Delete both' : 'Delete remote'}
-                              </button>
-                              {rb.hasLocal && (
-                                <button
-                                  onClick={() => handleDeleteBranch(rb.name, { local: false, remote: true })}
-                                  disabled={deleting === rb.name}
-                                  className="px-2 py-1 text-xs bg-port-warning/20 text-port-warning rounded hover:bg-port-warning/30 disabled:opacity-50"
-                                >
-                                  Remote only
-                                </button>
-                              )}
-                              <button
-                                onClick={() => setDeleteConfirm(null)}
-                                className="px-2 py-1 text-xs text-gray-400 hover:text-white"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setDeleteConfirm(rb.name)}
-                              className="p-1.5 text-gray-500 hover:text-port-error hover:bg-port-bg rounded"
-                              title="Delete branch"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </div>
+                        {rb.hasLocal && (
+                          <button
+                            onClick={() => handleDeleteBranch(rb.name, { local: false, remote: true })}
+                            disabled={deleting === rb.name}
+                            className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-warning/20 text-port-warning rounded hover:bg-port-warning/30 disabled:opacity-50`}
+                          >
+                            Remote only
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setDeleteConfirm(null)}
+                          className={`px-2 py-1 ${touchBtnCls} text-xs text-gray-400 hover:text-white`}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {remoteBranches.length === 0 && !loadingRemote && (

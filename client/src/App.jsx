@@ -63,6 +63,7 @@ const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
+const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -91,6 +92,7 @@ export default function App() {
           <Route path="devtools/history" element={<HistoryPage />} />
           <Route path="devtools/runs" element={<RunsHistoryPage />} />
           <Route path="devtools/runner" element={<RunnerPage />} />
+          <Route path="devtools/submodules" element={<Submodules />} />
           <Route path="devtools/usage" element={<UsagePage />} />
           <Route path="devtools/processes" element={<ProcessesPage />} />
           <Route path="devtools/agents" element={<AgentsPage />} />

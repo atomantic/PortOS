@@ -17,6 +17,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
 import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
+import { hasDeployScript } from '../services/appDeployer.js';
 
 const router = Router();
 
@@ -70,7 +71,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const enriched = await Promise.all(apps.map(async (app) => {
     // Non-PM2 apps skip PM2 enrichment entirely
     if (!usesPm2(app.type)) {
-      return { ...app, pm2Status: {}, overallStatus: 'n/a' };
+      return { ...app, pm2Status: {}, overallStatus: 'n/a', hasDeployScript: hasDeployScript(app) };
     }
 
     const pm2Home = app.pm2Home || null;
@@ -123,7 +124,8 @@ router.get('/', asyncHandler(async (req, res) => {
       devUiPort,
       apiPort,
       pm2Status: statuses,
-      overallStatus
+      overallStatus,
+      hasDeployScript: hasDeployScript(app)
     };
   }));
 
@@ -181,7 +183,7 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     appVersion = pkg?.version || null;
   }
 
-  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses, appVersion });
+  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses, appVersion, hasDeployScript: hasDeployScript(app) });
 }));
 
 // GET /api/apps/:id/icon - Serve the app's detected icon image

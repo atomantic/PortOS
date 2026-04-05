@@ -326,7 +326,7 @@ Use Playwright MCP to test the app at different viewport sizes:
 
   'feature-ideas': `[Improvement: {appName}] Implement Next Planned Feature
 
-You are working in a git worktree on a feature branch. Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
+Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
 
 Repository: {repoPath}
 
@@ -639,7 +639,7 @@ For each comment, read the referenced file and critically evaluate the suggestio
 Either way, resolve every thread — the goal is zero unresolved threads before merge.
 
 After evaluating all threads:
-- If any code changes were made: run the project's test suite to verify, then commit and push following the project's push conventions (e.g., \`git pull --rebase --autostash && git push\`)
+- If any code changes were made: run the project's test suite to verify, then commit and push using \`/do:push\` (or manually: stage specific files, conventional commit prefix, \`git pull --rebase && git push\`)
 
 ### 5d. Resolve ALL threads via GraphQL mutation (both fixed and dismissed):
 
@@ -888,7 +888,7 @@ Repository: {repoPath}
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
-  'feature-ideas': 5,  // v5: read DONE.md to avoid re-implementing completed features
+  'feature-ideas': 6,  // v6: remove hardcoded worktree language (worktree context injected by agentPromptBuilder)
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1  // v1: 2-stage pipeline (codebase review → triage & implement)
@@ -1074,7 +1074,77 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
    \`\`\`
    - [x] <description of the feature you implemented>
    \`\`\`
-7. Commit with a clear description of the feature and rationale`
+7. Commit with a clear description of the feature and rationale`,
+    // v5 default prompt (before removing hardcoded worktree language)
+    `[Improvement: {appName}] Implement Next Planned Feature
+
+You are working in a git worktree on a feature branch. Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
+
+Repository: {repoPath}
+
+## Phase 1 — Find the Next Task
+
+1. Read PLAN.md from {repoPath}
+2. Read DONE.md from {repoPath} (if it exists) to understand what has already been implemented
+3. If PLAN.md does not exist, is empty, or has no unchecked items (\`- [ ]\`), go to **Phase 4 — Brainstorm**.
+4. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
+5. If all unchecked items have \`<!-- NEEDS_INPUT -->\`, go to **Phase 4 — Brainstorm**.
+
+## Phase 2 — Evaluate Feasibility
+
+6. Read relevant source files to understand the scope of the item
+7. Determine: can this be implemented without user clarification?
+   - Consider: are requirements clear? Are there ambiguous design choices? Does it depend on external decisions?
+
+## Phase 3a — Implement (if feasible)
+
+8. Implement the feature:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+9. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+10. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`
+11. Commit with a clear description referencing the PLAN.md item
+
+## Phase 3b — Request Clarification (if not feasible)
+
+8. Create a file named \`.plan-questions.md\` in the repository root with this format:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+9. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line
+10. Commit both changes with message "chore: flag PLAN.md item needing user input"
+11. Do NOT open a PR — stop here
+
+## Phase 4 — Brainstorm a New Feature
+
+When PLAN.md is missing, empty, or fully completed, brainstorm and implement a new feature:
+
+1. Read GOALS.md from {repoPath} for context on the app's goals and priorities.
+   If no GOALS.md exists, focus on general improvements.
+2. Read DONE.md from {repoPath} (if it exists) to avoid re-implementing completed features
+3. Review the codebase structure, recent git log, and any README or docs to understand the app
+4. Identify ONE small, high-impact feature that:
+   - Aligns with GOALS.md priorities (if available)
+   - Is NOT already in DONE.md (avoid re-implementing shipped features)
+   - Saves user time, improves UX, or makes the app more useful
+   - Is self-contained and completable in one session
+   - Does NOT duplicate existing functionality
+5. Implement the feature:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+6. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+7. Add the feature as a checked item in PLAN.md (create the file if needed):
+   \`\`\`
+   - [x] <description of the feature you implemented>
+   \`\`\`
+8. Commit with a clear description of the feature and rationale`
   ],
   'pr-reviewer': [
     // v1 default prompt (required global slash-do install)

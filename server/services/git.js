@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { listWorktrees } from './worktreeManager.js';
 
 const PROTECTED_BRANCHES = ['main', 'master', 'dev', 'develop', 'release'];
@@ -16,6 +16,7 @@ const PROTECTED_BRANCHES = ['main', 'master', 'dev', 'develop', 'release'];
 function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
     const maxBuffer = options.maxBuffer || 10 * 1024 * 1024;
+    const timeout = options.timeout || 30000;
     const child = spawn('git', args, {
       cwd,
       shell: process.platform === 'win32',
@@ -26,10 +27,19 @@ function execGit(args, cwd, options = {}) {
     let stderr = '';
     let killed = false;
 
+    const timer = setTimeout(() => {
+      if (!killed) {
+        killed = true;
+        child.kill();
+        reject(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`));
+      }
+    }, timeout);
+
     child.stdout.on('data', (data) => {
       stdout += data.toString();
       if (stdout.length + stderr.length > maxBuffer && !killed) {
         killed = true;
+        clearTimeout(timer);
         child.kill();
         reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
       }
@@ -39,12 +49,14 @@ function execGit(args, cwd, options = {}) {
       stderr += data.toString();
       if (stdout.length + stderr.length > maxBuffer && !killed) {
         killed = true;
+        clearTimeout(timer);
         child.kill();
         reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
       }
     });
 
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (killed) return;
       if (code !== 0 && !options.ignoreExitCode) {
         reject(new Error(stderr || `git exited with code ${code}`));
@@ -54,10 +66,15 @@ function execGit(args, cwd, options = {}) {
     });
 
     child.on('error', (err) => {
+      clearTimeout(timer);
       reject(err);
     });
   });
 }
+
+// Like execGit but catches rejections (e.g. timeout) into a failed-result shape
+const execGitSafe = (args, cwd, options) =>
+  execGit(args, cwd, options).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message }));
 
 /**
  * Get git status for a directory
@@ -254,10 +271,8 @@ export async function updateBranches(dir) {
   const currentBranch = await getBranch(dir);
   const allBranches = await getBranches(dir);
   const trackBranches = allBranches.filter(b => b.tracking).map(b => b.name);
-  let stashed = false;
-  let stashRestored = false;
 
-  const results = { stashed, stashRestored: false, currentBranch };
+  const results = { currentBranch };
 
   // Update non-current branches via fetch refspec (no checkout needed)
   for (const branch of trackBranches.filter(b => b !== currentBranch)) {
@@ -266,20 +281,14 @@ export async function updateBranches(dir) {
   }
 
   // Update current branch if it's one of the tracked branches — requires merge
+  // Skip if working tree is dirty — other agents may own those uncommitted changes
   if (trackBranches.includes(currentBranch)) {
     if (!status.clean) {
-      await execGit(['stash', 'push', '-m', 'portos-auto-stash'], dir);
-      stashed = true;
-      results.stashed = true;
+      results[currentBranch] = 'skipped-dirty';
+    } else {
+      const r = await execGit(['merge', '--ff-only', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
+      results[currentBranch] = r.stderr?.includes('fatal') ? 'failed' : 'updated';
     }
-    const r = await execGit(['merge', '--ff-only', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
-    results[currentBranch] = r.stderr?.includes('fatal') ? 'failed' : 'updated';
-  }
-
-  if (stashed) {
-    const popResult = await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
-    stashRestored = !popResult.stderr?.includes('CONFLICT');
-    results.stashRestored = stashRestored;
   }
 
   return results;
@@ -577,63 +586,47 @@ export function hasChangelogDir(dir) {
 /**
  * Ensure workspace has the latest code from origin before agent work begins.
  * Scripted pull: fetch + fast-forward merge on the dev/default branch.
- * If the working tree is dirty, stashes changes first and restores after.
- * Returns conflict info if the pull can't be completed cleanly.
+ * If the working tree is dirty, skips the pull — other agents may own those
+ * uncommitted changes and stashing could interfere with their work.
  *
  * @param {string} dir - Git repository directory
- * @returns {{ success: boolean, branch: string, stashed: boolean, conflict: boolean, error: string|null }}
+ * @returns {{ success: boolean, branch: string, conflict: boolean, error: string|null }}
  */
-/**
- * Pop stash and clean up if the pop produces merge conflicts.
- * Returns { conflict: boolean, stderr: string }
- */
-async function popStashSafely(dir) {
-  const result = await execGit(['stash', 'pop'], dir, { ignoreExitCode: true });
-  const output = `${result.stdout || ''} ${result.stderr || ''}`;
-  if (output.includes('CONFLICT') || result.exitCode !== 0) {
-    await execGit(['checkout', '--', '.'], dir, { ignoreExitCode: true });
-    await execGit(['stash', 'drop'], dir, { ignoreExitCode: true });
-    return { conflict: true, stderr: result.stderr || '' };
-  }
-  return { conflict: false, stderr: '' };
-}
 
 export async function ensureLatest(dir) {
   const gitCheck = await isRepo(dir).catch(() => false);
-  if (!gitCheck) return { success: true, branch: null, stashed: false, conflict: false, error: null, skipped: 'not-a-repo' };
+  if (!gitCheck) return { success: true, branch: null, conflict: false, error: null, skipped: 'not-a-repo' };
 
   const currentBranch = await getBranch(dir).catch(() => null);
-  if (!currentBranch) return { success: true, branch: null, stashed: false, conflict: false, error: null, skipped: 'no-branch' };
+  if (!currentBranch) return { success: true, branch: null, conflict: false, error: null, skipped: 'no-branch' };
 
   // Check for remote — no remote means nothing to pull
   const remote = await getRemote(dir).catch(() => null);
-  if (!remote?.origin) return { success: true, branch: currentBranch, stashed: false, conflict: false, error: null, skipped: 'no-remote' };
+  if (!remote?.origin) return { success: true, branch: currentBranch, conflict: false, error: null, skipped: 'no-remote' };
 
   // Fetch latest refs from origin
   const fetchResult = await execGit(['fetch', 'origin'], dir, { ignoreExitCode: true });
   if (fetchResult.stderr?.includes('fatal')) {
-    return { success: false, branch: currentBranch, stashed: false, conflict: false, error: `fetch failed: ${fetchResult.stderr}` };
+    return { success: false, branch: currentBranch, conflict: false, error: `fetch failed: ${fetchResult.stderr}` };
   }
 
   // Check if remote tracking branch exists
   const remoteRef = await execGit(['rev-parse', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
   if (remoteRef.stderr?.includes('unknown revision')) {
-    return { success: true, branch: currentBranch, stashed: false, conflict: false, error: null, skipped: 'no-remote-tracking' };
+    return { success: true, branch: currentBranch, conflict: false, error: null, skipped: 'no-remote-tracking' };
   }
 
   // Check if already up to date
   const localHead = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
   const remoteHead = remoteRef.stdout.trim();
   if (localHead === remoteHead) {
-    return { success: true, branch: currentBranch, stashed: false, conflict: false, error: null, upToDate: true };
+    return { success: true, branch: currentBranch, conflict: false, error: null, upToDate: true };
   }
 
-  // Stash dirty working tree if needed
+  // Skip pull if working tree is dirty — other agents may own those changes
   const status = await getStatus(dir).catch(() => ({ clean: true }));
-  let stashed = false;
   if (!status.clean) {
-    await execGit(['stash', 'push', '-m', 'cos-pre-task-autostash'], dir);
-    stashed = true;
+    return { success: true, branch: currentBranch, conflict: false, error: null, skipped: 'dirty-working-tree' };
   }
 
   // Try fast-forward merge first (safest — no rewrite)
@@ -641,14 +634,7 @@ export async function ensureLatest(dir) {
   const mergeOk = !mergeResult.stderr?.includes('fatal') && !mergeResult.stderr?.includes('Not possible to fast-forward');
 
   if (mergeOk) {
-    // Fast-forward succeeded
-    if (stashed) {
-      const { conflict, stderr } = await popStashSafely(dir);
-      if (conflict) {
-        return { success: false, branch: currentBranch, stashed: true, conflict: true, error: `stash pop conflict after fast-forward: ${stderr}` };
-      }
-    }
-    return { success: true, branch: currentBranch, stashed, conflict: false, error: null };
+    return { success: true, branch: currentBranch, conflict: false, error: null };
   }
 
   // Fast-forward failed — local branch has diverged. Try rebase.
@@ -658,27 +644,15 @@ export async function ensureLatest(dir) {
   if (!rebaseOk) {
     // Rebase failed — abort and report conflict
     await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true });
-    if (stashed) {
-      await popStashSafely(dir);
-    }
     return {
       success: false,
       branch: currentBranch,
-      stashed,
       conflict: true,
       error: `branch ${currentBranch} has diverged from origin and rebase has conflicts: ${rebaseResult.stderr}`
     };
   }
 
-  // Rebase succeeded
-  if (stashed) {
-    const { conflict, stderr } = await popStashSafely(dir);
-    if (conflict) {
-      return { success: false, branch: currentBranch, stashed: true, conflict: true, error: `stash pop conflict after rebase: ${stderr}` };
-    }
-  }
-
-  return { success: true, branch: currentBranch, stashed, conflict: false, error: null };
+  return { success: true, branch: currentBranch, conflict: false, error: null };
 }
 
 /**
@@ -788,17 +762,19 @@ export async function deleteBranch(dir, branchName, { local = false, remote = fa
     throw new Error(`Cannot delete branch in active use by an agent: ${branchName}`);
   }
 
-  const results = {};
+  const opts = { ignoreExitCode: true };
+  const [localResult, remoteResult] = await Promise.all([
+    local ? execGitSafe(['branch', '-D', branchName], dir, opts) : null,
+    remote ? execGitSafe(['push', 'origin', '--delete', branchName], dir, opts) : null
+  ]);
 
-  if (local) {
-    const localResult = await execGit(['branch', '-D', branchName], dir, { ignoreExitCode: true });
+  const results = {};
+  if (localResult) {
     results.local = localResult.exitCode === 0
       ? 'deleted'
       : localResult.stderr?.includes('not found') ? 'not found' : `failed: ${localResult.stderr?.trim()}`;
   }
-
-  if (remote) {
-    const remoteResult = await execGit(['push', 'origin', '--delete', branchName], dir, { ignoreExitCode: true });
+  if (remoteResult) {
     results.remote = remoteResult.exitCode === 0
       ? 'deleted'
       : remoteResult.stderr?.includes('not found') || remoteResult.stderr?.includes('does not exist')
@@ -858,7 +834,7 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
     for (const b of excludeBranches) localOnlyProtected.add(b);
   }
 
-  await execGit(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
+  await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
 
   const [localMerged, remoteMerged] = await Promise.all([
     execGit(['branch', '--merged', defaultBranch, '--format=%(refname:short)'], dir, { ignoreExitCode: true }),
@@ -879,6 +855,7 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
 
   const deleted = [];
   const skipped = [];
+  const opts = { ignoreExitCode: true };
 
   for (const name of allMerged) {
     const hasLocal = localSet.has(name);
@@ -886,13 +863,13 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
     const result = { name, local: null, remote: null };
 
     if (hasLocal) {
-      const r = await execGit(['branch', '-d', name], dir, { ignoreExitCode: true });
+      const r = await execGitSafe(['branch', '-d', name], dir, opts);
       result.local = r.exitCode === 0 ? 'deleted' : 'failed';
       if (r.exitCode !== 0) skipped.push(`${name} (local: ${r.stderr?.trim()})`);
     }
 
     if (hasRemote) {
-      const r = await execGit(['push', 'origin', '--delete', name], dir, { ignoreExitCode: true });
+      const r = await execGitSafe(['push', 'origin', '--delete', name], dir, opts);
       result.remote = r.exitCode === 0 ? 'deleted' : 'failed';
       if (r.exitCode !== 0) skipped.push(`${name} (remote: ${r.stderr?.trim()})`);
     }
@@ -930,4 +907,124 @@ export async function getGitInfo(dir) {
     devBranch: repoBranches.devBranch,
     hasChangelog: hasChangelogDir(dir)
   };
+}
+
+const SUBMODULE_STATUS_RE = /^([+ \-U])([0-9a-f]+)\s+(\S+)/;
+
+function parseSubmoduleStatusLine(line) {
+  const match = line.match(SUBMODULE_STATUS_RE);
+  if (!match) return null;
+  return { statusChar: match[1], commit: match[2], path: match[3] };
+}
+
+/**
+ * Get submodule status for the PortOS repo
+ */
+export async function getSubmodules() {
+  const root = PATHS.root;
+  const result = await execGit(['submodule', 'status'], root);
+  const lines = result.stdout.trim().split('\n').filter(Boolean);
+
+  const parsed = lines.map(parseSubmoduleStatusLine).filter(Boolean);
+
+  const submodules = await Promise.all(parsed.map(async ({ statusChar, commit, path: subPath }) => {
+    const name = subPath.split('/').pop();
+    const fullPath = join(root, subPath);
+    const initialized = statusChar !== '-';
+    const conflicted = statusChar === 'U';
+    const exists = existsSync(fullPath);
+
+    // Skip remote-info fetch when submodule is uninitialized or has merge conflicts
+    const canFetchRemote = exists && initialized && !conflicted;
+
+    // Run independent git queries concurrently
+    const [urlResult, remoteInfo] = await Promise.all([
+      execGitSafe(['config', `submodule.${subPath}.url`], root),
+      canFetchRemote ? fetchRemoteInfo(fullPath, commit) : Promise.resolve({ latestCommit: null, behind: 0, latestMessage: null })
+    ]);
+
+    return {
+      name,
+      path: subPath,
+      currentCommit: commit.substring(0, 7),
+      ...remoteInfo,
+      statusChar,
+      initialized,
+      conflicted,
+      outOfSync: statusChar === '+',
+      url: urlResult.stdout.trim() || null
+    };
+  }));
+
+  return submodules;
+}
+
+async function fetchRemoteInfo(fullPath, currentCommit) {
+  await execGitSafe(['fetch', 'origin'], fullPath, { timeout: 15000 });
+
+  // Resolve the remote default branch — origin/HEAD may not exist in all clones
+  let remoteRef = 'origin/HEAD';
+  const headCheck = await execGitSafe(['rev-parse', 'origin/HEAD'], fullPath);
+  if (headCheck.exitCode !== 0) {
+    // Fallback: try origin/main then origin/master
+    const mainCheck = await execGitSafe(['rev-parse', 'origin/main'], fullPath);
+    if (mainCheck.exitCode === 0) {
+      remoteRef = 'origin/main';
+    } else {
+      const masterCheck = await execGitSafe(['rev-parse', 'origin/master'], fullPath);
+      if (masterCheck.exitCode === 0) {
+        remoteRef = 'origin/master';
+      }
+    }
+  }
+
+  const [latestResult, msgResult] = await Promise.all([
+    execGitSafe(['rev-parse', remoteRef], fullPath),
+    execGitSafe(['log', '-1', '--format=%s', remoteRef], fullPath)
+  ]);
+
+  let latestCommit = null;
+  let behind = 0;
+  if (latestResult.exitCode === 0) {
+    latestCommit = latestResult.stdout.trim().substring(0, 7);
+    const countResult = await execGitSafe(
+      ['rev-list', '--count', `${currentCommit}..${remoteRef}`],
+      fullPath
+    );
+    behind = parseInt(countResult.stdout.trim(), 10) || 0;
+  }
+
+  return {
+    latestCommit,
+    behind,
+    latestMessage: msgResult.stdout.trim() || null
+  };
+}
+
+/**
+ * Get known submodule paths
+ */
+export async function getSubmodulePaths() {
+  const root = PATHS.root;
+  const result = await execGit(['submodule', 'status'], root);
+  return result.stdout.trim().split('\n').filter(Boolean)
+    .map(parseSubmoduleStatusLine).filter(Boolean).map(s => s.path);
+}
+
+/**
+ * Update a specific submodule to the latest remote version
+ */
+export async function updateSubmodule(subPath) {
+  const root = PATHS.root;
+  // Validate subPath is a known submodule
+  const knownPaths = await getSubmodulePaths();
+  if (!knownPaths.includes(subPath)) {
+    throw new Error(`Unknown submodule path: ${subPath}`);
+  }
+  console.log(`📦 Updating submodule ${subPath}...`);
+  await execGit(['submodule', 'update', '--init', '--recursive', '--remote', subPath], root, { timeout: 60000 });
+  console.log(`✅ Submodule ${subPath} updated`);
+  const statusResult = await execGit(['submodule', 'status', subPath], root);
+  const parsed = parseSubmoduleStatusLine(statusResult.stdout);
+  return parsed ? parsed.commit.substring(0, 7) : null;
 }

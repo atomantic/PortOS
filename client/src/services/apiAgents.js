@@ -54,6 +54,10 @@ export const addCosTask = (task) => request('/cos/tasks', {
   method: 'POST',
   body: JSON.stringify(task)
 });
+export const createSlashdoTask = (command, app) => request('/cos/tasks/slashdo', {
+  method: 'POST',
+  body: JSON.stringify({ command, app })
+});
 export const enhanceCosTaskPrompt = (data) => request('/cos/tasks/enhance', {
   method: 'POST',
   body: JSON.stringify(data)

@@ -20,6 +20,31 @@ async function getActiveAgentBranches() {
 
 const router = Router();
 
+// GET /api/git/submodules/status - Get all submodule statuses
+router.get('/submodules/status', asyncHandler(async (req, res) => {
+  const submodules = await git.getSubmodules();
+  res.json(submodules);
+}));
+
+// POST /api/git/submodules/update - Update a specific submodule
+router.post('/submodules/update', asyncHandler(async (req, res) => {
+  const rawPath = req.body?.path;
+  if (!rawPath || typeof rawPath !== 'string') {
+    throw new ServerError('path must be a non-empty string', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const path = rawPath.trim();
+  if (!path) {
+    throw new ServerError('path must be a non-empty string', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // Validate that this is a known submodule path (cheap check, no remote fetches)
+  const knownPaths = await git.getSubmodulePaths();
+  if (!knownPaths.includes(path)) {
+    throw new ServerError(`Unknown submodule path: ${path}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const newCommit = await git.updateSubmodule(path);
+  res.json({ success: true, newCommit });
+}));
+
 // GET /api/git/:appId - Get git info for an app
 router.get('/:appId', asyncHandler(async (req, res) => {
   const { appId } = req.params;

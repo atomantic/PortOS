@@ -220,6 +220,11 @@ Focus on surfacing actionable insights and moving projects forward. Don't just c
     enabled: false,
     priority: 'LOW',
     autonomyLevel: 'assistant',
+    config: {
+      dailyJoke: false,
+      dailyQuote: false,
+      dailyImage: false
+    },
     promptTemplate: `[Autonomous Job] Daily Briefing
 
 You are acting as my Chief of Staff, preparing a daily briefing.
@@ -720,6 +725,7 @@ async function createJob(jobData) {
       promptTemplate: jobData.promptTemplate || '',
       command: jobData.command || null,
       triggerAction,
+      config: jobData.config || null,
       lastRun: null,
       runCount: 0,
       createdAt: now,
@@ -762,7 +768,7 @@ async function updateJob(jobId, updates) {
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
       'scheduledTime', 'cronExpression', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
-      'command', 'triggerAction'
+      'command', 'triggerAction', 'config'
     ]
 
     for (const field of updatableFields) {
@@ -938,6 +944,39 @@ async function listJobSkillTemplates() {
 }
 
 /**
+ * Build additional prompt instructions based on daily briefing config options.
+ * @param {Object} config - The briefing config object
+ * @returns {string} Additional instructions to append, or empty string
+ */
+function buildBriefingConfigInstructions(config) {
+  const parts = []
+
+  if (config.dailyJoke) {
+    parts.push('- Include a "Daily Joke" section with a short, clever joke to start the day on a light note.')
+  }
+  if (config.dailyQuote) {
+    parts.push('- Include a "Daily Quote" section with an inspirational or thought-provoking quote relevant to the day\'s focus areas.')
+  }
+  if (config.dailyImage) {
+    parts.push(
+      '- Generate a "Daily Image" to accompany the briefing by calling POST /api/image-gen/generate with a creative prompt related to today\'s theme or focus areas. Use a cyberpunk or futuristic aesthetic. Include the resulting image path in the briefing. If the image gen API is unavailable (GET /api/image-gen/status returns connected: false), skip this section silently.'
+    )
+  }
+
+  if (parts.length === 0) return ''
+  return 'Optional enrichments (include these sections in the briefing):\n' + parts.join('\n')
+}
+
+/**
+ * Append briefing config instructions to a prompt if this is the daily briefing job.
+ */
+function appendBriefingConfig(job, prompt) {
+  if (job.id !== 'job-daily-briefing' || !job.config) return prompt
+  const extras = buildBriefingConfigInstructions(job.config)
+  return extras ? prompt + '\n\n' + extras : prompt
+}
+
+/**
  * Get the effective prompt for a job, using skill template if available
  * Extracts the prompt from the skill template's structured format
  * @param {Object} job - The job object
@@ -945,10 +984,10 @@ async function listJobSkillTemplates() {
  */
 async function getJobEffectivePrompt(job) {
   const skillName = JOB_SKILL_MAP[job.id]
-  if (!skillName) return job.promptTemplate
+  if (!skillName) return appendBriefingConfig(job, job.promptTemplate)
 
   const template = await loadJobSkillTemplate(skillName)
-  if (!template) return job.promptTemplate
+  if (!template) return appendBriefingConfig(job, job.promptTemplate)
 
   // Extract structured sections from the skill template and build a prompt
   // The skill template has: Prompt Template header, Steps, Expected Outputs, Success Criteria
@@ -973,6 +1012,9 @@ async function getJobEffectivePrompt(job) {
   if (sections.steps.trim()) {
     prompt += '\n\nTasks to perform:\n' + sections.steps.trim()
   }
+
+  prompt = appendBriefingConfig(job, prompt)
+
   if (sections.expectedOutputs.trim()) {
     prompt += '\n\nExpected outputs:\n' + sections.expectedOutputs.trim()
   }

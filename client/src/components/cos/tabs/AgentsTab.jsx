@@ -55,13 +55,15 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   }, [dateBuckets, loadedDates]);
 
   const handleKill = async (agentId) => {
-    await api.killCosAgent(agentId).catch(err => toast.error(err.message));
+    const result = await api.killCosAgent(agentId).catch(err => { toast.error(err.message); return null; });
+    if (!result) return;
     toast.success('Agent force killed');
     onRefresh();
   };
 
   const handleDelete = useCallback(async (agentId) => {
-    await api.deleteCosAgent(agentId).catch(err => toast.error(err.message));
+    const result = await api.deleteCosAgent(agentId).catch(err => { toast.error(err.message); return null; });
+    if (!result) return;
     setLoadedAgents(prev => {
       const deleted = prev.find(a => a.id === agentId);
       if (deleted?.completedAt) {
@@ -81,7 +83,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   };
 
   const handleResumeSubmit = async ({ description, context, model, provider, app, type = 'user', screenshots }) => {
-    await api.addCosTask({
+    const result = await api.addCosTask({
       description,
       context,
       model: model || undefined,
@@ -91,15 +93,17 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
       screenshots
     }).catch(err => {
       toast.error(err.message);
-      return;
+      return null;
     });
+    if (!result) return;
     toast.success(`Created ${type === 'internal' ? 'system ' : ''}resume task`);
     setResumingAgent(null);
     onRefresh();
   };
 
   const handleClearCompleted = async () => {
-    await api.clearCompletedCosAgents().catch(err => toast.error(err.message));
+    const result = await api.clearCompletedCosAgents().catch(err => { toast.error(err.message); return null; });
+    if (!result) return;
     setLoadedAgents([]);
     setLoadedDates(new Set());
     setDateBuckets([]);

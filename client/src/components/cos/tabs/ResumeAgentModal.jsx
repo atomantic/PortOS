@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { X, CheckCircle, AlertCircle, RotateCcw, Image } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, RotateCcw, Image, Loader2 } from 'lucide-react';
 import { processScreenshotUploads } from '../../../utils/fileUpload';
 import toast from '../../ui/Toast';
 
@@ -27,6 +27,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
     app: agent.metadata?.taskApp || agent.metadata?.app || ''
   });
   const [screenshots, setScreenshots] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleFileSelect = async (e) => {
@@ -44,13 +45,18 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   const selectedProvider = providers?.find(p => p.id === formData.provider);
   const availableModels = selectedProvider?.models || [];
 
-  const handleSubmit = (e) => {
+  const submittingRef = useRef(false);
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsSubmitting(true);
+
     const fullContext = formData.refinedInstructions.trim()
       ? `## Additional Instructions\n${formData.refinedInstructions}\n\n${initialContext}`
       : initialContext;
 
-    onSubmit({
+    await onSubmit({
       description: `[Resume] ${taskDescription}`,
       context: fullContext,
       model: formData.model,
@@ -58,6 +64,11 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       app: formData.app,
       type: taskType,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined
+    }).catch(err => {
+      toast.error(err?.message || 'Failed to resume agent');
+    }).finally(() => {
+      submittingRef.current = false;
+      setIsSubmitting(false);
     });
   };
 
@@ -222,10 +233,11 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             </button>
             <button
               type="submit"
-              className="flex items-center gap-2 px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors"
+              disabled={isSubmitting}
+              className="flex items-center gap-2 px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <RotateCcw size={14} />
-              Queue Resume Task
+              {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+              {isSubmitting ? 'Queuing...' : 'Queue Resume Task'}
             </button>
           </div>
         </form>

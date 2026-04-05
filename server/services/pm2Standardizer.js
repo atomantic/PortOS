@@ -309,7 +309,8 @@ module.exports = ${configStr};
 }
 
 /**
- * Create git backup before modifications
+ * Create git backup before modifications.
+ * Refuses to proceed if the working tree has uncommitted changes to avoid data loss.
  */
 export async function createGitBackup(repoPath) {
   // Check if git repo
@@ -317,28 +318,19 @@ export async function createGitBackup(repoPath) {
     return { success: false, reason: 'Not a git repository' };
   }
 
+  // Refuse to overwrite uncommitted changes
+  const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd: repoPath, windowsHide: true });
+  if (statusOut.trim()) {
+    return { success: false, code: 'DIRTY_WORKTREE', reason: 'Working tree has uncommitted changes — commit or discard them before standardizing' };
+  }
+
   const timestamp = Date.now();
   const branch = `portos-backup-${timestamp}`;
 
-  // Check for uncommitted changes
-  const { stdout: status } = await execAsync('git status --porcelain', { cwd: repoPath, windowsHide: true });
-  const hasChanges = status.trim().length > 0;
-
-  if (hasChanges) {
-    // Stash changes
-    await execAsync('git stash push -m "PortOS standardization backup"', { cwd: repoPath, windowsHide: true })
-      .catch(() => null); // Ignore if nothing to stash
-  }
-
-  // Create backup branch
+  // Create backup branch from current HEAD (captures committed state without stashing)
   await execAsync(`git branch ${branch}`, { cwd: repoPath, windowsHide: true });
 
-  if (hasChanges) {
-    // Pop stash
-    await execAsync('git stash pop', { cwd: repoPath, windowsHide: true }).catch(() => null);
-  }
-
-  return { success: true, branch, hadChanges: hasChanges };
+  return { success: true, branch };
 }
 
 /**
@@ -414,7 +406,7 @@ export async function analyzeApp(repoPath, providerId = null) {
 /**
  * Apply standardization changes to the repository
  */
-export async function applyStandardization(repoPath, plan) {
+export async function applyStandardization(repoPath, plan, { skipBackup = false } = {}) {
   const results = {
     success: true,
     backupBranch: null,
@@ -422,14 +414,17 @@ export async function applyStandardization(repoPath, plan) {
     errors: []
   };
 
-  // Create git backup first
-  if (plan.currentState.hasGit) {
+  // Create git backup first — abort if working tree is dirty (skip when caller already did it)
+  if (plan.currentState.hasGit && !skipBackup) {
     const backup = await createGitBackup(repoPath);
     if (backup.success) {
       results.backupBranch = backup.branch;
       console.log(`📦 Created backup branch: ${backup.branch}`);
     } else {
       console.log(`⚠️ Could not create backup: ${backup.reason}`);
+      if (backup.code === 'DIRTY_WORKTREE') {
+        return { success: false, error: backup.reason, filesModified: [], errors: [backup.reason] };
+      }
     }
   }
 

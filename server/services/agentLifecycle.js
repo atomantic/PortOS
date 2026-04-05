@@ -311,7 +311,7 @@ export async function spawnAgentForTask(task) {
       return null;
     } else if (pullResult.success && !pullResult.upToDate && !pullResult.skipped) {
       emitLog('info', `📥 Pulled latest for ${resolvedAppName || 'workspace'} (branch: ${pullResult.branch})`, {
-        taskId: task.id, workspace: workspacePath, branch: pullResult.branch, stashed: pullResult.stashed
+        taskId: task.id, workspace: workspacePath, branch: pullResult.branch
       });
     } else if (!pullResult.success) {
       emitLog('warn', `⚠️ Pre-task git pull error: ${pullResult.error}`, { taskId: task.id, workspace: workspacePath });

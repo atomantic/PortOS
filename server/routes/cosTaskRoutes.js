@@ -6,7 +6,16 @@ import { Router } from 'express';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
+import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+
+const SLASHDO_COMMANDS = {
+  push:           { label: 'Push', description: 'Commit and push all work with changelog' },
+  review:         { label: 'Review', description: 'Deep code review of changed files' },
+  release:        { label: 'Release', description: 'Create a release PR' },
+  better:         { label: 'Better', description: 'Unified DevSecOps audit and remediation' },
+  'better-swift': { label: 'Better Swift', description: 'SwiftUI DevSecOps audit and remediation' }
+};
 
 const router = Router();
 
@@ -55,6 +64,34 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
   }
 
   const result = await enhanceTaskPrompt(description, context);
+  res.json(result);
+}));
+
+// POST /api/cos/tasks/slashdo - Create a task from a slashdo command
+router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
+  const { command, app } = req.body;
+
+  if (!command || !SLASHDO_COMMANDS[command]) {
+    throw new ServerError(`Invalid slashdo command. Allowed: ${Object.keys(SLASHDO_COMMANDS).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (!app) {
+    throw new ServerError('App ID is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const content = await loadSlashdoCommand(command);
+  if (!content) {
+    throw new ServerError(`Failed to load slashdo command: ${command}`, { status: 500, code: 'COMMAND_LOAD_FAILED' });
+  }
+
+  const meta = SLASHDO_COMMANDS[command];
+  const description = `Run /do:${command} for ${app} — ${meta.description}`;
+  const taskData = { description, app, context: content, useWorktree: false, openPR: false, simplify: false, reviewLoop: false };
+  const result = await cos.addTask(taskData, 'user');
+
+  if (result?.duplicate) {
+    throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
+  }
+
   res.json(result);
 }));
 

@@ -81,6 +81,11 @@ export async function createMemory(data, embedding) {
   return b.createMemory(data, embedding);
 }
 
+export async function peekMemory(id) {
+  const b = await getBackend();
+  return b.peekMemory(id);
+}
+
 export async function getMemory(id) {
   const b = await getBackend();
   return b.getMemory(id);

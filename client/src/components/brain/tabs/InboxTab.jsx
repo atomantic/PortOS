@@ -27,7 +27,6 @@ import VoiceCapture from '../VoiceCapture';
 
 export default function InboxTab({ onRefresh, settings }) {
   const [inputText, setInputText] = useState('');
-  const [sending, setSending] = useState(false);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNeedsReview, setShowNeedsReview] = useState(true);
@@ -40,10 +39,16 @@ export default function InboxTab({ onRefresh, settings }) {
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [retryingId, setRetryingId] = useState(null);
   const inputRef = useRef(null);
+  const tempIdCounter = useRef(0);
 
   const fetchInbox = useCallback(async () => {
     const data = await api.getBrainInbox().catch(() => ({ entries: [] }));
-    setEntries(data.entries || []);
+    const serverEntries = data.entries || [];
+    // Preserve any optimistic entries still pending API confirmation
+    setEntries(prev => {
+      const pending = prev.filter(e => e.id.startsWith('_pending_'));
+      return pending.length ? [...pending, ...serverEntries] : serverEntries;
+    });
     setLoading(false);
   }, []);
 
@@ -71,19 +76,34 @@ export default function InboxTab({ onRefresh, settings }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!inputText.trim() || sending) return;
+    const text = inputText.trim();
+    if (!text) return;
 
-    setSending(true);
-    const result = await api.captureBrainThought(inputText.trim()).catch(err => {
+    // Guard against rapid double-clicks before React flushes the cleared input
+    const lastText = inputRef.current?.dataset.lastSubmit;
+    if (lastText === text) return;
+    if (inputRef.current) inputRef.current.dataset.lastSubmit = text;
+
+    const tempId = `_pending_${++tempIdCounter.current}`;
+    const optimisticEntry = {
+      id: tempId,
+      capturedText: text,
+      status: 'classifying',
+      capturedAt: new Date().toISOString()
+    };
+    setInputText('');
+    setEntries(prev => [optimisticEntry, ...prev]);
+
+    const result = await api.captureBrainThought(text).catch(err => {
       toast.error(err.message || 'Failed to capture thought');
+      setEntries(prev => prev.filter(e => e.id !== tempId));
       return null;
     });
-    setSending(false);
+
+    if (inputRef.current) inputRef.current.dataset.lastSubmit = '';
 
     if (result) {
-      toast.success(result.message || 'Thought captured');
-      setInputText('');
-      fetchInbox();
+      setEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
       onRefresh?.();
     }
   };
@@ -223,20 +243,15 @@ export default function InboxTab({ onRefresh, settings }) {
             onChange={(e) => setInputText(e.target.value)}
             placeholder="One thought at a time..."
             className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
-            disabled={sending}
           />
-          <VoiceCapture onTranscript={handleVoiceTranscript} disabled={sending} />
+          <VoiceCapture onTranscript={handleVoiceTranscript} />
           <button
             type="submit"
-            disabled={sending || !inputText.trim()}
+            disabled={!inputText.trim()}
             className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            title={sending ? "Capturing..." : "Capture thought"}
+            title="Capture thought"
           >
-            {sending ? (
-              <RefreshCw className="w-5 h-5 animate-spin" />
-            ) : (
-              <Send className="w-5 h-5" />
-            )}
+            <Send className="w-5 h-5" />
           </button>
         </div>
         <p className="mt-2 text-xs text-gray-500">

@@ -189,7 +189,14 @@ export async function createMemory(data, embedding = null) {
 }
 
 /**
- * Get a memory by ID
+ * Read a memory by ID without updating access stats
+ */
+export async function peekMemory(id) {
+  return withMemoryLock(() => loadMemory(id));
+}
+
+/**
+ * Get a memory by ID (updates access stats)
  */
 export async function getMemory(id) {
   return withMemoryLock(async () => {

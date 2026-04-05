@@ -54,6 +54,7 @@ import {
   Scale,
   LayoutDashboard,
   Lightbulb,
+  GitBranch,
   Github,
   Link2,
   Database,
@@ -157,6 +158,7 @@ const navItems = [
       { to: '/devtools/jira/reports', label: 'JIRA Reports', icon: FileText },
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
       { to: '/shell', label: 'Shell', icon: SquareTerminal },
+      { to: '/devtools/submodules', label: 'Submodules', icon: GitBranch },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },

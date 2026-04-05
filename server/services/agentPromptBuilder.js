@@ -291,7 +291,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 - **ID**: ${task.id}
 - **Priority**: ${task.priority}
 - **Description**: ${task.description}
-${task.metadata?.context ? `- **Context**: ${task.metadata.context}` : ''}
+${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context.trimEnd()}\n` : `- **Context**: ${task.metadata.context}`) : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}\n- **Target App Directory**: ${workspaceDir}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}
@@ -315,13 +315,14 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
 - **BTW Messages**: The user may send you additional context while you work. Check for a \`BTW.md\` file in your working directory root — if it exists, read it for important messages from the user. Incorporate that context into your work. Do not delete or modify BTW.md.
-${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : task.metadata?.app && worktreeInfo && willOpenPR ? `- Commit code after each feature or bug fix using the git tools or /cam skill. A pull request will be automatically created when your task completes — do NOT open a PR manually.` : task.metadata?.app && worktreeInfo ? `- Commit code after each feature or bug fix using the git tools or /cam skill. Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : `- Commit code after each feature or bug fix using the git tools or /cam skill`}
+${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : task.metadata?.app && worktreeInfo && willOpenPR ? `- A pull request will be automatically created when your task completes — do NOT open a PR manually.` : task.metadata?.app && worktreeInfo ? `- Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : ``}
 
 ## Git Hygiene (CRITICAL)
-- **Before starting work**, run \`git status\` to verify a clean working tree. If there are uncommitted changes from a previous agent or manual work, **stash or discard them** before proceeding — do NOT commit someone else's changes.
+- **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
+- **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
+- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.
 ${worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
-- If the working tree is dirty with changes unrelated to your task, run \`git stash\` to set them aside before starting.
 
 ## Working Directory
 ${task.metadata?.app ? `You are working in the target app directory: \`${workspaceDir}\`. All code changes, research, plans, and docs for this task belong in this directory — NOT in the PortOS repo.` : 'You are working in the project directory.'} Use the available tools to explore, modify, and test code.

@@ -10,7 +10,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Backlog
 
-- [ ] **Test coverage** — cosRunnerClient.js ✅ (37 tests), agentActionExecutor.js ✅ (27 tests). Remaining gap: cos.js (~29% service, ~12% route coverage)
+- [x] **Test coverage** — cosRunnerClient.js ✅ (37 tests), agentActionExecutor.js ✅ (27 tests), CoS routes ✅ (170 tests across 6 test files, 83-100% route coverage). Remaining gap: cos.js service (~4% coverage)
 - [ ] **M50 P9**: CoS Automation & Rules — Automated email classification, rule-based pre-filtering, email-to-task pipeline
 - [ ] **M50 P10**: Auto-Send with AI Review Gate — Per-account trust level, second LLM reviews drafts. See [Messages Security](./docs/features/messages-security.md)
 - [ ] **M34 P5-P7**: Digital Twin — Multi-modal capture, advanced testing, personas
