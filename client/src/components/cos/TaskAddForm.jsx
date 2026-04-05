@@ -24,6 +24,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [showTemplateSave, setShowTemplateSave] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const fileInputRef = useRef(null);
   const attachmentInputRef = useRef(null);
 
@@ -152,12 +153,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   };
 
   const handleAddTask = async () => {
-    if (isSubmitting) return;
+    if (submittingRef.current) return;
     if (!newTask.description.trim()) {
       toast.error('Description is required');
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
 
     let finalDescription = newTask.description;
@@ -206,6 +208,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       return null;
     });
 
+    submittingRef.current = false;
     setIsSubmitting(false);
     setIsEnhancing(false);
 

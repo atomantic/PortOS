@@ -291,7 +291,7 @@ You are an autonomous agent working on behalf of the Chief of Staff.
 - **ID**: ${task.id}
 - **Priority**: ${task.priority}
 - **Description**: ${task.description}
-${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context}` : `- **Context**: ${task.metadata.context}`) : ''}
+${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context.trimEnd()}\n` : `- **Context**: ${task.metadata.context}`) : ''}
 ${task.metadata?.app ? `- **Target App**: ${task.metadata.app}\n- **Target App Directory**: ${workspaceDir}` : ''}
 ${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}

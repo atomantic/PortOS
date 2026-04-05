@@ -29,7 +29,7 @@ export default function Submodules() {
       toast.success(`Updated ${subPath} to ${result.newCommit}`);
       setSubmodules(prev => prev.map(s =>
         s.path === subPath
-          ? { ...s, currentCommit: result.newCommit, behind: 0, outOfSync: false }
+          ? { ...s, currentCommit: result.newCommit, behind: 0, outOfSync: false, initialized: true, conflicted: false }
           : s
       ));
     } else {
