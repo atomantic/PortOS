@@ -45,9 +45,11 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   const selectedProvider = providers?.find(p => p.id === formData.provider);
   const availableModels = selectedProvider?.models || [];
 
+  const submittingRef = useRef(false);
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
 
     const fullContext = formData.refinedInstructions.trim()
@@ -65,6 +67,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
     }).catch(err => {
       toast.error(err?.message || 'Failed to resume agent');
     }).finally(() => {
+      submittingRef.current = false;
       setIsSubmitting(false);
     });
   };

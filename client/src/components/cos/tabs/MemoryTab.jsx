@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -75,11 +75,14 @@ export default function MemoryTab({ apps = [] }) {
   }, [filters, sourceFilter]);
 
   const [actionInFlight, setActionInFlight] = useState(null);
+  const actionRef = useRef(false);
 
   const handleMemoryAction = async (id, action, label, updateStats) => {
-    if (actionInFlight) return;
+    if (actionRef.current) return;
+    actionRef.current = true;
     setActionInFlight(id);
     const result = await action(id).catch(() => null);
+    actionRef.current = false;
     setActionInFlight(null);
     if (!result) return;
     toast.success(`Memory ${label}`);
