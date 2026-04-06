@@ -862,10 +862,12 @@ async function deriveProjectInfo(repoPath, appName) {
   if (existsSync(projectYml)) {
     const content = await readFile(projectYml, 'utf-8');
     const nameMatch = content.match(/^name:\s*(.+)$/m);
-    const bundleMatch = content.match(/PRODUCT_BUNDLE_IDENTIFIER:\s*(.+)$/m);
+    const projectName = nameMatch?.[1]?.trim();
+    // Derive bundle ID from the project name (not regex, which could match
+    // a watchOS or test target's PRODUCT_BUNDLE_IDENTIFIER instead of the primary one)
     return {
-      targetName: nameMatch?.[1]?.trim() || toTargetName(appName),
-      bundleId: bundleMatch?.[1]?.trim() || toBundleId(appName)
+      targetName: projectName || toTargetName(appName),
+      bundleId: projectName ? toBundleId(projectName) : toBundleId(appName)
     };
   }
 

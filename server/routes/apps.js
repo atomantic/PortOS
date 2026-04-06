@@ -126,7 +126,8 @@ router.get('/', asyncHandler(async (req, res) => {
       apiPort,
       pm2Status: statuses,
       overallStatus,
-      hasDeployScript: hasDeployScript(app)
+      hasDeployScript: hasDeployScript(app),
+      xcodeScripts: checkScripts(app)
     };
   }));
 
