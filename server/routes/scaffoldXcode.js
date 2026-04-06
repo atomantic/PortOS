@@ -1,4 +1,4 @@
-import { writeFile } from 'fs/promises';
+import { writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -378,7 +378,11 @@ final class ScreenshotTests: XCTestCase {
   await writeFile(join(repoPath, 'take_screenshots.sh'), generateScreenshotScript(targetName, bundleId));
   await writeFile(join(repoPath, 'take_screenshots_macos.sh'), generateMacScreenshotScript(targetName, bundleId));
 
-  await execAsync(`chmod +x "${join(repoPath, 'deploy.sh')}" "${join(repoPath, 'take_screenshots.sh')}" "${join(repoPath, 'take_screenshots_macos.sh')}"`, { windowsHide: true });
+  await Promise.all([
+    chmod(join(repoPath, 'deploy.sh'), 0o755),
+    chmod(join(repoPath, 'take_screenshots.sh'), 0o755),
+    chmod(join(repoPath, 'take_screenshots_macos.sh'), 0o755),
+  ]);
 
   // CLAUDE.md
   await writeFile(join(repoPath, 'CLAUDE.md'), `# ${name}

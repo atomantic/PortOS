@@ -108,8 +108,8 @@ else
     /usr/bin/sed -i '' "s/CURRENT_PROJECT_VERSION = \${CURRENT_BUILD};/CURRENT_PROJECT_VERSION = \${NEW_BUILD};/g" "$PROJECT/project.pbxproj"
 fi
 
-# Run tests (unless skipped)
-if ! $SKIP_TESTS; then
+# Run tests (unless skipped; only when building iOS since tests use iOS simulator)
+if ! $SKIP_TESTS && $BUILD_IOS; then
     echo "🧪 Running tests..."
     DESTINATION=$(
         SIMINFO=$(xcrun simctl list devices available -j | python3 -c "
