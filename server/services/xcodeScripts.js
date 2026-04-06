@@ -53,7 +53,7 @@ fi
 
 KEY_PATH="$APPSTORE_API_PRIVATE_KEY_PATH"
 # Expand ~ to $HOME (~ doesn't expand inside double quotes)
-KEY_PATH="\${KEY_PATH/#\\~/\$HOME}"
+KEY_PATH="\${KEY_PATH/#~/\$HOME}"
 
 if [ ! -f "$KEY_PATH" ]; then
     echo "❌ API key not found at: $KEY_PATH"
