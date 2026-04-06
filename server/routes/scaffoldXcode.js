@@ -65,6 +65,7 @@ targets:
     scheme:
       testTargets:
         - ${targetName}Tests
+        - ${targetName}UITests
 
   # --- macOS Target ---
   ${targetName} macOS:

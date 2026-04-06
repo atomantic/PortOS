@@ -24,7 +24,7 @@ export function hasDeployScript(app) {
  * Run deploy.sh for an Xcode app with real-time output streaming.
  *
  * @param {object} app - App object with repoPath, type, name
- * @param {string[]} flags - CLI flags (--ios, --macos, --all, --skip-tests)
+ * @param {string[]} flags - CLI flags (--ios, --macos, --watch, --all, --skip-tests)
  * @param {function} emit - Callback (type, data) for streaming output
  * @returns {Promise<{success: boolean, code: number}>}
  */

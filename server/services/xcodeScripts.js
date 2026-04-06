@@ -1,11 +1,12 @@
 import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { NON_PM2_TYPES } from './streamingDetect.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // Shared Xcode project constants
 export const XCODE_TEAM_ID = 'TYQ32QCF6K';
@@ -296,7 +297,7 @@ if $BUILD_WATCH; then
     echo "📦 Archiving watchOS..."
     xcodebuild archive \\
         -project "$PROJECT" \\
-        -scheme "${targetName} Watch" \\
+        -scheme "${targetName}_Watch" \\
         -configuration Release \\
         -destination 'generic/platform=watchOS' \\
         -archivePath "$ARCHIVE_WATCH" \\
@@ -851,6 +852,10 @@ export function checkScripts(app) {
  * Checks project.yml first, then falls back to .xcodeproj name, then app name.
  */
 async function deriveProjectInfo(repoPath, appName) {
+  if (process.platform === 'win32') {
+    return { targetName: toTargetName(appName), bundleId: toBundleId(appName) };
+  }
+
   const projectYml = join(repoPath, 'project.yml');
   if (existsSync(projectYml)) {
     const content = await readFile(projectYml, 'utf-8');
@@ -909,7 +914,7 @@ export async function installScripts(app, scriptNames) {
 
   // Batch chmod for all installed scripts
   if (installedPaths.length) {
-    await execAsync(`chmod +x ${installedPaths.map(p => `"${p}"`).join(' ')}`, { windowsHide: true });
+    await execFileAsync('chmod', ['+x', ...installedPaths]);
   }
 
   // Create .env.example if deploy.sh was installed and none exists

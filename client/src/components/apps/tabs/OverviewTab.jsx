@@ -58,9 +58,16 @@ export default function OverviewTab({ app, onRefresh }) {
     setInstallingScripts(false);
     if (result.error) {
       toast.error(result.error);
-    } else if (result.installed?.length) {
+      return;
+    }
+
+    if (result.installed?.length) {
       toast.success(`Installed: ${result.installed.join(', ')}`);
       onRefresh();
+    }
+
+    if (result.errors?.length) {
+      toast.error(`Some scripts could not be installed: ${result.errors.join(', ')}`);
     }
   };
 
