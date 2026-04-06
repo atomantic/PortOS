@@ -3,13 +3,14 @@ import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { ensureDir, ensureDirs } from '../lib/fileUtils.js';
+import { XCODE_TEAM_ID, toBundleId, toTargetName } from '../services/xcodeScripts.js';
 
 const execAsync = promisify(exec);
 
 export async function scaffoldIOS(repoPath, name, dirName, addStep) {
-  const bundleId = `net.shadowpuppet.${name.replace(/[^a-zA-Z0-9]/g, '')}`;
-  const teamId = 'TYQ32QCF6K';
-  const targetName = name.replace(/[^a-zA-Z0-9_]/g, '_');
+  const bundleId = toBundleId(name);
+  const teamId = XCODE_TEAM_ID;
+  const targetName = toTargetName(name);
 
   // project.yml (XcodeGen source of truth)
   await writeFile(join(repoPath, 'project.yml'), `name: ${targetName}

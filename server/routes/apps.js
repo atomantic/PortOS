@@ -18,6 +18,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
 import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
+import { checkScripts, installScripts } from '../services/xcodeScripts.js';
 
 const router = Router();
 
@@ -71,7 +72,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const enriched = await Promise.all(apps.map(async (app) => {
     // Non-PM2 apps skip PM2 enrichment entirely
     if (!usesPm2(app.type)) {
-      return { ...app, pm2Status: {}, overallStatus: 'n/a', hasDeployScript: hasDeployScript(app) };
+      return { ...app, pm2Status: {}, overallStatus: 'n/a', hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) };
     }
 
     const pm2Home = app.pm2Home || null;
@@ -183,7 +184,20 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     appVersion = pkg?.version || null;
   }
 
-  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses, appVersion, hasDeployScript: hasDeployScript(app) });
+  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, pm2Status: statuses, appVersion, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
+}));
+
+// POST /api/apps/:id/xcode-scripts/install - Install missing management scripts
+const installScriptsSchema = z.object({
+  scripts: z.array(z.string().min(1)).min(1)
+});
+router.post('/:id/xcode-scripts/install', loadApp, asyncHandler(async (req, res) => {
+  const { scripts } = validateRequest(installScriptsSchema, req.body);
+  const result = await installScripts(req.loadedApp, scripts);
+  if (result.errors.length && !result.installed.length) {
+    throw new ServerError(result.errors.join(', '), { status: 400, code: 'INSTALL_FAILED' });
+  }
+  res.json(result);
 }));
 
 // GET /api/apps/:id/icon - Serve the app's detected icon image
