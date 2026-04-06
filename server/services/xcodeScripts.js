@@ -142,7 +142,7 @@ for runtime, devices in data.get('devices', {}).items():
         if [ -n "$SIM_NAME" ] && [ -n "$SIM_OS" ]; then
             echo "platform=iOS Simulator,name=$SIM_NAME,OS=$SIM_OS"
         else
-            echo "platform=iOS Simulator,name=iPhone 16,OS=18.6"
+            echo "platform=iOS Simulator,name=iPhone 16"
         fi
     )
     xcodebuild test \\
@@ -417,10 +417,20 @@ CONFIG_FILE_TMP="/tmp/${targetName.toLowerCase()}_screenshot_config.json"
 DERIVED_DATA="$PROJECT_DIR/.build/DerivedData"
 BUNDLE_ID="${bundleId}"
 
+# Detect installed iOS simulator runtime version
+IOS_VERSION=$(xcrun simctl list runtimes -j 2>/dev/null | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for r in sorted(data.get('runtimes', []), key=lambda x: x.get('version', ''), reverse=True):
+    if r.get('isAvailable') and 'iOS' in r.get('name', ''):
+        print(r['version']); sys.exit(0)
+print('18.0')  # safe fallback
+" 2>/dev/null)
+
 # App Store Connect screenshot device specs
 # Format: "Simulator Name|OS version|folder_name|test_method"
-IPHONE_DEVICE="iPhone 16 Pro Max|18.6|iphone_6.7|testCaptureIPhoneScreenshots"
-IPAD_DEVICE="iPad Pro 13-inch (M4)|18.6|ipad_13|testCaptureIPadScreenshots"
+IPHONE_DEVICE="iPhone 16 Pro Max|\${IOS_VERSION}|iphone_6.7|testCaptureIPhoneScreenshots"
+IPAD_DEVICE="iPad Pro 13-inch (M4)|\${IOS_VERSION}|ipad_13|testCaptureIPadScreenshots"
 
 # Supported languages (add your app's localizations here)
 ALL_LANGUAGES=("en")

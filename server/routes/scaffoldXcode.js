@@ -171,7 +171,7 @@ targets:
   await writeFile(join(sharedDir, 'AppConstants.swift'), `import Foundation
 
 enum AppConstants {
-    static let appName = "${name}"
+    static let appName = "${targetName}"
     static let bundleId = "${bundleId}"
 }
 `);
@@ -363,7 +363,7 @@ final class ScreenshotTests: XCTestCase {
     private func takeScreenshot(named name: String, outputDir: String) {
         let screenshot = app.screenshot()
         let fm = FileManager.default
-        try? fm.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: outputDir, withIntermediateDirectories: true, attributes: nil)
         let path = "\\(outputDir)/\\(name).png"
         try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: path))
     }

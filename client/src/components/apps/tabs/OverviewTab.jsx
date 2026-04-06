@@ -54,12 +54,9 @@ export default function OverviewTab({ app, onRefresh }) {
 
   const handleInstallScripts = async (scriptNames) => {
     setInstallingScripts(true);
-    const result = await api.installXcodeScripts(app.id, scriptNames).catch(err => ({ error: err.message }));
+    const result = await api.installXcodeScripts(app.id, scriptNames).catch(() => null);
     setInstallingScripts(false);
-    if (result.error) {
-      toast.error(result.error);
-      return;
-    }
+    if (!result) return; // request() already showed error toast
 
     if (result.installed?.length) {
       toast.success(`Installed: ${result.installed.join(', ')}`);
