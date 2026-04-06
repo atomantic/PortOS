@@ -63,6 +63,7 @@ vi.mock('../services/xcodeScripts.js', () => ({
   installScripts: vi.fn(),
   XCODE_TEAM_ID: 'TEST_TEAM',
   XCODE_BUNDLE_PREFIX: 'net.test',
+  XCODE_SCRIPT_NAMES: ['deploy.sh', 'take_screenshots.sh', 'take_screenshots_macos.sh'],
   toBundleId: vi.fn(),
   toTargetName: vi.fn(),
   generateDeployScript: vi.fn(),
@@ -668,14 +669,25 @@ describe('Apps Routes', () => {
 
     it('should return 400 when all scripts fail', async () => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
-      installScripts.mockResolvedValue({ installed: [], skipped: [], errors: ['Unknown script: bad.sh'] });
+      installScripts.mockResolvedValue({ installed: [], skipped: [], errors: ['some failure'] });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh'] });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INSTALL_FAILED');
+    });
+
+    it('should return 400 when scripts array contains an unknown name', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
 
       const response = await request(app)
         .post('/api/apps/app-001/xcode-scripts/install')
         .send({ scripts: ['bad.sh'] });
 
+      // Unknown script names are now rejected by the Zod enum validator
       expect(response.status).toBe(400);
-      expect(response.body.code).toBe('INSTALL_FAILED');
     });
 
     it('should return 400 when scripts array is empty', async () => {
@@ -700,15 +712,19 @@ describe('Apps Routes', () => {
 
     it('should return partial success with errors', async () => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
-      installScripts.mockResolvedValue({ installed: ['deploy.sh'], skipped: [], errors: ['Unknown script: foo.sh'] });
+      installScripts.mockResolvedValue({
+        installed: ['deploy.sh'],
+        skipped: [],
+        errors: ['Script take_screenshots_macos.sh does not apply to ios-native apps']
+      });
 
       const response = await request(app)
         .post('/api/apps/app-001/xcode-scripts/install')
-        .send({ scripts: ['deploy.sh', 'foo.sh'] });
+        .send({ scripts: ['deploy.sh', 'take_screenshots_macos.sh'] });
 
       expect(response.status).toBe(200);
       expect(response.body.installed).toEqual(['deploy.sh']);
-      expect(response.body.errors).toEqual(['Unknown script: foo.sh']);
+      expect(response.body.errors).toHaveLength(1);
     });
 
     it('should return 400 when repoPath does not exist', async () => {

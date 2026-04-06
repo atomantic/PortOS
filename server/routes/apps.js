@@ -18,7 +18,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
 import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
-import { checkScripts, installScripts } from '../services/xcodeScripts.js';
+import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
 
 const router = Router();
 
@@ -189,8 +189,10 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
 }));
 
 // POST /api/apps/:id/xcode-scripts/install - Install missing management scripts
+// Restrict the request payload to the known, fixed set of script names so that
+// arbitrary or oversized arrays are rejected at the validation layer.
 const installScriptsSchema = z.object({
-  scripts: z.array(z.string().min(1)).min(1)
+  scripts: z.array(z.enum(XCODE_SCRIPT_NAMES)).min(1).max(XCODE_SCRIPT_NAMES.length)
 });
 router.post('/:id/xcode-scripts/install', loadApp, asyncHandler(async (req, res) => {
   const { scripts } = validateRequest(installScriptsSchema, req.body);

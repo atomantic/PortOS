@@ -119,6 +119,33 @@ describe('xcodeScripts', () => {
       const result = checkScripts({ type: 'macos-native', repoPath: '/tmp/test' });
       expect(result.missing.length).toBeGreaterThan(0);
     });
+
+    it('should not require macOS screenshot script for ios-native apps', () => {
+      existsSync.mockImplementation((path) => path === '/tmp/test');
+      const result = checkScripts({ type: 'ios-native', repoPath: '/tmp/test' });
+      const names = result.missing.map(m => m.name);
+      expect(names).toContain('deploy.sh');
+      expect(names).toContain('take_screenshots.sh');
+      expect(names).not.toContain('take_screenshots_macos.sh');
+    });
+
+    it('should not require iOS screenshot script for macos-native apps', () => {
+      existsSync.mockImplementation((path) => path === '/tmp/test');
+      const result = checkScripts({ type: 'macos-native', repoPath: '/tmp/test' });
+      const names = result.missing.map(m => m.name);
+      expect(names).toContain('deploy.sh');
+      expect(names).toContain('take_screenshots_macos.sh');
+      expect(names).not.toContain('take_screenshots.sh');
+    });
+
+    it('should require all three scripts for multi-platform xcode apps', () => {
+      existsSync.mockImplementation((path) => path === '/tmp/test');
+      const result = checkScripts({ type: 'xcode', repoPath: '/tmp/test' });
+      const names = result.missing.map(m => m.name);
+      expect(names).toEqual(
+        expect.arrayContaining(['deploy.sh', 'take_screenshots.sh', 'take_screenshots_macos.sh'])
+      );
+    });
   });
 
   describe('generateDeployScript', () => {
@@ -198,6 +225,26 @@ describe('xcodeScripts', () => {
       );
       expect(result.errors).toContain('Unknown script: nonsense.sh');
       expect(result.installed).toHaveLength(0);
+    });
+
+    it('refuses to install macOS screenshot script for ios-native app', async () => {
+      existsSync.mockImplementation(() => false);
+      const result = await installScripts(
+        { type: 'ios-native', repoPath: '/tmp/x', name: 'MyApp' },
+        ['take_screenshots_macos.sh']
+      );
+      expect(result.installed).toHaveLength(0);
+      expect(result.errors.some(e => e.includes('does not apply to ios-native'))).toBe(true);
+    });
+
+    it('refuses to install iOS screenshot script for macos-native app', async () => {
+      existsSync.mockImplementation(() => false);
+      const result = await installScripts(
+        { type: 'macos-native', repoPath: '/tmp/x', name: 'MyApp' },
+        ['take_screenshots.sh']
+      );
+      expect(result.installed).toHaveLength(0);
+      expect(result.errors.some(e => e.includes('does not apply to macos-native'))).toBe(true);
     });
 
     it('skips scripts that already exist (never overwrites)', async () => {

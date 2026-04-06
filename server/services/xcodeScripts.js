@@ -834,16 +834,55 @@ echo "If sidebar navigation failed, grant Accessibility permission to your termi
 
 /**
  * Management scripts that should exist in an Xcode project.
+ * Each script declares which app types it applies to so that platform-specific
+ * scripts (e.g. macOS-only screenshot automation) are not required for apps
+ * that have no corresponding target.
+ *
+ * Type semantics:
+ *   - 'xcode'        : multi-platform (iOS + macOS + watchOS) — all scripts apply
+ *   - 'ios-native'   : iOS only — deploy + iOS screenshots
+ *   - 'macos-native' : macOS only — deploy + macOS screenshots
+ *
  * Used by scaffold for generation and health check for detection.
  */
 export const XCODE_MANAGEMENT_SCRIPTS = [
-  { name: 'deploy.sh', description: 'TestFlight deployment', generator: generateDeployScript },
-  { name: 'take_screenshots.sh', description: 'iOS/iPad screenshot automation', generator: generateScreenshotScript },
-  { name: 'take_screenshots_macos.sh', description: 'macOS screenshot automation', generator: generateMacScreenshotScript }
+  {
+    name: 'deploy.sh',
+    description: 'TestFlight deployment',
+    generator: generateDeployScript,
+    appTypes: ['xcode', 'ios-native', 'macos-native']
+  },
+  {
+    name: 'take_screenshots.sh',
+    description: 'iOS/iPad screenshot automation',
+    generator: generateScreenshotScript,
+    appTypes: ['xcode', 'ios-native']
+  },
+  {
+    name: 'take_screenshots_macos.sh',
+    description: 'macOS screenshot automation',
+    generator: generateMacScreenshotScript,
+    appTypes: ['xcode', 'macos-native']
+  }
 ];
 
 /**
+ * Return the subset of management scripts that apply to a given app type.
+ */
+export function scriptsForAppType(appType) {
+  return XCODE_MANAGEMENT_SCRIPTS.filter(s => s.appTypes.includes(appType));
+}
+
+/**
+ * The set of script names installable via the API. Used by route validation
+ * to fail fast on bogus payloads instead of relying on installScripts to
+ * report unknowns one-by-one.
+ */
+export const XCODE_SCRIPT_NAMES = XCODE_MANAGEMENT_SCRIPTS.map(s => s.name);
+
+/**
  * Check which management scripts are missing from an Xcode app's repo.
+ * Only scripts that apply to the app's type are considered.
  * Returns { missing: [{name, description}], present: [{name, description}] }
  */
 export function checkScripts(app) {
@@ -854,7 +893,7 @@ export function checkScripts(app) {
   const missing = [];
   const present = [];
 
-  for (const script of XCODE_MANAGEMENT_SCRIPTS) {
+  for (const script of scriptsForAppType(app.type)) {
     const path = join(app.repoPath, script.name);
     if (existsSync(path)) {
       present.push({ name: script.name, description: script.description });
@@ -930,6 +969,10 @@ export async function installScripts(app, scriptNames) {
     const scriptDef = XCODE_MANAGEMENT_SCRIPTS.find(s => s.name === scriptName);
     if (!scriptDef) {
       errors.push(`Unknown script: ${scriptName}`);
+      continue;
+    }
+    if (!scriptDef.appTypes.includes(app.type)) {
+      errors.push(`Script ${scriptName} does not apply to ${app.type} apps`);
       continue;
     }
 
