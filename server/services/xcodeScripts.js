@@ -878,12 +878,16 @@ async function deriveProjectInfo(repoPath, appName) {
     const content = await readFile(projectYml, 'utf-8');
     // Strip wrapping quotes from YAML scalar values
     const stripQuotes = (s) => s?.replace(/^["']|["']$/g, '');
+    // Validate parsed values are safe for bash interpolation
+    const isValidTarget = (s) => /^[A-Za-z0-9_ -]+$/.test(s);
+    const isValidBundleId = (s) => /^[A-Za-z0-9.-]+$/.test(s);
     const nameMatch = content.match(/^name:\s*(.+)$/m);
-    const projectName = stripQuotes(nameMatch?.[1]?.trim());
+    const rawName = stripQuotes(nameMatch?.[1]?.trim());
+    const projectName = rawName && isValidTarget(rawName) ? rawName : null;
     // Find PRODUCT_BUNDLE_IDENTIFIER entries, skip test/watch targets
     const bundleIds = [...content.matchAll(/PRODUCT_BUNDLE_IDENTIFIER:\s*(.+)$/gm)]
       .map(m => stripQuotes(m[1].trim()))
-      .filter(id => id && !id.includes('Tests') && !id.includes('watchkitapp'));
+      .filter(id => id && isValidBundleId(id) && !id.includes('Tests') && !id.includes('watchkitapp'));
     const bundleId = bundleIds[0] || (projectName ? toBundleId(projectName) : toBundleId(appName));
     return {
       targetName: projectName || toTargetName(appName),
@@ -896,7 +900,9 @@ async function deriveProjectInfo(repoPath, appName) {
   const xcodeproj = stdout.trim().split('\n')[0];
   if (xcodeproj) {
     const target = xcodeproj.replace('.xcodeproj', '');
-    return { targetName: target, bundleId: toBundleId(target) };
+    if (/^[A-Za-z0-9_ -]+$/.test(target)) {
+      return { targetName: target, bundleId: toBundleId(target) };
+    }
   }
 
   return { targetName: toTargetName(appName), bundleId: toBundleId(appName) };
