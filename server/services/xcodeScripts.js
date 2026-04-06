@@ -875,11 +875,14 @@ async function deriveProjectInfo(repoPath, appName) {
     const content = await readFile(projectYml, 'utf-8');
     const nameMatch = content.match(/^name:\s*(.+)$/m);
     const projectName = nameMatch?.[1]?.trim();
-    // Derive bundle ID from the project name (not regex, which could match
-    // a watchOS or test target's PRODUCT_BUNDLE_IDENTIFIER instead of the primary one)
+    // Find PRODUCT_BUNDLE_IDENTIFIER entries, skip test/watch targets
+    const bundleIds = [...content.matchAll(/PRODUCT_BUNDLE_IDENTIFIER:\s*(.+)$/gm)]
+      .map(m => m[1].trim())
+      .filter(id => !id.includes('Tests') && !id.includes('watchkitapp'));
+    const bundleId = bundleIds[0] || (projectName ? toBundleId(projectName) : toBundleId(appName));
     return {
       targetName: projectName || toTargetName(appName),
-      bundleId: projectName ? toBundleId(projectName) : toBundleId(appName)
+      bundleId
     };
   }
 
