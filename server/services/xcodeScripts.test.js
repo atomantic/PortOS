@@ -363,8 +363,15 @@ describe('xcodeScripts', () => {
     });
 
     it('emits Windows-specific message when running on win32', async () => {
-      const originalPlatform = process.platform;
-      Object.defineProperty(process, 'platform', { value: 'win32' });
+      // Capture the original property descriptor so we can restore it exactly,
+      // and ensure our override is configurable so the restore can replace it.
+      const originalDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', {
+        value: 'win32',
+        configurable: true,
+        writable: true,
+        enumerable: true
+      });
       try {
         existsSync.mockImplementation(() => false);
         const result = await installScripts(
@@ -377,7 +384,10 @@ describe('xcodeScripts', () => {
         // execFile should NOT have been called for chmod on Windows
         expect(hoisted.execFileMock).not.toHaveBeenCalled();
       } finally {
-        Object.defineProperty(process, 'platform', { value: originalPlatform });
+        // Restore the exact original descriptor so no test state leaks
+        if (originalDescriptor) {
+          Object.defineProperty(process, 'platform', originalDescriptor);
+        }
       }
     });
   });
