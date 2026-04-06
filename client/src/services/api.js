@@ -27,6 +27,7 @@ export * from './apiGithub.js';
 export * from './apiLoops.js';
 export * from './apiMemory.js';
 export * from './apiBrain.js';
+export * from './apiNotes.js';
 export * from './apiDigitalTwin.js';
 export * from './apiMeatspace.js';
 export * from './apiOpenClaw.js';

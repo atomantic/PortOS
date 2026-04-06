@@ -101,6 +101,7 @@ const navItems = [
       { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
       { to: '/brain/links', label: 'Links', icon: Link2 },
       { to: '/brain/memory', label: 'Memory', icon: Database },
+      { to: '/brain/notes', label: 'Notes', icon: FileText },
       { to: '/brain/trust', label: 'Trust', icon: Shield }
     ]
   },

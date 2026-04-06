@@ -7,6 +7,12 @@
   - Shared module for cross-platform code, macOS entitlements, watchOS companion app
 - **Xcode script health check** — PortOS now detects missing management scripts (deploy, screenshots) in Xcode-managed apps and surfaces a banner in the app detail overview with one-click install
 - Deploy panel now includes `--watch` (watchOS) flag option
+- **Obsidian Notes Manager** in Brain section — browse, search, edit, and create notes in Obsidian vaults synced via iCloud
+  - Auto-detects Obsidian vaults from iCloud directory
+  - Vault browser with folder tree, search, tags panel, and markdown preview with wikilink navigation
+  - Inline note editor with Cmd+S save, backlinks panel, and frontmatter properties view
+  - Full-text search with context snippets and relevance ranking
+  - Link graph endpoint for vault-wide wikilink visualization
 
 ## Fixed
 
