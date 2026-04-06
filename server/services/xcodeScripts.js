@@ -13,7 +13,10 @@ const XCODE_TYPES = new Set(['ios-native', 'macos-native', 'xcode']);
 // Shared Xcode project constants
 export const XCODE_TEAM_ID = 'TYQ32QCF6K';
 export const XCODE_BUNDLE_PREFIX = 'net.shadowpuppet';
-export const toBundleId = (name) => `${XCODE_BUNDLE_PREFIX}.${name.replace(/[^a-zA-Z0-9]/g, '')}`;
+export const toBundleId = (name) => {
+  const sanitized = name.replace(/[^a-zA-Z0-9]/g, '');
+  return `${XCODE_BUNDLE_PREFIX}.${sanitized || 'app'}`;
+};
 export const toTargetName = (name) => name.replace(/[^a-zA-Z0-9_]/g, '_');
 
 export const XCODE_ENV_EXAMPLE = `TEAM_ID=${XCODE_TEAM_ID}
@@ -873,12 +876,14 @@ async function deriveProjectInfo(repoPath, appName) {
   const projectYml = join(repoPath, 'project.yml');
   if (existsSync(projectYml)) {
     const content = await readFile(projectYml, 'utf-8');
+    // Strip wrapping quotes from YAML scalar values
+    const stripQuotes = (s) => s?.replace(/^["']|["']$/g, '');
     const nameMatch = content.match(/^name:\s*(.+)$/m);
-    const projectName = nameMatch?.[1]?.trim();
+    const projectName = stripQuotes(nameMatch?.[1]?.trim());
     // Find PRODUCT_BUNDLE_IDENTIFIER entries, skip test/watch targets
     const bundleIds = [...content.matchAll(/PRODUCT_BUNDLE_IDENTIFIER:\s*(.+)$/gm)]
-      .map(m => m[1].trim())
-      .filter(id => !id.includes('Tests') && !id.includes('watchkitapp'));
+      .map(m => stripQuotes(m[1].trim()))
+      .filter(id => id && !id.includes('Tests') && !id.includes('watchkitapp'));
     const bundleId = bundleIds[0] || (projectName ? toBundleId(projectName) : toBundleId(appName));
     return {
       targetName: projectName || toTargetName(appName),
@@ -936,7 +941,9 @@ export async function installScripts(app, scriptNames) {
     if (process.platform === 'win32') {
       errors.push('Scripts installed but chmod is not supported on Windows');
     } else {
-      await execFileAsync('chmod', ['+x', ...installedPaths]);
+      await execFileAsync('chmod', ['+x', ...installedPaths]).catch(err => {
+        errors.push(`chmod failed: ${err.message}`);
+      });
     }
   }
 
