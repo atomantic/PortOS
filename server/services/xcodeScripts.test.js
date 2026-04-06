@@ -79,7 +79,8 @@ describe('xcodeScripts', () => {
     });
 
     it('should detect missing scripts for xcode apps', () => {
-      existsSync.mockReturnValue(false);
+      // First call checks repoPath exists (true), rest check script files (false)
+      existsSync.mockImplementation((path) => path === '/tmp/test');
       const result = checkScripts({ type: 'xcode', repoPath: '/tmp/test' });
       expect(result.missing.length).toBeGreaterThan(0);
       expect(result.present).toHaveLength(0);
@@ -92,14 +93,21 @@ describe('xcodeScripts', () => {
       expect(result.missing).toHaveLength(0);
     });
 
-    it('should work for ios-native type', () => {
+    it('should return empty arrays when repoPath does not exist', () => {
       existsSync.mockReturnValue(false);
+      const result = checkScripts({ type: 'xcode', repoPath: '/nonexistent' });
+      expect(result.missing).toHaveLength(0);
+      expect(result.present).toHaveLength(0);
+    });
+
+    it('should work for ios-native type', () => {
+      existsSync.mockImplementation((path) => path === '/tmp/test');
       const result = checkScripts({ type: 'ios-native', repoPath: '/tmp/test' });
       expect(result.missing.length).toBeGreaterThan(0);
     });
 
     it('should work for macos-native type', () => {
-      existsSync.mockReturnValue(false);
+      existsSync.mockImplementation((path) => path === '/tmp/test');
       const result = checkScripts({ type: 'macos-native', repoPath: '/tmp/test' });
       expect(result.missing.length).toBeGreaterThan(0);
     });

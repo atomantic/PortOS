@@ -194,6 +194,9 @@ const installScriptsSchema = z.object({
 });
 router.post('/:id/xcode-scripts/install', loadApp, asyncHandler(async (req, res) => {
   const { scripts } = validateRequest(installScriptsSchema, req.body);
+  if (!req.loadedApp.repoPath || !existsSync(req.loadedApp.repoPath)) {
+    throw new ServerError('App repository path not found', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
   const result = await installScripts(req.loadedApp, scripts);
   if (result.errors.length && !result.installed.length) {
     throw new ServerError(result.errors.join(', '), { status: 400, code: 'INSTALL_FAILED' });

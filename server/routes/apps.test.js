@@ -655,7 +655,7 @@ describe('Apps Routes', () => {
 
   describe('POST /api/apps/:id/xcode-scripts/install', () => {
     it('should install requested scripts successfully', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp/test' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
       installScripts.mockResolvedValue({ installed: ['deploy.sh'], skipped: [], errors: [] });
 
       const response = await request(app)
@@ -667,7 +667,7 @@ describe('Apps Routes', () => {
     });
 
     it('should return 400 when all scripts fail', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp/test' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
       installScripts.mockResolvedValue({ installed: [], skipped: [], errors: ['Unknown script: bad.sh'] });
 
       const response = await request(app)
@@ -679,7 +679,7 @@ describe('Apps Routes', () => {
     });
 
     it('should return 400 when scripts array is empty', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp/test' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
 
       const response = await request(app)
         .post('/api/apps/app-001/xcode-scripts/install')
@@ -699,7 +699,7 @@ describe('Apps Routes', () => {
     });
 
     it('should return partial success with errors', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp/test' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
       installScripts.mockResolvedValue({ installed: ['deploy.sh'], skipped: [], errors: ['Unknown script: foo.sh'] });
 
       const response = await request(app)
@@ -709,6 +709,17 @@ describe('Apps Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.installed).toEqual(['deploy.sh']);
       expect(response.body.errors).toEqual(['Unknown script: foo.sh']);
+    });
+
+    it('should return 400 when repoPath does not exist', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/nonexistent/path' });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh'] });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('PATH_NOT_FOUND');
     });
   });
 });

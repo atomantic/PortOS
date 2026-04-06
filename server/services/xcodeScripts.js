@@ -845,7 +845,7 @@ export const XCODE_MANAGEMENT_SCRIPTS = [
  * Returns { missing: [{name, description}], present: [{name, description}] }
  */
 export function checkScripts(app) {
-  if (!app?.repoPath || !XCODE_TYPES.has(app.type)) {
+  if (!app?.repoPath || !XCODE_TYPES.has(app.type) || !existsSync(app.repoPath)) {
     return { missing: [], present: [] };
   }
 
