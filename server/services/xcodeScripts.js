@@ -3,10 +3,12 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
-import { NON_PM2_TYPES } from './streamingDetect.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
+
+// Xcode-based app types (excludes 'swift' which is SPM-only, no .xcodeproj)
+const XCODE_TYPES = new Set(['ios-native', 'macos-native', 'xcode']);
 
 // Shared Xcode project constants
 export const XCODE_TEAM_ID = 'TYQ32QCF6K';
@@ -828,7 +830,7 @@ export const XCODE_MANAGEMENT_SCRIPTS = [
  * Returns { missing: [{name, description}], present: [{name, description}] }
  */
 export function checkScripts(app) {
-  if (!app?.repoPath || !NON_PM2_TYPES.has(app.type)) {
+  if (!app?.repoPath || !XCODE_TYPES.has(app.type)) {
     return { missing: [], present: [] };
   }
 
@@ -883,7 +885,7 @@ async function deriveProjectInfo(repoPath, appName) {
  * Only installs scripts that don't already exist (never overwrites).
  */
 export async function installScripts(app, scriptNames) {
-  if (!app?.repoPath || !NON_PM2_TYPES.has(app.type)) {
+  if (!app?.repoPath || !XCODE_TYPES.has(app.type)) {
     return { installed: [], skipped: [], errors: ['Not an Xcode app'] };
   }
 
@@ -914,7 +916,11 @@ export async function installScripts(app, scriptNames) {
 
   // Batch chmod for all installed scripts
   if (installedPaths.length) {
-    await execFileAsync('chmod', ['+x', ...installedPaths]);
+    if (process.platform === 'win32') {
+      errors.push('Scripts installed but chmod is not supported on Windows');
+    } else {
+      await execFileAsync('chmod', ['+x', ...installedPaths]);
+    }
   }
 
   // Create .env.example if deploy.sh was installed and none exists

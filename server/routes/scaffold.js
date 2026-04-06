@@ -13,6 +13,7 @@ import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldExpress } from './scaffoldExpress.js';
 import { scaffoldIOS } from './scaffoldIOS.js';
 import { scaffoldXcode } from './scaffoldXcode.js';
+import { toTargetName } from '../services/xcodeScripts.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';
 
 const execAsync = promisify(exec);
@@ -537,11 +538,12 @@ Thumbs.db
     pm2Names = [`${dirName}-ui`, `${dirName}-api`];
     startCmds = ['npm run dev:all'];
   } else if (template === 'ios-native') {
+    const tn = toTargetName(name);
     pm2Names = [];
-    startCmds = [`open ${name.replace(/[^a-zA-Z0-9_]/g, '_')}.xcodeproj`];
-    buildCmd = `xcodebuild build -project ${name.replace(/[^a-zA-Z0-9_]/g, '_')}.xcodeproj -scheme ${name.replace(/[^a-zA-Z0-9_]/g, '_')} -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO`;
+    startCmds = [`open ${tn}.xcodeproj`];
+    buildCmd = `xcodebuild build -project ${tn}.xcodeproj -scheme ${tn} -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO`;
   } else if (template === 'xcode-multiplatform') {
-    const tn = name.replace(/[^a-zA-Z0-9_]/g, '_');
+    const tn = toTargetName(name);
     pm2Names = [];
     startCmds = [`open ${tn}.xcodeproj`];
     buildCmd = `xcodebuild build -project ${tn}.xcodeproj -scheme ${tn} -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO`;
