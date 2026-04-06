@@ -66,6 +66,40 @@ describe('xcodeScripts', () => {
     it('should handle already clean names', () => {
       expect(toTargetName('MyApp')).toBe('MyApp');
     });
+
+    it('should produce a valid Swift identifier for names starting with digits', () => {
+      const targetName = toTargetName('123App');
+      expect(targetName).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+      expect(targetName).not.toBe('123App');
+      expect(targetName).toContain('123App');
+    });
+
+    it('should produce a valid identifier for purely numeric names', () => {
+      const targetName = toTargetName('123');
+      expect(targetName).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+    });
+
+    it('should not sanitize names to only underscores', () => {
+      const targetName = toTargetName('---');
+      expect(targetName).toBe('App');
+      expect(targetName).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+    });
+
+    it('should collapse runs of underscores from substituted characters', () => {
+      // 'My!@#App' -> 'My___App' -> 'My_App'
+      expect(toTargetName('My!@#App')).toBe('My_App');
+    });
+
+    it('should trim leading and trailing whitespace and underscores', () => {
+      expect(toTargetName('  My App  ')).toBe('My_App');
+      expect(toTargetName('___MyApp___')).toBe('MyApp');
+    });
+
+    it('should fall back to App for empty or null input', () => {
+      expect(toTargetName('')).toBe('App');
+      expect(toTargetName(null)).toBe('App');
+      expect(toTargetName(undefined)).toBe('App');
+    });
   });
 
   describe('checkScripts', () => {

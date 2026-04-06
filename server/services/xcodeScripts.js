@@ -17,12 +17,28 @@ export const toBundleId = (name) => {
   const sanitized = name.replace(/[^a-zA-Z0-9]/g, '');
   return `${XCODE_BUNDLE_PREFIX}.${sanitized || 'app'}`;
 };
-export const toTargetName = (name) => name.replace(/[^a-zA-Z0-9_]/g, '_');
+/**
+ * Convert an arbitrary app name into a valid Swift / Xcode target identifier.
+ * Identifiers must start with a letter or underscore and contain only
+ * [A-Za-z0-9_]. Names that sanitize to empty or start with a digit are
+ * prefixed with `App` so the generated Swift compiles cleanly.
+ */
+export const toTargetName = (name) => {
+  const sanitized = (name ?? '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (!sanitized) return 'App';
+  return /^[A-Za-z_]/.test(sanitized) ? sanitized : `App_${sanitized}`;
+};
 
+// Quote values that contain spaces because deploy.sh sources this file with
+// `source .env`; an unquoted value with spaces would be split on whitespace.
 export const XCODE_ENV_EXAMPLE = `TEAM_ID=${XCODE_TEAM_ID}
 APPSTORE_API_KEY_ID=YOUR_KEY_ID
 APPSTORE_ISSUER_ID=YOUR_ISSUER_ID
-APPSTORE_API_PRIVATE_KEY_PATH=~/Library/Mobile Documents/com~apple~CloudDocs/AppDev/AuthKey_XXXXXXXXXX.p8
+APPSTORE_API_PRIVATE_KEY_PATH="~/Library/Mobile Documents/com~apple~CloudDocs/AppDev/AuthKey_XXXXXXXXXX.p8"
 `;
 
 /**
