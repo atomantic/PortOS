@@ -359,14 +359,16 @@ fi
 
 echo "✅ Build $NEW_BUILD submitted to TestFlight ($PLATFORMS_BUILT platform(s))."
 
-# Commit the build number bump
-if [ "$PROJECT_MODE" = "xcodegen" ]; then
-    git add project.yml "$PROJECT/project.pbxproj"
-else
-    git add "$PROJECT/project.pbxproj"
+# Commit the build number bump (if in a git repo with changes)
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ "$PROJECT_MODE" = "xcodegen" ]; then
+        git add project.yml "$PROJECT/project.pbxproj" 2>/dev/null || true
+    else
+        git add "$PROJECT/project.pbxproj" 2>/dev/null || true
+    fi
+    git diff --cached --quiet || git commit -m "build: bump to build $NEW_BUILD"
+    echo "📝 Committed build number bump"
 fi
-git commit -m "build: bump to build $NEW_BUILD"
-echo "📝 Committed build number bump"
 
 # Clean up
 rm -rf "$BUILD_DIR"

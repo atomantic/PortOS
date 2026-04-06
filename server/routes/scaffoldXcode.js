@@ -378,11 +378,13 @@ final class ScreenshotTests: XCTestCase {
   await writeFile(join(repoPath, 'take_screenshots.sh'), generateScreenshotScript(targetName, bundleId));
   await writeFile(join(repoPath, 'take_screenshots_macos.sh'), generateMacScreenshotScript(targetName, bundleId));
 
-  await Promise.all([
-    chmod(join(repoPath, 'deploy.sh'), 0o755),
-    chmod(join(repoPath, 'take_screenshots.sh'), 0o755),
-    chmod(join(repoPath, 'take_screenshots_macos.sh'), 0o755),
-  ]);
+  if (process.platform !== 'win32') {
+    await Promise.all([
+      chmod(join(repoPath, 'deploy.sh'), 0o755),
+      chmod(join(repoPath, 'take_screenshots.sh'), 0o755),
+      chmod(join(repoPath, 'take_screenshots_macos.sh'), 0o755),
+    ]);
+  }
 
   // CLAUDE.md
   await writeFile(join(repoPath, 'CLAUDE.md'), `# ${name}
