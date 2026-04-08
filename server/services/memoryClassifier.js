@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { getMemories } from './memoryBackend.js';
 
 const MEMORY_CONFIG_FILE = join(PATHS.data, 'memory-classifier-config.json');
 
@@ -74,15 +75,38 @@ export async function updateConfig(updates) {
 }
 
 /**
+ * Load existing active + pending memories as a summary for the LLM prompt.
+ * Defense-in-depth: the LLM sees what's already stored so it avoids proposing
+ * duplicates. The backend dedup in memoryExtractor is the actual safety net.
+ */
+async function loadExistingMemorySummary() {
+  const [active, pending] = await Promise.all([
+    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30 })
+      .catch(() => ({ memories: [] })),
+    getMemories({ status: 'pending_approval', limit: 30 })
+      .catch(() => ({ memories: [] }))
+  ]);
+
+  const allMemories = [...active.memories, ...pending.memories];
+  if (allMemories.length === 0) return '';
+
+  const lines = allMemories.slice(0, 30).map(m => `- [${m.type}] ${(m.content || '').substring(0, 150)}`);
+  return lines.join('\n');
+}
+
+/**
  * Build the classification prompt
  */
 async function buildClassificationPrompt(task, agentOutput, config) {
   // Try to load the template
   const template = await getStageTemplate('memory-evaluate').catch(() => null);
 
+  // Load existing memories to inject into the prompt
+  const existingMemories = await loadExistingMemorySummary();
+
   if (!template) {
     // Fallback inline template
-    return buildFallbackPrompt(task, agentOutput);
+    return buildFallbackPrompt(task, agentOutput, existingMemories);
   }
 
   // Apply variables to template
@@ -91,7 +115,8 @@ async function buildClassificationPrompt(task, agentOutput, config) {
     taskDescription: task.description || 'No description',
     taskStatus: task.status || 'completed',
     appName: task.metadata?.app || 'PortOS',
-    agentOutput: agentOutput.substring(0, config.maxOutputLength || 10000)
+    agentOutput: agentOutput.substring(0, config.maxOutputLength || 10000),
+    existingMemories: existingMemories || 'No existing memories yet.'
   };
 
   let prompt = template;
@@ -105,13 +130,17 @@ async function buildClassificationPrompt(task, agentOutput, config) {
 /**
  * Fallback prompt if template not found
  */
-function buildFallbackPrompt(task, agentOutput) {
+function buildFallbackPrompt(task, agentOutput, existingMemories = '') {
+  const existingSection = existingMemories
+    ? `\n## Existing Memories (DO NOT duplicate these)\nThe following memories are already stored. Do NOT propose any memory that overlaps with or restates these:\n${existingMemories}\n`
+    : '';
+
   return `Analyze this agent output and extract memories about the USER — their values, preferences, work patterns, and qualities they care about.
 
 Task: ${task.description || 'Unknown task'}
 Output:
 ${agentOutput.substring(0, 8000)}
-
+${existingSection}
 Return JSON with memories array. Each memory should have:
 - type: preference|decision|learning
 - category: values|workflow|preferences|communication|aesthetics|patterns
@@ -126,8 +155,9 @@ DO NOT include:
 - Task completion summaries (that's git history)
 - Generic best practices any developer would know
 - One-time code observations or status assessments
+- Anything already captured in the existing memories listed above
 
-Most outputs should produce ZERO memories. Only extract when you observe something genuinely revealing about the user's values, preferences, or work patterns.
+Most outputs should produce ZERO memories. Only extract when you observe something genuinely revealing about the user's values, preferences, or work patterns that is NOT already stored.
 
 Return: {"memories": [...], "rejected": [...]}`;
 }
