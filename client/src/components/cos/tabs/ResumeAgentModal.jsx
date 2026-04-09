@@ -64,9 +64,10 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       app: formData.app,
       type: taskType,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined
+    }).then(() => {
+      onClose();
     }).catch(err => {
       toast.error(err?.message || 'Failed to resume agent');
-    }).finally(() => {
       submittingRef.current = false;
       setIsSubmitting(false);
     });
