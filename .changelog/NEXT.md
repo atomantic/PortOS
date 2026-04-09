@@ -16,6 +16,8 @@
 
 ## Fixed
 
+- **Simplify agent summary visibility** — completed agents that ran with `/simplify` now extract and display a separate "Task Summary" showing what the agent accomplished, so the original work summary is no longer buried under the simplify review output
+
 - **Memory dedup — duplicate approval requests** — memory extractor now checks existing active and pending memories (via vector similarity + text prefix matching) before proposing new ones, and the LLM classification prompt now includes existing memories so it avoids re-proposing semantically equivalent knowledge
 
 - **Xcode `deploy.sh` template — altool upload check false-positive** — generated deploy scripts grepped altool output for plain `ERROR: ` to detect upload failures, but altool's multipart uploader logs every transient retry as `ERROR: [ContentDelivery.Uploader.X] WILL RETRY PART N. Checksums do not match.` On flaky/slow networks the script killed deploys mid-recovery. Switched to Apple's definitive failure markers only: `UPLOAD FAILED|Validation failed \(|ERROR ITMS-|product-errors`. Affects iOS, macOS, and watchOS upload sections in `xcodeScripts.js`.

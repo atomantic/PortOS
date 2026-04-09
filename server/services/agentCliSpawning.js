@@ -20,6 +20,7 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
+import { persistSimplifySummaries } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
@@ -61,6 +62,8 @@ export function summarizeToolInput(toolName, input) {
       return input.todos?.length ? `${input.todos.length} items` : '';
     case 'NotebookEdit':
       return shorten(input.notebook_path);
+    case 'Skill':
+      return input.skill || '';
     default:
       return '';
   }
@@ -494,6 +497,10 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
+
+    if (success) {
+      await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
+    }
 
     await completeAgent(agentId, {
       success,

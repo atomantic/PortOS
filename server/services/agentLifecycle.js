@@ -650,6 +650,39 @@ export function extractFinalSummary(outputBuffer) {
   return summary || null;
 }
 
+const RE_SIMPLIFY_MARKER = /\/simplify/;
+const RE_SIMPLIFY_ACTION = /\b(run|running|launch|now)\b/i;
+
+export function extractSimplifySummaries(outputBuffer) {
+  if (!outputBuffer) return null;
+
+  const lines = outputBuffer.split('\n');
+  let simplifyIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (RE_SIMPLIFY_MARKER.test(lines[i]) && RE_SIMPLIFY_ACTION.test(lines[i])) {
+      simplifyIdx = i;
+      break;
+    }
+  }
+  if (simplifyIdx < 0) return null;
+
+  const taskSummary = extractFinalSummary(lines.slice(0, simplifyIdx).join('\n'));
+  const simplifySummary = extractFinalSummary(lines.slice(simplifyIdx + 1).join('\n'));
+  return { taskSummary, simplifySummary };
+}
+
+/**
+ * Persist task/simplify summaries for agents that ran with /simplify.
+ * Shared by handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
+ */
+export async function persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn) {
+  if (!isTruthyMetaFn(task.metadata?.simplify)) return;
+  const summaries = extractSimplifySummaries(outputBuffer);
+  if (summaries?.taskSummary) {
+    await updateAgent(agentId, { metadata: { taskSummary: summaries.taskSummary, simplifySummary: summaries.simplifySummary } });
+  }
+}
+
 /**
  * Extract a concise output summary for pipeline stage agents.
  * For review stages: reads the generated REVIEW.md from the workspace.
@@ -879,6 +912,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     if (summary) {
       await updateAgent(agentId, { metadata: { outputSummary: summary } });
     }
+  }
+
+  if (effectiveSuccess) {
+    await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMeta);
   }
 
   await completeAgent(agentId, {
