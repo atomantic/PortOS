@@ -25,3 +25,4 @@
 - CoS agents page crash: pipe characters (`|`) in task descriptions triggered infinite loop in markdown parser — non-table pipes now treated as normal text with safety fallback
 - CoS agents API returned full output arrays (600KB+) for all agents in listing — output now stripped from listing response and loaded on demand
 - **Resume Agent modal not dismissing** — clicking "Queue Resume Task" successfully queued the task but left the modal open; modal now closes on successful submit
+- **Pending task edit form unresponsive** — save/cancel buttons on the edit form for pending tasks did not respond to taps; dnd-kit's sortable wrapper interfered with pointer events inside sortable items. Sorting is now disabled while editing, pointer events are stopped from propagating through the edit form, and button touch targets are enlarged to 40px minimum height

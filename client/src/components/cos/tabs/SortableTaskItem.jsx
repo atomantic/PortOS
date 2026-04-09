@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import TaskItem from './TaskItem';
 
 export default function SortableTaskItem({ task, onRefresh, providers, durations, apps }) {
+  const [isEditing, setIsEditing] = useState(false);
   const {
     attributes,
     listeners,
@@ -10,7 +12,7 @@ export default function SortableTaskItem({ task, onRefresh, providers, durations
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: task.id, disabled: isEditing });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -27,7 +29,8 @@ export default function SortableTaskItem({ task, onRefresh, providers, durations
         providers={providers}
         durations={durations}
         apps={apps}
-        dragHandleProps={{ ...attributes, ...listeners }}
+        dragHandleProps={isEditing ? undefined : { ...attributes, ...listeners }}
+        onEditingChange={setIsEditing}
       />
     </div>
   );

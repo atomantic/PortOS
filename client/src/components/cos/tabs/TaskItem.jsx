@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Clock,
   Activity,
@@ -94,8 +94,12 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps, apps }) {
-  const [editing, setEditing] = useState(false);
+export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps, apps, onEditingChange }) {
+  const [editing, setEditingInternal] = useState(false);
+  const setEditing = useCallback((val) => {
+    setEditingInternal(val);
+    onEditingChange?.(val);
+  }, [onEditingChange]);
   const [editData, setEditData] = useState({
     description: task.description,
     context: task.metadata?.context || '',
@@ -283,7 +287,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           </div>
 
           {editing ? (
-            <div className="space-y-2">
+            <div className="space-y-2" onPointerDown={e => e.stopPropagation()}>
               <input
                 type="text"
                 value={editData.description}
@@ -324,15 +328,15 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
               <div className="flex gap-2">
                 <button
                   onClick={handleSave}
-                  className="flex items-center gap-1 text-xs text-port-success hover:text-port-success/80"
+                  className="flex items-center gap-1 text-sm px-3 py-2 min-h-[40px] text-port-success hover:text-port-success/80 bg-port-success/10 hover:bg-port-success/20 rounded transition-colors"
                 >
-                  <Save size={12} aria-hidden="true" /> Save
+                  <Save size={14} aria-hidden="true" /> Save
                 </button>
                 <button
                   onClick={() => setEditing(false)}
-                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-white"
+                  className="flex items-center gap-1 text-sm px-3 py-2 min-h-[40px] text-gray-400 hover:text-white bg-port-bg hover:bg-port-border rounded transition-colors"
                 >
-                  <X size={12} aria-hidden="true" /> Cancel
+                  <X size={14} aria-hidden="true" /> Cancel
                 </button>
               </div>
             </div>
