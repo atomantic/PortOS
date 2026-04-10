@@ -67,8 +67,10 @@ export function initSocket(io) {
         console.log(`🔍 Starting detection: ${data.path}`);
         await streamDetection(socket, data.path);
       } catch (err) {
-        console.error(`❌ Socket handler error [detect:start]: ${err.message}`);
-        socket.emit('error:server', { message: err.message });
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [detect:start]: ${message}`);
+        socket.emit('error:server', { message });
+        socket.emit('detect:complete', { success: false, error: message });
       }
     });
 
@@ -149,9 +151,10 @@ export function initSocket(io) {
 
         console.log(`✅ Standardization complete: ${result.filesModified.length} files modified`);
       } catch (err) {
-        console.error(`❌ Socket handler error [standardize:start]: ${err.message}`);
-        socket.emit('error:server', { message: err.message });
-        socket.emit('standardize:complete', { success: false, error: err.message });
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [standardize:start]: ${message}`);
+        socket.emit('error:server', { message });
+        socket.emit('standardize:complete', { success: false, error: message });
       }
     });
 
@@ -308,8 +311,9 @@ export function initSocket(io) {
           timestamp: Date.now()
         });
       } catch (err) {
-        console.error(`❌ Socket handler error [error:recover]: ${err.message}`);
-        socket.emit('error:server', { message: err.message });
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [error:recover]: ${message}`);
+        socket.emit('error:server', { message });
       }
     });
 
@@ -340,8 +344,9 @@ export function initSocket(io) {
           console.log(`✅ Socket update complete for ${app.name}`);
         }
       } catch (err) {
-        console.error(`❌ Socket handler error [app:update]: ${err.message}`);
-        socket.emit('app:update:error', { message: err.message });
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [app:update]: ${message}`);
+        socket.emit('app:update:error', { message });
         socket.emit('app:update:complete', { success: false, steps: [] });
       }
     });
@@ -414,8 +419,9 @@ export function initSocket(io) {
         });
         console.log(`✅ Socket standardize complete for ${app.name}`);
       } catch (err) {
-        console.error(`❌ Socket handler error [app:standardize]: ${err.message}`);
-        socket.emit('app:standardize:error', { message: err.message });
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [app:standardize]: ${message}`);
+        socket.emit('app:standardize:error', { message });
       }
     });
 

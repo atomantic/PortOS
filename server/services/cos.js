@@ -2993,19 +2993,19 @@ async function init() {
   // Autonomous job lifecycle → re-register/cancel individual job timers
   cosEvents.on('jobs:toggled', async ({ id }) => {
     if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
-      console.error(`❌ Failed to register job schedule on toggle for ${id}: ${err.message}`)
+      console.error(`❌ Failed to register job schedule on toggle for ${id}: ${err?.message ?? String(err)}`)
     );
   });
 
   cosEvents.on('jobs:updated', async ({ id }) => {
     if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
-      console.error(`❌ Failed to register job schedule on update for ${id}: ${err.message}`)
+      console.error(`❌ Failed to register job schedule on update for ${id}: ${err?.message ?? String(err)}`)
     );
   });
 
   cosEvents.on('jobs:created', async ({ id }) => {
     if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
-      console.error(`❌ Failed to register job schedule on create for ${id}: ${err.message}`)
+      console.error(`❌ Failed to register job schedule on create for ${id}: ${err?.message ?? String(err)}`)
     );
   });
 
@@ -3016,7 +3016,7 @@ async function init() {
   // Schedule changes → re-compute next improvement check
   cosEvents.on('schedule:changed', async () => {
     if (isDaemonRunning()) await scheduleNextImprovementCheck().catch(err =>
-      console.error(`❌ Failed to schedule next improvement check: ${err.message}`)
+      console.error(`❌ Failed to schedule next improvement check: ${err?.message ?? String(err)}`)
     );
   });
 
