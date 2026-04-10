@@ -240,7 +240,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
       if (validationResult.success) {
         classification = validationResult.data;
       } else {
-        console.error(`🧠 Classification validation failed: ${JSON.stringify(validationResult.error.errors)}`);
+        console.error(`🧠 Classification validation failed: ${validationResult.error.errors.length} issues, first: ${validationResult.error.errors[0]?.message}`);
         aiError = new Error('Invalid classification output from AI');
       }
     } else {

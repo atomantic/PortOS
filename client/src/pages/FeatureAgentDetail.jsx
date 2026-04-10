@@ -46,19 +46,19 @@ export default function FeatureAgentDetail() {
   }, [fetchAgent, id]);
 
   const handleStart = useCallback((agentId) => {
-    api.startFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(() => {});
+    api.startFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handlePause = useCallback((agentId) => {
-    api.pauseFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Paused'); }).catch(() => {});
+    api.pauseFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Paused'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleResume = useCallback((agentId) => {
-    api.resumeFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Resumed'); }).catch(() => {});
+    api.resumeFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Resumed'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleStop = useCallback((agentId) => {
-    api.stopFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(() => {});
+    api.stopFeatureAgent(agentId).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleTrigger = useCallback((agentId) => {
-    api.triggerFeatureAgent(agentId).then(() => toast.success('Run triggered')).catch(() => {});
+    api.triggerFeatureAgent(agentId).then(() => toast.success('Run triggered')).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handleSave = useCallback((saved) => {

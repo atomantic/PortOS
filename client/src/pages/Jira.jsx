@@ -43,7 +43,7 @@ export default function Jira() {
       const response = await api.get('/jira/instances');
       setInstances(response.instances || {});
     } catch (error) {
-      console.error('Failed to load JIRA instances:', error);
+      console.error(`Failed to load JIRA instances: ${error.message}`);
       toast.error(`Failed to load JIRA instances: ${error.message}`);
     } finally {
       setLoading(false);
@@ -102,13 +102,13 @@ export default function Jira() {
         apiToken: formData.apiToken
       };
 
-      await api.post('/jira/instances', payload);
+      const saved = await api.post('/jira/instances', payload);
 
       toast.success(`JIRA instance "${payload.name}" saved successfully`);
-      await loadInstances();
+      setInstances(prev => ({ ...prev, [saved.id]: saved }));
       handleCancel();
     } catch (error) {
-      console.error('Failed to save JIRA instance:', error);
+      console.error(`Failed to save JIRA instance: ${error.message}`);
       setSaveError(error.message);
       toast.error(`Failed to save: ${error.message}`);
     } finally {
@@ -127,9 +127,13 @@ export default function Jira() {
     try {
       await api.delete(`/jira/instances/${instanceId}`);
       toast.success(`JIRA instance "${instanceId}" deleted`);
-      await loadInstances();
+      setInstances(prev => {
+        const next = { ...prev };
+        delete next[instanceId];
+        return next;
+      });
     } catch (error) {
-      console.error('Failed to delete JIRA instance:', error);
+      console.error(`Failed to delete JIRA instance: ${error.message}`);
       toast.error(`Failed to delete: ${error.message}`);
     }
   };

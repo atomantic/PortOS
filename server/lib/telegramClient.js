@@ -8,6 +8,8 @@ import { EventEmitter } from 'events';
 const BASE_URL = 'https://api.telegram.org/bot';
 const POLL_TIMEOUT_SEC = 30;
 const API_TIMEOUT_MS = 10_000; // regular calls: sendMessage, editMessageText, etc.
+const RETRY_DELAY_API_ERROR_MS = 5_000;
+const RETRY_DELAY_NETWORK_ERROR_MS = 2_000;
 
 function buildUrl(token, method) {
   return `${BASE_URL}${token}/${method}`;
@@ -57,14 +59,14 @@ export function createTelegramBot(token, opts = {}) {
         const json = await res.json();
         if (!json.ok) {
           // Retry after a delay on API errors
-          await new Promise(r => setTimeout(r, 5000));
+          await new Promise(r => setTimeout(r, RETRY_DELAY_API_ERROR_MS));
           continue;
         }
         updates = json.result;
       } catch {
         // Aborted (stopPolling called) or network error
         if (!polling) break;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, RETRY_DELAY_NETWORK_ERROR_MS));
         continue;
       }
 

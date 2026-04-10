@@ -5,28 +5,12 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
-import { generateAvatar } from '../services/api';
+import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
 
-const request = async (endpoint, options = {}) => {
-  const response = await fetch(`/api/character${endpoint}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options
-  });
-  let data = null;
-  try { data = await response.json(); } catch { /* non-JSON body */ }
-  if (!response.ok) {
-    const message = data?.message || `Request failed with status ${response.status}`;
-    const error = new Error(message);
-    error.status = response.status;
-    throw error;
-  }
-  return data;
-};
-
-const get = () => request('');
-const post = (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) });
-const put = (body) => request('', { method: 'PUT', body: JSON.stringify(body) });
+const charGet = () => api.get('/character');
+const charPost = (path, body) => api.post(`/character${path}`, body);
+const charPut = (body) => api.put('/character', body);
 
 // D&D 5e XP thresholds (must match server)
 const XP_THRESHOLDS = [
@@ -91,7 +75,7 @@ export default function CharacterSheet() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const data = await get();
+      const data = await charGet();
       if (!data || data.error) {
         setLoadError('Failed to load character data');
         return;
@@ -143,7 +127,7 @@ export default function CharacterSheet() {
 
   const handleDamage = async () => {
     try {
-      const result = await post('/damage', { diceNotation: dmgDice, description: dmgDesc || undefined });
+      const result = await charPost('/damage', { diceNotation: dmgDice, description: dmgDesc || undefined });
       setChar(result.character);
       setActiveAction(null);
       setDmgDice('1d6');
@@ -153,14 +137,14 @@ export default function CharacterSheet() {
 
   const handleShortRest = async () => {
     try {
-      const result = await post('/rest', { type: 'short' });
+      const result = await charPost('/rest', { type: 'short' });
       setChar(result.character);
     } catch (err) { toast.error(err.message || 'Failed to take short rest'); }
   };
 
   const handleLongRest = async () => {
     try {
-      const result = await post('/rest', { type: 'long' });
+      const result = await charPost('/rest', { type: 'long' });
       setChar(result.character);
     } catch (err) { toast.error(err.message || 'Failed to take long rest'); }
   };
@@ -168,7 +152,7 @@ export default function CharacterSheet() {
   const handleAddXp = async () => {
     if (!xpAmount) return;
     try {
-      const result = await post('/xp', { amount: Number(xpAmount), source: 'manual', description: xpDesc || undefined });
+      const result = await charPost('/xp', { amount: Number(xpAmount), source: 'manual', description: xpDesc || undefined });
       setChar(result.character);
       setActiveAction(null);
       setXpAmount('');
@@ -182,7 +166,7 @@ export default function CharacterSheet() {
       const body = { description: evtDesc };
       if (evtXp) body.xp = Number(evtXp);
       if (evtDice) body.diceNotation = evtDice;
-      const result = await post('/event', body);
+      const result = await charPost('/event', body);
       setChar(result.character);
       setActiveAction(null);
       setEvtDesc('');
@@ -194,7 +178,7 @@ export default function CharacterSheet() {
   const handleSync = async (type) => {
     setSyncing(type);
     try {
-      const result = await post(`/sync/${type}`, {});
+      const result = await charPost(`/sync/${type}`, {});
       setChar(result.character);
     } catch (err) {
       toast.error(err.message || `Failed to sync ${type}`);
@@ -206,7 +190,7 @@ export default function CharacterSheet() {
   const handleNameSave = async () => {
     try {
       if (nameVal.trim() && nameVal !== char.name) {
-        const data = await put({ name: nameVal.trim() });
+        const data = await charPut({ name: nameVal.trim() });
         setChar(data);
       }
     } catch (err) { toast.error(err.message || 'Failed to save name'); }
@@ -216,7 +200,7 @@ export default function CharacterSheet() {
   const handleClassSave = async () => {
     try {
       if (classVal.trim() && classVal !== char.class) {
-        const data = await put({ class: classVal.trim() });
+        const data = await charPut({ class: classVal.trim() });
         setChar(data);
       }
     } catch (err) { toast.error(err.message || 'Failed to save class'); }

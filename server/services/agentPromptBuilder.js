@@ -405,7 +405,7 @@ export async function generateJiraTitle(description) {
     } else {
       executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onDone);
     }
-  }).catch(() => {});
+  }).catch(err => console.warn(`⚠️ JIRA title generation failed: ${err.message}`));
 
   title = title.trim().replace(/^["']|["']$/g, '');
   return title || fallback;
