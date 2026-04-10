@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, Image, X, Info } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
@@ -9,6 +9,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 
 export function RunnerPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [mode, setMode] = useState('ai'); // 'ai' or 'command'
   const [prompt, setPrompt] = useState('');
   const [command, setCommand] = useState('');
@@ -52,7 +53,7 @@ export function RunnerPage() {
         }
       }
       // Clear location state to prevent re-triggering on refresh
-      window.history.replaceState({}, document.title);
+      navigate(location.pathname, { replace: true, state: null });
     }
   }, [location.state, apps]);
 

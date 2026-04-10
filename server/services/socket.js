@@ -313,7 +313,7 @@ export function initSocket(io) {
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [error:recover]: ${message}`);
-        socket.emit('error:server', { message });
+        socket.emit('error:recover:error', { message });
       }
     });
 

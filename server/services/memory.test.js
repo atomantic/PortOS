@@ -22,9 +22,6 @@ vi.mock('../lib/uuid.js', () => ({
 vi.mock('./cosEvents.js', () => ({
   cosEvents: new EventEmitter()
 }));
-vi.mock('./cos.js', () => ({
-  cosEvents: new EventEmitter()
-}));
 
 // Mock vectorMath
 vi.mock('../lib/vectorMath.js', () => ({
