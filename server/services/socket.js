@@ -427,41 +427,34 @@ export function initSocket(io) {
 
     // App deploy handler — streams real-time output from deploy.sh
     socket.on('app:deploy', async (rawData) => {
-      const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
-      if (!data) return;
-
-      let app;
       try {
-        app = await appsService.getAppById(data.appId);
+        const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
+        if (!data) return;
+
+        const app = await appsService.getAppById(data.appId);
+        if (!app) {
+          socket.emit('app:deploy:error', { message: 'App not found' });
+          return;
+        }
+
+        if (!appDeployer.hasDeployScript(app)) {
+          socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
+          return;
+        }
+
+        console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
+        const emit = (type, payload) => {
+          socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
+        };
+
+        const result = await appDeployer.deployApp(app, data.flags, emit);
+        socket.emit('app:deploy:complete', { success: result.success, code: result.code });
+        console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
       } catch (err) {
-        socket.emit('app:deploy:error', { message: `Failed to look up app: ${err.message}` });
-        return;
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [app:deploy]: ${message}`);
+        socket.emit('app:deploy:error', { message });
       }
-      if (!app) {
-        socket.emit('app:deploy:error', { message: 'App not found' });
-        return;
-      }
-
-      if (!appDeployer.hasDeployScript(app)) {
-        socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
-        return;
-      }
-
-      console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
-      const emit = (type, payload) => {
-        socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
-      };
-
-      let result;
-      try {
-        result = await appDeployer.deployApp(app, data.flags, emit);
-      } catch (err) {
-        console.error(`❌ Deploy error for ${app.name}: ${err.message}`);
-        socket.emit('app:deploy:error', { message: err.message });
-        return;
-      }
-      socket.emit('app:deploy:complete', { success: result.success, code: result.code });
-      console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
     });
 
     // Shell session handlers
