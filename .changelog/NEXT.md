@@ -1,5 +1,6 @@
 ## Added
 
+- **Test coverage** for 7 previously untested modules: `commandSecurity`, `httpClient`, `platform`, `memoryBM25`, `notifications`, `search`, and `taskSchedule` — 171 new tests covering command validation, output redaction, HTTP client factory, BM25 memory indexing, notification CRUD, fan-out search, and task scheduling logic
 - **Xcode Multi-Platform template** — new "Xcode Multi-Platform" app template scaffolds a SwiftUI project with iOS, macOS, and watchOS targets via XcodeGen
   - Generic `deploy.sh` with `--ios`, `--macos`, `--watch`, `--all` flags for TestFlight deployment
   - Generic `take_screenshots.sh` and `take_screenshots_macos.sh` for App Store screenshot automation
