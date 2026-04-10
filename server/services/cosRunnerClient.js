@@ -12,7 +12,8 @@ const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
 
 // Socket.IO client for real-time events
 let socket = null;
-let eventHandlers = new Map();
+// Map of event name -> array of handlers (supports multiple listeners per event)
+const eventHandlers = new Map();
 
 /**
  * Initialize connection to CoS Runner
@@ -26,17 +27,19 @@ export function initCosRunnerConnection() {
     reconnectionDelay: 1000
   });
 
+  const dispatch = (event, data) => {
+    const handlers = eventHandlers.get(event);
+    if (handlers) handlers.forEach(h => h(data));
+  };
+
   socket.on('connect', () => {
     console.log('🔌 Connected to CoS Runner');
-    // Emit reconnect event so services can sync their state
-    const handler = eventHandlers.get('connection:ready');
-    if (handler) handler();
+    dispatch('connection:ready', undefined);
   });
 
   socket.on('disconnect', () => {
     console.log('🔌 Disconnected from CoS Runner');
-    const handler = eventHandlers.get('connection:lost');
-    if (handler) handler();
+    dispatch('connection:lost', undefined);
   });
 
   socket.on('connect_error', (err) => {
@@ -44,54 +47,26 @@ export function initCosRunnerConnection() {
   });
 
   // Forward events to registered handlers
-  socket.on('agent:output', (data) => {
-    const handler = eventHandlers.get('agent:output');
-    if (handler) handler(data);
-  });
-
-  socket.on('agent:completed', (data) => {
-    const handler = eventHandlers.get('agent:completed');
-    if (handler) handler(data);
-  });
-
-  socket.on('agent:error', (data) => {
-    const handler = eventHandlers.get('agent:error');
-    if (handler) handler(data);
-  });
-
-  socket.on('agent:btw', (data) => {
-    const handler = eventHandlers.get('agent:btw');
-    if (handler) handler(data);
-  });
+  socket.on('agent:output', (data) => dispatch('agent:output', data));
+  socket.on('agent:completed', (data) => dispatch('agent:completed', data));
+  socket.on('agent:error', (data) => dispatch('agent:error', data));
+  socket.on('agent:btw', (data) => dispatch('agent:btw', data));
 
   // Batch orphaned agents event (startup cleanup)
-  socket.on('agents:orphaned', (data) => {
-    const handler = eventHandlers.get('agents:orphaned');
-    if (handler) handler(data);
-  });
+  socket.on('agents:orphaned', (data) => dispatch('agents:orphaned', data));
 
   // Forward devtools run events to registered handlers
-  socket.on('run:data', (data) => {
-    const handler = eventHandlers.get('run:data');
-    if (handler) handler(data);
-  });
-
-  socket.on('run:complete', (data) => {
-    const handler = eventHandlers.get('run:complete');
-    if (handler) handler(data);
-  });
-
-  socket.on('run:error', (data) => {
-    const handler = eventHandlers.get('run:error');
-    if (handler) handler(data);
-  });
+  socket.on('run:data', (data) => dispatch('run:data', data));
+  socket.on('run:complete', (data) => dispatch('run:complete', data));
+  socket.on('run:error', (data) => dispatch('run:error', data));
 }
 
 /**
- * Register event handler
+ * Register event handler (multiple handlers per event are supported)
  */
 export function onCosRunnerEvent(event, handler) {
-  eventHandlers.set(event, handler);
+  if (!eventHandlers.has(event)) eventHandlers.set(event, []);
+  eventHandlers.get(event).push(handler);
 }
 
 /**

@@ -101,10 +101,14 @@ const parseFeed = (xml) => {
 
 export async function getFeeds() {
   const data = await store.load();
-  // Attach unread counts
+  // Pre-compute unread counts in one pass: O(I) instead of O(F×I)
+  const unreadCounts = new Map();
+  for (const item of data.items) {
+    if (!item.read) unreadCounts.set(item.feedId, (unreadCounts.get(item.feedId) || 0) + 1);
+  }
   return data.feeds.map(feed => ({
     ...feed,
-    unreadCount: data.items.filter(i => i.feedId === feed.id && !i.read).length
+    unreadCount: unreadCounts.get(feed.id) || 0
   }));
 }
 

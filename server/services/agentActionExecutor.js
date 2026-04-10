@@ -569,7 +569,11 @@ async function executeMoltworldInteract(client, account, params) {
  * Listens to scheduler events and executes actions
  */
 export function init() {
-  scheduleEvents.on('execute', async ({ scheduleId, schedule, timestamp }) => {
+  // Prevent duplicate listeners; safe to re-register after listeners are removed
+  if (scheduleEvents.listenerCount('execute') > 0) return;
+
+  scheduleEvents.on('execute', ({ scheduleId, schedule, timestamp }) => {
+    (async () => {
     console.log(`⚡ Executing scheduled action: ${schedule.action.type} (${scheduleId})`);
 
     // Get account with full credentials
@@ -656,6 +660,9 @@ export function init() {
       error,
       timestamp: new Date().toISOString(),
       durationMs: Date.now() - startTime
+    });
+    })().catch(err => {
+      console.error(`❌ Unhandled error in execute listener for schedule ${scheduleId}: ${err.message}`);
     });
   });
 
