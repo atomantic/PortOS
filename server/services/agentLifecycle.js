@@ -527,7 +527,7 @@ export async function spawnAgentForTask(task) {
 
   // Use CoS Runner if available, otherwise spawn directly
   if (useRunner) {
-    return spawnViaRunner(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, toolExecution.id, laneName);
+    return spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider, runId, cliConfig, executionId: toolExecution.id, laneName });
   }
 
   // Direct spawn mode (fallback)
@@ -571,7 +571,8 @@ export async function waitForRunnerStability() {
 /**
  * Spawn agent via CoS Runner (isolated PM2 process).
  */
-export async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, executionId, laneName) {
+export async function spawnViaRunner(agentId, task, opts) {
+  const { prompt, workspacePath, model, provider, runId, cliConfig, executionId, laneName } = opts;
   // Wait for runner to be stable to prevent orphaned agents during rolling restarts
   await waitForRunnerStability();
 

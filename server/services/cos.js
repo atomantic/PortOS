@@ -997,7 +997,7 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     }
 
     // Generate task description
-    const taskDesc = getAppImprovementTaskDescription(nextType, app);
+    const taskDesc = getTaskDescription(nextType, app.name);
     if (!taskDesc) continue;
 
     // Add to COS-TASKS.md
@@ -1025,9 +1025,31 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 }
 
 /**
- * Get task description for a self-improvement type
+ * Get task description for a self-improvement or app improvement type.
+ * When appName is provided, returns app-scoped descriptions; otherwise returns PortOS self-improvement descriptions.
  */
-function getSelfImprovementTaskDescription(taskType) {
+function getTaskDescription(taskType, appName) {
+  if (appName) {
+    const descriptions = {
+      'security': `Security audit for ${appName}: check for vulnerabilities`,
+      'code-quality': `Code quality review for ${appName}: DRY violations, dead code`,
+      'test-coverage': `Add missing tests for ${appName}`,
+      'performance': `Performance optimization for ${appName}`,
+      'accessibility': `Accessibility audit for ${appName}`,
+      'console-errors': `Fix console errors in ${appName}`,
+      'dependency-updates': `Update dependencies for ${appName}`,
+      'documentation': `Update documentation for ${appName}`,
+      'error-handling': `Improve error handling in ${appName}`,
+      'typing': `Add/fix TypeScript types in ${appName}`,
+      'ui-bugs': `Review UI for visual bugs in ${appName}`,
+      'mobile-responsive': `Check mobile responsiveness of ${appName}`,
+      'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
+      'release-check': `Verify release readiness for ${appName}`,
+      'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
+      'jira-status-report': `Generate JIRA weekly status report for ${appName}`
+    };
+    return descriptions[taskType] ?? null;
+  }
   const descriptions = {
     'ui-bugs': 'Review UI for visual bugs, layout issues, and UX improvements',
     'mobile-responsive': 'Check mobile responsiveness and fix layout issues on smaller screens',
@@ -1046,32 +1068,7 @@ function getSelfImprovementTaskDescription(taskType) {
     'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
     'jira-status-report': 'Generate JIRA weekly status report'
   };
-  return descriptions[taskType] || null;
-}
-
-/**
- * Get task description for an app improvement type
- */
-function getAppImprovementTaskDescription(taskType, app) {
-  const descriptions = {
-    'security': `Security audit for ${app.name}: check for vulnerabilities`,
-    'code-quality': `Code quality review for ${app.name}: DRY violations, dead code`,
-    'test-coverage': `Add missing tests for ${app.name}`,
-    'performance': `Performance optimization for ${app.name}`,
-    'accessibility': `Accessibility audit for ${app.name}`,
-    'console-errors': `Fix console errors in ${app.name}`,
-    'dependency-updates': `Update dependencies for ${app.name}`,
-    'documentation': `Update documentation for ${app.name}`,
-    'error-handling': `Improve error handling in ${app.name}`,
-    'typing': `Add/fix TypeScript types in ${app.name}`,
-    'ui-bugs': `Review UI for visual bugs in ${app.name}`,
-    'mobile-responsive': `Check mobile responsiveness of ${app.name}`,
-    'feature-ideas': `Implement a feature idea for ${app.name} aligned with GOALS.md and PLAN.md (worktree+PR)`,
-    'release-check': `Verify release readiness for ${app.name}`,
-    'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${app.name} (worktree+PR)`,
-    'jira-status-report': `Generate JIRA weekly status report for ${app.name}`
-  };
-  return descriptions[taskType] || null;
+  return descriptions[taskType] ?? null;
 }
 
 // Unified improvement task types (rotates through these)
@@ -2995,15 +2992,21 @@ async function init() {
 
   // Autonomous job lifecycle → re-register/cancel individual job timers
   cosEvents.on('jobs:toggled', async ({ id }) => {
-    if (isDaemonRunning()) await registerSingleJobSchedule(id);
+    if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
+      console.error(`❌ Failed to register job schedule on toggle for ${id}: ${err.message}`)
+    );
   });
 
   cosEvents.on('jobs:updated', async ({ id }) => {
-    if (isDaemonRunning()) await registerSingleJobSchedule(id);
+    if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
+      console.error(`❌ Failed to register job schedule on update for ${id}: ${err.message}`)
+    );
   });
 
   cosEvents.on('jobs:created', async ({ id }) => {
-    if (isDaemonRunning()) await registerSingleJobSchedule(id);
+    if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
+      console.error(`❌ Failed to register job schedule on create for ${id}: ${err.message}`)
+    );
   });
 
   cosEvents.on('jobs:deleted', async ({ id }) => {
@@ -3012,7 +3015,9 @@ async function init() {
 
   // Schedule changes → re-compute next improvement check
   cosEvents.on('schedule:changed', async () => {
-    if (isDaemonRunning()) await scheduleNextImprovementCheck();
+    if (isDaemonRunning()) await scheduleNextImprovementCheck().catch(err =>
+      console.error(`❌ Failed to schedule next improvement check: ${err.message}`)
+    );
   });
 
   const state = await loadState();

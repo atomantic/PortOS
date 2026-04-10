@@ -9,7 +9,7 @@
 
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
-import { cosEvents } from './cos.js';
+import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 import { getInstanceId } from './instances.js';
