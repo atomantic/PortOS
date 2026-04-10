@@ -303,7 +303,7 @@ export function RunsHistoryPage() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard.writeText(run.id);
+                              navigator.clipboard?.writeText(run.id).catch(() => {});
                             }}
                             className="p-1 text-gray-500 hover:text-white transition-colors"
                             title="Copy execution ID"
