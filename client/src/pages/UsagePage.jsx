@@ -33,7 +33,7 @@ export function UsagePage() {
     return <div className="text-center py-8 text-gray-500">No usage data available</div>;
   }
 
-  const maxActivity = Math.max(...(usage.last7Days?.map(d => d.sessions) || [1]));
+  const maxActivity = Math.max(1, ...(usage.last7Days?.map(d => d.sessions) || []));
 
   return (
     <div className="space-y-6">
@@ -85,18 +85,18 @@ export function UsagePage() {
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Hourly Distribution</h3>
           <div className="flex items-end gap-0.5 h-24 sm:h-32">
-            {usage.hourlyActivity?.map((count, hour) => {
-              const maxHour = Math.max(...usage.hourlyActivity);
-              return (
+            {(() => {
+              const maxHour = Math.max(1, ...(usage.hourlyActivity || []));
+              return usage.hourlyActivity?.map((count, hour) => (
                 <div key={hour} className="flex-1 flex flex-col items-center">
                   <div
                     className="w-full bg-port-accent/40 rounded-t"
-                    style={{ height: `${(count / (maxHour || 1)) * 100}%`, minHeight: count > 0 ? 2 : 0 }}
+                    style={{ height: `${(count / maxHour) * 100}%`, minHeight: count > 0 ? 2 : 0 }}
                     title={`${hour}:00 - ${count} sessions`}
                   />
                 </div>
-              );
-            })}
+              ));
+            })()}
           </div>
           <div className="flex justify-between text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">
             <span>12am</span>

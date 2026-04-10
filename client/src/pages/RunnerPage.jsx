@@ -65,13 +65,18 @@ export function RunnerPage() {
       // Filter out PortOS Autofixer (it's part of PortOS project)
       const filteredApps = appsData.filter(a => a.id !== 'portos-autofixer');
       setApps(filteredApps);
-      // Set PortOS as default workspace (exact name match)
-      const portosApp = filteredApps.find(a => a.name === 'PortOS');
-      if (portosApp) {
-        setSelectedAppId(portosApp.id);
-      } else if (filteredApps.length > 0) {
-        setSelectedAppId(filteredApps[0].id);
-      }
+      // Set workspace: prefer continuation context, then PortOS, then first app
+      setSelectedAppId(prev => {
+        if (prev) return prev;
+        const continueWorkspacePath = location.state?.continueFrom?.workspacePath;
+        if (continueWorkspacePath) {
+          const continueApp = filteredApps.find(a => a.repoPath === continueWorkspacePath);
+          if (continueApp) return continueApp.id;
+        }
+        const portosApp = filteredApps.find(a => a.name === 'PortOS');
+        if (portosApp) return portosApp.id;
+        return filteredApps.length > 0 ? filteredApps[0].id : prev;
+      });
       const allProviders = providersRes.providers || [];
       const enabledProviders = allProviders.filter(p => p.enabled);
       setProviders(enabledProviders);
