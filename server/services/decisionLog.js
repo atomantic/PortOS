@@ -7,7 +7,6 @@
  */
 
 import { writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
@@ -54,9 +53,7 @@ async function loadDecisions() {
     return decisionCache;
   }
 
-  if (!existsSync(DATA_DIR)) {
-    await ensureDir(DATA_DIR);
-  }
+  await ensureDir(DATA_DIR);
 
   decisionCache = await readJSONFile(DECISION_FILE, { ...DEFAULT_DATA });
   cacheLoaded = true;

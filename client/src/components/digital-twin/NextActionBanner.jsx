@@ -80,7 +80,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
 
   const loadQuestion = useCallback(async (category, skipList = []) => {
     setLoading(true);
-    const q = await api.getSoulEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
+    const q = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
       setCurrentGapIdx(prev => {

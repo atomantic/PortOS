@@ -1,76 +1,11 @@
-import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { listWorktrees } from './worktreeManager.js';
+export { execGit } from '../lib/execGit.js';
+import { execGit } from '../lib/execGit.js';
 
 const PROTECTED_BRANCHES = ['main', 'master', 'dev', 'develop', 'release'];
-
-/**
- * Execute a git command safely using spawn (prevents shell injection)
- * @param {string[]} args - Git command arguments
- * @param {string} cwd - Working directory
- * @param {object} options - Additional options
- * @returns {Promise<{stdout: string, stderr: string, exitCode: number}>}
- */
-function execGit(args, cwd, options = {}) {
-  return new Promise((resolve, reject) => {
-    const maxBuffer = options.maxBuffer || 10 * 1024 * 1024;
-    const timeout = options.timeout || 30000;
-    const child = spawn('git', args, {
-      cwd,
-      shell: process.platform === 'win32',
-      windowsHide: true
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let killed = false;
-
-    const timer = setTimeout(() => {
-      if (!killed) {
-        killed = true;
-        child.kill();
-        reject(new Error(`git command timed out after ${timeout / 1000}s: git ${args.join(' ')}`));
-      }
-    }, timeout);
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-      if (stdout.length + stderr.length > maxBuffer && !killed) {
-        killed = true;
-        clearTimeout(timer);
-        child.kill();
-        reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
-      }
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-      if (stdout.length + stderr.length > maxBuffer && !killed) {
-        killed = true;
-        clearTimeout(timer);
-        child.kill();
-        reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
-      }
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (killed) return;
-      if (code !== 0 && !options.ignoreExitCode) {
-        reject(new Error(stderr || `git exited with code ${code}`));
-      } else {
-        resolve({ stdout, stderr, exitCode: code });
-      }
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
-}
 
 // Like execGit but catches rejections (e.g. timeout) into a failed-result shape
 const execGitSafe = (args, cwd, options) =>

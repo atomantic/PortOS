@@ -71,10 +71,7 @@ const DEFAULT_META = {
  * Ensure brain data directory exists
  */
 export async function ensureBrainDir() {
-  if (!existsSync(DATA_DIR)) {
-    await ensureDir(DATA_DIR);
-    console.log(`🧠 Created brain data directory: ${DATA_DIR}`);
-  }
+  await ensureDir(DATA_DIR);
 }
 
 /**

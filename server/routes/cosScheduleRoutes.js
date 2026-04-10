@@ -83,29 +83,6 @@ router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   res.json({ success: true, taskType, interval: result });
 }));
 
-// Deprecated aliases — delegate to unified endpoints
-router.get('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  const interval = await taskSchedule.getTaskInterval(taskType);
-  const shouldRun = await taskSchedule.shouldRunTask(taskType);
-  res.json({ taskType, interval, shouldRun });
-}));
-router.put('/schedule/self-improvement/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  const result = await taskSchedule.updateTaskInterval(taskType, pickScheduleSettings(req.body));
-  res.json({ success: true, taskType, interval: result });
-}));
-router.get('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  const interval = await taskSchedule.getTaskInterval(taskType);
-  res.json({ taskType, interval });
-}));
-router.put('/schedule/app-improvement/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  const result = await taskSchedule.updateTaskInterval(taskType, pickScheduleSettings(req.body));
-  res.json({ success: true, taskType, interval: result });
-}));
-
 // GET /api/cos/schedule/due - Get all tasks that are due to run
 router.get('/schedule/due', asyncHandler(async (req, res) => {
   const tasks = await taskSchedule.getDueTasks();

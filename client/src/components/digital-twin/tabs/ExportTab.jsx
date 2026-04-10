@@ -38,8 +38,8 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
   const loadData = async () => {
     setLoading(true);
     const [docsData, formatsData] = await Promise.all([
-      api.getSoulDocuments().catch(() => []),
-      api.getSoulExportFormats().catch(() => [])
+      api.getDigitalTwinDocuments().catch(() => []),
+      api.getDigitalTwinExportFormats().catch(() => [])
     ]);
     setDocuments(docsData);
     setFormats(formatsData);

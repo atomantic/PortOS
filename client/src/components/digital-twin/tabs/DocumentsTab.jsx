@@ -34,13 +34,13 @@ export default function DocumentsTab({ onRefresh }) {
 
   const loadDocuments = async () => {
     setLoading(true);
-    const docs = await api.getSoulDocuments().catch(() => []);
+    const docs = await api.getDigitalTwinDocuments().catch(() => []);
     setDocuments(docs);
     setLoading(false);
   };
 
   const loadDocument = async (id) => {
-    const doc = await api.getSoulDocument(id);
+    const doc = await api.getDigitalTwinDocument(id);
     setSelectedDoc(doc);
     setEditContent(doc.content);
     setEditMode(false);

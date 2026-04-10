@@ -9,36 +9,15 @@
  * and the branch cleaned up.
  */
 
-import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { readdir, readFile, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { execGit } from '../lib/execGit.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
 // Lockfiles that npm/yarn/pnpm modify as a side-effect — safe to discard during worktree cleanup
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
-
-/**
- * Execute a git command and return stdout
- */
-function execGit(args, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd, shell: false, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', d => { stdout += d.toString(); });
-    child.stderr.on('data', d => { stderr += d.toString(); });
-    child.on('close', code => {
-      if (code !== 0) {
-        reject(new Error(stderr || `git exited with code ${code}`));
-      } else {
-        resolve(stdout);
-      }
-    });
-    child.on('error', reject);
-  });
-}
 
 /**
  * Create a git worktree for an agent.
@@ -72,11 +51,11 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
   // Determine the base: explicit option > detected default branch > current HEAD
   let baseBranch = options.baseBranch;
   if (!baseBranch) {
-    const mainExists = (await execGit(['branch', '--list', 'main'], sourceWorkspace)).trim();
-    const masterExists = (await execGit(['branch', '--list', 'master'], sourceWorkspace)).trim();
+    const mainExists = (await execGit(['branch', '--list', 'main'], sourceWorkspace)).stdout.trim();
+    const masterExists = (await execGit(['branch', '--list', 'master'], sourceWorkspace)).stdout.trim();
     if (mainExists) baseBranch = 'main';
     else if (masterExists) baseBranch = 'master';
-    else baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).trim();
+    else baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).stdout.trim();
   }
 
   // Prefer the remote ref (freshest state) if available
@@ -122,7 +101,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // In that case, git status would report the parent repo's dirty files, causing us to
   // incorrectly preserve the worktree.
   const detectedToplevel = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
-    .then(s => s.trim())
+    .then(r => r.stdout.trim())
     .catch(() => null);
   if (detectedToplevel && detectedToplevel !== worktreePath) {
     console.log(`🌳 Worktree ${agentId} resolves to ${detectedToplevel} instead of ${worktreePath} — broken worktree, removing`);
@@ -137,7 +116,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // Also fail closed if git status itself fails — treat unknown state as dirty.
   let dirtyFiles;
   try {
-    dirtyFiles = (await execGit(['status', '--porcelain'], worktreePath)).trim();
+    dirtyFiles = (await execGit(['status', '--porcelain'], worktreePath)).stdout.trim();
   } catch (err) {
     console.log(`⚠️ git status failed for worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
     warnings.push(`Worktree preserved — git status failed: ${err.message}`);
@@ -169,12 +148,12 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     const currentBranch = (await execGit(
       ['rev-parse', '--abbrev-ref', 'HEAD'],
       sourceWorkspace
-    )).trim();
+    )).stdout.trim();
 
     commitsAhead = parseInt((await execGit(
       ['rev-list', '--count', `${currentBranch}..${branchName}`],
       sourceWorkspace
-    ).catch(() => '0')).trim(), 10) || 0;
+    ).catch(() => ({ stdout: '0' }))).stdout.trim(), 10) || 0;
 
     if (commitsAhead > 0) {
       await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
@@ -232,8 +211,8 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
     .catch(() => baseBranch);
 
   // Check if branch already exists (local or remote)
-  const localBranchExists = (await execGit(['branch', '--list', branchName], sourceWorkspace)).trim();
-  const remoteBranchExists = (await execGit(['branch', '-r', '--list', `origin/${branchName}`], sourceWorkspace)).trim();
+  const localBranchExists = (await execGit(['branch', '--list', branchName], sourceWorkspace)).stdout.trim();
+  const remoteBranchExists = (await execGit(['branch', '-r', '--list', `origin/${branchName}`], sourceWorkspace)).stdout.trim();
 
   if (localBranchExists) {
     // Local branch exists - create worktree from existing branch
@@ -306,7 +285,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch = 
  * List all active worktrees for the repository
  */
 export async function listWorktrees(sourceWorkspace) {
-  const stdout = await execGit(['worktree', 'list', '--porcelain'], sourceWorkspace);
+  const { stdout } = await execGit(['worktree', 'list', '--porcelain'], sourceWorkspace);
   const worktrees = [];
   let current = {};
 
@@ -421,7 +400,7 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
     // Clean via the parent repo's git
     console.log(`🌳 Cleaning external worktree ${agentId} from ${parentRepo}`);
     const branchName = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)
-      .then(b => b.trim())
+      .then(r => r.stdout.trim())
       .catch(() => '');
 
     await execGit(['worktree', 'remove', worktreePath, '--force'], parentRepo)

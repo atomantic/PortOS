@@ -6,36 +6,15 @@
  * use a git worktree for isolation.
  */
 
-import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
-
-/**
- * Execute a git command and return stdout
- */
-function execGit(args, cwd) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd, shell: false, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', d => { stdout += d.toString(); });
-    child.stderr.on('data', d => { stderr += d.toString(); });
-    child.on('close', code => {
-      if (code !== 0) {
-        reject(new Error(stderr || `git exited with code ${code}`));
-      } else {
-        resolve(stdout);
-      }
-    });
-    child.on('error', reject);
-  });
-}
+import { execGit } from '../lib/execGit.js';
 
 /**
  * Get list of files modified in the working tree (unstaged + staged + untracked)
  */
 async function getModifiedFiles(workspacePath) {
-  const stdout = await execGit(['status', '--porcelain'], workspacePath);
+  const { stdout } = await execGit(['status', '--porcelain'], workspacePath);
   return stdout.trim().split('\n')
     .filter(Boolean)
     .map(line => line.substring(3).trim());
@@ -46,10 +25,10 @@ async function getModifiedFiles(workspacePath) {
  */
 async function isGitRepo(workspacePath) {
   if (!existsSync(join(workspacePath, '.git'))) return false;
-  const stdout = await execGit(
+  const { stdout } = await execGit(
     ['rev-parse', '--is-inside-work-tree'],
     workspacePath
-  ).catch(() => 'false');
+  ).catch(() => ({ stdout: 'false' }));
   return stdout.trim() === 'true';
 }
 
