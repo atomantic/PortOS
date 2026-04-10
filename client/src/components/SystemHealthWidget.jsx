@@ -5,6 +5,7 @@ import {
   Server,
   Cpu,
   HardDrive,
+  Database,
   ChevronRight,
   AlertTriangle,
   CheckCircle,
@@ -121,7 +122,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {/* Memory Usage */}
         <div className="bg-port-bg/50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
@@ -205,6 +206,28 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
             )}
           </div>
         </div>
+
+        {/* Disk Usage */}
+        {system.disk && (
+          <div className="bg-port-bg/50 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Database size={14} className="text-cyan-400" />
+              <span className="text-xs text-gray-500">Disk</span>
+            </div>
+            <div className={`text-lg sm:text-xl font-bold ${getUsageColor(system.disk.usagePercent)}`}>
+              {system.disk.usagePercent}%
+            </div>
+            <div className="text-xs text-gray-500">
+              {system.disk.usedFormatted} / {system.disk.totalFormatted}
+            </div>
+            <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${getBarColor(system.disk.usagePercent)}`}
+                style={{ width: `${system.disk.usagePercent}%` }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* CoS Status (if running) */}

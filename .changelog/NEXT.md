@@ -14,6 +14,7 @@
   - Inline note editor with Cmd+S save, backlinks panel, and frontmatter properties view
   - Full-text search with context snippets and relevance ranking
   - Link graph endpoint for vault-wide wikilink visualization
+- **Disk usage monitoring** on dashboard — system health endpoint now reports root filesystem disk usage (total/used/free/percent) with warning at 85% and critical alert at 95%; SystemHealthWidget displays a new Disk card with progress bar alongside Memory, CPU, Processes, and Apps
 
 ## Fixed
 

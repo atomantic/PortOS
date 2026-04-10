@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import os from 'os';
+import { statfs } from 'fs/promises';
 import { listProcesses } from '../services/pm2.js';
 import * as apps from '../services/apps.js';
 import * as cos from '../services/cos.js';
@@ -32,13 +33,14 @@ router.get('/health/details', async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, allApps, cosStatus, self, dbHealth, version] = await Promise.all([
+  const [pm2Processes, allApps, cosStatus, self, dbHealth, version, diskStats] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAllApps({ includeArchived: false }).catch(() => []),
     cos.getStatus().catch(() => null),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
-    getCurrentVersion().catch(() => null)
+    getCurrentVersion().catch(() => null),
+    statfs('/').catch(() => null)
   ]);
 
   // System metrics
@@ -49,6 +51,21 @@ router.get('/health/details', async (req, res) => {
   const cpuLoad = os.loadavg()[0]; // 1-minute load average
   const cpuCount = os.cpus().length;
   const cpuUsagePercent = Math.round((cpuLoad / cpuCount) * 100);
+
+  // Disk usage (root filesystem)
+  let disk = null;
+  if (diskStats) {
+    const totalDisk = diskStats.blocks * diskStats.bsize;
+    const freeDisk = diskStats.bavail * diskStats.bsize;
+    const usedDisk = totalDisk - (diskStats.bfree * diskStats.bsize);
+    const diskUsagePercent = Math.round((usedDisk / totalDisk) * 100);
+    disk = {
+      total: totalDisk,
+      used: usedDisk,
+      free: freeDisk,
+      usagePercent: diskUsagePercent
+    };
+  }
 
   // Process status summary from PM2
   const processStats = {
@@ -84,6 +101,16 @@ router.get('/health/details', async (req, res) => {
   if (cpuUsagePercent > 100) {
     if (overallHealth !== 'critical') overallHealth = 'warning';
     warnings.push({ type: 'cpu', message: 'CPU load high' });
+  }
+
+  if (disk) {
+    if (disk.usagePercent > 95) {
+      overallHealth = 'critical';
+      warnings.push({ type: 'disk', message: 'Disk usage above 95%' });
+    } else if (disk.usagePercent > 85) {
+      if (overallHealth !== 'critical') overallHealth = 'warning';
+      warnings.push({ type: 'disk', message: 'Disk usage above 85%' });
+    }
   }
 
   if (processStats.errored > 0) {
@@ -159,7 +186,16 @@ router.get('/health/details', async (req, res) => {
         cores: cpuCount,
         loadAvg1m: cpuLoad,
         usagePercent: cpuUsagePercent
-      }
+      },
+      disk: disk ? {
+        total: disk.total,
+        used: disk.used,
+        free: disk.free,
+        usagePercent: disk.usagePercent,
+        totalFormatted: formatBytes(disk.total),
+        usedFormatted: formatBytes(disk.used),
+        freeFormatted: formatBytes(disk.free)
+      } : null
     },
     processes: processStats,
     apps: appStats,
