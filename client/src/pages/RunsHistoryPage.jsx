@@ -138,8 +138,8 @@ export function RunsHistoryPage() {
   const failedCount = runs.filter(r => r.success === false).length;
 
   const handleClearFailed = async () => {
-    const result = await api.deleteFailedRuns().catch(() => null);
-    if (result) {
+    const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
+    if (ok) {
       setRuns(prev => prev.filter(r => r.success !== false));
     }
   };

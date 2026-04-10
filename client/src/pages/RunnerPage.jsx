@@ -76,8 +76,8 @@ export function RunnerPage() {
       setProviders(enabledProviders);
       if (enabledProviders.length > 0) {
         const active = enabledProviders.find(p => p.id === providersRes.activeProvider) || enabledProviders[0];
-        setSelectedProvider(active.id);
-        setSelectedModel(active.defaultModel || '');
+        setSelectedProvider(prev => prev || active.id);
+        setSelectedModel(prev => prev || active.defaultModel || '');
       }
       setAllowedCommands(cmds);
     });
