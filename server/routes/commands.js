@@ -1,9 +1,15 @@
 import { Router } from 'express';
+import { existsSync, statSync } from 'fs';
+import { resolve } from 'path';
+import { homedir } from 'os';
 import * as commands from '../services/commands.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
+
+// Allowed workspace roots: user home and /tmp
+const ALLOWED_WORKSPACE_ROOTS = [homedir(), '/tmp'];
 
 // POST /api/commands/execute - Execute a command
 router.post('/execute', asyncHandler(async (req, res) => {
@@ -11,6 +17,21 @@ router.post('/execute', asyncHandler(async (req, res) => {
 
   if (!command) {
     throw new ServerError('Command is required', { status: 400, code: 'MISSING_COMMAND' });
+  }
+
+  // Validate workspacePath if provided: must exist, be a directory, and resolve within allowed roots
+  if (workspacePath) {
+    const resolvedPath = resolve(workspacePath);
+    const isAllowed = ALLOWED_WORKSPACE_ROOTS.some(root => resolvedPath === root || resolvedPath.startsWith(root + '/'));
+    if (!isAllowed) {
+      throw new ServerError('workspacePath is outside allowed directories', { status: 400, code: 'INVALID_PATH' });
+    }
+    if (!existsSync(resolvedPath)) {
+      throw new ServerError('workspacePath does not exist', { status: 400, code: 'INVALID_PATH' });
+    }
+    if (!statSync(resolvedPath).isDirectory()) {
+      throw new ServerError('workspacePath is not a directory', { status: 400, code: 'INVALID_PATH' });
+    }
   }
 
   const io = req.app.get('io');

@@ -492,8 +492,16 @@ Thumbs.db
   }
 
   await writeFile(join(repoPath, '.gitignore'), gitignoreContent);
-  await execAsync('git add -A', { cwd: repoPath, windowsHide: true });
-  await execAsync('git commit -m "Initial commit"', { cwd: repoPath, windowsHide: true });
+  // Use spawn with shell:false to avoid shell injection
+  const spawnGit = (args) => new Promise((resolve, reject) => {
+    const proc = spawn('git', args, { cwd: repoPath, shell: false, windowsHide: true });
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`git ${args[0]} failed: ${stderr.trim()}`)));
+    proc.on('error', reject);
+  });
+  await spawnGit(['add', '-A']);
+  await spawnGit(['commit', '-m', 'Initial commit']);
   addStep('Initialize git', 'done');
 
   // Create GitHub repo if requested

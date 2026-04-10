@@ -328,7 +328,14 @@ export async function createGitBackup(repoPath) {
   const branch = `portos-backup-${timestamp}`;
 
   // Create backup branch from current HEAD (captures committed state without stashing)
-  await execAsync(`git branch ${branch}`, { cwd: repoPath, windowsHide: true });
+  // Use spawn with shell:false to avoid shell injection via branch name
+  await new Promise((resolve, reject) => {
+    const proc = spawn('git', ['branch', branch], { cwd: repoPath, shell: false, windowsHide: true });
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`git branch failed: ${stderr.trim()}`)));
+    proc.on('error', reject);
+  });
 
   return { success: true, branch };
 }

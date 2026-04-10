@@ -14,11 +14,14 @@ function SafeHtmlBody({ html }) {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
-    // Strip script tags and event handlers from HTML
+    // Strip script tags, event handlers, meta tags, SVG content, and javascript: URIs
     const sanitized = html
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<meta\b[^>]*>/gi, '')
+      .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
       .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-      .replace(/\s+on\w+\s*=\s*\S+/gi, '');
+      .replace(/\s+on\w+\s*=\s*\S+/gi, '')
+      .replace(/(href|src)\s*=\s*["']\s*javascript:[^"']*/gi, '$1="#"');
 
     const doc = iframe.contentDocument;
     if (!doc) return;
@@ -49,7 +52,7 @@ function SafeHtmlBody({ html }) {
   return (
     <iframe
       ref={iframeRef}
-      sandbox="allow-same-origin"
+      sandbox=""
       className="w-full border-0 min-h-[100px]"
       style={{ background: 'transparent' }}
       title="Email content"

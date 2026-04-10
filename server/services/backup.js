@@ -10,7 +10,7 @@ import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { createReadStream } from 'fs';
 import { access, readFile, readdir, stat, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth } from '../lib/db.js';
@@ -285,7 +285,16 @@ export async function listSnapshots(destPath) {
  * @param {string|null} [options.subdirFilter=null] - Limit restore to a subdirectory
  */
 export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null } = {}) {
+  // Validate snapshotId to prevent path traversal
+  if (!snapshotId || !/^[\w\-.:T]+$/.test(snapshotId)) {
+    throw new Error(`Invalid snapshotId: ${snapshotId}`);
+  }
   const srcDir = join(destPath, 'snapshots', snapshotId, 'data');
+  // Containment check: resolved path must stay within the snapshots directory
+  const snapshotsRoot = resolve(join(destPath, 'snapshots'));
+  if (!resolve(srcDir).startsWith(snapshotsRoot + '/')) {
+    throw new Error(`Path traversal detected for snapshotId: ${snapshotId}`);
+  }
 
   const flags = ['--itemize-changes'];
   if (dryRun) flags.push('--dry-run');

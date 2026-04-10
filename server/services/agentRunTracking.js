@@ -7,7 +7,7 @@
 import { join } from 'path';
 import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession, recordMessages } from './usage.js';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -69,15 +69,12 @@ export function checkForTaskCommit(taskId, workspacePath) {
   const gitDir = join(workspacePath, '.git');
   if (!existsSync(gitDir)) return false;
 
-  try {
-    const searchPattern = `[task-${taskId}]`;
-    const result = execSync(`git log --all --oneline --grep="${searchPattern}" -1`, {
-      cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true
-    }).trim();
-    return result.length > 0;
-  } catch {
-    return false;
-  }
+  const searchPattern = `[task-${taskId}]`;
+  const result = spawnSync('git', ['log', '--all', '--oneline', '--grep', searchPattern, '-1'], {
+    cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false
+  });
+  if (result.status !== 0 || result.error) return false;
+  return (result.stdout?.trim().length ?? 0) > 0;
 }
 
 /**
