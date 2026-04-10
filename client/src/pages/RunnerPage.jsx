@@ -28,12 +28,13 @@ export function RunnerPage() {
   const [continueContext, setContinueContext] = useState(null);
   const fileInputRef = useRef(null);
   const outputRef = useRef(null);
+  const continueWorkspaceRef = useRef(location.state?.continueFrom?.workspacePath ?? null);
 
   // Get the selected app's repoPath
   const selectedApp = apps.find(a => a.id === selectedAppId);
   const workspacePath = selectedApp?.repoPath || '';
 
-  // Handle continuation context from navigation
+  // Handle continuation context from navigation — store continueFrom and clear location state once
   useEffect(() => {
     const continueFrom = location.state?.continueFrom;
     if (continueFrom) {
@@ -45,17 +46,10 @@ export function RunnerPage() {
       if (continueFrom.model) {
         setSelectedModel(continueFrom.model);
       }
-      // Set workspace from previous run if available
-      if (continueFrom.workspacePath) {
-        const app = apps.find(a => a.repoPath === continueFrom.workspacePath);
-        if (app) {
-          setSelectedAppId(app.id);
-        }
-      }
       // Clear location state to prevent re-triggering on refresh
       navigate(location.pathname, { replace: true, state: null });
     }
-  }, [location.state, apps]);
+  }, [location.state, navigate]);
 
   useEffect(() => {
     Promise.all([
@@ -66,12 +60,11 @@ export function RunnerPage() {
       // Filter out PortOS Autofixer (it's part of PortOS project)
       const filteredApps = appsData.filter(a => a.id !== 'portos-autofixer');
       setApps(filteredApps);
-      // Set workspace: prefer continuation context, then PortOS, then first app
+      // Set workspace: prefer continuation context (stored in ref), then PortOS, then first app
       setSelectedAppId(prev => {
         if (prev) return prev;
-        const continueWorkspacePath = location.state?.continueFrom?.workspacePath;
-        if (continueWorkspacePath) {
-          const continueApp = filteredApps.find(a => a.repoPath === continueWorkspacePath);
+        if (continueWorkspaceRef.current) {
+          const continueApp = filteredApps.find(a => a.repoPath === continueWorkspaceRef.current);
           if (continueApp) return continueApp.id;
         }
         const portosApp = filteredApps.find(a => a.name === 'PortOS');

@@ -41,7 +41,8 @@ export function RunsHistoryPage() {
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    await api.deleteRun(id);
+    const deleted = await api.deleteRun(id).catch(() => null);
+    if (!deleted && deleted !== undefined) return;
     setRuns(prev => prev.filter(run => run.id !== id));
     if (expandedId === id) setExpandedId(null);
   };

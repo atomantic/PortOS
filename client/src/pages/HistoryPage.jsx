@@ -35,14 +35,16 @@ export function HistoryPage() {
   }, [loadData]);
 
   const handleClear = async () => {
-    await api.clearHistory();
+    const result = await api.clearHistory().catch(() => null);
+    if (result === null) return;
     setConfirmingClear(false);
     loadData();
   };
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    await api.deleteHistoryEntry(id);
+    const result = await api.deleteHistoryEntry(id).catch(() => null);
+    if (result === null) return;
     setHistory(prev => prev.filter(entry => entry.id !== id));
     if (expandedId === id) setExpandedId(null);
   };
