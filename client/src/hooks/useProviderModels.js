@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 
 /**
@@ -12,6 +12,7 @@ export default function useProviderModels({ filter } = {}) {
   const [selectedProviderId, setSelectedProviderId] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [loading, setLoading] = useState(true);
+  const hasSetInitialRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -19,12 +20,13 @@ export default function useProviderModels({ filter } = {}) {
     const filterFn = filter || (p => p.enabled);
     const filtered = (data.providers || []).filter(filterFn);
     setProviders(filtered);
-    if (filtered.length > 0 && !selectedProviderId) {
+    if (filtered.length > 0 && !hasSetInitialRef.current) {
+      hasSetInitialRef.current = true;
       setSelectedProviderId(filtered[0].id);
       setSelectedModel(filtered[0].defaultModel || '');
     }
     setLoading(false);
-  }, [filter, selectedProviderId]);
+  }, [filter]);
 
   useEffect(() => { load(); }, [load]);
 

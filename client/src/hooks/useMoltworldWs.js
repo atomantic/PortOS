@@ -73,11 +73,13 @@ export default function useMoltworldWs() {
     socket.on('moltworld:nearby', handleNearby);
 
     // Fetch initial WS status
-    api.moltworldWsStatus().then(data => {
+    const abortCtrl = new AbortController();
+    api.moltworldWsStatus({ signal: abortCtrl.signal, silent: true }).then(data => {
       if (data?.status) setConnectionStatus(data.status);
     }).catch(() => {});
 
     return () => {
+      abortCtrl.abort();
       socket.off('moltworld:status', handleStatus);
       socket.off('moltworld:event', handleEvent);
       socket.off('moltworld:presence', handlePresence);

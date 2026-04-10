@@ -116,8 +116,8 @@ export const moltworldWsConnect = (accountId) =>
   });
 export const moltworldWsDisconnect = () =>
   request('/agents/tools/moltworld/ws/disconnect', { method: 'POST' });
-export const moltworldWsStatus = () =>
-  request('/agents/tools/moltworld/ws/status');
+export const moltworldWsStatus = (options = {}) =>
+  request('/agents/tools/moltworld/ws/status', options);
 export const moltworldWsMove = (x, y, thought) =>
   request('/agents/tools/moltworld/ws/move', {
     method: 'POST',

@@ -8,7 +8,6 @@ import Apps from './pages/Apps';
 import CreateApp from './pages/CreateApp';
 import Templates from './pages/Templates';
 import PromptManager from './pages/PromptManager';
-import ChiefOfStaff from './pages/ChiefOfStaff';
 import Brain from './pages/Brain';
 import Security from './pages/Security';
 import DigitalTwin from './pages/DigitalTwin';
@@ -64,6 +63,7 @@ const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
+const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (

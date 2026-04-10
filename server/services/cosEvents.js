@@ -9,6 +9,7 @@ import { EventEmitter } from 'events';
 
 // Event emitter for CoS events
 export const cosEvents = new EventEmitter();
+cosEvents.setMaxListeners(60);
 
 /**
  * Emit a log event for UI display

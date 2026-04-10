@@ -119,44 +119,44 @@ export default function BodyTab() {
             </h4>
             <div className="grid grid-cols-7 gap-2 mb-3">
               <div>
-                <label className="text-xs text-gray-500">Date</label>
-                <input type="date" value={eyeForm.date}
+                <label htmlFor="eye-date" className="text-xs text-gray-500">Date</label>
+                <input id="eye-date" type="date" value={eyeForm.date}
                   onChange={e => setEyeForm(f => ({ ...f, date: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">L SPH</label>
-                <input type="number" step="0.25" value={eyeForm.leftSphere}
+                <label htmlFor="eye-left-sphere" className="text-xs text-gray-500">L SPH</label>
+                <input id="eye-left-sphere" type="number" step="0.25" value={eyeForm.leftSphere}
                   onChange={e => setEyeForm(f => ({ ...f, leftSphere: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">L CYL</label>
-                <input type="number" step="0.25" value={eyeForm.leftCylinder}
+                <label htmlFor="eye-left-cylinder" className="text-xs text-gray-500">L CYL</label>
+                <input id="eye-left-cylinder" type="number" step="0.25" value={eyeForm.leftCylinder}
                   onChange={e => setEyeForm(f => ({ ...f, leftCylinder: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">L AXIS</label>
-                <input type="number" step="1" min="0" max="180" value={eyeForm.leftAxis}
+                <label htmlFor="eye-left-axis" className="text-xs text-gray-500">L AXIS</label>
+                <input id="eye-left-axis" type="number" step="1" min="0" max="180" value={eyeForm.leftAxis}
                   onChange={e => setEyeForm(f => ({ ...f, leftAxis: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">R SPH</label>
-                <input type="number" step="0.25" value={eyeForm.rightSphere}
+                <label htmlFor="eye-right-sphere" className="text-xs text-gray-500">R SPH</label>
+                <input id="eye-right-sphere" type="number" step="0.25" value={eyeForm.rightSphere}
                   onChange={e => setEyeForm(f => ({ ...f, rightSphere: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">R CYL</label>
-                <input type="number" step="0.25" value={eyeForm.rightCylinder}
+                <label htmlFor="eye-right-cylinder" className="text-xs text-gray-500">R CYL</label>
+                <input id="eye-right-cylinder" type="number" step="0.25" value={eyeForm.rightCylinder}
                   onChange={e => setEyeForm(f => ({ ...f, rightCylinder: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">R AXIS</label>
-                <input type="number" step="1" min="0" max="180" value={eyeForm.rightAxis}
+                <label htmlFor="eye-right-axis" className="text-xs text-gray-500">R AXIS</label>
+                <input id="eye-right-axis" type="number" step="1" min="0" max="180" value={eyeForm.rightAxis}
                   onChange={e => setEyeForm(f => ({ ...f, rightAxis: e.target.value }))}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200 font-mono" />
               </div>
