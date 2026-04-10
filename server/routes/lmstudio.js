@@ -7,6 +7,7 @@
 import { Router } from 'express'
 import * as lmStudioManager from '../services/lmStudioManager.js'
 import * as localThinking from '../services/localThinking.js'
+import { asyncHandler } from '../lib/errorHandler.js'
 
 const router = Router()
 
@@ -14,7 +15,7 @@ const router = Router()
  * GET /api/lmstudio/status
  * Check LM Studio availability and loaded models
  */
-router.get('/status', async (req, res) => {
+router.get('/status', asyncHandler(async (req, res) => {
   const status = await lmStudioManager.getStatus()
   const thinkingStats = localThinking.getStats()
 
@@ -22,13 +23,13 @@ router.get('/status', async (req, res) => {
     ...status,
     thinkingStats
   })
-})
+}))
 
 /**
  * GET /api/lmstudio/models
  * List available/loaded models
  */
-router.get('/models', async (req, res) => {
+router.get('/models', asyncHandler(async (req, res) => {
   const available = await lmStudioManager.checkLMStudioAvailable()
 
   if (!available) {
@@ -47,13 +48,13 @@ router.get('/models', async (req, res) => {
     models,
     recommendedThinkingModel: recommended
   })
-})
+}))
 
 /**
  * POST /api/lmstudio/download
  * Download a model by ID
  */
-router.post('/download', async (req, res) => {
+router.post('/download', asyncHandler(async (req, res) => {
   const { modelId } = req.body
 
   if (!modelId) {
@@ -62,13 +63,13 @@ router.post('/download', async (req, res) => {
 
   const result = await lmStudioManager.downloadModel(modelId)
   res.json(result)
-})
+}))
 
 /**
  * POST /api/lmstudio/load
  * Load a model into memory
  */
-router.post('/load', async (req, res) => {
+router.post('/load', asyncHandler(async (req, res) => {
   const { modelId } = req.body
 
   if (!modelId) {
@@ -77,13 +78,13 @@ router.post('/load', async (req, res) => {
 
   const result = await lmStudioManager.loadModel(modelId)
   res.json(result)
-})
+}))
 
 /**
  * POST /api/lmstudio/unload
  * Unload a model from memory
  */
-router.post('/unload', async (req, res) => {
+router.post('/unload', asyncHandler(async (req, res) => {
   const { modelId } = req.body
 
   if (!modelId) {
@@ -92,13 +93,13 @@ router.post('/unload', async (req, res) => {
 
   const result = await lmStudioManager.unloadModel(modelId)
   res.json(result)
-})
+}))
 
 /**
  * POST /api/lmstudio/completion
  * Quick completion using local model
  */
-router.post('/completion', async (req, res) => {
+router.post('/completion', asyncHandler(async (req, res) => {
   const { prompt, model, maxTokens, temperature, systemPrompt } = req.body
 
   if (!prompt) {
@@ -113,13 +114,13 @@ router.post('/completion', async (req, res) => {
   })
 
   res.json(result)
-})
+}))
 
 /**
  * POST /api/lmstudio/analyze-task
  * Analyze a task for complexity and escalation needs
  */
-router.post('/analyze-task', async (req, res) => {
+router.post('/analyze-task', asyncHandler(async (req, res) => {
   const { description, id, metadata } = req.body
 
   if (!description) {
@@ -133,13 +134,13 @@ router.post('/analyze-task', async (req, res) => {
   })
 
   res.json(analysis)
-})
+}))
 
 /**
  * POST /api/lmstudio/classify-memory
  * Classify memory content
  */
-router.post('/classify-memory', async (req, res) => {
+router.post('/classify-memory', asyncHandler(async (req, res) => {
   const { content } = req.body
 
   if (!content) {
@@ -148,13 +149,13 @@ router.post('/classify-memory', async (req, res) => {
 
   const classification = await localThinking.classifyMemory(content)
   res.json(classification)
-})
+}))
 
 /**
  * POST /api/lmstudio/embeddings
  * Get embeddings for text
  */
-router.post('/embeddings', async (req, res) => {
+router.post('/embeddings', asyncHandler(async (req, res) => {
   const { text, model } = req.body
 
   if (!text) {
@@ -163,13 +164,13 @@ router.post('/embeddings', async (req, res) => {
 
   const result = await lmStudioManager.getEmbeddings(text, { model })
   res.json(result)
-})
+}))
 
 /**
  * PUT /api/lmstudio/config
  * Update LM Studio configuration
  */
-router.put('/config', async (req, res) => {
+router.put('/config', asyncHandler(async (req, res) => {
   const { baseUrl, timeout, defaultThinkingModel } = req.body
 
   const config = lmStudioManager.updateConfig({
@@ -179,7 +180,7 @@ router.put('/config', async (req, res) => {
   })
 
   res.json({ success: true, config })
-})
+}))
 
 /**
  * GET /api/lmstudio/thinking-stats

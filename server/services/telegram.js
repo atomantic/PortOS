@@ -16,6 +16,8 @@ import { ensureDir, PATHS, readJSONFile, formatDuration } from '../lib/fileUtils
 import { getActiveAgents } from './subAgentSpawner.js';
 import { getGoals } from './identity.js';
 
+const HEALTH_CHECK_INTERVAL_MS = 30_000;
+
 // Module-level state
 let bot = null;
 let isConnected = false;
@@ -192,7 +194,7 @@ export async function init(sendTestMessage = false) {
   });
 
   // Start health check
-  healthCheckInterval = setInterval(healthCheck, 30000);
+  healthCheckInterval = setInterval(healthCheck, HEALTH_CHECK_INTERVAL_MS);
 
   // Subscribe to notification events
   initNotificationForwarding();
