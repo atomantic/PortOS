@@ -26,6 +26,7 @@ import Post from './pages/Post';
 import Review from './pages/Review';
 import Loops from './pages/Loops';
 import CharacterSheet from './pages/CharacterSheet';
+import Wiki from './pages/Wiki';
 
 // Auto-reload on stale chunk errors (e.g., after a rebuild changes chunk hashes)
 // Uses sessionStorage to prevent infinite reload loops (max 1 reload per session)
@@ -143,6 +144,8 @@ export default function App() {
           <Route path="city/settings" element={<CyberCity />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
+          <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
+          <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />

@@ -14,6 +14,15 @@
   - Inline note editor with Cmd+S save, backlinks panel, and frontmatter properties view
   - Full-text search with context snippets and relevance ranking
   - Link graph endpoint for vault-wide wikilink visualization
+- **LLM Wiki** — a dedicated Wiki page for managing an LLM-maintained knowledge base in Obsidian
+  - Overview tab with page-type stats (sources, entities, concepts, comparisons, synthesis, queries), recent activity feed, and health report display
+  - Browse tab with folder-tree navigation for both wiki pages and raw sources, inline note viewer/editor with metadata sidebar (frontmatter, tags, wikilinks, backlinks)
+  - Full-text search tab with relevance ranking, context snippets, and one-click navigation to results
+  - Interactive knowledge graph tab with color-coded node clusters by page type, zoom/pan, and click-to-navigate
+  - Activity log tab parsing the wiki's chronological log into a structured timeline
+  - Wiki schema (`WIKI.md`) defining page types, frontmatter conventions, and ingest/query/lint workflows
+  - Weekly CoS maintenance job (`job-wiki-maintenance`) that audits the wiki for contradictions, orphans, missing cross-references, outdated claims, and generates a lint report
+  - Obsidian attachment folder auto-configured to `raw/assets/` for Web Clipper image downloads
 - **Disk usage monitoring** on dashboard — system health endpoint now reports root filesystem disk usage (total/used/free/percent) with warning at 85% and critical alert at 95%; SystemHealthWidget displays a new Disk card with progress bar alongside Memory, CPU, Processes, and Apps
 - **CyberCity v2 improvement plan** — 19 concrete ideas across 3 effort tiers for transforming CyberCity from decorative scene to living systems dashboard, including system health atmosphere, productivity district, goal monuments, chronotype energy overlay, and knowledge district
 
@@ -32,3 +41,4 @@
 - **Broken worktree detection** — worktree cleanup now verifies `rev-parse --show-toplevel` matches the expected worktree path before trusting `git status`; prevents broken worktrees (missing `.git` file) from resolving to a parent repo and incorrectly blocking removal
 - **Agent prompt missing commit step** — agent instructions now explicitly include "commit and push" in the numbered steps and the simplify section reinforces committing after review, preventing agents from completing work without pushing changes
 - **Memory classifier — LM Studio no-model-loaded failures** — memory classification calls to LM Studio failed with `400 "No models loaded"` when the server had no model in memory. The classifier now discovers downloaded LLMs via `GET /api/v0/models`, auto-loads the configured model (or first available LLM) via `POST /api/v1/models/load`, and retries with the actually-loaded model id — mirroring the existing embedding auto-load path in `memoryEmbeddings.js`
+- **Browser CDP downloads reverting to `~/Downloads`** — `Browser.setDownloadBehavior` is DevTools-session-scoped in Chrome: the instant the WebSocket that issued the command closes, Chrome tears down the session's `BrowserHandler` and the download directory reverts to the profile default. The previous implementation opened a WS, sent the command, and closed it immediately after the ack — so the managed download dir was only in effect for milliseconds and real downloads landed in `~/Downloads`. `browser/server.js` now keeps a persistent keep-alive WebSocket open for the lifetime of the process, with automatic reconnect if Chrome restarts, proper error detection on the command response, and clean teardown on shutdown
