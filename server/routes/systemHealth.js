@@ -109,12 +109,12 @@ router.get('/health/details', async (req, res) => {
   }
 
   if (disk) {
-    if (disk.usagePercent > 95) {
+    if (disk.usagePercent >= 95) {
       overallHealth = 'critical';
-      warnings.push({ type: 'disk', message: 'Disk usage above 95%' });
-    } else if (disk.usagePercent > 85) {
+      warnings.push({ type: 'disk', message: 'Disk usage at or above 95%' });
+    } else if (disk.usagePercent >= 85) {
       if (overallHealth !== 'critical') overallHealth = 'warning';
-      warnings.push({ type: 'disk', message: 'Disk usage above 85%' });
+      warnings.push({ type: 'disk', message: 'Disk usage at or above 85%' });
     }
   }
 

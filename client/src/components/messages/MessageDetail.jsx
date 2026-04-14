@@ -21,7 +21,12 @@ function SafeHtmlBody({ html }) {
       .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
       .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
       .replace(/\s+on\w+\s*=\s*\S+/gi, '')
-      .replace(/(href|src)\s*=\s*["']\s*javascript:[^"']*/gi, '$1="#"');
+      // Match the full quoted attribute value (capture the quote char so we
+      // consume the closing quote too) — prevents leaving a stray trailing
+      // quote in the output like `href="#""`.
+      .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"')
+      // Also handle unquoted attributes, which end at whitespace or `>`.
+      .replace(/(href|src)\s*=\s*javascript:[^\s>]*/gi, '$1="#"');
 
     const doc = iframe.contentDocument;
     if (!doc) return;

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve, relative, isAbsolute } from 'path';
 import { homedir } from 'os';
 import * as commands from '../services/commands.js';
@@ -8,9 +8,16 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-// Allowed workspace roots: user home and /tmp (normalized via resolve so they
-// match regardless of trailing separators or relative forms).
-const ALLOWED_WORKSPACE_ROOTS = [homedir(), '/tmp'].map(r => resolve(r));
+// Allowed workspace roots: user home and /tmp. Resolve symlinks too so that
+// e.g. a symlinked /tmp on macOS (which points to /private/tmp) still matches
+// after we realpath() the caller's workspacePath.
+const ALLOWED_WORKSPACE_ROOTS = [homedir(), '/tmp']
+  .map(r => {
+    const abs = resolve(r);
+    // Falls back to the resolved path if the root doesn't exist yet — callers
+    // providing paths under a non-existent root will fail the existence check.
+    try { return realpathSync(abs); } catch { return abs; }
+  });
 
 // Separator-safe containment: resolvedPath === root or is a descendant of root.
 function isWithinRoot(resolvedPath, root) {
@@ -27,18 +34,22 @@ router.post('/execute', asyncHandler(async (req, res) => {
     throw new ServerError('Command is required', { status: 400, code: 'MISSING_COMMAND' });
   }
 
-  // Validate workspacePath if provided: must exist, be a directory, and resolve within allowed roots
+  // Validate workspacePath if provided: must exist, be a directory, and — after
+  // symlinks are followed — resolve within an allowed root. Using realpath here
+  // prevents a symlink like /tmp/escape -> /etc from tricking the containment
+  // check (which only sees /tmp/escape).
   if (workspacePath) {
     const resolvedPath = resolve(workspacePath);
-    const isAllowed = ALLOWED_WORKSPACE_ROOTS.some(root => isWithinRoot(resolvedPath, root));
-    if (!isAllowed) {
-      throw new ServerError('workspacePath is outside allowed directories', { status: 400, code: 'INVALID_PATH' });
-    }
     if (!existsSync(resolvedPath)) {
       throw new ServerError('workspacePath does not exist', { status: 400, code: 'INVALID_PATH' });
     }
     if (!statSync(resolvedPath).isDirectory()) {
       throw new ServerError('workspacePath is not a directory', { status: 400, code: 'INVALID_PATH' });
+    }
+    const realPath = realpathSync(resolvedPath);
+    const isAllowed = ALLOWED_WORKSPACE_ROOTS.some(root => isWithinRoot(realPath, root));
+    if (!isAllowed) {
+      throw new ServerError('workspacePath is outside allowed directories', { status: 400, code: 'INVALID_PATH' });
     }
   }
 
