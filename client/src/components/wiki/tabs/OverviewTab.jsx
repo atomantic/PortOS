@@ -40,7 +40,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
         </div>
         {WIKI_CATEGORIES.map(cat => (
           <div key={cat.key} className="bg-port-card border border-port-border rounded-lg p-4 text-center">
-            <cat.icon className={`w-5 h-5 text-${cat.color} mx-auto mb-1`} />
+            <cat.icon className={`w-5 h-5 ${cat.textClass} mx-auto mb-1`} />
             <div className="text-2xl font-bold text-white">{stats[cat.key]}</div>
             <div className="text-xs text-gray-500">{cat.label}</div>
           </div>

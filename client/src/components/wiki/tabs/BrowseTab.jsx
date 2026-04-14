@@ -10,7 +10,7 @@ import toast from '../../ui/Toast';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 
-const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, icon: c.icon, color: `text-${c.color}` }));
+const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, icon: c.icon, color: c.textClass }));
 const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color: 'text-gray-400' }];
 
 export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefresh }) {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { existsSync, statSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, relative, isAbsolute } from 'path';
 import { homedir } from 'os';
 import * as commands from '../services/commands.js';
 import * as pm2Service from '../services/pm2.js';
@@ -8,8 +8,16 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-// Allowed workspace roots: user home and /tmp
-const ALLOWED_WORKSPACE_ROOTS = [homedir(), '/tmp'];
+// Allowed workspace roots: user home and /tmp (normalized via resolve so they
+// match regardless of trailing separators or relative forms).
+const ALLOWED_WORKSPACE_ROOTS = [homedir(), '/tmp'].map(r => resolve(r));
+
+// Separator-safe containment: resolvedPath === root or is a descendant of root.
+function isWithinRoot(resolvedPath, root) {
+  if (resolvedPath === root) return true;
+  const rel = relative(root, resolvedPath);
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
+}
 
 // POST /api/commands/execute - Execute a command
 router.post('/execute', asyncHandler(async (req, res) => {
@@ -22,7 +30,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // Validate workspacePath if provided: must exist, be a directory, and resolve within allowed roots
   if (workspacePath) {
     const resolvedPath = resolve(workspacePath);
-    const isAllowed = ALLOWED_WORKSPACE_ROOTS.some(root => resolvedPath === root || resolvedPath.startsWith(root + '/'));
+    const isAllowed = ALLOWED_WORKSPACE_ROOTS.some(root => isWithinRoot(resolvedPath, root));
     if (!isAllowed) {
       throw new ServerError('workspacePath is outside allowed directories', { status: 400, code: 'INVALID_PATH' });
     }
