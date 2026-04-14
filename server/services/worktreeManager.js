@@ -9,7 +9,7 @@
  * and the branch cleaned up.
  */
 
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { readdir, readFile, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
@@ -103,7 +103,16 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   const detectedToplevel = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
     .then(r => r.stdout.trim())
     .catch(() => null);
-  if (detectedToplevel && detectedToplevel !== worktreePath) {
+  // Compare realpath-resolved forms so symlinks (e.g. macOS /var → /private/var)
+  // or normalization differences don't false-positive as a broken worktree.
+  const sameTopLevel = (a, b) => {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const ra = (() => { try { return realpathSync(a); } catch { return a; } })();
+    const rb = (() => { try { return realpathSync(b); } catch { return b; } })();
+    return ra === rb;
+  };
+  if (detectedToplevel && !sameTopLevel(detectedToplevel, worktreePath)) {
     console.log(`🌳 Worktree ${agentId} resolves to ${detectedToplevel} instead of ${worktreePath} — broken worktree, removing`);
     await rm(worktreePath, { recursive: true, force: true }).catch(rmErr => {
       console.log(`⚠️ Failed to remove broken worktree ${agentId}: ${rmErr.message}`);
