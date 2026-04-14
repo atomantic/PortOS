@@ -141,18 +141,11 @@ export function setEmbeddingConfig(config) {
 export async function checkAvailability() {
   await initConfig();
   const config = getConfig();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
 
   const response = await fetch(`${config.embeddingEndpoint.replace('/v1/embeddings', '/v1/models')}`, {
     method: 'GET',
-    signal: controller.signal
-  }).catch(err => {
-    clearTimeout(timeout);
-    return { ok: false, _err: err.message };
-  });
-
-  clearTimeout(timeout);
+    signal: AbortSignal.timeout(5000)
+  }).catch(err => ({ ok: false, _err: err.message }));
 
   if (!response.ok) {
     return { available: false, error: response._err || `LM Studio returned ${response.status}`, endpoint: config.embeddingEndpoint };

@@ -93,9 +93,10 @@ export default function WordplayTrainer({ onBack, config }) {
 
     let responseObj;
     if (selectedMode === 'compound-chain') {
-      responseObj = { items, responseMs };
+      responseObj = { questionIndex, items, responseMs };
     } else {
       responseObj = {
+        questionIndex,
         prompt: currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
         response: inputValue.trim(),
         responseMs,
@@ -121,7 +122,7 @@ export default function WordplayTrainer({ onBack, config }) {
       score: fb.score ?? scored?.score ?? 0,
       feedback: fb.feedback || '',
     }]);
-  }, [inputValue, items, currentPrompt, selectedMode, drill, providerId, model]);
+  }, [inputValue, items, currentPrompt, selectedMode, drill, providerId, model, questionIndex]);
 
   const handleNext = useCallback(() => {
     setFeedback(null);

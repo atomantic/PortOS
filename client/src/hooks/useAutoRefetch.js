@@ -27,8 +27,9 @@ export function useAutoRefetch(fetchFn, intervalMs) {
         if (cancelled) return;
         setData(result);
         setLoading(false);
-      } catch {
+      } catch (err) {
         // Keep prior data on failure, just clear loading state
+        console.warn(`⚠️ Auto-refetch failed: ${err.message}`);
         if (!cancelled) setLoading(false);
       }
     };

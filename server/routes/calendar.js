@@ -1,7 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
+import { UUID_RE } from '../lib/fileUtils.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
@@ -94,7 +95,7 @@ router.post('/accounts', asyncHandler(async (req, res) => {
 }));
 
 router.put('/accounts/:id', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const updates = validateRequest(updateAccountSchema, req.body);
@@ -105,7 +106,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/accounts/:id', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const deleted = await calendarAccounts.deleteAccount(req.params.id);
@@ -117,7 +118,7 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
 
 // === Sync Routes ===
 router.post('/sync/:accountId', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const io = req.app.get('io');
@@ -127,7 +128,7 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
 }));
 
 router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const status = await calendarSync.getSyncStatus(req.params.accountId);
@@ -137,15 +138,11 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 
 // === Event Routes ===
 router.get('/events', asyncHandler(async (req, res) => {
-  const { accountId, search, startDate, endDate, limit, offset } = req.query;
-  if (accountId && !z.string().uuid().safeParse(accountId).success) {
+  const { accountId, search, startDate, endDate } = req.query;
+  if (accountId && !UUID_RE.test(accountId)) {
     return res.status(400).json({ error: 'Invalid accountId format' });
   }
-  let parsedLimit = limit !== undefined ? parseInt(limit, 10) : 50;
-  if (Number.isNaN(parsedLimit) || parsedLimit <= 0) parsedLimit = 50;
-  if (parsedLimit > 200) parsedLimit = 200;
-  let parsedOffset = offset !== undefined ? parseInt(offset, 10) : 0;
-  if (Number.isNaN(parsedOffset) || parsedOffset < 0) parsedOffset = 0;
+  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
   const result = await calendarSync.getEvents({
     accountId,
     search,
@@ -158,7 +155,7 @@ router.get('/events', asyncHandler(async (req, res) => {
 }));
 
 router.get('/events/:accountId/:eventId', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     return res.status(400).json({ error: 'Invalid accountId format' });
   }
   const event = await calendarSync.getEvent(req.params.accountId, req.params.eventId);
@@ -168,7 +165,7 @@ router.get('/events/:accountId/:eventId', asyncHandler(async (req, res) => {
 
 // === Subcalendar Routes ===
 router.get('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const account = await calendarAccounts.getAccount(req.params.id);
@@ -177,7 +174,7 @@ router.get('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
 }));
 
 router.put('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const { subcalendars } = validateRequest(updateSubcalendarsSchema, req.body);
@@ -191,7 +188,7 @@ router.put('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
 
 // === Push Sync Route ===
 router.post('/sync/:accountId/push', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const data = validateRequest(pushSyncSchema, req.body);
@@ -202,7 +199,7 @@ router.post('/sync/:accountId/push', asyncHandler(async (req, res) => {
 
 // === MCP Discover Calendars Route ===
 router.post('/sync/:accountId/discover', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const io = req.app.get('io');
@@ -214,7 +211,7 @@ router.post('/sync/:accountId/discover', asyncHandler(async (req, res) => {
 
 // === MCP Sync Route ===
 router.post('/sync/:accountId/google', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const io = req.app.get('io');
@@ -284,7 +281,7 @@ router.post('/google/auto-configure/run', asyncHandler(async (req, res) => {
 
 // === Google API Sync Routes ===
 router.post('/sync/:accountId/api', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const io = req.app.get('io');
@@ -294,7 +291,7 @@ router.post('/sync/:accountId/api', asyncHandler(async (req, res) => {
 }));
 
 router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const result = await calendarGoogleApiSync.apiDiscoverCalendars(req.params.accountId);

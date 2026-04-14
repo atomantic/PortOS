@@ -86,9 +86,7 @@ async function loadLearningData() {
     return structuredClone(_learningCache);
   }
 
-  if (!existsSync(DATA_DIR)) {
-    await ensureDir(DATA_DIR);
-  }
+  await ensureDir(DATA_DIR);
 
   const data = await readJSONFile(LEARNING_FILE, structuredClone(DEFAULT_LEARNING_DATA));
   _learningCache = structuredClone(data);

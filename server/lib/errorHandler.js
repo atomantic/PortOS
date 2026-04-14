@@ -220,5 +220,9 @@ export function setupProcessErrorHandlers(io) {
     if (io) {
       emitErrorEvent(io, serverError);
     }
+
+    // Process is in undefined state after uncaught exception — must exit.
+    // Use a short delay to allow the socket event to flush before exiting.
+    setTimeout(() => process.exit(1), 100);
   });
 }

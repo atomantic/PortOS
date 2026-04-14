@@ -6,7 +6,6 @@
  */
 
 import { writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
@@ -112,10 +111,7 @@ async function loadState() {
 async function saveState(state) {
   state.lastUpdated = new Date().toISOString();
 
-  if (!existsSync(DATA_DIR)) {
-    await ensureDir(DATA_DIR);
-  }
-
+  await ensureDir(DATA_DIR);
   await writeFile(TEMPLATES_FILE, JSON.stringify(state, null, 2));
 }
 

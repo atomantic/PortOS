@@ -101,7 +101,9 @@ async function getNativeStats() {
   const parts = result.stdout.trim().split(/\s+/);
   // ps aux columns: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
   if (parts.length < 6) return null;
-  const pid = parts[1];
+  const pidRaw = parseInt(parts[1], 10);
+  if (!Number.isInteger(pidRaw) || pidRaw <= 0) return null;
+  const pid = String(pidRaw);
   // Get all postgres child processes
   const childResult = await runCmd('bash', ['-c',
     `ps -o pid=,pcpu=,pmem=,rss= -p $(pgrep -P ${pid} | tr '\\n' ',')${pid} 2>/dev/null`
@@ -460,8 +462,11 @@ router.post('/export', asyncHandler(async (req, res) => {
     const dumpDir = join(rootDir, 'data', 'db-dumps');
     await runCmd('mkdir', ['-p', dumpDir], 5_000);
     const dumpFile = join(dumpDir, `portos-${backend}-${label}.sql`);
-    const result = await runCmd('bash', ['-c',
-      `pg_dump -h localhost -p ${port} -U ${pgUser} -d ${pgDb} --no-owner --no-privileges --if-exists --clean > "${dumpFile}"`
+    // Use -f flag to write output directly — no shell redirect needed, avoids shell injection
+    const pgDumpBin = pg17Bin ? `${pg17Bin}/pg_dump` : 'pg_dump';
+    const result = await runCmd(pgDumpBin, [
+      '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
+      '--no-owner', '--no-privileges', '--if-exists', '--clean', '-f', dumpFile
     ], 120_000, env);
     if (result.exitCode !== 0) {
       return res.status(500).json({ error: 'Export failed', details: result.stderr || result.stdout });

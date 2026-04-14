@@ -6,11 +6,12 @@ import { useAppDeploy } from '../../hooks/useAppDeploy';
 const FLAG_OPTIONS = [
   { value: '--ios', label: 'iOS' },
   { value: '--macos', label: 'macOS' },
+  { value: '--watch', label: 'watchOS' },
   { value: '--all', label: 'All Platforms' },
   { value: '--skip-tests', label: 'Skip Tests' },
 ];
 
-const PLATFORM_FLAGS = new Set(['--ios', '--macos', '--all']);
+const PLATFORM_FLAGS = new Set(['--ios', '--macos', '--watch', '--all']);
 
 export default function DeployPanel({ appId, appName }) {
   const { output, isDeploying, error, result, startDeploy, clearDeploy } = useAppDeploy();

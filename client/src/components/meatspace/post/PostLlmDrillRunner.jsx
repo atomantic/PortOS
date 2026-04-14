@@ -97,16 +97,19 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     let responseObj;
     if (drillType === 'story-recall') {
       responseObj = {
+        questionIndex,
         answers: items.length > 0 ? items : [inputValue.trim()],
         responseMs
       };
     } else if (drillType === 'verbal-fluency' || drillType === 'compound-chain' || drillType === 'alternative-uses') {
       responseObj = {
+        questionIndex,
         items: items,
         responseMs
       };
     } else {
       responseObj = {
+        questionIndex,
         prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
         response: inputValue.trim(),
         responseMs

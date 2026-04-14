@@ -693,6 +693,16 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           </div>
         )}
 
+        {completed && agent.metadata?.taskSummary && (
+          <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
+            <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
+              <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
+              Task Summary
+            </div>
+            <MarkdownOutput content={agent.metadata.taskSummary} />
+          </div>
+        )}
+
         {/* Feedback section - shown for completed non-system local agents */}
         {completed && !isSystemAgent && !remote && (
           <div className="mt-3 pt-3 border-t border-port-border/50">

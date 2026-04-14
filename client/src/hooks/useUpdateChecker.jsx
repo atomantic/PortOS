@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -12,6 +12,8 @@ const TOAST_ID = 'portos-update-available';
  */
 export function useUpdateChecker() {
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   useEffect(() => {
     const showUpdateToast = (data) => {
@@ -25,7 +27,7 @@ export function useUpdateChecker() {
               <button
                 onClick={() => {
                   toast.dismiss(t.id);
-                  navigate(`/apps/${api.PORTOS_APP_ID}/update`);
+                  navigateRef.current(`/apps/${api.PORTOS_APP_ID}/update`);
                 }}
                 className="px-2 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/80"
               >
@@ -67,5 +69,5 @@ export function useUpdateChecker() {
     return () => {
       socket.off('portos:update:available', showUpdateToast);
     };
-  }, [navigate]);
+  }, []);
 }

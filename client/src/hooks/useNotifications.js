@@ -12,13 +12,18 @@ export function useNotifications() {
   useEffect(() => {
     const fetchNotifications = async () => {
       setLoading(true);
-      const [notifs, countData] = await Promise.all([
-        api.getNotifications({ limit: 50 }),
-        api.getNotificationCount()
-      ]);
-      setNotifications(notifs);
-      setUnreadCount(countData.count);
-      setLoading(false);
+      try {
+        const [notifs, countData] = await Promise.all([
+          api.getNotifications({ limit: 50 }),
+          api.getNotificationCount()
+        ]);
+        setNotifications(notifs);
+        setUnreadCount(countData.count);
+      } catch (err) {
+        console.error(`❌ Failed to load notifications: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
     };
 
     fetchNotifications();

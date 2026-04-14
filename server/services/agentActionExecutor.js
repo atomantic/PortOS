@@ -568,8 +568,17 @@ async function executeMoltworldInteract(client, account, params) {
  * Initialize the action executor
  * Listens to scheduler events and executes actions
  */
+let executeListener = null;
+
 export function init() {
-  scheduleEvents.on('execute', async ({ scheduleId, schedule, timestamp }) => {
+  // Prevent duplicate listeners from THIS module specifically. Tracking our
+  // own handler (rather than counting all `execute` listeners) avoids both
+  // a false-positive skip when another module subscribes to the same event
+  // and a stale-flag skip when tests call `removeAllListeners()` between cases.
+  if (executeListener && scheduleEvents.listeners('execute').includes(executeListener)) return;
+
+  executeListener = ({ scheduleId, schedule, timestamp }) => {
+    (async () => {
     console.log(`⚡ Executing scheduled action: ${schedule.action.type} (${scheduleId})`);
 
     // Get account with full credentials
@@ -657,7 +666,11 @@ export function init() {
       timestamp: new Date().toISOString(),
       durationMs: Date.now() - startTime
     });
-  });
+    })().catch(err => {
+      console.error(`❌ Unhandled error in execute listener for schedule ${scheduleId}: ${err.message}`);
+    });
+  };
 
+  scheduleEvents.on('execute', executeListener);
   console.log('⚡ Agent action executor initialized');
 }

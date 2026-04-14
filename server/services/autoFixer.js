@@ -39,20 +39,27 @@ function isDuplicateError(errorKey) {
   return false;
 }
 
+let autoFixerInitialized = false;
+
 /**
  * Initialize auto-fixer event listeners
  */
 export function initAutoFixer() {
-  errorEvents.on('error', async (error) => {
-    // Always handle AI provider errors (even if CoS not running)
-    if (error.code === 'AI_PROVIDER_EXECUTION_FAILED') {
-      await handleAIProviderError(error);
-      return;
-    }
+  if (autoFixerInitialized) return;
+  autoFixerInitialized = true;
 
-    if (shouldAutoFix(error)) {
-      await createAutoFixTask(error);
-    }
+  errorEvents.on('error', (error) => {
+    (async () => {
+      // Always handle AI provider errors (even if CoS not running)
+      if (error.code === 'AI_PROVIDER_EXECUTION_FAILED') {
+        await handleAIProviderError(error);
+        return;
+      }
+
+      if (shouldAutoFix(error)) {
+        await createAutoFixTask(error);
+      }
+    })().catch(err => console.error(`❌ autoFixer handler failed: ${err.message}`));
   });
 
   console.log('🔧 Auto-fixer initialized');

@@ -21,10 +21,11 @@ router.post('/health/check', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/cos/agents - Get state-resident agents (running + recently completed, auto-cleans zombies)
+// Strips output arrays from listing — output is loaded on demand via GET /agents/:id
 router.get('/agents', asyncHandler(async (req, res) => {
   await cos.cleanupZombieAgents();
   const agents = await cos.getAgents();
-  res.json(agents);
+  res.json(agents.map(({ output, ...rest }) => rest));
 }));
 
 // GET /api/cos/agents/history - Get available date buckets with counts

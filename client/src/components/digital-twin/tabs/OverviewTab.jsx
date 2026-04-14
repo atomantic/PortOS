@@ -65,7 +65,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
 
   const loadCompleteness = async () => {
     setLoadingCompleteness(true);
-    const data = await api.getSoulCompleteness().catch(() => null);
+    const data = await api.getDigitalTwinCompleteness().catch(() => null);
     setCompleteness(data);
     setLoadingCompleteness(false);
   };

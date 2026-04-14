@@ -1,7 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
+import { UUID_RE } from '../lib/fileUtils.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -84,7 +85,7 @@ router.post('/accounts', asyncHandler(async (req, res) => {
 }));
 
 router.put('/accounts/:id', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   const updates = validateRequest(updateAccountSchema, req.body);
@@ -95,7 +96,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/accounts/:id', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   const deleted = await messageAccounts.deleteAccount(req.params.id);
@@ -109,7 +110,7 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
 
 // === Sync Routes ===
 router.post('/sync/:accountId', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   const mode = ['unread', 'full'].includes(req.body?.mode) ? req.body.mode : 'unread';
@@ -120,7 +121,7 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
 }));
 
 router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   const status = await messageSync.getSyncStatus(req.params.accountId);
@@ -130,15 +131,11 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 
 // === Inbox Routes ===
 router.get('/inbox', asyncHandler(async (req, res) => {
-  const { accountId, search, limit, offset } = req.query;
-  if (accountId && !z.string().uuid().safeParse(accountId).success) {
+  const { accountId, search } = req.query;
+  if (accountId && !UUID_RE.test(accountId)) {
     return res.status(400).json({ error: 'Invalid accountId format' });
   }
-  let parsedLimit = limit !== undefined ? parseInt(limit, 10) : 50;
-  if (Number.isNaN(parsedLimit) || parsedLimit <= 0) parsedLimit = 50;
-  if (parsedLimit > 100) parsedLimit = 100;
-  let parsedOffset = offset !== undefined ? parseInt(offset, 10) : 0;
-  if (Number.isNaN(parsedOffset) || parsedOffset < 0) parsedOffset = 0;
+  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
   const result = await messageSync.getMessages({
     accountId,
     search,
@@ -189,7 +186,7 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 // === Draft Routes ===
 router.get('/drafts', asyncHandler(async (req, res) => {
   const { accountId, status } = req.query;
-  if (accountId && !z.string().uuid().safeParse(accountId).success) {
+  if (accountId && !UUID_RE.test(accountId)) {
     return res.status(400).json({ error: 'Invalid accountId format' });
   }
   const drafts = await messageDrafts.listDrafts({ accountId, status });
@@ -253,7 +250,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
 }));
 
 router.put('/drafts/:id', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid draft ID format' });
   }
   const updates = validateRequest(updateDraftSchema, req.body);
@@ -263,7 +260,7 @@ router.put('/drafts/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/drafts/:id/approve', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid draft ID format' });
   }
   const draft = await messageDrafts.approveDraft(req.params.id);
@@ -272,7 +269,7 @@ router.post('/drafts/:id/approve', asyncHandler(async (req, res) => {
 }));
 
 router.post('/drafts/:id/send', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid draft ID format' });
   }
   const io = req.app.get('io');
@@ -284,7 +281,7 @@ router.post('/drafts/:id/send', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/drafts/:id', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid draft ID format' });
   }
   const deleted = await messageDrafts.deleteDraft(req.params.id);
@@ -294,7 +291,7 @@ router.delete('/drafts/:id', asyncHandler(async (req, res) => {
 
 // === Browser Launch Route ===
 router.post('/launch/:accountId', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   const account = await messageAccounts.getAccount(req.params.accountId);
@@ -357,7 +354,7 @@ router.post('/selectors/:provider/test', asyncHandler(async (req, res) => {
 
 // === Thread Route ===
 router.get('/thread/:accountId/:threadId', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     return res.status(400).json({ error: 'Invalid accountId format' });
   }
   if (!req.params.threadId) return res.status(400).json({ error: 'threadId is required' });
@@ -389,7 +386,7 @@ router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
 
 // === Fetch full content for preview-only messages ===
 router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.accountId).success) {
+  if (!UUID_RE.test(req.params.accountId)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   const { accountId } = req.params;
@@ -413,7 +410,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
 
 // === Clear account cache ===
 router.post('/accounts/:id/cache/clear', asyncHandler(async (req, res) => {
-  if (!z.string().uuid().safeParse(req.params.id).success) {
+  if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid account ID format' });
   }
   await messageSync.deleteCache(req.params.id);

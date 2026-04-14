@@ -507,7 +507,7 @@ function buildScoringResult(evaluation, userResponses, speedBonus) {
 
 function scoreLocalBridgeWord(drillData, userResponses) {
   const scores = userResponses.map((r, i) => {
-    const puzzle = drillData.puzzles?.[i];
+    const puzzle = drillData.puzzles?.[r.questionIndex ?? i];
     if (!puzzle?.answer) return { score: 0, feedback: 'No answer available' };
     const userAnswer = (r.response || '').trim().toLowerCase();
     const correct = puzzle.answer.trim().toLowerCase();
@@ -523,7 +523,7 @@ function scoreLocalBridgeWord(drillData, userResponses) {
 
 function scoreLocalCompoundChain(drillData, userResponses) {
   const scores = userResponses.map((r, i) => {
-    const challenge = drillData.challenges?.[i];
+    const challenge = drillData.challenges?.[r.questionIndex ?? i];
     if (!challenge?.rootWord) return { score: 0, feedback: 'No root word', validCount: 0, invalidItems: [], missedExamples: [] };
     const root = challenge.rootWord.toLowerCase();
     const seen = new Set();
@@ -557,7 +557,7 @@ function scoreLocalCompoundChain(drillData, userResponses) {
 
 function scoreLocalVerbalFluency(drillData, userResponses) {
   const scores = userResponses.map((r, i) => {
-    const cat = drillData.categories?.[i];
+    const cat = drillData.categories?.[r.questionIndex ?? i];
     const seen = new Set();
     for (const item of (r.items || [])) seen.add(item.toLowerCase().trim());
     const uniqueCount = seen.size;
@@ -578,7 +578,7 @@ function scoreLocalVerbalFluency(drillData, userResponses) {
 
 function scoreLocalStoryRecall(drillData, userResponses) {
   const scores = userResponses.map((r, i) => {
-    const questions = drillData.exercises?.[i]?.questions || [];
+    const questions = drillData.exercises?.[r.questionIndex ?? i]?.questions || [];
     if (questions.length === 0) return { score: 0, feedback: 'No questions' };
     let correct = 0;
     for (let qi = 0; qi < questions.length; qi++) {
@@ -639,7 +639,7 @@ export async function scoreLlmDrill(type, drillData, userResponses, timeLimitMs,
 
 function buildWordAssociationScorePrompt(drillData, responses) {
   const pairs = responses.map((r, i) => {
-    const q = drillData.questions?.[i];
+    const q = drillData.questions?.[r.questionIndex ?? i];
     return `Word: "${q?.prompt}" -> User associations: "${r.response || '(no response)'}"`;
   }).join('\n');
 
@@ -654,7 +654,7 @@ Return ONLY valid JSON:
 
 function buildStoryRecallScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const exercise = drillData.exercises?.[i];
+    const exercise = drillData.exercises?.[r.questionIndex ?? i];
     const qas = (exercise?.questions || []).map((q, qi) => {
       const userAnswer = r.answers?.[qi] || '(no answer)';
       return `  Q: ${q.question} | Correct: ${q.answer} | User: ${userAnswer}`;
@@ -673,7 +673,7 @@ Return ONLY valid JSON:
 
 function buildVerbalFluencyScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const cat = drillData.categories?.[i];
+    const cat = drillData.categories?.[r.questionIndex ?? i];
     return `Category: "${cat?.category}" (expected ~${cat?.minExpected})\nUser items: ${(r.items || []).join(', ') || '(none)'}`;
   }).join('\n\n');
 
@@ -690,7 +690,7 @@ Return ONLY valid JSON:
 
 function buildWitComebackScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const scenario = drillData.scenarios?.[i];
+    const scenario = drillData.scenarios?.[r.questionIndex ?? i];
     return `Setup: "${scenario?.setup}"\nContext: ${scenario?.context || 'none'}\nUser's response: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -705,7 +705,7 @@ Return ONLY valid JSON:
 
 function buildPunWordplayScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const challenge = drillData.challenges?.[i];
+    const challenge = drillData.challenges?.[r.questionIndex ?? i];
     return `Challenge: "${challenge?.prompt}" (topic: ${challenge?.topic})\nUser's answer: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -724,7 +724,7 @@ Return ONLY valid JSON:
 
 function buildCompoundChainScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const challenge = drillData.challenges?.[i];
+    const challenge = drillData.challenges?.[r.questionIndex ?? i];
     return `Root word: "${challenge?.rootWord}" (position: ${challenge?.position}, target: ${challenge?.minExpected}+)\nUser's compounds: ${(r.items || []).join(', ') || '(none)'}`;
   }).join('\n\n');
 
@@ -742,7 +742,7 @@ Return ONLY valid JSON:
 
 function buildBridgeWordScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const puzzle = drillData.puzzles?.[i];
+    const puzzle = drillData.puzzles?.[r.questionIndex ?? i];
     return `Clues: ${(puzzle?.clues || []).join(', ')}\nCorrect answer: "${puzzle?.answer}"\nUser's answer: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -759,7 +759,7 @@ Return ONLY valid JSON:
 
 function buildDoubleMeaningScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const challenge = drillData.challenges?.[i];
+    const challenge = drillData.challenges?.[r.questionIndex ?? i];
     return `Word: "${challenge?.word}" (meanings: ${(challenge?.meanings || []).join(' / ')})\nUser's sentence: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -777,7 +777,7 @@ Return ONLY valid JSON:
 
 function buildIdiomTwistScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const challenge = drillData.challenges?.[i];
+    const challenge = drillData.challenges?.[r.questionIndex ?? i];
     return `Idiom: "${challenge?.idiom}" → Domain: "${challenge?.domain}"\nUser's twist: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -796,7 +796,7 @@ Return ONLY valid JSON:
 
 function buildWhatIfScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const scenario = drillData.scenarios?.[i];
+    const scenario = drillData.scenarios?.[r.questionIndex ?? i];
     return `Scenario: "${scenario?.prompt}"\nUser's response: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -811,7 +811,7 @@ Return ONLY valid JSON:
 
 function buildAlternativeUsesScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const obj = drillData.objects?.[i];
+    const obj = drillData.objects?.[r.questionIndex ?? i];
     return `Object: "${obj?.object}" (common use: ${obj?.commonUse})\nUser's creative uses: ${(r.items || []).join(', ') || '(none)'}`;
   }).join('\n\n');
 
@@ -828,7 +828,7 @@ Return ONLY valid JSON:
 
 function buildStoryPromptScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const p = drillData.prompts?.[i];
+    const p = drillData.prompts?.[r.questionIndex ?? i];
     return `Words: ${(p?.words || []).join(', ')}\nUser's micro-story: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -843,7 +843,7 @@ Return ONLY valid JSON:
 
 function buildInventionPitchScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const p = drillData.problems?.[i];
+    const p = drillData.problems?.[r.questionIndex ?? i];
     return `Problem: "${p?.problem}"\nUser's invention pitch: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 
@@ -858,7 +858,7 @@ Return ONLY valid JSON:
 
 function buildReframeScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
-    const s = drillData.situations?.[i];
+    const s = drillData.situations?.[r.questionIndex ?? i];
     return `Negative situation: "${s?.situation}"\nUser's reframe: "${r.response || '(no response)'}"`;
   }).join('\n\n');
 

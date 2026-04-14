@@ -5,11 +5,13 @@
  * Supports structured MEMORY blocks and pattern-based extraction.
  */
 
-import { createMemory } from './memoryBackend.js';
+import { createMemory, searchMemories, getMemories } from './memoryBackend.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
+
+const DEDUP_SIMILARITY_THRESHOLD = 0.82;
 
 /**
  * Parse structured MEMORY blocks from agent output
@@ -133,18 +135,17 @@ function extractTaskContext(_task, _output, _success) {
   return [];
 }
 
+const normalizeText = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
 /**
- * Deduplicate memories by content similarity
- * Uses simple string comparison for now
+ * Deduplicate memories within a single extraction batch
  */
 function deduplicateMemories(memories) {
   const unique = [];
   const seen = new Set();
 
   for (const memory of memories) {
-    // Normalize content for comparison
-    const normalized = memory.content.toLowerCase().replace(/\s+/g, ' ').trim();
-    const key = `${memory.type}:${normalized.substring(0, 100)}`;
+    const key = `${memory.type}:${normalizeText(memory.content).substring(0, 100)}`;
 
     if (!seen.has(key)) {
       seen.add(key);
@@ -153,6 +154,44 @@ function deduplicateMemories(memories) {
   }
 
   return unique;
+}
+
+/**
+ * Check if a proposed memory duplicates an existing active or pending memory.
+ * Uses vector similarity for active memories and text prefix matching for pending.
+ */
+async function findExistingDuplicate(embedding, content, pendingMemories) {
+  if (embedding) {
+    const results = await searchMemories(embedding, {
+      minRelevance: DEDUP_SIMILARITY_THRESHOLD,
+      limit: 3
+    }).catch(err => {
+      console.log(`⚠️ Dedup vector search failed: ${err.message}`);
+      return { memories: [] };
+    });
+
+    if (results.memories.length > 0) {
+      return results.memories[0];
+    }
+  }
+
+  // Also check pending_approval memories (searchMemories only returns active).
+  // Note: getMemories() returns index/summary rows without `content`, so we
+  // compare against `summary` (which we also normalize on the incoming memory
+  // for a reasonable cross-match). This keeps the dedup cheap without an
+  // extra round-trip to load full bodies.
+  if (pendingMemories.length > 0) {
+    const normalizedIncoming = normalizeText(content).substring(0, 80);
+    for (const mem of pendingMemories) {
+      const memText = mem.content || mem.summary || '';
+      if (!memText) continue;
+      if (normalizeText(memText).substring(0, 80) === normalizedIncoming) {
+        return mem;
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -226,35 +265,46 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   const highConfidence = unique.filter(m => m.confidence >= 0.85);
   const mediumConfidence = unique.filter(m => m.confidence >= 0.7 && m.confidence < 0.85);
 
-  const created = [];
-
-  // Extract appId from task metadata if available
   const sourceAppId = task?.metadata?.app || null;
 
-  // Auto-save high confidence memories
-  for (const mem of highConfidence) {
+  // Pre-fetch pending memories once for dedup checks across both loops.
+  // Pass a high limit to avoid relying on the default pagination (50) — dedup
+  // should see the full pending backlog so duplicates aren't missed when the
+  // queue grows.
+  const pendingForDedup = await getMemories({ status: 'pending_approval', limit: 1000 })
+    .catch(err => {
+      console.log(`⚠️ Failed to load pending memories for dedup: ${err.message}`);
+      return { memories: [] };
+    });
+
+  let skippedDuplicates = 0;
+
+  async function dedupAndCreate(mem, extraFields = {}) {
     const embedding = await generateMemoryEmbedding(mem);
-    const memory = await createMemory({
-      ...mem,
-      sourceAgentId: agentId,
-      sourceTaskId: taskId,
-      sourceAppId
+    const existing = await findExistingDuplicate(embedding, mem.content, pendingForDedup.memories);
+    if (existing) {
+      // Active-memory hits from searchMemories() return metadata with \`summary\`
+      // but no \`content\`; pending hits carry \`content\`. Prefer whichever is present.
+      const existingText = existing.content || existing.summary || '';
+      console.log(`🧠 Skipping duplicate memory (similar to "${normalizeText(existingText).substring(0, 60)}…")`);
+      skippedDuplicates++;
+      return null;
+    }
+    return createMemory({
+      ...mem, sourceAgentId: agentId, sourceTaskId: taskId, sourceAppId, ...extraFields
     }, embedding);
-    created.push(memory);
   }
 
-  // Store medium confidence memories as pending_approval
+  const created = [];
+  for (const mem of highConfidence) {
+    const memory = await dedupAndCreate(mem);
+    if (memory) created.push(memory);
+  }
+
   const pendingMemories = [];
   for (const mem of mediumConfidence) {
-    const embedding = await generateMemoryEmbedding(mem);
-    const memory = await createMemory({
-      ...mem,
-      sourceAgentId: agentId,
-      sourceTaskId: taskId,
-      sourceAppId,
-      status: 'pending_approval'
-    }, embedding);
-    pendingMemories.push(memory);
+    const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
+    if (memory) pendingMemories.push(memory);
   }
 
   if (pendingMemories.length > 0) {
@@ -295,12 +345,16 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     }
   }
 
+  if (skippedDuplicates > 0) {
+    console.log(`🧠 Skipped ${skippedDuplicates} duplicate memories from agent ${agentId}`);
+  }
   console.log(`🧠 Extracted ${created.length} memories from agent ${agentId}`);
   cosEvents.emit('memory:extracted', {
     agentId,
     taskId,
     count: created.length,
-    pendingApproval: pendingMemories.length
+    pendingApproval: pendingMemories.length,
+    skippedDuplicates
   });
 
   return {

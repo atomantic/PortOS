@@ -94,14 +94,18 @@ export async function terminateAgent(agentId) {
   // Kill the process
   agent.process.kill('SIGTERM');
 
-  // Give it a moment, then force kill if needed
-  setTimeout(() => {
+  // Give it a moment, then force kill if still running
+  const killTimer = setTimeout(() => {
     if (activeAgents.has(agentId)) {
       agent.process.kill('SIGKILL');
       unregisterSpawnedAgent(agent.pid);
       activeAgents.delete(agentId);
     }
   }, 5000);
+
+  // Store the timer so the close handler can clear it when the process exits cleanly
+  const agentEntry = activeAgents.get(agentId);
+  if (agentEntry) agentEntry.killTimer = killTimer;
 
   return { success: true, agentId };
 }

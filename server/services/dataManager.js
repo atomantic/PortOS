@@ -1,5 +1,5 @@
 import { readdir, stat, rm, mkdir, writeFile as fsWriteFile } from 'fs/promises';
-import { join, relative } from 'path';
+import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -169,10 +169,13 @@ export async function purgeCategory(categoryKey, options = {}) {
   if (!existsSync(dirPath)) throw new Error(`Category directory not found: ${categoryKey}`);
 
   if (options.subPath) {
-    if (!SAFE_NAME.test(options.subPath.replace(/\//g, ''))) throw new Error('Invalid subpath');
-    const targetPath = join(dirPath, options.subPath);
-    if (!targetPath.startsWith(dirPath)) throw new Error('Path traversal not allowed');
-    await rm(targetPath, { recursive: true, force: true });
+    const resolvedRoot = resolve(dirPath);
+    const resolvedTarget = resolve(join(dirPath, options.subPath));
+    // Boundary-aware containment check: use path.relative so a prefix like
+    // `/data/cat` cannot satisfy containment for `/data/cat2`.
+    const rel = relative(resolvedRoot, resolvedTarget);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Invalid subPath');
+    await rm(resolvedTarget, { recursive: true, force: true });
   } else {
     const entries = await readdir(dirPath).catch(() => []);
     await Promise.all(entries.map(entry => rm(join(dirPath, entry), { recursive: true, force: true })));

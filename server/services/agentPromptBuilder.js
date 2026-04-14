@@ -197,7 +197,7 @@ Use the findings from the previous stage to inform your work. If the previous st
   // Build simplify section if enabled
   const simplifySection = isTruthyMetaFn(task.metadata?.simplify) ? `
 ## Simplify Step
-After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found before committing.
+After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then commit and push using \`/do:push\`.
 ` : '';
 
   // Build review loop section if enabled
@@ -305,7 +305,8 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
 3. Test your changes when possible
-4. Provide a summary of what was done
+4. Commit and push your changes (see Git Hygiene below)
+5. Provide a summary of what was done
 
 ## Guidelines
 - Focus only on the assigned task
@@ -404,7 +405,7 @@ export async function generateJiraTitle(description) {
     } else {
       executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onDone);
     }
-  }).catch(() => {});
+  }).catch(err => console.warn(`⚠️ JIRA title generation failed: ${err.message}`));
 
   title = title.trim().replace(/^["']|["']$/g, '');
   return title || fallback;

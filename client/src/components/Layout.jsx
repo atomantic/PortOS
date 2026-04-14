@@ -70,7 +70,9 @@ import {
   Swords,
   Image as ImageIcon,
   HardDrive,
-  MessagesSquare
+  MessagesSquare,
+  BookOpen,
+  Search
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -101,6 +103,7 @@ const navItems = [
       { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
       { to: '/brain/links', label: 'Links', icon: Link2 },
       { to: '/brain/memory', label: 'Memory', icon: Database },
+      { to: '/brain/notes', label: 'Notes', icon: FileText },
       { to: '/brain/trust', label: 'Trust', icon: Shield }
     ]
   },
@@ -235,7 +238,18 @@ const navItems = [
       { to: '/uploads', label: 'Uploads', icon: Upload }
     ]
   },
-  { to: '/agents', label: 'Social Agents', icon: Users, single: true }
+  { to: '/agents', label: 'Social Agents', icon: Users, single: true },
+  {
+    label: 'Wiki',
+    icon: BookOpen,
+    children: [
+      { to: '/wiki/overview', label: 'Overview', icon: BarChart3 },
+      { to: '/wiki/browse', label: 'Browse', icon: FileText },
+      { to: '/wiki/graph', label: 'Graph', icon: Network },
+      { to: '/wiki/log', label: 'Log', icon: Activity },
+      { to: '/wiki/search', label: 'Search', icon: Search }
+    ]
+  }
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
@@ -694,6 +708,7 @@ export default function Layout() {
             location.pathname.startsWith('/messages') ||
             location.pathname.startsWith('/post') ||
             location.pathname === '/review' ||
+            location.pathname.startsWith('/wiki') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||
             location.pathname.startsWith('/city') ||

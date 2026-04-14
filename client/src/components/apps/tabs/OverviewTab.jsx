@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag } from 'lucide-react';
+import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { NON_PM2_TYPES } from '../constants';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -10,12 +10,19 @@ import SlashDoPanel from '../SlashDoPanel';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import * as api from '../../../services/api';
 
+const SCRIPT_ICONS = {
+  'deploy.sh': Rocket,
+  'take_screenshots.sh': Camera,
+  'take_screenshots_macos.sh': Camera
+};
+
 export default function OverviewTab({ app, onRefresh }) {
   const [editingApp, setEditingApp] = useState(null);
   const [refreshingConfig, setRefreshingConfig] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [jiraTickets, setJiraTickets] = useState(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
+  const [installingScripts, setInstallingScripts] = useState(false);
 
   const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
   const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete });
@@ -42,6 +49,24 @@ export default function OverviewTab({ app, onRefresh }) {
   };
 
   const handleStandardize = () => startStandardize(app.id);
+
+  const missingScripts = app.xcodeScripts?.missing || [];
+
+  const handleInstallScripts = async (scriptNames) => {
+    setInstallingScripts(true);
+    const result = await api.installXcodeScripts(app.id, scriptNames).catch(() => null);
+    setInstallingScripts(false);
+    if (!result) return; // request() already showed error toast
+
+    if (result.installed?.length) {
+      toast.success(`Installed: ${result.installed.join(', ')}`);
+      onRefresh();
+    }
+
+    if (result.errors?.length) {
+      toast.error(`Some scripts could not be installed: ${result.errors.join(', ')}`);
+    }
+  };
 
   const handleArchive = async () => {
     setArchiving(true);
@@ -89,6 +114,51 @@ export default function OverviewTab({ app, onRefresh }) {
           </div>
         )}
       </div>
+
+      {/* Missing Xcode Scripts Banner */}
+      {missingScripts.length > 0 && (
+        <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm font-medium text-port-warning mb-2">
+                Missing management scripts
+              </div>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {missingScripts.map(s => {
+                  const Icon = SCRIPT_ICONS[s.name] || Terminal;
+                  return (
+                    <span key={s.name} className="inline-flex items-center gap-1.5 px-2 py-1 bg-port-card border border-port-border rounded text-xs text-gray-300">
+                      <Icon size={12} />
+                      <span className="font-mono">{s.name}</span>
+                      <span className="text-gray-500">— {s.description}</span>
+                    </span>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleInstallScripts(missingScripts.map(s => s.name))}
+                  disabled={installingScripts}
+                  className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded text-xs font-medium disabled:opacity-50"
+                >
+                  {installingScripts ? 'Installing...' : 'Install All'}
+                </button>
+                {missingScripts.length > 1 && missingScripts.map(s => (
+                  <button
+                    key={s.name}
+                    onClick={() => handleInstallScripts([s.name])}
+                    disabled={installingScripts}
+                    className="px-2 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-300 rounded text-xs disabled:opacity-50"
+                  >
+                    Install {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Start Commands */}
       {app.startCommands?.length > 0 && (

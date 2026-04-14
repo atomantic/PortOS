@@ -158,8 +158,8 @@ async function applyGoalsRemote(remoteData) {
 
   // Merge top-level metadata (birthDate, lifeExpectancy, timeHorizons) via LWW
   // Use the most recent goal's updatedAt as proxy for file freshness
-  const localMaxTs = Math.max(0, ...(local.goals || []).map(g => new Date(g.updatedAt || 0).getTime()));
-  const remoteMaxTs = Math.max(0, ...(remoteData.goals || []).map(g => new Date(g.updatedAt || 0).getTime()));
+  const localMaxTs = (local.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
+  const remoteMaxTs = (remoteData.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
   const metaSource = remoteMaxTs > localMaxTs ? remoteData : local;
 
   const merged = {

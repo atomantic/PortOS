@@ -58,12 +58,26 @@ vi.mock('../services/git.js', () => ({
   commit: vi.fn()
 }));
 
+vi.mock('../services/xcodeScripts.js', () => ({
+  checkScripts: vi.fn().mockReturnValue({ missing: [], present: [] }),
+  installScripts: vi.fn(),
+  XCODE_TEAM_ID: 'TEST_TEAM',
+  XCODE_BUNDLE_PREFIX: 'net.test',
+  XCODE_SCRIPT_NAMES: ['deploy.sh', 'take_screenshots.sh', 'take_screenshots_macos.sh'],
+  toBundleId: vi.fn(),
+  toTargetName: vi.fn(),
+  generateDeployScript: vi.fn(),
+  generateScreenshotScript: vi.fn(),
+  generateMacScreenshotScript: vi.fn()
+}));
+
 // Import mocked modules
 import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import * as history from '../services/history.js';
 import * as streamingDetect from '../services/streamingDetect.js';
 import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
+import { installScripts } from '../services/xcodeScripts.js';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -637,6 +651,91 @@ describe('Apps Routes', () => {
         .send({ enabled: true });
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/apps/:id/xcode-scripts/install', () => {
+    it('should install requested scripts successfully', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      installScripts.mockResolvedValue({ installed: ['deploy.sh'], skipped: [], errors: [] });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh'] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.installed).toEqual(['deploy.sh']);
+    });
+
+    it('should return 400 when all scripts fail', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      installScripts.mockResolvedValue({ installed: [], skipped: [], errors: ['some failure'] });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh'] });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INSTALL_FAILED');
+    });
+
+    it('should return 400 when scripts array contains an unknown name', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['bad.sh'] });
+
+      // Unknown script names are now rejected by the Zod enum validator
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 400 when scripts array is empty', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: [] });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('should return 404 when app not found', async () => {
+      appsService.getAppById.mockResolvedValue(null);
+
+      const response = await request(app)
+        .post('/api/apps/app-999/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh'] });
+
+      expect(response.status).toBe(404);
+    });
+
+    it('should return partial success with errors', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      installScripts.mockResolvedValue({
+        installed: ['deploy.sh'],
+        skipped: [],
+        errors: ['Script take_screenshots_macos.sh does not apply to ios-native apps']
+      });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh', 'take_screenshots_macos.sh'] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.installed).toEqual(['deploy.sh']);
+      expect(response.body.errors).toHaveLength(1);
+    });
+
+    it('should return 400 when repoPath does not exist', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/nonexistent/path' });
+
+      const response = await request(app)
+        .post('/api/apps/app-001/xcode-scripts/install')
+        .send({ scripts: ['deploy.sh'] });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('PATH_NOT_FOUND');
     });
   });
 });

@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { getMemories } from './memoryBackend.js';
 
 const MEMORY_CONFIG_FILE = join(PATHS.data, 'memory-classifier-config.json');
 
@@ -74,15 +75,43 @@ export async function updateConfig(updates) {
 }
 
 /**
+ * Load existing active + pending memories as a summary for the LLM prompt.
+ * Defense-in-depth: the LLM sees what's already stored so it avoids proposing
+ * duplicates. The backend dedup in memoryExtractor is the actual safety net.
+ */
+async function loadExistingMemorySummary() {
+  const [active, pending] = await Promise.all([
+    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30 })
+      .catch(() => ({ memories: [] })),
+    getMemories({ status: 'pending_approval', limit: 30 })
+      .catch(() => ({ memories: [] }))
+  ]);
+
+  const allMemories = [...active.memories, ...pending.memories];
+  if (allMemories.length === 0) return '';
+
+  // getMemories() returns index/metadata rows without \`content\` — fall back
+  // to \`summary\` so each bullet has a real sentence instead of an empty string.
+  const lines = allMemories.slice(0, 30).map(m => {
+    const text = (m.content || m.summary || '').substring(0, 150);
+    return `- [${m.type}] ${text}`;
+  });
+  return lines.join('\n');
+}
+
+/**
  * Build the classification prompt
  */
 async function buildClassificationPrompt(task, agentOutput, config) {
   // Try to load the template
   const template = await getStageTemplate('memory-evaluate').catch(() => null);
 
+  // Load existing memories to inject into the prompt
+  const existingMemories = await loadExistingMemorySummary();
+
   if (!template) {
     // Fallback inline template
-    return buildFallbackPrompt(task, agentOutput);
+    return buildFallbackPrompt(task, agentOutput, existingMemories);
   }
 
   // Apply variables to template
@@ -91,7 +120,8 @@ async function buildClassificationPrompt(task, agentOutput, config) {
     taskDescription: task.description || 'No description',
     taskStatus: task.status || 'completed',
     appName: task.metadata?.app || 'PortOS',
-    agentOutput: agentOutput.substring(0, config.maxOutputLength || 10000)
+    agentOutput: agentOutput.substring(0, config.maxOutputLength || 10000),
+    existingMemories: existingMemories || 'No existing memories yet.'
   };
 
   let prompt = template;
@@ -105,13 +135,17 @@ async function buildClassificationPrompt(task, agentOutput, config) {
 /**
  * Fallback prompt if template not found
  */
-function buildFallbackPrompt(task, agentOutput) {
+function buildFallbackPrompt(task, agentOutput, existingMemories = '') {
+  const existingSection = existingMemories
+    ? `\n## Existing Memories (DO NOT duplicate these)\nThe following memories are already stored. Do NOT propose any memory that overlaps with or restates these:\n${existingMemories}\n`
+    : '';
+
   return `Analyze this agent output and extract memories about the USER — their values, preferences, work patterns, and qualities they care about.
 
 Task: ${task.description || 'Unknown task'}
 Output:
 ${agentOutput.substring(0, 8000)}
-
+${existingSection}
 Return JSON with memories array. Each memory should have:
 - type: preference|decision|learning
 - category: values|workflow|preferences|communication|aesthetics|patterns
@@ -126,16 +160,90 @@ DO NOT include:
 - Task completion summaries (that's git history)
 - Generic best practices any developer would know
 - One-time code observations or status assessments
+- Anything already captured in the existing memories listed above
 
-Most outputs should produce ZERO memories. Only extract when you observe something genuinely revealing about the user's values, preferences, or work patterns.
+Most outputs should produce ZERO memories. Only extract when you observe something genuinely revealing about the user's values, preferences, or work patterns that is NOT already stored.
 
 Return: {"memories": [...], "rejected": [...]}`;
+}
+
+/**
+ * Derive the LM Studio base URL from the chat/completions endpoint
+ */
+function getBaseUrl(endpoint) {
+  return endpoint.replace(/\/v1\/chat\/completions\/?$/, '').replace(/\/+$/, '');
+}
+
+/**
+ * Ensure an LLM model is loaded in LM Studio. If none is loaded, discover
+ * downloaded LLM models via `/api/v0/models` and auto-load one via
+ * `/api/v1/models/load`. Prefers the configured model when available,
+ * otherwise falls back to any downloaded LLM.
+ *
+ * @returns {Promise<string|null>} The id of a loaded LLM model, or null
+ */
+async function ensureLLMModelLoaded(config) {
+  const baseUrl = getBaseUrl(config.endpoint);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  const listResponse = await fetch(`${baseUrl}/api/v0/models`, {
+    method: 'GET',
+    signal: controller.signal
+  }).catch(() => null).finally(() => clearTimeout(timeoutId));
+
+  if (!listResponse?.ok) return null;
+
+  const payload = await listResponse.json().catch(() => null);
+  const allModels = payload?.data || [];
+  const llmModels = allModels.filter(m => m.type === 'llm');
+
+  if (llmModels.length === 0) {
+    console.warn('⚠️ No LLM models downloaded in LM Studio — download one in the Discover tab');
+    return null;
+  }
+
+  // If any LLM is already loaded, prefer the configured one; otherwise use any loaded LLM
+  const loaded = llmModels.filter(m => m.state === 'loaded');
+  if (loaded.length > 0) {
+    const match = loaded.find(m => m.id === config.model || m.id.includes(config.model));
+    return (match || loaded[0]).id;
+  }
+
+  // Need to load one — prefer configured model, else first available
+  const preferred = llmModels.find(m => m.id === config.model || m.id.includes(config.model))
+    || llmModels[0];
+
+  console.log(`📦 Auto-loading LLM model: ${preferred.id}`);
+
+  const loadController = new AbortController();
+  const loadTimeout = setTimeout(() => loadController.abort(), 120000);
+  const loadResponse = await fetch(`${baseUrl}/api/v1/models/load`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: preferred.id }),
+    signal: loadController.signal
+  }).catch(err => ({ ok: false, _err: err.message })).finally(() => clearTimeout(loadTimeout));
+
+  if (!loadResponse.ok) {
+    const errText = loadResponse._err || await loadResponse.text?.().catch(() => 'unknown error') || 'unknown error';
+    console.error(`❌ Failed to auto-load LLM model ${preferred.id}: ${errText}`);
+    return null;
+  }
+
+  console.log(`✅ LLM model loaded: ${preferred.id}`);
+  return preferred.id;
 }
 
 /**
  * Call LM Studio API for classification
  */
 async function callLLM(prompt, config) {
+  // Make sure a model is loaded before sending the request — LM Studio returns
+  // 400 "No models loaded" otherwise.
+  const loadedModel = await ensureLLMModelLoaded(config);
+  const modelToUse = loadedModel || config.model;
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeout);
 
@@ -146,7 +254,7 @@ async function callLLM(prompt, config) {
       'Authorization': `Bearer lm-studio`
     },
     body: JSON.stringify({
-      model: config.model,
+      model: modelToUse,
       messages: [
         {
           role: 'system',

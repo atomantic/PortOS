@@ -8,7 +8,6 @@ import Apps from './pages/Apps';
 import CreateApp from './pages/CreateApp';
 import Templates from './pages/Templates';
 import PromptManager from './pages/PromptManager';
-import ChiefOfStaff from './pages/ChiefOfStaff';
 import Brain from './pages/Brain';
 import Security from './pages/Security';
 import DigitalTwin from './pages/DigitalTwin';
@@ -27,6 +26,7 @@ import Post from './pages/Post';
 import Review from './pages/Review';
 import Loops from './pages/Loops';
 import CharacterSheet from './pages/CharacterSheet';
+import Wiki from './pages/Wiki';
 
 // Auto-reload on stale chunk errors (e.g., after a rebuild changes chunk hashes)
 // Uses sessionStorage to prevent infinite reload loops (max 1 reload per session)
@@ -64,6 +64,7 @@ const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
+const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -143,6 +144,8 @@ export default function App() {
           <Route path="city/settings" element={<CyberCity />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
+          <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
+          <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />

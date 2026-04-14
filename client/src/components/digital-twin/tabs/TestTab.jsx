@@ -52,9 +52,9 @@ export default function TestTab({ onRefresh }) {
   const loadData = async () => {
     setLoading(true);
     const [testsData, providersData, historyData, fbStats] = await Promise.all([
-      api.getSoulTests().catch(() => []),
+      api.getDigitalTwinTests().catch(() => []),
       api.getProviders().catch(() => ({ providers: [] })),
-      api.getSoulTestHistory(5).catch(() => []),
+      api.getDigitalTwinTestHistory(5).catch(() => []),
       api.getBehavioralFeedbackStats().catch(() => null)
     ]);
 

@@ -100,10 +100,10 @@ export default function DataDog() {
         ...(formData.appKey && { appKey: formData.appKey })
       };
 
-      await api.post('/datadog/instances', payload);
+      const saved = await api.post('/datadog/instances', payload);
 
       toast.success(`DataDog instance "${payload.name}" saved successfully`);
-      await loadInstances();
+      setInstances(prev => ({ ...prev, [saved.id]: saved }));
       handleCancel();
     } catch (error) {
       console.error(`Failed to save DataDog instance: ${error.message}`);
@@ -125,7 +125,11 @@ export default function DataDog() {
     try {
       await api.delete(`/datadog/instances/${instanceId}`);
       toast.success(`DataDog instance "${instanceId}" deleted`);
-      await loadInstances();
+      setInstances(prev => {
+        const next = { ...prev };
+        delete next[instanceId];
+        return next;
+      });
     } catch (error) {
       console.error(`Failed to delete DataDog instance: ${error.message}`);
       toast.error(`Failed to delete: ${error.message}`);

@@ -369,6 +369,53 @@ Phase 4 — Report:
     createdAt: null,
     updatedAt: null
   },
+  {
+    id: 'job-wiki-maintenance',
+    name: 'Wiki Maintenance',
+    description: 'Audit the LLM Wiki for contradictions, orphan pages, missing cross-references, outdated claims, and structural issues.',
+    category: 'wiki-maintenance',
+    interval: 'weekly',
+    intervalMs: WEEK,
+    scheduledTime: '03:00',
+    cronExpression: '0 3 * * 0',
+    enabled: false,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    type: 'agent',
+    promptTemplate: `[Autonomous Job] Wiki Maintenance
+
+You are acting as my Chief of Staff, performing a weekly health check on my LLM Wiki.
+
+The wiki lives in an Obsidian vault. Read the schema file first:
+  Read the file at: ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/PortOS/WIKI.md
+
+Then perform a full lint pass:
+
+1. Read wiki/index.md and wiki/log.md to understand current state
+2. Read every file in wiki/ (sources, entities, concepts, comparisons, synthesis, queries)
+3. Read every file in raw/ to check for unprocessed sources
+4. Check for:
+   - Contradictions between wiki pages (conflicting claims about the same topic)
+   - Orphan pages with no inbound wikilinks from other pages
+   - Concepts or entities mentioned repeatedly in text but lacking their own dedicated page
+   - Claims that appear outdated based on newer files in raw/
+   - Missing cross-references (pages that should link to each other but don't)
+   - Raw sources that have no corresponding wiki/sources/ summary page
+   - Broken wikilinks (links to pages that don't exist)
+   - Frontmatter inconsistencies (missing type, dates, sources, tags)
+5. Write the health report to wiki/lint-report.md with:
+   - Summary of findings grouped by severity (critical, warning, suggestion)
+   - Specific fixes for each issue (which file, what to change)
+   - Statistics (total pages, total links, orphan count, coverage %)
+6. Append a log entry to wiki/log.md
+7. Create CoS tasks for any critical issues that need manual attention
+
+Focus on actionable findings. The goal is to keep the wiki healthy as it grows.`,
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
 ]
 
 let initPromise = null

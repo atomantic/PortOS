@@ -16,7 +16,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import * as feedsService from '../services/feeds.js';
 
 const router = Router();
@@ -37,14 +37,15 @@ router.get('/stats', asyncHandler(async (req, res) => {
   res.json(stats);
 }));
 
-// GET /api/feeds/items — get feed items
+// GET /api/feeds/items — get feed items (supports limit/offset pagination, default limit 100)
 router.get('/items', asyncHandler(async (req, res) => {
   const { feedId, unreadOnly } = req.query;
+  const { limit, offset } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });
   const items = await feedsService.getItems({
     feedId: feedId || undefined,
     unreadOnly: unreadOnly === 'true'
   });
-  res.json(items);
+  res.json(items.slice(offset, offset + limit));
 }));
 
 // POST /api/feeds — add a new feed subscription

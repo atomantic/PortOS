@@ -527,7 +527,7 @@ export async function spawnAgentForTask(task) {
 
   // Use CoS Runner if available, otherwise spawn directly
   if (useRunner) {
-    return spawnViaRunner(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, toolExecution.id, laneName);
+    return spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider, runId, cliConfig, executionId: toolExecution.id, laneName });
   }
 
   // Direct spawn mode (fallback)
@@ -571,7 +571,8 @@ export async function waitForRunnerStability() {
 /**
  * Spawn agent via CoS Runner (isolated PM2 process).
  */
-export async function spawnViaRunner(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, executionId, laneName) {
+export async function spawnViaRunner(agentId, task, opts) {
+  const { prompt, workspacePath, model, provider, runId, cliConfig, executionId, laneName } = opts;
   // Wait for runner to be stable to prevent orphaned agents during rolling restarts
   await waitForRunnerStability();
 
@@ -648,6 +649,46 @@ export function extractFinalSummary(outputBuffer) {
 
   const summary = contentLines.join('\n').trim();
   return summary || null;
+}
+
+const RE_SIMPLIFY_MARKER = /\/simplify/;
+const RE_SIMPLIFY_ACTION = /\b(run|running|launch|now)\b/i;
+
+export function extractSimplifySummaries(outputBuffer) {
+  if (!outputBuffer) return null;
+
+  const lines = outputBuffer.split('\n');
+  let simplifyIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (RE_SIMPLIFY_MARKER.test(lines[i]) && RE_SIMPLIFY_ACTION.test(lines[i])) {
+      simplifyIdx = i;
+      break;
+    }
+  }
+  if (simplifyIdx < 0) return null;
+
+  const taskSummary = extractFinalSummary(lines.slice(0, simplifyIdx).join('\n'));
+  const simplifySummary = extractFinalSummary(lines.slice(simplifyIdx + 1).join('\n'));
+  return { taskSummary, simplifySummary };
+}
+
+/**
+ * Persist task/simplify summaries for agents that ran with /simplify.
+ * Shared by handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
+ */
+export async function persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn) {
+  if (!isTruthyMetaFn(task.metadata?.simplify)) return;
+  const summaries = extractSimplifySummaries(outputBuffer);
+  if (!summaries) return;
+  // Persist whenever *either* summary is present — e.g. if the /simplify
+  // marker appears at the very top of the output, taskSummary will be null
+  // but simplifySummary is still worth keeping.
+  if (summaries.taskSummary || summaries.simplifySummary) {
+    await updateAgent(agentId, { metadata: {
+      taskSummary: summaries.taskSummary || null,
+      simplifySummary: summaries.simplifySummary || null
+    } });
+  }
 }
 
 /**
@@ -879,6 +920,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     if (summary) {
       await updateAgent(agentId, { metadata: { outputSummary: summary } });
     }
+  }
+
+  if (effectiveSuccess) {
+    await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMeta);
   }
 
   await completeAgent(agentId, {

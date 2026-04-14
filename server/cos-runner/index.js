@@ -87,6 +87,8 @@ function summarizeToolInput(toolName, input) {
       return input.todos?.length ? `${input.todos.length} items` : '';
     case 'NotebookEdit':
       return shorten(input.notebook_path);
+    case 'Skill':
+      return input.skill || '';
     default:
       return '';
   }

@@ -68,6 +68,10 @@ export const getAppLogs = (id, lines = 100, processName) => {
   return request(`/apps/${id}/logs?${params}`);
 };
 
+export const installXcodeScripts = (id, scripts) => request(`/apps/${id}/xcode-scripts/install`, {
+  method: 'POST',
+  body: JSON.stringify({ scripts })
+});
 export const getAppDocuments = (id) => request(`/apps/${id}/documents`);
 export const getAppDocument = (id, filename) => request(`/apps/${id}/documents/${filename}`);
 export const saveAppDocument = (id, filename, content, commitMessage) =>

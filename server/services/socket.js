@@ -61,87 +61,101 @@ export function initSocket(io) {
 
     // Handle streaming app detection
     socket.on('detect:start', async (rawData) => {
-      const data = validateSocketData(detectStartSchema, rawData, socket, 'detect:start');
-      if (!data) return;
-      console.log(`🔍 Starting detection: ${data.path}`);
-      await streamDetection(socket, data.path);
+      try {
+        const data = validateSocketData(detectStartSchema, rawData, socket, 'detect:start');
+        if (!data) return;
+        console.log(`🔍 Starting detection: ${data.path}`);
+        await streamDetection(socket, data.path);
+      } catch (err) {
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [detect:start]: ${message}`);
+        socket.emit('error:server', { message });
+        socket.emit('detect:complete', { success: false, error: message });
+      }
     });
 
     // Handle PM2 standardization
     socket.on('standardize:start', async (rawData) => {
-      const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
-      if (!data) return;
-      const { repoPath, providerId } = data;
-      console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
+      try {
+        const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
+        if (!data) return;
+        const { repoPath, providerId } = data;
+        console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
-      const emit = (step, status, data = {}) => {
-        socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
-      };
+        const emit = (step, status, data = {}) => {
+          socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
+        };
 
-      // Step 1: Analyze
-      emit('analyze', 'running', { message: 'Analyzing project configuration...' });
+        // Step 1: Analyze
+        emit('analyze', 'running', { message: 'Analyzing project configuration...' });
 
-      const analysis = await pm2Standardizer.analyzeApp(repoPath, providerId)
-        .catch(err => ({ success: false, error: err.message }));
+        const analysis = await pm2Standardizer.analyzeApp(repoPath, providerId)
+          .catch(err => ({ success: false, error: err.message }));
 
-      if (!analysis.success) {
-        emit('analyze', 'error', { message: analysis.error });
-        socket.emit('standardize:complete', { success: false, error: analysis.error });
-        return;
-      }
-
-      emit('analyze', 'done', {
-        message: `Found ${analysis.proposedChanges.processes?.length || 0} processes`,
-        processes: analysis.proposedChanges.processes,
-        strayPorts: analysis.proposedChanges.strayPorts
-      });
-
-      socket.emit('standardize:analyzed', { plan: analysis });
-
-      // Step 2: Backup
-      emit('backup', 'running', { message: 'Creating git backup...' });
-
-      const backup = await pm2Standardizer.createGitBackup(repoPath)
-        .catch(err => ({ success: false, reason: err.message }));
-
-      if (backup.success) {
-        emit('backup', 'done', { message: `Backup branch: ${backup.branch}`, branch: backup.branch });
-      } else if (backup.code === 'DIRTY_WORKTREE') {
-        emit('backup', 'error', { message: backup.reason });
-        socket.emit('standardize:complete', { success: false, error: backup.reason });
-        return;
-      } else {
-        emit('backup', 'skipped', { message: backup.reason || 'No git repository' });
-      }
-
-      // Step 3: Apply changes
-      emit('apply', 'running', { message: 'Writing ecosystem.config.cjs...' });
-
-      const result = await pm2Standardizer.applyStandardization(repoPath, analysis, { skipBackup: true })
-        .catch(err => ({ success: false, errors: [err.message] }));
-
-      if (result.errors?.length > 0) {
-        emit('apply', 'error', { message: result.errors.join(', ') });
-        socket.emit('standardize:complete', { success: false, error: result.errors.join(', ') });
-        return;
-      }
-
-      emit('apply', 'done', {
-        message: `Modified ${result.filesModified.length} files`,
-        filesModified: result.filesModified
-      });
-
-      // Complete — use backup branch from step 2 since step 3 skips backup
-      socket.emit('standardize:complete', {
-        success: true,
-        result: {
-          backupBranch: backup.branch || null,
-          filesModified: result.filesModified,
-          processes: analysis.proposedChanges.processes
+        if (!analysis.success) {
+          emit('analyze', 'error', { message: analysis.error });
+          socket.emit('standardize:complete', { success: false, error: analysis.error });
+          return;
         }
-      });
 
-      console.log(`✅ Standardization complete: ${result.filesModified.length} files modified`);
+        emit('analyze', 'done', {
+          message: `Found ${analysis.proposedChanges.processes?.length || 0} processes`,
+          processes: analysis.proposedChanges.processes,
+          strayPorts: analysis.proposedChanges.strayPorts
+        });
+
+        socket.emit('standardize:analyzed', { plan: analysis });
+
+        // Step 2: Backup
+        emit('backup', 'running', { message: 'Creating git backup...' });
+
+        const backup = await pm2Standardizer.createGitBackup(repoPath)
+          .catch(err => ({ success: false, reason: err.message }));
+
+        if (backup.success) {
+          emit('backup', 'done', { message: `Backup branch: ${backup.branch}`, branch: backup.branch });
+        } else if (backup.code === 'DIRTY_WORKTREE') {
+          emit('backup', 'error', { message: backup.reason });
+          socket.emit('standardize:complete', { success: false, error: backup.reason });
+          return;
+        } else {
+          emit('backup', 'skipped', { message: backup.reason || 'No git repository' });
+        }
+
+        // Step 3: Apply changes
+        emit('apply', 'running', { message: 'Writing ecosystem.config.cjs...' });
+
+        const result = await pm2Standardizer.applyStandardization(repoPath, analysis, { skipBackup: true })
+          .catch(err => ({ success: false, errors: [err.message] }));
+
+        if (result.errors?.length > 0) {
+          emit('apply', 'error', { message: result.errors.join(', ') });
+          socket.emit('standardize:complete', { success: false, error: result.errors.join(', ') });
+          return;
+        }
+
+        emit('apply', 'done', {
+          message: `Modified ${result.filesModified.length} files`,
+          filesModified: result.filesModified
+        });
+
+        // Complete — use backup branch from step 2 since step 3 skips backup
+        socket.emit('standardize:complete', {
+          success: true,
+          result: {
+            backupBranch: backup.branch || null,
+            filesModified: result.filesModified,
+            processes: analysis.proposedChanges.processes
+          }
+        });
+
+        console.log(`✅ Standardization complete: ${result.filesModified.length} files modified`);
+      } catch (err) {
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [standardize:start]: ${message}`);
+        socket.emit('error:server', { message });
+        socket.emit('standardize:complete', { success: false, error: message });
+      }
     });
 
     // Handle log streaming requests
@@ -280,155 +294,167 @@ export function initSocket(io) {
 
     // Handle error recovery requests (can trigger auto-fix agents)
     socket.on('error:recover', async (rawData) => {
-      const data = validateSocketData(errorRecoverSchema, rawData, socket, 'error:recover');
-      if (!data) return;
-      const { code, context } = data;
-      console.log(`🔧 Error recovery requested: ${code}`);
+      try {
+        const data = validateSocketData(errorRecoverSchema, rawData, socket, 'error:recover');
+        if (!data) return;
+        const { code, context } = data;
+        console.log(`🔧 Error recovery requested: ${code}`);
 
-      // Create auto-fix task
-      const task = await handleErrorRecovery(code, context);
+        // Create auto-fix task
+        const task = await handleErrorRecovery(code, context);
 
-      // Broadcast recovery task created
-      io.emit('error:recover:requested', {
-        code,
-        context,
-        taskId: task.id,
-        timestamp: Date.now()
-      });
+        // Broadcast recovery task created
+        io.emit('error:recover:requested', {
+          code,
+          context,
+          taskId: task.id,
+          timestamp: Date.now()
+        });
+      } catch (err) {
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [error:recover]: ${message}`);
+        socket.emit('error:recover:error', { message });
+      }
     });
 
     // App update handler — streams progress via socket
     socket.on('app:update', async (rawData) => {
-      const data = validateSocketData(appUpdateSchema, rawData, socket, 'app:update');
-      if (!data) return;
+      try {
+        const data = validateSocketData(appUpdateSchema, rawData, socket, 'app:update');
+        if (!data) return;
 
-      const app = await appsService.getAppById(data.appId);
-      if (!app) {
-        socket.emit('app:update:error', { message: 'App not found' });
-        return;
-      }
+        const app = await appsService.getAppById(data.appId);
+        if (!app) {
+          socket.emit('app:update:error', { message: 'App not found' });
+          return;
+        }
 
-      console.log(`⬇️ Socket update started for ${app.name}`);
-      const emit = (step, status, message) => {
-        socket.emit('app:update:step', { step, status, message, timestamp: Date.now() });
-      };
+        console.log(`⬇️ Socket update started for ${app.name}`);
+        const emit = (step, status, message) => {
+          socket.emit('app:update:step', { step, status, message, timestamp: Date.now() });
+        };
 
-      const result = await appUpdater.updateApp(app, emit).catch(err => {
-        socket.emit('app:update:error', { message: err.message });
-        return null;
-      });
+        const result = await appUpdater.updateApp(app, emit).catch(err => {
+          socket.emit('app:update:error', { message: err.message });
+          return null;
+        });
 
-      if (result) {
-        socket.emit('app:update:complete', { success: result.success, steps: result.steps });
-        console.log(`✅ Socket update complete for ${app.name}`);
+        if (result) {
+          socket.emit('app:update:complete', { success: result.success, steps: result.steps });
+          console.log(`✅ Socket update complete for ${app.name}`);
+        }
+      } catch (err) {
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [app:update]: ${message}`);
+        socket.emit('app:update:error', { message });
+        socket.emit('app:update:complete', { success: false, steps: [] });
       }
     });
 
     // App standardize handler — streams progress via socket
     socket.on('app:standardize', async (rawData) => {
-      const data = validateSocketData(appStandardizeSchema, rawData, socket, 'app:standardize');
-      if (!data) return;
+      try {
+        const data = validateSocketData(appStandardizeSchema, rawData, socket, 'app:standardize');
+        if (!data) return;
 
-      const app = await appsService.getAppById(data.appId);
-      if (!app) {
-        socket.emit('app:standardize:error', { message: 'App not found' });
-        return;
-      }
-
-      console.log(`🔧 Socket standardize started for ${app.name}`);
-      const emit = (step, status, message) => {
-        socket.emit('app:standardize:step', { step, status, message, timestamp: Date.now() });
-      };
-
-      // Step 1: Analyze
-      emit('analyze', 'running', 'Analyzing project configuration...');
-      const analysis = await pm2Standardizer.analyzeApp(app.repoPath)
-        .catch(err => ({ success: false, error: err.message }));
-
-      if (!analysis.success) {
-        emit('analyze', 'error', analysis.error);
-        socket.emit('app:standardize:error', { message: analysis.error });
-        return;
-      }
-      emit('analyze', 'done', `Found ${analysis.proposedChanges.processes?.length || 0} processes`);
-
-      // Step 2: Backup
-      emit('backup', 'running', 'Creating git backup...');
-      const backup = await pm2Standardizer.createGitBackup(app.repoPath)
-        .catch(err => ({ success: false, reason: err.message }));
-
-      if (backup.success) {
-        emit('backup', 'done', `Backup branch: ${backup.branch}`);
-      } else {
-        emit('backup', 'skipped', backup.reason || 'No git repository');
-      }
-
-      // Step 3: Apply
-      emit('apply', 'running', 'Writing ecosystem.config.cjs...');
-      const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis)
-        .catch(err => ({ success: false, errors: [err.message] }));
-
-      if (result.errors?.length > 0) {
-        emit('apply', 'error', result.errors.join(', '));
-        socket.emit('app:standardize:error', { message: result.errors.join(', ') });
-        return;
-      }
-      emit('apply', 'done', `Modified ${result.filesModified.length} files`);
-
-      // Update app with new PM2 process names
-      if (analysis.proposedChanges?.processes) {
-        const pm2ProcessNames = analysis.proposedChanges.processes.map(p => p.name);
-        await appsService.updateApp(data.appId, { pm2ProcessNames });
-      }
-
-      socket.emit('app:standardize:complete', {
-        success: true,
-        result: {
-          backupBranch: result.backupBranch,
-          filesModified: result.filesModified,
-          processes: analysis.proposedChanges.processes
+        const app = await appsService.getAppById(data.appId);
+        if (!app) {
+          socket.emit('app:standardize:error', { message: 'App not found' });
+          return;
         }
-      });
-      console.log(`✅ Socket standardize complete for ${app.name}`);
+
+        console.log(`🔧 Socket standardize started for ${app.name}`);
+        const emit = (step, status, message) => {
+          socket.emit('app:standardize:step', { step, status, message, timestamp: Date.now() });
+        };
+
+        // Step 1: Analyze
+        emit('analyze', 'running', 'Analyzing project configuration...');
+        const analysis = await pm2Standardizer.analyzeApp(app.repoPath)
+          .catch(err => ({ success: false, error: err.message }));
+
+        if (!analysis.success) {
+          emit('analyze', 'error', analysis.error);
+          socket.emit('app:standardize:error', { message: analysis.error });
+          return;
+        }
+        emit('analyze', 'done', `Found ${analysis.proposedChanges.processes?.length || 0} processes`);
+
+        // Step 2: Backup
+        emit('backup', 'running', 'Creating git backup...');
+        const backup = await pm2Standardizer.createGitBackup(app.repoPath)
+          .catch(err => ({ success: false, reason: err.message }));
+
+        if (backup.success) {
+          emit('backup', 'done', `Backup branch: ${backup.branch}`);
+        } else {
+          emit('backup', 'skipped', backup.reason || 'No git repository');
+        }
+
+        // Step 3: Apply
+        emit('apply', 'running', 'Writing ecosystem.config.cjs...');
+        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis)
+          .catch(err => ({ success: false, errors: [err.message] }));
+
+        if (result.errors?.length > 0) {
+          emit('apply', 'error', result.errors.join(', '));
+          socket.emit('app:standardize:error', { message: result.errors.join(', ') });
+          return;
+        }
+        emit('apply', 'done', `Modified ${result.filesModified.length} files`);
+
+        // Update app with new PM2 process names
+        if (analysis.proposedChanges?.processes) {
+          const pm2ProcessNames = analysis.proposedChanges.processes.map(p => p.name);
+          await appsService.updateApp(data.appId, { pm2ProcessNames });
+        }
+
+        socket.emit('app:standardize:complete', {
+          success: true,
+          result: {
+            backupBranch: result.backupBranch,
+            filesModified: result.filesModified,
+            processes: analysis.proposedChanges.processes
+          }
+        });
+        console.log(`✅ Socket standardize complete for ${app.name}`);
+      } catch (err) {
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [app:standardize]: ${message}`);
+        socket.emit('app:standardize:error', { message });
+      }
     });
 
     // App deploy handler — streams real-time output from deploy.sh
     socket.on('app:deploy', async (rawData) => {
-      const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
-      if (!data) return;
-
-      let app;
       try {
-        app = await appsService.getAppById(data.appId);
+        const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
+        if (!data) return;
+
+        const app = await appsService.getAppById(data.appId);
+        if (!app) {
+          socket.emit('app:deploy:error', { message: 'App not found' });
+          return;
+        }
+
+        if (!appDeployer.hasDeployScript(app)) {
+          socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
+          return;
+        }
+
+        console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
+        const emit = (type, payload) => {
+          socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
+        };
+
+        const result = await appDeployer.deployApp(app, data.flags, emit);
+        socket.emit('app:deploy:complete', { success: result.success, code: result.code });
+        console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
       } catch (err) {
-        socket.emit('app:deploy:error', { message: `Failed to look up app: ${err.message}` });
-        return;
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [app:deploy]: ${message}`);
+        socket.emit('app:deploy:error', { message });
       }
-      if (!app) {
-        socket.emit('app:deploy:error', { message: 'App not found' });
-        return;
-      }
-
-      if (!appDeployer.hasDeployScript(app)) {
-        socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
-        return;
-      }
-
-      console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
-      const emit = (type, payload) => {
-        socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
-      };
-
-      let result;
-      try {
-        result = await appDeployer.deployApp(app, data.flags, emit);
-      } catch (err) {
-        console.error(`❌ Deploy error for ${app.name}: ${err.message}`);
-        socket.emit('app:deploy:error', { message: err.message });
-        return;
-      }
-      socket.emit('app:deploy:complete', { success: result.success, code: result.code });
-      console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
     });
 
     // Shell session handlers

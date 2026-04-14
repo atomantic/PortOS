@@ -18,9 +18,7 @@ const withLock = createMutex();
 let currentSeq = 0;
 
 async function ensureBrainDir() {
-  if (!existsSync(DATA_DIR)) {
-    await ensureDir(DATA_DIR);
-  }
+  await ensureDir(DATA_DIR);
 }
 
 /**

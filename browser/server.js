@@ -17,6 +17,10 @@ const CDP_HOST = process.env.CDP_HOST || '127.0.0.1';
 
 let chromeProcess = null;
 let headlessMode = true;
+let downloadWs = null;
+let downloadWsReconnectTimer = null;
+let downloadDirCurrent = null;
+let shuttingDown = false;
 
 function getChromePath() {
   const os = platform();
@@ -39,38 +43,96 @@ async function checkCdp() {
   return res.json();
 }
 
+// Chrome's `Browser.setDownloadBehavior` is DevTools-session-scoped — when the
+// WebSocket that issued the command closes, Chrome tears down the BrowserHandler
+// and the setting reverts to default (`~/Downloads`). We must keep a live CDP
+// connection open for the lifetime of this process so downloads keep landing in
+// our managed directory.
 async function configureDownloadBehavior(downloadDir) {
-  const version = await checkCdp();
-  const wsUrl = version?.webSocketDebuggerUrl;
-  if (!wsUrl) return;
+  downloadDirCurrent = downloadDir;
 
-  // CDP requires explicit Browser.setDownloadBehavior — without it headless Chrome silently drops downloads
   // WebSocket is a global in Node.js 21+ (project targets Node 22+)
   if (typeof WebSocket === 'undefined') {
     console.log('⚠️ WebSocket not available — download configuration skipped (requires Node.js 21+)');
     return;
   }
-  await new Promise((resolve) => {
-    const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => { ws.close(); resolve(); }, 5000);
-    ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({
-        id: 1,
-        method: 'Browser.setDownloadBehavior',
-        params: { behavior: 'allow', downloadPath: downloadDir }
-      }));
-    });
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.id === 1) {
-        console.log(`📥 Downloads configured → ${downloadDir}`);
-        clearTimeout(timer);
-        ws.close();
-        resolve();
-      }
-    });
-    ws.addEventListener('error', () => { clearTimeout(timer); resolve(); });
+
+  // Tear down any existing keep-alive before opening a new one
+  if (downloadWs) {
+    try { downloadWs.close(); } catch {}
+    downloadWs = null;
+  }
+  if (downloadWsReconnectTimer) {
+    clearTimeout(downloadWsReconnectTimer);
+    downloadWsReconnectTimer = null;
+  }
+
+  const version = await checkCdp();
+  const wsUrl = version?.webSocketDebuggerUrl;
+  if (!wsUrl) {
+    console.log('⚠️ CDP unreachable — cannot configure download behavior');
+    scheduleDownloadReconnect();
+    return;
+  }
+
+  const ws = new WebSocket(wsUrl);
+  downloadWs = ws;
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({
+      id: 1,
+      method: 'Browser.setDownloadBehavior',
+      params: { behavior: 'allow', downloadPath: downloadDir }
+    }));
   });
+
+  ws.addEventListener('message', (event) => {
+    // Chrome should only send JSON on this WS, but guard against truncated
+    // frames / non-JSON noise so a single bad message can't crash the service.
+    let msg;
+    try { msg = JSON.parse(event.data); } catch (err) {
+      console.error(`⚠️ Ignoring non-JSON WS frame: ${err.message}`);
+      return;
+    }
+    if (msg.id === 1) {
+      if (msg.error) {
+        console.error(`❌ Browser.setDownloadBehavior failed: ${msg.error.message || JSON.stringify(msg.error)}`);
+      } else {
+        console.log(`📥 Downloads configured → ${downloadDir} (keep-alive WS open)`);
+      }
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    if (downloadWs === ws) downloadWs = null;
+    if (shuttingDown) return;
+    console.log('⚠️ Download keep-alive WS closed — will reconnect');
+    scheduleDownloadReconnect();
+  });
+
+  ws.addEventListener('error', (event) => {
+    console.error(`❌ Download keep-alive WS error: ${event?.message || 'unknown'}`);
+  });
+}
+
+function scheduleDownloadReconnect() {
+  if (shuttingDown || downloadWsReconnectTimer) return;
+  downloadWsReconnectTimer = setTimeout(async () => {
+    downloadWsReconnectTimer = null;
+    if (shuttingDown || !downloadDirCurrent) return;
+    // Contain any rejection from checkCdp/configureDownloadBehavior so an
+    // async setTimeout callback can't escape as an unhandledRejection.
+    try {
+      if (await checkCdp()) {
+        await configureDownloadBehavior(downloadDirCurrent);
+      } else {
+        scheduleDownloadReconnect();
+      }
+    } catch (err) {
+      console.error(`⚠️ Download keep-alive reconnect failed: ${err.message}`);
+      scheduleDownloadReconnect();
+    }
+  }, 2000);
 }
 
 async function launchBrowser() {
@@ -115,6 +177,10 @@ async function launchBrowser() {
   chromeProcess.on('exit', (code) => {
     console.log(`⚠️ Chrome exited with code ${code}`);
     chromeProcess = null;
+    if (downloadWs) {
+      try { downloadWs.close(); } catch {}
+      downloadWs = null;
+    }
   });
 
   // Wait for CDP to become available
@@ -163,6 +229,15 @@ const healthServer = createServer(async (req, res) => {
 
 function shutdown() {
   console.log('🛑 Shutting down browser...');
+  shuttingDown = true;
+  if (downloadWsReconnectTimer) {
+    clearTimeout(downloadWsReconnectTimer);
+    downloadWsReconnectTimer = null;
+  }
+  if (downloadWs) {
+    try { downloadWs.close(); } catch {}
+    downloadWs = null;
+  }
   if (chromeProcess && !chromeProcess.killed) {
     chromeProcess.kill('SIGTERM');
   }

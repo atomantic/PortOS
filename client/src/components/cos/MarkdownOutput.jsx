@@ -32,6 +32,9 @@ function parseInline(text) {
   return parts;
 }
 
+const RE_STRUCTURAL = /^(#{1,6} |```|---+$|> |[-*+] |\d+\. )/;
+const RE_TABLE_SEP = /^[\s|:-]+$/;
+
 const H_STYLES = [
   'text-base font-bold text-white mt-3 mb-1',
   'text-sm font-bold text-white mt-3 mb-1',
@@ -97,7 +100,8 @@ function parseBlocks(md) {
     }
 
     // Table: header row followed by separator
-    if (line.includes('|') && lines[i + 1]?.match(/^[\s|:-]+$/)) {
+    const isTableStart = line.includes('|') && RE_TABLE_SEP.test(lines[i + 1] || '');
+    if (isTableStart) {
       const headers = line.split('|').map(c => c.trim()).filter(Boolean);
       i += 2;
       const rows = [];
@@ -116,12 +120,14 @@ function parseBlocks(md) {
     // Empty line
     if (!line.trim()) { i++; continue; }
 
-    // Paragraph: collect consecutive non-structural lines
+    // Paragraph: collect consecutive non-structural lines (pipes without table separators are normal text)
     const para = [];
-    while (i < lines.length && lines[i].trim() && !/^(#{1,6} |```|---+$|> |[-*+] |\d+\. )/.test(lines[i]) && !lines[i].includes('|')) {
+    while (i < lines.length && lines[i].trim() && !RE_STRUCTURAL.test(lines[i])) {
+      if (lines[i].includes('|') && RE_TABLE_SEP.test(lines[i + 1] || '')) break;
       para.push(lines[i]); i++;
     }
     if (para.length) blocks.push(<p key={`p${i}`} className="text-xs text-gray-300 my-0.5">{parseInline(para.join(' '))}</p>);
+    if (para.length === 0) i++; // skip unconsumed line to prevent infinite loop
   }
 
   return blocks;

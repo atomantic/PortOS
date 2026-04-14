@@ -20,6 +20,7 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
+import { persistSimplifySummaries } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
@@ -61,6 +62,8 @@ export function summarizeToolInput(toolName, input) {
       return input.todos?.length ? `${input.todos.length} items` : '';
     case 'NotebookEdit':
       return shorten(input.notebook_path);
+    case 'Skill':
+      return input.skill || '';
     default:
       return '';
   }
@@ -447,6 +450,12 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
       completeExecution(executionId, { success: false });
     }
 
+    const agentDataErr = activeAgents.get(agentId);
+    if (agentDataErr?.killTimer) {
+      clearTimeout(agentDataErr.killTimer);
+      agentDataErr.killTimer = null;
+    }
+
     cosEvents.emit('agent:error', { agentId, error: err.message });
     await completeAgent(agentId, { success: false, error: err.message });
     await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
@@ -459,6 +468,13 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
+
+    // If terminateAgent scheduled a SIGKILL fallback, the process exited
+    // before it fired — clear it so we don't leak the timer.
+    if (agentData?.killTimer) {
+      clearTimeout(agentData.killTimer);
+      agentData.killTimer = null;
+    }
 
     // Flush remaining stream parser data
     if (streamParser) {
@@ -494,6 +510,10 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
+
+    if (success) {
+      await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
+    }
 
     await completeAgent(agentId, {
       success,

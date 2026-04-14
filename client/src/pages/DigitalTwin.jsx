@@ -30,8 +30,8 @@ export default function DigitalTwin() {
 
   const fetchData = useCallback(async () => {
     const [statusData, settingsData] = await Promise.all([
-      api.getSoulStatus().catch(() => null),
-      api.getSoulSettings().catch(() => null)
+      api.getDigitalTwinStatus().catch(() => null),
+      api.getDigitalTwinSettings().catch(() => null)
     ]);
     setStatus(statusData);
     setSettings(settingsData);

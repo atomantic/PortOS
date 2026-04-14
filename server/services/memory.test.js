@@ -18,8 +18,8 @@ vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn().mockReturnValue('test-uuid-1234')
 }));
 
-// Mock cosEvents
-vi.mock('./cos.js', () => ({
+// Mock cosEvents (memory.js imports from cosEvents.js directly)
+vi.mock('./cosEvents.js', () => ({
   cosEvents: new EventEmitter()
 }));
 
@@ -79,7 +79,7 @@ import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import { generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
-import { cosEvents } from './cos.js';
+import { cosEvents } from './cosEvents.js';
 import {
   createMemory,
   getMemory,

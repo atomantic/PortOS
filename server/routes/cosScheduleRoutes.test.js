@@ -306,16 +306,4 @@ describe('CoS Schedule Routes', () => {
     });
   });
 
-  // Deprecated alias routes
-  describe('GET /api/cos/schedule/self-improvement/:taskType', () => {
-    it('should delegate to unified endpoint', async () => {
-      taskSchedule.getTaskInterval.mockResolvedValue({ type: 'daily' });
-      taskSchedule.shouldRunTask.mockResolvedValue(false);
-
-      const response = await request(app).get('/api/cos/schedule/self-improvement/review');
-
-      expect(response.status).toBe(200);
-      expect(response.body.taskType).toBe('review');
-    });
-  });
 });

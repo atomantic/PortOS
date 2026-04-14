@@ -44,8 +44,12 @@ export async function getRelevantMemories(task, options = {}) {
       });
     }
 
-    for (const result of searchResults.memories) {
-      const mem = await getMemory(result.id);
+    // allSettled: a single failed getMemory() shouldn't abort the whole retrieval.
+    const fetchedMems = await Promise.allSettled(searchResults.memories.map(r => getMemory(r.id)));
+    for (let i = 0; i < searchResults.memories.length; i++) {
+      const result = searchResults.memories[i];
+      const settled = fetchedMems[i];
+      const mem = settled.status === 'fulfilled' ? settled.value : null;
       if (mem) {
         const tokens = estimateTokens(mem.content);
         if (tokenCount + tokens <= maxTokens) {
@@ -69,10 +73,11 @@ export async function getRelevantMemories(task, options = {}) {
     limit: 5
   });
 
-  for (const pref of preferences.memories) {
-    if (memories.some(m => m.id === pref.id)) continue;
-
-    const mem = await getMemory(pref.id);
+  const prefIds = preferences.memories.filter(p => !memories.some(m => m.id === p.id)).map(p => p.id);
+  const prefMems = await Promise.allSettled(prefIds.map(id => getMemory(id)));
+  for (let i = 0; i < prefIds.length; i++) {
+    const settled = prefMems[i];
+    const mem = settled.status === 'fulfilled' ? settled.value : null;
     if (mem) {
       const tokens = estimateTokens(mem.content);
       if (tokenCount + tokens <= maxTokens) {
@@ -97,10 +102,11 @@ export async function getRelevantMemories(task, options = {}) {
       limit: 5
     });
 
-    for (const appMem of appMemories.memories) {
-      if (memories.some(m => m.id === appMem.id)) continue;
-
-      const mem = await getMemory(appMem.id);
+    const appIds = appMemories.memories.filter(a => !memories.some(m => m.id === a.id)).map(a => a.id);
+    const appMems = await Promise.allSettled(appIds.map(id => getMemory(id)));
+    for (let i = 0; i < appIds.length; i++) {
+      const settled = appMems[i];
+      const mem = settled.status === 'fulfilled' ? settled.value : null;
       if (mem) {
         const tokens = estimateTokens(mem.content);
         if (tokenCount + tokens <= maxTokens) {

@@ -14,11 +14,19 @@ function SafeHtmlBody({ html }) {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
-    // Strip script tags and event handlers from HTML
+    // Strip script tags, event handlers, meta tags, SVG content, and javascript: URIs
     const sanitized = html
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<meta\b[^>]*>/gi, '')
+      .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
       .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-      .replace(/\s+on\w+\s*=\s*\S+/gi, '');
+      .replace(/\s+on\w+\s*=\s*\S+/gi, '')
+      // Match the full quoted attribute value (capture the quote char so we
+      // consume the closing quote too) — prevents leaving a stray trailing
+      // quote in the output like `href="#""`.
+      .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"')
+      // Also handle unquoted attributes, which end at whitespace or `>`.
+      .replace(/(href|src)\s*=\s*javascript:[^\s>]*/gi, '$1="#"');
 
     const doc = iframe.contentDocument;
     if (!doc) return;
@@ -49,6 +57,9 @@ function SafeHtmlBody({ html }) {
   return (
     <iframe
       ref={iframeRef}
+      // allow-same-origin is required to write/resize via contentDocument;
+      // scripts remain blocked (no allow-scripts), and we sanitize HTML upstream
+      // before injecting so the email body cannot execute JS.
       sandbox="allow-same-origin"
       className="w-full border-0 min-h-[100px]"
       style={{ background: 'transparent' }}
