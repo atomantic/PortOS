@@ -27,14 +27,17 @@ export function ProcessesPage() {
 
   const handlePm2Save = async () => {
     setSaving(true);
-    const result = await fetch('/api/commands/execute', {
+    // /api/commands/execute returns 202 { commandId, status: 'started' } and
+    // runs asynchronously — treat a returned commandId as a successful queue.
+    const res = await fetch('/api/commands/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: 'pm2 save' })
-    }).then(r => r.json()).catch(() => ({ success: false }));
+    }).catch(() => null);
+    const body = res ? await res.json().catch(() => null) : null;
     setSaving(false);
-    if (result.success) {
-      toast.success('PM2 process list saved to startup');
+    if (res?.ok && body?.commandId) {
+      toast.success('PM2 save queued');
     } else {
       toast.error('Failed to save PM2 process list');
     }

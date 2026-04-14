@@ -679,8 +679,15 @@ export function extractSimplifySummaries(outputBuffer) {
 export async function persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn) {
   if (!isTruthyMetaFn(task.metadata?.simplify)) return;
   const summaries = extractSimplifySummaries(outputBuffer);
-  if (summaries?.taskSummary) {
-    await updateAgent(agentId, { metadata: { taskSummary: summaries.taskSummary, simplifySummary: summaries.simplifySummary } });
+  if (!summaries) return;
+  // Persist whenever *either* summary is present — e.g. if the /simplify
+  // marker appears at the very top of the output, taskSummary will be null
+  // but simplifySummary is still worth keeping.
+  if (summaries.taskSummary || summaries.simplifySummary) {
+    await updateAgent(agentId, { metadata: {
+      taskSummary: summaries.taskSummary || null,
+      simplifySummary: summaries.simplifySummary || null
+    } });
   }
 }
 

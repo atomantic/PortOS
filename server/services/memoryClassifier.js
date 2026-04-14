@@ -90,7 +90,12 @@ async function loadExistingMemorySummary() {
   const allMemories = [...active.memories, ...pending.memories];
   if (allMemories.length === 0) return '';
 
-  const lines = allMemories.slice(0, 30).map(m => `- [${m.type}] ${(m.content || '').substring(0, 150)}`);
+  // getMemories() returns index/metadata rows without \`content\` — fall back
+  // to \`summary\` so each bullet has a real sentence instead of an empty string.
+  const lines = allMemories.slice(0, 30).map(m => {
+    const text = (m.content || m.summary || '').substring(0, 150);
+    return `- [${m.type}] ${text}`;
+  });
   return lines.join('\n');
 }
 

@@ -38,7 +38,10 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // symlinks are followed — resolve within an allowed root. Using realpath here
   // prevents a symlink like /tmp/escape -> /etc from tricking the containment
   // check (which only sees /tmp/escape).
-  if (workspacePath) {
+  if (workspacePath !== undefined && workspacePath !== null && workspacePath !== '') {
+    if (typeof workspacePath !== 'string') {
+      throw new ServerError('workspacePath must be a string', { status: 400, code: 'INVALID_PATH' });
+    }
     const resolvedPath = resolve(workspacePath);
     if (!existsSync(resolvedPath)) {
       throw new ServerError('workspacePath does not exist', { status: 400, code: 'INVALID_PATH' });
