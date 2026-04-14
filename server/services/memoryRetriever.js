@@ -74,9 +74,10 @@ export async function getRelevantMemories(task, options = {}) {
   });
 
   const prefIds = preferences.memories.filter(p => !memories.some(m => m.id === p.id)).map(p => p.id);
-  const prefMems = await Promise.all(prefIds.map(id => getMemory(id)));
+  const prefMems = await Promise.allSettled(prefIds.map(id => getMemory(id)));
   for (let i = 0; i < prefIds.length; i++) {
-    const mem = prefMems[i];
+    const settled = prefMems[i];
+    const mem = settled.status === 'fulfilled' ? settled.value : null;
     if (mem) {
       const tokens = estimateTokens(mem.content);
       if (tokenCount + tokens <= maxTokens) {
@@ -102,9 +103,10 @@ export async function getRelevantMemories(task, options = {}) {
     });
 
     const appIds = appMemories.memories.filter(a => !memories.some(m => m.id === a.id)).map(a => a.id);
-    const appMems = await Promise.all(appIds.map(id => getMemory(id)));
+    const appMems = await Promise.allSettled(appIds.map(id => getMemory(id)));
     for (let i = 0; i < appIds.length; i++) {
-      const mem = appMems[i];
+      const settled = appMems[i];
+      const mem = settled.status === 'fulfilled' ? settled.value : null;
       if (mem) {
         const tokens = estimateTokens(mem.content);
         if (tokenCount + tokens <= maxTokens) {
