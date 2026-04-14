@@ -267,8 +267,11 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
 
   const sourceAppId = task?.metadata?.app || null;
 
-  // Pre-fetch pending memories once for dedup checks across both loops
-  const pendingForDedup = await getMemories({ status: 'pending_approval' })
+  // Pre-fetch pending memories once for dedup checks across both loops.
+  // Pass a high limit to avoid relying on the default pagination (50) — dedup
+  // should see the full pending backlog so duplicates aren't missed when the
+  // queue grows.
+  const pendingForDedup = await getMemories({ status: 'pending_approval', limit: 1000 })
     .catch(err => {
       console.log(`⚠️ Failed to load pending memories for dedup: ${err.message}`);
       return { memories: [] };

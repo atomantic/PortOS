@@ -70,7 +70,10 @@ export function checkForTaskCommit(taskId, workspacePath) {
   if (!existsSync(gitDir)) return false;
 
   const searchPattern = `[task-${taskId}]`;
-  const result = spawnSync('git', ['log', '--all', '--oneline', '--grep', searchPattern, '-1'], {
+  // --fixed-strings / -F: treat pattern as literal string, not regex. Without
+  // this, square brackets in `[task-123]` would be parsed as a character class
+  // and fail to match the literal commit message.
+  const result = spawnSync('git', ['log', '--all', '--oneline', '--fixed-strings', '--grep', searchPattern, '-1'], {
     cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false
   });
   if (result.status !== 0 || result.error) return false;
