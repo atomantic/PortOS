@@ -8,10 +8,19 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
-// Allowed workspace roots: user home and /tmp. Resolve symlinks too so that
-// e.g. a symlinked /tmp on macOS (which points to /private/tmp) still matches
-// after we realpath() the caller's workspacePath.
-const ALLOWED_WORKSPACE_ROOTS = [homedir(), '/tmp']
+// Allowed workspace roots. Defaults cover common single-user Tailscale
+// deployments (home + /tmp + /Users so multiple macOS accounts' repos work,
+// plus /Volumes for external drives and /opt for Linux server layouts).
+// Operators can extend via PORTOS_WORKSPACE_ROOTS="/path1:/path2" if their
+// repos live somewhere more exotic.
+// Resolve symlinks so e.g. /tmp -> /private/tmp on macOS still matches after
+// we realpath() the caller's workspacePath.
+const DEFAULT_WORKSPACE_ROOTS = [homedir(), '/tmp', '/Users', '/Volumes', '/opt'];
+const EXTRA_WORKSPACE_ROOTS = (process.env.PORTOS_WORKSPACE_ROOTS || '')
+  .split(':')
+  .map(s => s.trim())
+  .filter(Boolean);
+const ALLOWED_WORKSPACE_ROOTS = [...DEFAULT_WORKSPACE_ROOTS, ...EXTRA_WORKSPACE_ROOTS]
   .map(r => {
     const abs = resolve(r);
     // Falls back to the resolved path if the root doesn't exist yet — callers
