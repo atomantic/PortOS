@@ -1,0 +1,3 @@
+## Fixed
+
+- **POST drill scoring paired every answer to the first prompt** — `llmResponseSchema` in `postValidation.js` didn't list `questionIndex`, so Zod's default strip mode dropped the field on its way to the scorer. The scorer's `r.questionIndex ?? i` fallback then resolved to the response-array index — always 0 for the single-response submits the trainer makes — and every answer was evaluated against the FIRST prompt of the drill. Affected bridge-word, idiom-twist, double-meaning, and every other LLM-scored POST drill (the v1.43.0 client-side fix wired up `questionIndex` on the request but it never reached the scorer). Schema now declares `questionIndex` and a regression test in `postValidation.test.js` covers the round-trip.

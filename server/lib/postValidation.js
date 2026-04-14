@@ -20,6 +20,11 @@ const questionResultSchema = z.object({
 
 // LLM drill response (text-based)
 const llmResponseSchema = z.object({
+  // questionIndex pairs the response with the correct prompt in drillData.
+  // Without it Zod's default strip would drop the field, the scorer would fall
+  // back to the array index (always 0 for single-response submits), and every
+  // answer would be evaluated against the first prompt.
+  questionIndex: z.number().int().min(0).optional(),
   prompt: z.string().optional(),
   response: z.string().optional(),
   answers: z.array(z.string()).optional(),
