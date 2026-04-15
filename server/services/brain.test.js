@@ -1056,7 +1056,7 @@ describe('brain service', () => {
         type: 'cli',
         command: 'gemini',
         args: [],
-        timeout: 1000
+        timeout: 50
         // defaultModel deliberately unset — exercises the flash-lite fallback
       });
       spawn.mockReturnValue(createMockChild(validDigestJson));
@@ -1092,7 +1092,7 @@ describe('brain service', () => {
         command: 'gemini',
         args: [],
         defaultModel: 'gemini-2.5-pro',
-        timeout: 1000
+        timeout: 50
       });
       spawn.mockReturnValue(createMockChild(validDigestJson));
 
@@ -1103,6 +1103,26 @@ describe('brain service', () => {
       expect(args[modelIdx + 1]).toBe('gemini-2.5-pro');
     });
 
+    it('prefers provider.lightModel over the hard-coded flash-lite fallback when defaultModel is unset', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: [],
+        lightModel: 'gemini-2.5-flash',
+        timeout: 50
+        // defaultModel deliberately unset — lightModel should win over the hard-coded default
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('gemini-cli');
+
+      const args = spawn.mock.calls[0][1];
+      const modelIdx = args.indexOf('--model');
+      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash');
+    });
+
     it('does not duplicate --output-format when provider args already specify it', async () => {
       getProviderById.mockResolvedValue({
         id: 'gemini-cli',
@@ -1111,7 +1131,7 @@ describe('brain service', () => {
         command: 'gemini',
         args: ['--output-format', 'json'],
         defaultModel: 'gemini-2.5-flash-lite',
-        timeout: 1000
+        timeout: 50
       });
       spawn.mockReturnValue(createMockChild(validDigestJson));
 
@@ -1131,7 +1151,7 @@ describe('brain service', () => {
         command: 'claude',
         args: ['-p'],
         defaultModel: 'sonnet',
-        timeout: 1000
+        timeout: 50
       });
       spawn.mockReturnValue(createMockChild(validDigestJson));
 

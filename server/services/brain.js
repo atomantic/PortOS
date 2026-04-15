@@ -50,9 +50,11 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
   const prompt = await buildPrompt(promptStageName, variables);
   let model = modelOverride || provider.defaultModel;
 
-  // gemini-cli default is a thinking model (2.5-pro); fall back to flash-lite for speed
+  // gemini-cli default is a thinking model (2.5-pro); prefer the provider's configured
+  // light tier (populated from data.sample/providers.json on new installs) and only fall
+  // back to the hard-coded flash-lite if nothing is configured at all.
   if (provider.id === 'gemini-cli' && !model) {
-    model = 'gemini-2.5-flash-lite';
+    model = provider.lightModel || 'gemini-2.5-flash-lite';
   }
 
   console.log(`🧠 Calling AI: ${provider.id} / ${model} / ${promptStageName}`);
