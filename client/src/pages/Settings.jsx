@@ -4,13 +4,15 @@ import { DatabaseTab } from '../components/settings/DatabaseTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
+import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'backup', label: 'Backup' },
   { id: 'database', label: 'Database' },
   { id: 'image-gen', label: 'Image Gen' },
-  { id: 'telegram', label: 'Telegram' }
+  { id: 'telegram', label: 'Telegram' },
+  { id: 'mortalloom', label: 'MortalLoom' }
 ];
 
 export default function Settings() {
@@ -29,6 +31,7 @@ export default function Settings() {
       case 'database': return <DatabaseTab />;
       case 'image-gen': return <ImageGenTab />;
       case 'telegram': return <TelegramTab />;
+      case 'mortalloom': return <MortalLoomTab />;
       default: return <GeneralTab />;
     }
   };

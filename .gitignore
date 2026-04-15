@@ -40,6 +40,7 @@ Thumbs.db
 # Claude worktrees
 .claude/worktrees/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # BTW messages (ephemeral agent context, cleaned up after ingestion)
 BTW.md
