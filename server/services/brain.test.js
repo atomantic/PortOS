@@ -1143,6 +1143,31 @@ describe('brain service', () => {
       expect(args[args.indexOf('--output-format') + 1]).toBe('json');
     });
 
+    it('persists the resolved model in digest ai.modelId so attribution survives the fallback', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: [],
+        timeout: 50
+        // defaultModel and lightModel unset — forces the hard-coded fallback
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+      // Capture the digest record so we can assert its ai metadata
+      let storedDigest = null;
+      storage.createDigest.mockImplementation(async (data) => {
+        storedDigest = data;
+        return { id: 'd-attr', ...data };
+      });
+
+      await runDailyDigest('gemini-cli');
+
+      expect(storedDigest).toBeTruthy();
+      expect(storedDigest.ai.providerId).toBe('gemini-cli');
+      expect(storedDigest.ai.modelId).toBe('gemini-2.5-flash-lite');
+    });
+
     it('uses positional prompt (not --prompt) for non-gemini CLI providers', async () => {
       getProviderById.mockResolvedValue({
         id: 'claude-code',

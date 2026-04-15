@@ -102,7 +102,7 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
       child.on('close', (code) => {
         if (code === 0) {
-          resolve(output);
+          resolve({ content: output, model, providerId: provider.id });
         } else {
           reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.substring(0, 500) : ''}`));
         }
@@ -139,7 +139,11 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return {
+      content: data.choices?.[0]?.message?.content || '',
+      model,
+      providerId: provider.id
+    };
   }
 
   throw new Error(`Unsupported provider type: ${provider.type}`);
@@ -240,7 +244,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   let aiError = null;
 
   const startTime = Date.now();
-  const aiResponse = await callAI(
+  const aiResult = await callAI(
     'brain-classifier',
     { capturedText: text, now: new Date().toISOString() },
     providerOverride,
@@ -251,6 +255,13 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   });
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const aiResponse = aiResult?.content;
+  // Patch ai metadata so the inbox entry reflects the model actually invoked
+  // (captureThought/retryClassification stored the pre-resolved value, which may
+  // have been null when gemini-cli fell back internally).
+  const aiMeta = aiResult
+    ? { providerId: aiResult.providerId, modelId: aiResult.model, promptTemplateId: 'brain-classifier' }
+    : null;
 
   if (aiResponse) {
     console.log(`🧠 AI responded in ${elapsed}s for ${entryId}`);
@@ -274,6 +285,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   if (!classification) {
     const errorMessage = aiError?.message || 'AI classification failed';
     await storage.updateInboxLog(entryId, {
+      ...(aiMeta ? { ai: aiMeta } : {}),
       classification: {
         destination: 'unknown',
         confidence: 0,
@@ -293,6 +305,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   // Check confidence threshold
   if (classification.confidence < meta.confidenceThreshold || classification.destination === 'unknown') {
     await storage.updateInboxLog(entryId, {
+      ai: aiMeta,
       classification,
       status: 'needs_review'
     });
@@ -306,6 +319,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
   const filedRecord = await fileToDestination(classification.destination, classification.extracted, classification.title);
 
   await storage.updateInboxLog(entryId, {
+    ai: aiMeta,
     classification,
     status: 'filed',
     filed: {
@@ -517,7 +531,7 @@ export async function runDailyDigest(providerOverride, modelOverride) {
     return null;
   }
 
-  const aiResponse = await callAI(
+  const aiResult = await callAI(
     'brain-daily-digest',
     {
       activeProjects: JSON.stringify(activeProjects),
@@ -530,7 +544,7 @@ export async function runDailyDigest(providerOverride, modelOverride) {
     modelOverride || meta.defaultModel
   );
 
-  const parsed = parseJsonResponse(aiResponse);
+  const parsed = parseJsonResponse(aiResult.content);
   const validationResult = digestOutputSchema.safeParse(parsed);
 
   if (!validationResult.success) {
@@ -545,12 +559,13 @@ export async function runDailyDigest(providerOverride, modelOverride) {
     digestData.digestText = digestData.digestText.split(/\s+/).slice(0, 150).join(' ') + '...';
   }
 
-  // Store digest
+  // Store digest — ai.modelId reflects the resolved model so attribution stays
+  // accurate even when callAI falls back (e.g., gemini-cli → gemini-2.5-flash-lite).
   const digest = await storage.createDigest({
     ...digestData,
     ai: {
-      providerId: providerOverride || meta.defaultProvider,
-      modelId: modelOverride || meta.defaultModel,
+      providerId: aiResult.providerId,
+      modelId: aiResult.model,
       promptTemplateId: 'brain-daily-digest'
     }
   });
@@ -580,7 +595,7 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
     return null;
   }
 
-  const aiResponse = await callAI(
+  const aiResult = await callAI(
     'brain-weekly-review',
     {
       inboxLogLast7Days: JSON.stringify(recentInboxLogs),
@@ -591,7 +606,7 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
     modelOverride || meta.defaultModel
   );
 
-  const parsed = parseJsonResponse(aiResponse);
+  const parsed = parseJsonResponse(aiResult.content);
   const validationResult = reviewOutputSchema.safeParse(parsed);
 
   if (!validationResult.success) {
@@ -606,12 +621,13 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
     reviewData.reviewText = reviewData.reviewText.split(/\s+/).slice(0, 250).join(' ') + '...';
   }
 
-  // Store review
+  // Store review — ai.modelId reflects the resolved model so attribution stays
+  // accurate even when callAI falls back (e.g., gemini-cli → gemini-2.5-flash-lite).
   const review = await storage.createReview({
     ...reviewData,
     ai: {
-      providerId: providerOverride || meta.defaultProvider,
-      modelId: modelOverride || meta.defaultModel,
+      providerId: aiResult.providerId,
+      modelId: aiResult.model,
       promptTemplateId: 'brain-weekly-review'
     }
   });
