@@ -539,3 +539,82 @@ if (typeof window !== 'undefined') {
     set: (v) => { VAD.debug = !!v; },
   });
 }
+
+// ─── Web Speech API mode ─────────────────────────────────────────────────
+// Browser-native STT via SpeechRecognition. Transcription happens entirely
+// in the browser — no whisper.cpp server needed. Final transcripts are sent
+// as voice:text (reusing the existing text-input path on the server).
+
+const SpeechRecognition = typeof window !== 'undefined'
+  && (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+let webSpeechRecognition = null;
+let webSpeechShouldListen = false;
+let webSpeechCallbacks = null;
+
+export const webSpeechSupported = !!SpeechRecognition;
+
+export const startWebSpeechCapture = (callbacks = {}) => {
+  if (!SpeechRecognition) return;
+  stopWebSpeechCapture();
+
+  // Barge-in: abort any in-flight turn and silence current playback
+  socket.emit('voice:interrupt');
+  stopPlayback();
+
+  const recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        final += transcript;
+      } else {
+        interim += transcript;
+      }
+    }
+    if (interim) callbacks.onInterim?.(interim);
+    if (final) {
+      callbacks.onInterim?.('');
+      callbacks.onFinal?.(final);
+      // Send as text — server pipeline skips STT and goes straight to LLM
+      sendText(final);
+    }
+  };
+
+  recognition.onend = () => {
+    // Chrome stops after silence; restart if user hasn't toggled off
+    if (webSpeechShouldListen) {
+      recognition.start();
+    }
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      webSpeechShouldListen = false;
+      callbacks.onError?.(event.error);
+    }
+    // "no-speech" and "aborted" are expected, ignore them
+  };
+
+  webSpeechRecognition = recognition;
+  webSpeechShouldListen = true;
+  webSpeechCallbacks = callbacks;
+  recognition.start();
+};
+
+export const stopWebSpeechCapture = () => {
+  webSpeechShouldListen = false;
+  if (webSpeechRecognition) {
+    webSpeechRecognition.stop();
+    webSpeechRecognition = null;
+  }
+  webSpeechCallbacks = null;
+};
+
+export const isWebSpeechCapturing = () => webSpeechShouldListen;
