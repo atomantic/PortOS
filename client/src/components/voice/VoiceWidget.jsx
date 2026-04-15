@@ -3,6 +3,7 @@ import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Se
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
+  webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
 } from '../../services/voiceClient';
 import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
@@ -36,10 +37,12 @@ const warnIfQuiet = (peak) => {
 export default function VoiceWidget() {
   const [enabled, setEnabled] = useState(false);
   const [hotkey, setHotkey] = useState('Space');
+  const [sttEngine, setSttEngine] = useState('whisper');
   const [stage, setStage] = useState('idle');
   const [history, setHistory] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [handsFree, setHandsFree] = useState(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
@@ -47,12 +50,14 @@ export default function VoiceWidget() {
   });
   const [level, setLevel] = useState(0);
   const scrollRef = useRef(null);
+  const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
   useEffect(() => {
     getVoiceConfig()
       .then((cfg) => {
         setEnabled(!!cfg?.enabled);
         setHotkey(cfg?.hotkey || 'Space');
+        if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
       })
       .catch(() => {});
   }, []);
@@ -68,11 +73,18 @@ export default function VoiceWidget() {
       return [...h, { role: 'assistant', text: delta }].slice(-MAX_HISTORY);
     });
 
-    const restState = () => (isContinuous() ? 'handsfree' : 'idle');
+    const restState = () => {
+      if (isWebSpeechCapturing()) return 'listening';
+      if (isContinuous()) return 'handsfree';
+      return 'idle';
+    };
 
     const offs = [
       onVoiceEvent('voice:transcript', (d) => {
-        if (d.text) appendUser(d.text);
+        // In web-speech mode, user text is already appended client-side
+        // when onFinal fires. Server echoes it back with source='text' —
+        // skip the duplicate append but still advance the stage.
+        if (d.text && d.source !== 'text') appendUser(d.text);
         setStage('thinking');
       }),
       onVoiceEvent('voice:llm:delta', (d) => {
@@ -109,6 +121,27 @@ export default function VoiceWidget() {
 
   const handleStart = useCallback(async () => {
     if (!enabled) return;
+
+    // Web Speech API mode — browser handles STT, sends text directly
+    if (useWebSpeech) {
+      if (isWebSpeechCapturing()) return;
+      setStage('listening');
+      setInterimTranscript('');
+      startWebSpeechCapture({
+        onInterim: (text) => setInterimTranscript(text),
+        onFinal: (text) => {
+          setInterimTranscript('');
+          setHistory((h) => [...h, { role: 'user', text }].slice(-MAX_HISTORY));
+          setStage('thinking');
+        },
+        onError: (err) => {
+          toast.error(`Mic: ${err}`);
+          setStage('idle');
+        },
+      });
+      return;
+    }
+
     if (handsFree) {
       if (isContinuous()) return;
       setStage('handsfree');
@@ -134,9 +167,15 @@ export default function VoiceWidget() {
       toast.error(`Mic: ${err.message}`);
       setStage('idle');
     });
-  }, [enabled, handsFree]);
+  }, [enabled, handsFree, useWebSpeech]);
 
   const handleStop = useCallback(async () => {
+    if (useWebSpeech) {
+      stopWebSpeechCapture();
+      setInterimTranscript('');
+      setStage('idle');
+      return;
+    }
     if (handsFree && isContinuous()) {
       await stopContinuous();
       setStage('idle');
@@ -154,7 +193,7 @@ export default function VoiceWidget() {
       return;
     }
     warnIfQuiet(r.peak);
-  }, [handsFree]);
+  }, [handsFree, useWebSpeech]);
 
   const handleClear = () => {
     resetConversation();
@@ -171,7 +210,7 @@ export default function VoiceWidget() {
   }, [draft]);
 
   const toggleCapture = useCallback(() => {
-    if (isCapturing() || isContinuous()) handleStop();
+    if (isWebSpeechCapturing() || isCapturing() || isContinuous()) handleStop();
     else handleStart();
   }, [handleStart, handleStop]);
 
@@ -221,7 +260,7 @@ export default function VoiceWidget() {
   if (!enabled) return null;
 
   const { icon: Icon, label, tone } = STAGE[stage] || STAGE.idle;
-  const capturing = ACTIVE_STAGES.has(stage);
+  const capturing = ACTIVE_STAGES.has(stage) || isWebSpeechCapturing();
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2 w-96 max-w-[calc(100vw-2rem)]">
@@ -246,6 +285,12 @@ export default function VoiceWidget() {
                 {turn.text}
               </div>
             ))}
+            {interimTranscript && (
+              <div className="text-gray-500 italic">
+                <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">you</span>
+                {interimTranscript}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -271,25 +316,27 @@ export default function VoiceWidget() {
       </form>
       <div className="flex items-center gap-2 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-3 pr-1 py-1 shadow-lg">
         <span className={`text-xs ${tone}`}>{label}</span>
-        {handsFree && isContinuous() && (
+        {!useWebSpeech && handsFree && isContinuous() && (
           <span
             className="w-1.5 rounded-full bg-port-accent transition-all"
             style={{ height: `${Math.min(20, 4 + level * 120)}px` }}
             title={`mic level ${level.toFixed(3)}`}
           />
         )}
-        <button
-          onClick={toggleHandsFree}
-          title={handsFree
-            ? 'Hands-free ON — mic stays open, auto-submits on pause, talk over the bot to interrupt. Click to switch to push-to-talk.'
-            : 'Push-to-talk ON — click mic to start, click again to send. Click to switch to hands-free.'}
-          className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${handsFree
-            ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
-            : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
-        >
-          <InfinityIcon size={12} />
-          {handsFree ? 'hands-free' : 'push-to-talk'}
-        </button>
+        {!useWebSpeech && (
+          <button
+            onClick={toggleHandsFree}
+            title={handsFree
+              ? 'Hands-free ON — mic stays open, auto-submits on pause, talk over the bot to interrupt. Click to switch to push-to-talk.'
+              : 'Push-to-talk ON — click mic to start, click again to send. Click to switch to hands-free.'}
+            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${handsFree
+              ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
+              : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
+          >
+            <InfinityIcon size={12} />
+            {handsFree ? 'hands-free' : 'push-to-talk'}
+          </button>
+        )}
         {history.length > 0 && (
           <button
             onClick={() => setCollapsed((c) => !c)}
