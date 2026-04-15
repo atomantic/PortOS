@@ -14,7 +14,11 @@ export const VOICE_DEFAULTS = Object.freeze({
   hotkey: 'Space',
 
   stt: {
-    engine: 'whisper', // 'whisper' | 'web-speech' (browser-native, no server needed)
+    // 'web-speech' (browser-native, zero-latency, no server process needed) is the
+    // default. Falls back to 'whisper' (local whisper.cpp) for browsers without
+    // SpeechRecognition support (Firefox, older Safari) or when the user wants
+    // consistent offline STT across clients.
+    engine: 'web-speech', // 'whisper' | 'web-speech'
     // 5562 keeps whisper inside PortOS's own 55xx port band. Avoid 8080 —
     // IPFS, Supabase Studio, Tomcat, etc. commonly squat on it.
     endpoint: 'http://127.0.0.1:5562',

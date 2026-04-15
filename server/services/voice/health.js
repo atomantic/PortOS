@@ -30,7 +30,8 @@ const lmStudioBaseUrl = () => (process.env.LM_STUDIO_URL || 'http://localhost:12
 
 export const checkAll = async (cfg) => {
   const voice = cfg || await getVoiceConfig();
-  const cacheKey = `${voice.tts.engine}|${voice.stt.endpoint}`;
+  const sttEngine = voice.stt?.engine || 'whisper';
+  const cacheKey = `${sttEngine}|${voice.tts.engine}|${voice.stt.endpoint}`;
   if (cache && cache.key === cacheKey && Date.now() - cache.ts < CACHE_TTL_MS) {
     // Refresh kokoro readiness on every call — it's a cheap in-memory check
     // and flips from lazy → loaded mid-cache-window after first synthesis.
@@ -40,8 +41,14 @@ export const checkAll = async (cfg) => {
     return cache.value;
   }
 
-  const probes = [probe(voice.stt.endpoint), probe(`${lmStudioBaseUrl()}/v1/models`)];
-  const labels = ['whisper', 'lmstudio'];
+  // STT probes: whisper.cpp needs an HTTP health check; web-speech runs in
+  // the browser so just report it as available.
+  const probes = [probe(`${lmStudioBaseUrl()}/v1/models`)];
+  const labels = ['lmstudio'];
+  if (sttEngine === 'whisper') {
+    probes.unshift(probe(voice.stt.endpoint));
+    labels.unshift('whisper');
+  }
 
   if (voice.tts.engine === 'piper') {
     probes.push(probe(voice.tts.piper?.endpoint || 'http://127.0.0.1:5002'));
@@ -51,6 +58,9 @@ export const checkAll = async (cfg) => {
   const results = await Promise.all(probes);
   const out = Object.fromEntries(labels.map((k, i) => [k, results[i]]));
 
+  if (sttEngine === 'web-speech') {
+    out['web-speech'] = { ok: true, state: 'browser-native' };
+  }
   if (voice.tts.engine === 'kokoro') {
     out.kokoro = { ok: kokoroReady(), state: kokoroReady() ? 'loaded' : 'lazy' };
   }

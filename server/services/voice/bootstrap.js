@@ -147,6 +147,13 @@ export const stopWhisper = async () => {
 export const reconcile = async (cfg) => {
   if (!cfg.enabled) return stopWhisper();
 
+  // Web Speech STT runs entirely in the browser — no whisper process needed.
+  // Stop any leftover whisper instance so we aren't paying for an unused model.
+  if (cfg.stt?.engine === 'web-speech') {
+    await stopWhisper().catch(() => null);
+    return { skipped: 'web-speech' };
+  }
+
   const bins = await verifyBinaries(cfg);
   const models = verifyModels(cfg);
   const piperMissing = bins.piperRequired && (!bins.piper || !models.ttsVoice);

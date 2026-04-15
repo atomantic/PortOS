@@ -47,11 +47,12 @@ router.get('/voices', asyncHandler(async (_req, res) => {
   res.json(await listVoices());
 }));
 
-// POST /api/voice/test — synthesize {text} and return WAV bytes
+// POST /api/voice/test — synthesize {text, voice?} and return WAV bytes
 router.post('/test', asyncHandler(async (req, res) => {
   const text = (req.body?.text || '').toString().trim();
   if (!text) return res.status(400).json({ error: 'text is required' });
-  const { wav, latencyMs } = await synthesize(text);
+  const voice = (req.body?.voice || '').toString().trim() || undefined;
+  const { wav, latencyMs } = await synthesize(text, { voice });
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
   res.send(wav);
