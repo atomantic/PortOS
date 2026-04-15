@@ -1,0 +1,54 @@
+// Kokoro TTS backend — in-process ONNX inference via kokoro-js + transformers.js.
+// Model loads lazily on first synthesis (~2–3s) and stays resident.
+
+import { KokoroTTS } from 'kokoro-js';
+import { KOKORO_VOICES } from './kokoro-voices.js';
+
+let modelPromise = null;
+let loadedKey = null;
+
+const ensureModel = async ({ modelId, dtype }) => {
+  const key = `${modelId}|${dtype}`;
+  if (modelPromise && loadedKey === key) return modelPromise;
+  loadedKey = key;
+  console.log(`🗣  kokoro: loading ${modelId} (dtype=${dtype})`);
+  const started = Date.now();
+  modelPromise = KokoroTTS.from_pretrained(modelId, { dtype, device: 'cpu' })
+    .then((tts) => {
+      console.log(`🗣  kokoro: ready in ${Date.now() - started}ms`);
+      return tts;
+    })
+    .catch((err) => {
+      modelPromise = null;
+      loadedKey = null;
+      throw err;
+    });
+  return modelPromise;
+};
+
+/**
+ * @param {string} text
+ * @param {object} cfg                   — full voice.tts config
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{ wav: Buffer, latencyMs: number }>}
+ */
+export const synthesizeKokoro = async (text, cfg, signal) => {
+  if (signal?.aborted) throw new Error('aborted');
+  const { modelId, dtype, voice } = cfg.kokoro;
+  const tts = await ensureModel({ modelId, dtype });
+  if (signal?.aborted) throw new Error('aborted');
+
+  const started = Date.now();
+  const speed = Math.max(0.5, Math.min(2.0, cfg.rate ?? 1.0));
+  const audio = await tts.generate(text, { voice, speed });
+  if (signal?.aborted) throw new Error('aborted');
+
+  return { wav: Buffer.from(audio.toWav()), latencyMs: Date.now() - started };
+};
+
+export const listKokoroVoices = async () =>
+  Object.entries(KOKORO_VOICES)
+    .map(([name, meta]) => ({ name, ...meta }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+export const isReady = () => modelPromise !== null;

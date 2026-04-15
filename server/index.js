@@ -44,6 +44,9 @@ import genomeRoutes from './routes/genome.js';
 import digitalTwinRoutes from './routes/digital-twin.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
+import voiceRoutes from './routes/voice.js';
+import { getVoiceConfig } from './services/voice/config.js';
+import { reconcile as reconcileVoice } from './services/voice/bootstrap.js';
 import browserRoutes from './routes/browser.js';
 import moltworldToolsRoutes from './routes/moltworldTools.js';
 import moltworldWsRoutes from './routes/moltworldWs.js';
@@ -264,6 +267,7 @@ app.use('/api/digital-twin/identity', identityRoutes);
 app.use('/api/digital-twin/autobiography', autobiographyRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
+app.use('/api/voice', voiceRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/data', dataManagerRoutes);
 app.use('/api/datadog', datadogRoutes);
@@ -307,6 +311,8 @@ getInitSettings().then(s => {
     telegram.init().catch(err => console.error(`❌ Telegram init failed: ${err.message}`));
   }
 }).catch(err => console.error(`❌ Telegram settings read failed: ${err.message}`));
+// Reconcile voice stack (start portos-whisper if voice.enabled)
+getVoiceConfig().then(reconcileVoice).catch(err => console.error(`❌ Voice reconcile failed: ${err.message}`));
 // Check for update completion marker from a previous update cycle
 const updateMarkerPath = join(PATHS.data, 'update-complete.json');
 const removeMarker = () => unlink(updateMarkerPath).catch(e => {

@@ -5,12 +5,14 @@ import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
+import { VoiceTab } from '../components/settings/VoiceTab';
 
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'backup', label: 'Backup' },
   { id: 'database', label: 'Database' },
   { id: 'image-gen', label: 'Image Gen' },
+  { id: 'voice', label: 'Voice' },
   { id: 'telegram', label: 'Telegram' },
   { id: 'mortalloom', label: 'MortalLoom' }
 ];
@@ -30,6 +32,7 @@ export default function Settings() {
       case 'backup': return <BackupTab />;
       case 'database': return <DatabaseTab />;
       case 'image-gen': return <ImageGenTab />;
+      case 'voice': return <VoiceTab />;
       case 'telegram': return <TelegramTab />;
       case 'mortalloom': return <MortalLoomTab />;
       default: return <GeneralTab />;
