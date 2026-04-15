@@ -5,14 +5,20 @@ import BrailleSpinner from '../BrailleSpinner';
 import {
   getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, testTts,
 } from '../../services/apiVoice';
-import { playWav } from '../../services/voiceClient';
+import { playWav, webSpeechSupported } from '../../services/voiceClient';
 
 const SERVICE_LABELS = {
   whisper: 'Whisper (STT)',
+  'web-speech': 'Web Speech API (STT)',
   piper: 'Piper (TTS)',
   kokoro: 'Kokoro (TTS)',
   lmstudio: 'LM Studio (LLM)',
 };
+
+const STT_ENGINES = [
+  { value: 'whisper', label: 'Whisper (local, accurate, works offline)' },
+  { value: 'web-speech', label: 'Web Speech API (browser-native, zero latency)' },
+];
 
 const TTS_ENGINES = [
   { value: 'kokoro', label: 'Kokoro (in-process, high quality)' },
@@ -25,6 +31,20 @@ const KOKORO_DTYPES = [
   { value: 'fp16', label: 'fp16 (higher quality)' },
   { value: 'fp32', label: 'fp32 (best quality, slowest)' },
 ];
+
+const ACCENT_LABELS = { 'en-US': 'American', 'en-GB': 'British' };
+
+const formatVoiceLabel = (v, engine) => {
+  if (engine !== 'kokoro') return v.name;
+  const accent = ACCENT_LABELS[v.language] || v.language || '';
+  const [, ...rest] = v.name.split('_');
+  const raw = rest.join(' ') || v.name;
+  const display = raw.charAt(0).toUpperCase() + raw.slice(1);
+  const who = [accent, v.gender].filter(Boolean).join(' ');
+  const traits = v.traits ? `${v.traits} ` : '';
+  const grade = v.grade ? ` (${v.grade})` : '';
+  return `${traits}${who ? `${who} — ${display}` : display}${grade}`;
+};
 
 const WHISPER_MODELS = [
   { value: 'tiny.en',   file: 'ggml-tiny.en.bin',   label: 'tiny.en — 75 MB, fastest' },
@@ -66,6 +86,7 @@ export function VoiceTab() {
   const [status, setStatus] = useState(null);
   const [voiceList, setVoiceList] = useState({ engine: null, voices: [] });
   const [testing, setTesting] = useState(false);
+  const [previewingVoice, setPreviewingVoice] = useState(null);
 
   const refreshStatus = useCallback(() => {
     return Promise.all([getVoiceStatus(), listVoices().catch(() => ({ engine: null, voices: [] }))])
@@ -121,6 +142,15 @@ export function VoiceTab() {
     await refreshStatus();
   };
 
+  const handlePreviewVoice = async (voiceName) => {
+    if (!voiceName || previewingVoice) return;
+    setPreviewingVoice(voiceName);
+    await testTts("Hi, I'm your voice. This is how I sound.", voiceName)
+      .then((buf) => playWav(buf))
+      .catch((err) => toast.error(`Preview failed: ${err.message}`))
+      .finally(() => setPreviewingVoice(null));
+  };
+
   const handleWhisperModel = (value) => {
     const m = WHISPER_MODELS.find((x) => x.value === value);
     if (!m) return;
@@ -131,6 +161,7 @@ export function VoiceTab() {
   if (loading || !cfg) return <BrailleSpinner text="Loading voice settings" />;
 
   const engine = cfg.tts.engine || 'kokoro';
+  const sttEngine = cfg.stt.engine || 'whisper';
   const activeVoice = engine === 'kokoro' ? cfg.tts.kokoro?.voice : cfg.tts.piper?.voice;
   const voices = voiceList.voices || [];
 
@@ -189,32 +220,39 @@ export function VoiceTab() {
 
         <Field label={`${engine === 'kokoro' ? 'Kokoro' : 'Piper'} voice`} hint={
           engine === 'kokoro'
-            ? 'af_*: American female · am_*: American male · bf_*/bm_*: British. ❤️ = highest quality.'
-            : 'ONNX voice file under ~/.portos/voice/voices/'
+            ? 'Grade letter = Kokoro author\'s quality rating. ❤️ 🔥 🎧 mark the best-sounding voices. Click ▶ to preview without saving.'
+            : 'ONNX voice file under ~/.portos/voice/voices/. Click ▶ to preview without saving.'
         }>
-          <select
-            value={activeVoice || ''}
-            onChange={(e) => {
-              if (engine === 'kokoro') patch('tts.kokoro.voice', e.target.value);
-              else {
-                const v = voices.find((x) => x.name === e.target.value);
-                patch('tts.piper.voice', e.target.value);
-                if (v?.path) patch('tts.piper.voicePath', v.path);
-              }
-            }}
-            className={inputCls}
-          >
-            {activeVoice && !voices.some((v) => v.name === activeVoice) && (
-              <option value={activeVoice}>{activeVoice} (current)</option>
-            )}
-            {voices.map((v) => (
-              <option key={v.name} value={v.name}>
-                {v.name}
-                {v.gender ? ` (${v.gender})` : ''}
-                {v.grade ? ` — ${v.grade}` : ''}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={activeVoice || ''}
+              onChange={(e) => {
+                if (engine === 'kokoro') patch('tts.kokoro.voice', e.target.value);
+                else {
+                  const v = voices.find((x) => x.name === e.target.value);
+                  patch('tts.piper.voice', e.target.value);
+                  if (v?.path) patch('tts.piper.voicePath', v.path);
+                }
+              }}
+              className={`${inputCls} flex-1`}
+            >
+              {activeVoice && !voices.some((v) => v.name === activeVoice) && (
+                <option value={activeVoice}>{activeVoice} (current)</option>
+              )}
+              {voices.map((v) => (
+                <option key={v.name} value={v.name}>{formatVoiceLabel(v, engine)}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => handlePreviewVoice(activeVoice)}
+              disabled={!activeVoice || !!previewingVoice}
+              title="Preview this voice"
+              className="shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
+            >
+              {previewingVoice === activeVoice ? <BrailleSpinner /> : <Play size={14} />}
+            </button>
+          </div>
         </Field>
 
         {engine === 'kokoro' && (
@@ -240,26 +278,46 @@ export function VoiceTab() {
           />
         </Field>
 
-        <Field label="Whisper model" hint="Bigger = more accurate, slower, larger download.">
+        <Field label="STT engine" hint={webSpeechSupported
+          ? 'Web Speech = browser-native, zero-latency, but quality varies by browser and only works in Chrome/Edge. Whisper = local, consistent, offline.'
+          : 'Web Speech unavailable in this browser (Chrome/Edge only). Whisper it is.'}>
           <select
-            value={cfg.stt.model || 'base.en'}
-            onChange={(e) => handleWhisperModel(e.target.value)}
+            value={sttEngine}
+            onChange={(e) => patch('stt.engine', e.target.value)}
             className={inputCls}
           >
-            {WHISPER_MODELS.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
+            {STT_ENGINES.map((opt) => (
+              <option key={opt.value} value={opt.value} disabled={opt.value === 'web-speech' && !webSpeechSupported}>
+                {opt.label}{opt.value === 'web-speech' && !webSpeechSupported ? ' — not supported here' : ''}
+              </option>
             ))}
           </select>
         </Field>
 
-        <Field label="Whisper endpoint">
-          <input
-            type="text"
-            value={cfg.stt.endpoint}
-            onChange={(e) => patch('stt.endpoint', e.target.value)}
-            className={inputCls}
-          />
-        </Field>
+        {sttEngine === 'whisper' && (
+          <>
+            <Field label="Whisper model" hint="Bigger = more accurate, slower, larger download.">
+              <select
+                value={cfg.stt.model || 'base.en'}
+                onChange={(e) => handleWhisperModel(e.target.value)}
+                className={inputCls}
+              >
+                {WHISPER_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Whisper endpoint">
+              <input
+                type="text"
+                value={cfg.stt.endpoint}
+                onChange={(e) => patch('stt.endpoint', e.target.value)}
+                className={inputCls}
+              />
+            </Field>
+          </>
+        )}
 
         <Field label="LLM model" hint="'auto' picks the first loaded LM Studio model">
           <input
@@ -351,16 +409,18 @@ export function VoiceTab() {
           </span>
         </label>
 
-        <label className="flex items-center gap-3 cursor-pointer md:col-span-2">
-          <input
-            type="checkbox"
-            checked={!!cfg.stt.coreml}
-            onChange={(e) => patch('stt.coreml', e.target.checked)}
-            className="w-4 h-4"
-          />
-          <span className="text-sm text-white">Use CoreML encoder for Whisper (macOS only)</span>
-          <span className="text-xs text-gray-500">2–3× faster STT on Apple Silicon.</span>
-        </label>
+        {sttEngine === 'whisper' && (
+          <label className="flex items-center gap-3 cursor-pointer md:col-span-2">
+            <input
+              type="checkbox"
+              checked={!!cfg.stt.coreml}
+              onChange={(e) => patch('stt.coreml', e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm text-white">Use CoreML encoder for Whisper (macOS only)</span>
+            <span className="text-xs text-gray-500">2–3× faster STT on Apple Silicon.</span>
+          </label>
+        )}
       </div>
 
       <div className="flex items-center gap-3 pt-2">
