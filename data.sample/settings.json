@@ -1,3 +1,35 @@
 {
-  "timezone": "America/Los_Angeles"
+  "timezone": "America/Los_Angeles",
+  "voice": {
+    "enabled": false,
+    "trigger": "push-to-talk",
+    "hotkey": "Space",
+    "stt": {
+      "engine": "whisper",
+      "endpoint": "http://127.0.0.1:5562",
+      "model": "base.en",
+      "modelPath": "~/.portos/voice/models/ggml-base.en.bin",
+      "language": "en",
+      "coreml": false
+    },
+    "tts": {
+      "engine": "kokoro",
+      "rate": 1.0,
+      "kokoro": {
+        "modelId": "onnx-community/Kokoro-82M-v1.0-ONNX",
+        "dtype": "q8",
+        "voice": "af_heart"
+      },
+      "piper": {
+        "voice": "en_US-ryan-high",
+        "voicePath": "~/.portos/voice/voices/en_US-ryan-high.onnx"
+      }
+    },
+    "llm": {
+      "provider": "lmstudio",
+      "model": "auto",
+      "systemPrompt": "You are the PortOS assistant. Your replies are spoken aloud — keep them short and use plain prose (no markdown or lists)."
+    },
+    "vad": { "endOfSpeechMs": 700, "minUtteranceMs": 250 }
+  }
 }
