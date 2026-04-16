@@ -227,3 +227,15 @@ export const compareTimeCapsuleSnapshots = (id1, id2) => request('/digital-twin/
   method: 'POST',
   body: JSON.stringify({ id1, id2 })
 });
+
+// Soul aliases (used by digital-twin UI components)
+export const createSoulDocument = createDigitalTwinDocument;
+export const updateSoulDocument = updateDigitalTwinDocument;
+export const deleteSoulDocument = deleteDigitalTwinDocument;
+export const updateSoulSettings = updateDigitalTwinSettings;
+export const detectSoulContradictions = detectDigitalTwinContradictions;
+export const submitSoulEnrichAnswer = submitDigitalTwinEnrichAnswer;
+export const runSoulTests = runDigitalTwinTests;
+export const runSoulMultiTests = runDigitalTwinMultiTests;
+export const generateSoulTests = generateDigitalTwinTests;
+export const exportSoul = exportDigitalTwin;
