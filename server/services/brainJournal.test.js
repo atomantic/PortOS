@@ -88,11 +88,15 @@ describe('brainJournal', () => {
       expect(second.segments).toHaveLength(2);
     });
 
-    it('emits journals:changed and journals:appended', async () => {
+    it('emits journals:changed, journals:appended, and journals:upserted', async () => {
       await journal.appendJournal('2026-04-17', 'hello');
       const eventNames = brainEvents.emit.mock.calls.map((c) => c[0]);
       expect(eventNames).toContain('journals:changed');
       expect(eventNames).toContain('journals:appended');
+      // journals:upserted is the per-entry event the memory bridge listens
+      // on — must fire for every append so a single day's embedding gets
+      // refreshed without re-embedding every other day in the store.
+      expect(eventNames).toContain('journals:upserted');
     });
 
     it('ignores empty/whitespace text', async () => {

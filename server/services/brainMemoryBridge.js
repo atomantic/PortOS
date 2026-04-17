@@ -345,13 +345,23 @@ export function initBridge() {
   brainEvents.on('digests:added', (record) => handleJsonlAdded('digests', record));
   brainEvents.on('reviews:added', (record) => handleJsonlAdded('reviews', record));
 
-  // Daily log — entity-store shape, but keyed by date. Reuse handler.
-  brainEvents.on('journals:changed', (data) => handleEntityChanged('journals', toEntityStore(data)));
-  // Explicit deletion: archive the mapped memory so agents stop surfacing
-  // a day the user intentionally removed.
+  // Daily log — per-entry events so a single append doesn't re-embed every
+  // day of the user's history. (An earlier version listened for the
+  // store-wide 'journals:changed' event, which would trigger O(totalDays)
+  // embedding calls per dictation segment and saturate the embedding
+  // backend.) appendJournal/setJournalContent fire 'journals:upserted' with
+  // the single affected entry; deleteJournal fires 'journals:deleted'.
+  brainEvents.on('journals:upserted', ({ entry }) => handleJournalUpserted(entry));
   brainEvents.on('journals:deleted', ({ entry }) => handleJournalDeleted(entry));
 
   console.log('🧠🔗 Brain→Memory bridge initialized');
+}
+
+function handleJournalUpserted(entry) {
+  if (!entry?.id) return;
+  syncBrainRecord('journals', entry).catch((err) => {
+    console.error(`❌ Brain bridge sync failed for journals/${entry.id}: ${err.message}`);
+  });
 }
 
 async function handleJournalDeleted(entry) {
@@ -363,15 +373,4 @@ async function handleJournalDeleted(entry) {
   memory.updateMemory(memoryId, { status: 'archived' }).catch((err) => {
     console.error(`❌ Brain bridge archive failed for journals/${entry.id}: ${err.message}`);
   });
-}
-
-// Daily log emits { records: { 'YYYY-MM-DD': entry } } — already entity-shaped
-function toEntityStore(data) {
-  if (!data?.records) return { records: {} };
-  // handleEntityChanged keys on the id field, so inject entry.id as the map key
-  const out = { records: {} };
-  for (const entry of Object.values(data.records)) {
-    if (entry?.id) out.records[entry.id] = entry;
-  }
-  return out;
 }
