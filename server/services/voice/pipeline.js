@@ -75,7 +75,7 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
   let userText = text;
   let sttLatencyMs = 0;
   if (!userText) {
-    const stt = await transcribe(audio, { mimeType });
+    const stt = await transcribe(audio, { mimeType, signal });
     sttLatencyMs = stt.latencyMs;
     userText = isNonSpeechMarker(stt.text) ? '' : stt.text;
     emit('voice:transcript', { text: userText, latencyMs: stt.latencyMs });

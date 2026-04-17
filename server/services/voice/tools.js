@@ -259,6 +259,12 @@ const TOOLS = [
       if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
         throw new Error('weight must be a positive number');
       }
+      // Validate unit explicitly — tool args come from an LLM, so "kgs"
+      // or "pounds" would otherwise silently be treated as lb and corrupt
+      // the body-weight log.
+      if (unit !== 'lb' && unit !== 'kg') {
+        throw new Error('unit must be either "lb" or "kg"');
+      }
       const weightLb = unit === 'kg' ? weight * 2.2046226218 : weight;
       // Upper guard catches STT mis-transcriptions ("eighty" → "1800") before
       // they silently corrupt body-weight history.

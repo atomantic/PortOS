@@ -17,6 +17,7 @@ const DEFAULT_STT_PROMPT = 'PortOS, Chief of Staff, brain inbox, brain capture, 
  * @param {string} [opts.language='en']
  * @param {string} [opts.mimeType='audio/wav']
  * @param {string} [opts.endpoint]      override default endpoint
+ * @param {AbortSignal} [opts.signal]   upstream abort (barge-in) — cancels STT mid-flight
  * @returns {Promise<{ text: string, latencyMs: number }>}
  */
 export const transcribe = async (audio, opts = {}) => {
@@ -38,14 +39,23 @@ export const transcribe = async (audio, opts = {}) => {
   form.append('prompt', cfg.stt.vocabularyPrompt || DEFAULT_STT_PROMPT);
 
   const started = Date.now();
+  // Combine the internal timeout with the caller's abort signal so barge-in
+  // can tear down an in-flight whisper request. If the caller's signal is
+  // already aborted, short-circuit without hitting the network.
+  if (opts.signal?.aborted) throw new Error('transcribe aborted');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), STT_TIMEOUT_MS);
+  const onCallerAbort = () => controller.abort();
+  opts.signal?.addEventListener?.('abort', onCallerAbort, { once: true });
 
   const res = await fetch(`${endpoint}/inference`, {
     method: 'POST',
     body: form,
     signal: controller.signal,
-  }).finally(() => clearTimeout(timer));
+  }).finally(() => {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener?.('abort', onCallerAbort);
+  });
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');

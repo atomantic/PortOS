@@ -2,8 +2,8 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { join } from 'path';
-import { expandPath, voiceHome } from './config.js';
+import { delimiter, join } from 'path';
+import { expandPath, piperVoiceTildePath, voiceHome } from './config.js';
 import { PIPER_VOICES, findPiperVoice } from './piper-voices.js';
 
 const PIPER_TIMEOUT_MS = 30_000;
@@ -34,49 +34,78 @@ export const synthesizePiper = (text, cfg, signal) => {
   return new Promise((resolve, reject) => {
     const piperBin = existsSync(PIPER_BIN) ? PIPER_BIN : 'piper';
     const piperLib = join(voiceHome(), 'piper', 'lib');
-    const env = existsSync(piperLib)
-      ? { ...process.env, DYLD_LIBRARY_PATH: piperLib, LD_LIBRARY_PATH: piperLib }
-      : process.env;
+    // Prepend piperLib onto existing DYLD_/LD_LIBRARY_PATH so users who rely
+    // on other libraries (MKL, Metal plugins, locally-built deps) don't have
+    // their paths clobbered. Piper's dylibs win first-match without erasing
+    // the caller's environment.
+    const env = { ...process.env };
+    if (existsSync(piperLib)) {
+      env.DYLD_LIBRARY_PATH = process.env.DYLD_LIBRARY_PATH
+        ? `${piperLib}${delimiter}${process.env.DYLD_LIBRARY_PATH}`
+        : piperLib;
+      env.LD_LIBRARY_PATH = process.env.LD_LIBRARY_PATH
+        ? `${piperLib}${delimiter}${process.env.LD_LIBRARY_PATH}`
+        : piperLib;
+    }
     const child = spawn(piperBin, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
     const chunks = [];
     let errBuf = '';
     let killed = false;
+    let settled = false;
+
+    const settle = (fn) => (arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      fn(arg);
+    };
+    const doResolve = settle(resolve);
+    const doReject = settle(reject);
 
     const killTimer = setTimeout(() => {
       killed = true;
       child.kill('SIGKILL');
-      reject(new Error(`piper timed out after ${PIPER_TIMEOUT_MS}ms`));
+      doReject(new Error(`piper timed out after ${PIPER_TIMEOUT_MS}ms`));
     }, PIPER_TIMEOUT_MS);
 
     if (signal) {
+      if (signal.aborted) {
+        killed = true;
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+        return doReject(new Error('piper synthesis aborted'));
+      }
       signal.addEventListener('abort', () => {
         killed = true;
-        child.kill('SIGTERM');
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+        doReject(new Error('piper synthesis aborted'));
       }, { once: true });
     }
 
     child.stdout.on('data', (c) => chunks.push(c));
     child.stderr.on('data', (c) => { errBuf += c.toString(); });
-    child.on('error', (err) => { clearTimeout(killTimer); reject(err); });
+    child.on('error', (err) => { doReject(err); });
     child.on('close', (code) => {
-      clearTimeout(killTimer);
-      if (killed) return;
-      if (code !== 0) return reject(new Error(`piper exited ${code}: ${errBuf.slice(0, 400)}`));
-      resolve({ wav: Buffer.concat(chunks), latencyMs: Date.now() - started });
+      if (killed) return doReject(new Error('piper synthesis aborted'));
+      if (code !== 0) return doReject(new Error(`piper exited ${code}: ${errBuf.slice(0, 400)}`));
+      doResolve({ wav: Buffer.concat(chunks), latencyMs: Date.now() - started });
     });
 
     child.stdin.end(text);
   });
 };
 
-// Return the curated catalog, annotated with `downloaded` + resolved `path`.
-// The UI shows every entry; missing ones are fetched on save via reconcile.
+// Return the curated catalog, annotated with `downloaded` plus both tilde
+// and resolved paths. Storing `path` in tilde form keeps voice.tts.piper.voicePath
+// portable across machines/users (the rest of the voice config uses `~/` too),
+// while `resolvedPath` is available for UI display or diagnostics.
 export const listPiperVoices = async () => PIPER_VOICES.map((v) => {
-  const path = voicePathFor(v.id);
+  const tildePath = piperVoiceTildePath(v.id);
+  const resolvedPath = voicePathFor(v.id);
   return {
     name: v.id,
-    path,
-    downloaded: existsSync(path),
+    path: tildePath,
+    resolvedPath,
+    downloaded: existsSync(resolvedPath),
     gender: v.gender,
     accent: v.accent,
     note: v.note,

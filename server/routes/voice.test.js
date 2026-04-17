@@ -133,16 +133,16 @@ describe('Voice Routes', () => {
   });
 
   describe('GET /api/voice/voices', () => {
-    it('delegates to listVoices with the requested engine', async () => {
-      tts.listVoices.mockResolvedValue([{ id: 'af_heart' }]);
+    it('delegates to listVoices with the requested engine and returns { engine, voices } shape', async () => {
+      tts.listVoices.mockResolvedValue({ engine: 'kokoro', voices: [{ id: 'af_heart' }] });
       const res = await request(buildApp()).get('/api/voice/voices?engine=kokoro');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([{ id: 'af_heart' }]);
+      expect(res.body).toEqual({ engine: 'kokoro', voices: [{ id: 'af_heart' }] });
       expect(tts.listVoices).toHaveBeenCalledWith('kokoro');
     });
 
     it('ignores unknown engine query values', async () => {
-      tts.listVoices.mockResolvedValue([]);
+      tts.listVoices.mockResolvedValue({ engine: 'kokoro', voices: [] });
       await request(buildApp()).get('/api/voice/voices?engine=elevenlabs');
       expect(tts.listVoices).toHaveBeenCalledWith(undefined);
     });
