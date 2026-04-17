@@ -4,6 +4,7 @@
 //           | voice:error | voice:idle
 
 import { runTurn } from '../services/voice/pipeline.js';
+import { isIsoDate } from '../services/brainJournal.js';
 
 const HISTORY_TURNS = 12; // keep last N messages (user+assistant) per socket
 
@@ -85,8 +86,13 @@ export const registerVoiceHandlers = (socket) => {
   });
 
   // Explicit UI control — user toggled dictation from the Daily Log page.
+  // Validate the date to prevent malformed values from flowing into
+  // appendJournal(), which would throw and break the dictation turn. Fall
+  // back to the existing state date (or null to let the pipeline default to
+  // today) rather than storing garbage.
   socket.on('voice:dictation:set', ({ enabled, date } = {}) => {
-    state.dictation = { enabled: !!enabled, date: date || null };
+    const normalizedDate = isIsoDate(date) ? date : (state.dictation.date || null);
+    state.dictation = { enabled: !!enabled, date: enabled ? normalizedDate : null };
     socket.emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
   });
 
