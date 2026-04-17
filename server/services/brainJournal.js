@@ -67,24 +67,6 @@ async function saveStore(store) {
   await writeFile(JOURNALS_FILE, JSON.stringify(store, null, 2));
 }
 
-// Wraps a load→mutate→save sequence so the whole thing runs atomically w.r.t.
-// other writers. The callback receives a fresh store snapshot and must return
-// either the mutated store (it will be saved) or { store, result } to return
-// a value alongside. Returning a falsy store skips saveStore().
-async function withStore(mutator) {
-  return storeMutex(async () => {
-    const store = await loadStore();
-    const out = await mutator(store);
-    if (out === undefined || out === null) return undefined;
-    if (out && typeof out === 'object' && 'store' in out) {
-      if (out.store) await saveStore(out.store);
-      return out.result;
-    }
-    await saveStore(out);
-    return out;
-  });
-}
-
 // Accept YYYY-MM-DD only, and require a real calendar day so we can't create
 // store keys like '2026-02-30' that don't sort meaningfully or round-trip.
 export const isIsoDate = (date) => {
@@ -175,6 +157,12 @@ export async function setJournalContent(date, content) {
   return entry;
 }
 
+// Segment source metadata is persisted on disk, so reject unknown or
+// non-string values at the service boundary rather than trusting the caller
+// (HTTP body, socket payload). Unknown sources fall back to 'text'.
+const SEGMENT_SOURCES = new Set(['text', 'voice', 'edit']);
+const normalizeSource = (source) => (SEGMENT_SOURCES.has(source) ? source : 'text');
+
 /**
  * Append a text segment (typed or dictated) to the given date's entry.
  * Preserves segment metadata (source, timestamp) so the entry can be
@@ -184,11 +172,12 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
   if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
   const clean = (text || '').trim();
   if (!clean) return null;
+  const segmentSource = normalizeSource(source);
 
   const { entry, segment, records } = await storeMutex(async () => {
     const store = await loadStore();
     const entryLocal = ensureEntry(store, date);
-    const segmentLocal = { text: clean, at: now(), source };
+    const segmentLocal = { text: clean, at: now(), source: segmentSource };
     entryLocal.segments.push(segmentLocal);
     entryLocal.content = entryLocal.content
       ? `${entryLocal.content.trimEnd()}\n\n${clean}`

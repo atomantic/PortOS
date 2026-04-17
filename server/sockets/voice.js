@@ -1,7 +1,9 @@
 // Per-socket voice handlers.
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
+//           | voice:dictation:set
 // Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
-//           | voice:tool | voice:error | voice:idle
+//           | voice:tool | voice:dictation | voice:navigate
+//           | voice:dailyLog:appended | voice:error | voice:idle
 
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
