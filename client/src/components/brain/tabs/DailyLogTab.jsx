@@ -116,16 +116,16 @@ export default function DailyLogTab() {
     const onAppend = (payload) => {
       if (!payload?.date || typeof payload.text !== 'string') return;
       const { date: appendedDate, text: appendedText, segment, segmentCount, updatedAt } = payload;
-      const patchEntry = (prev) => {
+      // Full-entry patch — used for the right-hand editor/preview where
+      // `segments[]` and `content` must be present. Safe against either a
+      // summary-only previous state or a full entry.
+      const patchFullEntry = (prev) => {
         if (!prev || prev.date !== appendedDate) {
-          // Entry didn't exist locally yet — fabricate a minimal one so
-          // the segment count / updatedAt reflect the server state until a
-          // full refetch. Leaves `id`/`createdAt` unset; that's fine since
-          // nothing in this view depends on them for first-append state.
           return {
             date: appendedDate,
             content: appendedText,
             segments: segment ? [segment] : [],
+            segmentCount: segmentCount ?? (segment ? 1 : 0),
             updatedAt: updatedAt || prev?.updatedAt,
             obsidianPath: prev?.obsidianPath || null,
           };
@@ -138,28 +138,27 @@ export default function DailyLogTab() {
           ...prev,
           content: nextContent,
           segments: nextSegments,
+          segmentCount: segmentCount ?? nextSegments.length,
           updatedAt: updatedAt || prev.updatedAt,
         };
       };
       setHistory((prev) => {
         const existing = prev.find((h) => h.date === appendedDate);
-        const patched = patchEntry(existing);
-        // Sidebar renders `h.segments?.length` — pad/trim so the displayed
-        // count matches the server's authoritative segmentCount even when
-        // our local segments array is out of sync (e.g. initial fetch
-        // returned summary-only records without full segment detail).
-        if (typeof segmentCount === 'number') {
-          const current = patched.segments || [];
-          if (current.length !== segmentCount) {
-            patched.segments = current.length < segmentCount
-              ? [...current, ...Array(segmentCount - current.length).fill(segment || { text: '', at: updatedAt, source: 'voice' })]
-              : current.slice(0, segmentCount);
-          }
-        }
+        // Sidebar entries are summaries — only carry metadata, not content.
+        // Patch just what the sidebar renders (segmentCount, updatedAt,
+        // obsidianPath) to keep memory and renders cheap.
+        const patched = existing
+          ? { ...existing, segmentCount: segmentCount ?? (existing.segmentCount ?? 0) + 1, updatedAt: updatedAt || existing.updatedAt }
+          : {
+              date: appendedDate,
+              segmentCount: segmentCount ?? 1,
+              updatedAt: updatedAt || new Date().toISOString(),
+              obsidianPath: null,
+            };
         return upsertHistory(prev, patched);
       });
       if (appendedDate === date) {
-        setEntry((prev) => patchEntry(prev));
+        setEntry((prev) => patchFullEntry(prev));
         // Only sync the textarea when the user has no unsaved edits —
         // otherwise an incoming voice segment would clobber whatever they're
         // in the middle of typing. The entry state still updates so the
@@ -287,7 +286,7 @@ export default function DailyLogTab() {
   };
 
   const isToday = date === serverToday;
-  const segmentCount = entry?.segments?.length || 0;
+  const segmentCount = entry?.segments?.length ?? entry?.segmentCount ?? 0;
 
   const dateLabel = useMemo(() => {
     try {
@@ -379,7 +378,7 @@ export default function DailyLogTab() {
                   >
                     <div className={`text-sm ${active ? 'text-white' : 'text-gray-300'}`}>{h.date}</div>
                     <div className="text-xs text-gray-500 truncate">
-                      {h.segments?.length || 0} segment{h.segments?.length === 1 ? '' : 's'}
+                      {(() => { const n = h.segmentCount ?? h.segments?.length ?? 0; return `${n} segment${n === 1 ? '' : 's'}`; })()}
                       {h.obsidianPath ? ' · obsidian' : ''}
                     </div>
                   </button>

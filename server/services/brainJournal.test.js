@@ -74,6 +74,24 @@ describe('brainJournal', () => {
       expect(total).toBe(0);
       expect(records).toEqual([]);
     });
+
+    it('default listJournals returns slim summaries (no content/segments)', async () => {
+      await journal.appendJournal('2026-04-17', 'day one body', { source: 'voice' });
+      const { records } = await journal.listJournals();
+      expect(records).toHaveLength(1);
+      const [entry] = records;
+      expect(entry).toHaveProperty('segmentCount', 1);
+      expect(entry).toHaveProperty('date', '2026-04-17');
+      expect(entry).not.toHaveProperty('content');
+      expect(entry).not.toHaveProperty('segments');
+    });
+
+    it('includeContent: true returns full entries', async () => {
+      await journal.appendJournal('2026-04-17', 'day one body');
+      const { records } = await journal.listJournals({ includeContent: true });
+      expect(records[0].content).toBe('day one body');
+      expect(records[0].segments).toHaveLength(1);
+    });
   });
 
   describe('appendJournal', () => {
@@ -179,6 +197,29 @@ describe('brainJournal', () => {
 
       // Second sync updates, not creates
       expect(obsidian.updateNote).toHaveBeenCalled();
+    });
+
+    it('refuses to delete notes from a different vault than the one the entry was mirrored to', async () => {
+      obsidian.getVaultById.mockResolvedValue({ id: 'v1', path: '/' });
+      obsidian.updateNote.mockResolvedValueOnce({ error: 'NOTE_NOT_FOUND' });
+      obsidian.createNote.mockResolvedValueOnce({ path: 'Daily Log/2026-04-17.md' });
+
+      // Mirror a note to vault v1.
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: true, obsidianFolder: 'Daily Log' });
+      await journal.appendJournal('2026-04-17', 'content');
+      await journal.syncToObsidian({
+        id: 'j1', date: '2026-04-17', content: 'content', segments: [], obsidianPath: null, obsidianVaultId: null,
+      });
+
+      // User changes their configured vault to v2. deleteJournal() should not
+      // delete the v1 note (which could collide with an unrelated v2 note at
+      // the same relative path).
+      await journal.updateSettings({ obsidianVaultId: 'v2' });
+      obsidian.deleteNote.mockClear();
+
+      await journal.deleteJournal('2026-04-17');
+
+      expect(obsidian.deleteNote).not.toHaveBeenCalled();
     });
   });
 });

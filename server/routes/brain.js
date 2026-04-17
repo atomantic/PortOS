@@ -800,7 +800,10 @@ router.get('/daily-log', asyncHandler(async (req, res) => {
   const parsedOffset = parseInt(req.query.offset, 10);
   const limit = Math.min(Math.max(Number.isNaN(parsedLimit) ? 50 : parsedLimit, 1), 200);
   const offset = Math.max(Number.isNaN(parsedOffset) ? 0 : parsedOffset, 0);
-  const result = await journal.listJournals({ limit, offset });
+  // Opt-in to full entries; default is slim summaries (date + segmentCount +
+  // obsidianPath) so the sidebar doesn't pull every day's content on load.
+  const includeContent = req.query.includeContent === '1' || req.query.includeContent === 'true';
+  const result = await journal.listJournals({ limit, offset, includeContent });
   res.json(result);
 }));
 

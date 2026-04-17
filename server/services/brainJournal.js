@@ -90,12 +90,31 @@ export async function getToday() {
 
 // ─── Reads ─────────────────────────────────────────────────────────────────
 
-export async function listJournals({ limit = 50, offset = 0 } = {}) {
+// Sidebar/history views only need lightweight metadata — full `content` and
+// `segments` would balloon the response as the log grows. Callers that want
+// the full entry should use getJournal(date) or pass includeContent=true.
+function toJournalSummary(entry) {
+  return {
+    id: entry.id,
+    date: entry.date,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    obsidianPath: entry.obsidianPath,
+    obsidianVaultId: entry.obsidianVaultId || null,
+    segmentCount: Array.isArray(entry.segments) ? entry.segments.length : 0,
+  };
+}
+
+export async function listJournals({ limit = 50, offset = 0, includeContent = false } = {}) {
   const store = await loadStore();
   const records = Object.values(store.records || {});
   records.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const total = records.length;
-  return { records: records.slice(offset, offset + limit), total };
+  const page = records.slice(offset, offset + limit);
+  return {
+    records: includeContent ? page : page.map(toJournalSummary),
+    total,
+  };
 }
 
 export async function getJournal(date) {
@@ -117,6 +136,7 @@ function ensureEntry(store, date) {
     createdAt: now(),
     updatedAt: now(),
     obsidianPath: null,
+    obsidianVaultId: null,
   };
   store.records[date] = entry;
   return entry;
@@ -259,50 +279,58 @@ export async function syncToObsidian(entry, { force = false } = {}) {
   const vault = await obsidian.getVaultById(settings.obsidianVaultId);
   if (!vault || !existsSync(vault.path)) return null;
 
+  const vaultId = settings.obsidianVaultId;
   const notePath = buildObsidianNotePath(settings, entry.date);
   const markdown = buildMarkdown(entry);
 
   // createNote errors when the file exists; try update first then create.
-  const update = await obsidian.updateNote(settings.obsidianVaultId, notePath, markdown);
+  const update = await obsidian.updateNote(vaultId, notePath, markdown);
   if (update?.error === 'NOTE_NOT_FOUND') {
-    const created = await obsidian.createNote(settings.obsidianVaultId, notePath, markdown);
+    const created = await obsidian.createNote(vaultId, notePath, markdown);
     if (created?.error) return null;
-    await persistObsidianPath(entry.date, notePath);
+    await persistObsidianLocation(entry.date, notePath, vaultId);
     return notePath;
   }
   if (update?.error) return null;
-  // Persist whenever the path differs — not just when it's missing — so a
-  // folder rename or manual move in Obsidian doesn't leave a stale path
-  // that would later point deleteJournal() at the wrong file.
-  if (entry.obsidianPath !== notePath) await persistObsidianPath(entry.date, notePath);
+  // Persist whenever the path OR the vault changes — a folder rename or
+  // a vault swap in Settings both need to update the store so a later
+  // deleteJournal() unlinks the right file in the right vault.
+  if (entry.obsidianPath !== notePath || entry.obsidianVaultId !== vaultId) {
+    await persistObsidianLocation(entry.date, notePath, vaultId);
+  }
   return notePath;
 }
 
-// Record the note path on the store entry whenever it changes. Typical case
-// is the first successful Obsidian create, but a folder-rename or manual
-// vault move can also shift the path — we want the store to reflect the
-// current location so deleteJournal() unlinks the right file later. The
-// `!== notePath` guard in syncToObsidian() keeps the steady-state cost
-// zero; this function is only invoked on an actual change.
-//
-// Serialized via storeMutex: this runs fire-and-forget from syncToObsidian(),
-// so without serialization an in-flight Obsidian persist could read a stale
-// store snapshot while a concurrent appendJournal() is writing new segments,
-// then clobber them when its own saveStore() lands last.
-async function persistObsidianPath(date, notePath) {
+// Record the note location (path + vault) on the store entry whenever it
+// changes. Serialized via storeMutex so a fire-and-forget Obsidian persist
+// can't clobber concurrent appendJournal writes.
+async function persistObsidianLocation(date, notePath, vaultId) {
   return storeMutex(async () => {
     const store = await loadStore();
     const entry = store.records?.[date];
-    if (entry && entry.obsidianPath !== notePath) {
+    if (!entry) return;
+    if (entry.obsidianPath !== notePath || entry.obsidianVaultId !== vaultId) {
       entry.obsidianPath = notePath;
+      entry.obsidianVaultId = vaultId;
       await saveStore(store);
     }
   });
 }
 
+// Refuse to delete if the entry's recorded vault doesn't match the currently
+// configured vault — the same relative path in a different vault points at an
+// unrelated note, and silently nuking it would be data loss.
 async function removeFromObsidian(entry) {
   const settings = await getSettings();
   if (!settings.obsidianVaultId || !entry.obsidianPath) return false;
+  if (entry.obsidianVaultId && entry.obsidianVaultId !== settings.obsidianVaultId) {
+    console.warn(
+      `📓 Skipping Obsidian delete for ${entry.date}: entry was mirrored to vault ` +
+      `${entry.obsidianVaultId} but current vault is ${settings.obsidianVaultId}. ` +
+      `Clean up the stale note manually if needed.`
+    );
+    return false;
+  }
   const result = await obsidian.deleteNote(settings.obsidianVaultId, entry.obsidianPath);
   return result === true;
 }
@@ -316,7 +344,7 @@ export async function resyncAllToObsidian() {
   const settings = await getSettings();
   if (!settings.obsidianVaultId) return { synced: 0, skipped: 0 };
 
-  const { records } = await listJournals({ limit: 10000 });
+  const { records } = await listJournals({ limit: 10000, includeContent: true });
   let synced = 0;
   let skipped = 0;
   for (const entry of records) {

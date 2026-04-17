@@ -248,7 +248,7 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
   // and deletions flow through the 'journals:upserted' / 'journals:deleted'
   // event handlers instead (see initBridge).
   {
-    const { records: journals } = await listJournals({ limit: 10000 });
+    const { records: journals } = await listJournals({ limit: 10000, includeContent: true });
     for (const record of journals) {
       const key = bridgeKey('journals', record.id);
       // Already-mapped days are skipped in both real and dry-run modes so
