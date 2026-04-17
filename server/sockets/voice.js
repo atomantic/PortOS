@@ -113,7 +113,7 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:text', async (payload = {}) => {
     if (!(await ensureEnabled('text'))) return;
-    const raw = payload.text;
+    const raw = payload?.text;
     if (typeof raw !== 'string' && typeof raw !== 'number') {
       socket.emit('voice:error', { stage: 'text', message: 'text is required' });
       return;
@@ -127,7 +127,7 @@ export const registerVoiceHandlers = (socket) => {
       socket.emit('voice:error', { stage: 'text', message: `text too long (${text.length} > ${MAX_TEXT_LEN} chars)` });
       return;
     }
-    await runTurnWithState({ text, source: payload.source, errorStage: 'text' });
+    await runTurnWithState({ text, source: payload?.source, errorStage: 'text' });
   });
 
   socket.on('voice:interrupt', () => {

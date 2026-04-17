@@ -219,10 +219,15 @@ function buildObsidianNotePath(settings, date) {
  * Write the entry's markdown to the configured Obsidian vault. If the file
  * doesn't exist yet, create it; otherwise update. Records the path on the
  * entry so delete can unlink it later.
+ *
+ * `force: true` bypasses the autoSync check — used by the manual "Re-sync
+ * all entries now" action so users who turn off auto-sync can still trigger
+ * a one-shot backfill.
  */
-export async function syncToObsidian(entry) {
+export async function syncToObsidian(entry, { force = false } = {}) {
   const settings = await getSettings();
-  if (!settings.autoSync || !settings.obsidianVaultId) return null;
+  if (!settings.obsidianVaultId) return null;
+  if (!force && !settings.autoSync) return null;
 
   const vault = await obsidian.getVaultById(settings.obsidianVaultId);
   if (!vault || !existsSync(vault.path)) return null;
@@ -291,7 +296,10 @@ export async function resyncAllToObsidian() {
   let synced = 0;
   let skipped = 0;
   for (const entry of records) {
-    const path = await syncToObsidian(entry).catch(() => null);
+    // force:true so this bulk resync still writes even when the user has
+    // turned off the per-write autoSync — they explicitly clicked "Re-sync
+    // all entries now", which is the manual-sync escape hatch.
+    const path = await syncToObsidian(entry, { force: true }).catch(() => null);
     if (path) synced += 1;
     else skipped += 1;
   }
