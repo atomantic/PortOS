@@ -107,9 +107,16 @@ export default function DailyLogTab() {
       }
     };
     const onDictation = (payload) => {
-      setDictation((prev) => (prev === !!payload?.enabled ? prev : !!payload?.enabled));
+      const nextEnabled = !!payload?.enabled;
+      setDictation((prev) => {
+        // Only toast on a real false→true transition — the server echoes
+        // dictation state after every set (including our own toggleDictation
+        // click, which already toasted locally), and without this guard we'd
+        // stack "Dictation on" twice per click.
+        if (!prev && nextEnabled) toast('Dictation on — speak your log.', { icon: '🎙️' });
+        return prev === nextEnabled ? prev : nextEnabled;
+      });
       if (payload?.date && payload.date !== date) setDate(payload.date);
-      if (payload?.enabled) toast('Dictation on — speak your log.', { icon: '🎙️' });
     };
     const offs = [
       onVoiceEvent('voice:dailyLog:appended', onAppend),

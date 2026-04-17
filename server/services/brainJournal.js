@@ -251,9 +251,17 @@ export async function syncToObsidian(entry) {
 // vault move can also shift the path — we want the store to reflect the
 // current location so deleteJournal() unlinks the right file later. The
 // `!== notePath` guard in syncToObsidian() keeps the steady-state cost
-// zero; this function is only invoked on an actual change. PortOS is
-// single-user/single-instance (see CLAUDE.md) so we don't guard against
-// concurrent-writer lost-update races here.
+// zero; this function is only invoked on an actual change.
+//
+// Note on concurrency: PortOS is single-user/single-instance (see CLAUDE.md)
+// running on a single-threaded Node event loop. The only writers to
+// journals.json are appendJournal / setJournalContent / deleteJournal, all
+// of which await their own saveStore() before returning, and this function,
+// which runs fire-and-forget from syncToObsidian(). In practice: the caller
+// has already written the authoritative content; this load-modify-save only
+// ever flips obsidianPath from unset (or stale) to the current value on an
+// entry the caller already persisted. We intentionally don't add a mutex
+// here — per CLAUDE.md, concurrent-write races are explicitly out of scope.
 async function persistObsidianPath(date, notePath) {
   const store = await loadStore();
   const entry = store.records?.[date];
