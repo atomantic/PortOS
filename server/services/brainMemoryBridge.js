@@ -250,7 +250,10 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     const { records: journals } = await listJournals({ limit: 10000 });
     for (const record of journals) {
       const key = bridgeKey('journals', record.id);
-      if (map[key] && !dryRun) {
+      // Already-mapped days are skipped in both real and dry-run modes so
+      // dry-run stats match actual-run stats (rather than claiming to
+      // re-sync every day every time).
+      if (map[key]) {
         stats.skipped += 1;
         continue;
       }
