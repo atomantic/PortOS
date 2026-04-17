@@ -11,7 +11,7 @@ import { synthesize } from './tts.js';
 import { streamChat } from './llm.js';
 import { getVoiceConfig } from './config.js';
 import { getToolSpecs, dispatchTool } from './tools.js';
-import { appendJournal } from '../brainJournal.js';
+import { appendJournal, getToday } from '../brainJournal.js';
 
 const buildSystemPrompt = (cfg) => {
   if (!cfg.llm.usePersonality) return cfg.llm.systemPrompt;
@@ -87,7 +87,10 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     userText = isNonSpeechMarker(stt.text) ? '' : stt.text;
     emit('voice:transcript', { text: userText, latencyMs: stt.latencyMs });
   } else {
-    emit('voice:transcript', { text: userText, latencyMs: 0, source: 'text' });
+    // Web Speech mode sends spoken transcripts through voice:text with
+    // source='voice', so propagate the caller's hint (defaulting to 'text'
+    // for the Read-back button, assistant sendText, typed input).
+    emit('voice:transcript', { text: userText, latencyMs: 0, source: source || 'text' });
   }
 
   if (!userText) {
@@ -120,7 +123,16 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       emit('voice:idle', { reason: 'turn-complete' });
       return { transcript: userText, reply };
     }
-    const date = state.dictation.date;
+    // Defensive: dictation can be enabled without a date (e.g. UI toggle
+    // without a date, or tool side-effect missing one). Default to today so
+    // we never throw here and kill the user's dictation turn.
+    let date = state.dictation.date;
+    if (!date) {
+      date = await getToday();
+      state.dictation.date = date;
+      console.warn(`🎙️  dictation missing date; defaulting to ${date}`);
+      emit('voice:dictation', { enabled: true, date });
+    }
     const entry = await appendJournal(date, trimmed, { source: 'voice' });
     emit('voice:dailyLog:appended', { date, text: trimmed, entry });
     console.log(`🎙️  dictation → journal[${date}] +${trimmed.length} chars`);

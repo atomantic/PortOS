@@ -115,7 +115,15 @@ export async function setJournalContent(date, content) {
   if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
   const store = await loadStore();
   const entry = ensureEntry(store, date);
-  entry.content = content || '';
+  const clean = content || '';
+  entry.content = clean;
+  // Full replace invalidates the old segment history: the user rewrote the
+  // whole day, so segment metadata (counts, per-line sources, timestamps)
+  // would otherwise drift from what's actually stored in `content`. Collapse
+  // to a single 'edit' segment that represents the rewrite.
+  entry.segments = clean
+    ? [{ text: clean, at: now(), source: 'edit' }]
+    : [];
   entry.updatedAt = now();
   await saveStore(store);
   scheduleObsidianSync(entry);

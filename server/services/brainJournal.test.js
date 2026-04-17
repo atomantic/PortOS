@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -46,9 +46,11 @@ afterAll(() => {
 
 describe('brainJournal', () => {
   beforeEach(() => {
-    // Fresh scratch state per test
+    // Fresh scratch state per test — rm then recreate the same dir so the
+    // vi.mock of PATHS.brain still points at it. (mkdtempSync with a concrete
+    // path silently creates sibling dirs, orphaning our mocked path.)
     rmSync(TEMP_ROOT, { recursive: true, force: true });
-    mkdtempSync(TEMP_ROOT); // no-op if gone; we recreate via ensureDir
+    mkdirSync(TEMP_ROOT, { recursive: true });
     vi.clearAllMocks();
   });
 
@@ -104,10 +106,23 @@ describe('brainJournal', () => {
   });
 
   describe('setJournalContent', () => {
-    it('replaces the full content', async () => {
-      await journal.appendJournal('2026-04-17', 'old');
+    it('replaces the full content and collapses segments', async () => {
+      await journal.appendJournal('2026-04-17', 'old one');
+      await journal.appendJournal('2026-04-17', 'old two');
       const replaced = await journal.setJournalContent('2026-04-17', 'brand new');
       expect(replaced.content).toBe('brand new');
+      // Full replace invalidates prior segment history — collapse to a single
+      // 'edit' segment that matches the current content.
+      expect(replaced.segments).toHaveLength(1);
+      expect(replaced.segments[0].source).toBe('edit');
+      expect(replaced.segments[0].text).toBe('brand new');
+    });
+
+    it('clears segments when content is emptied', async () => {
+      await journal.appendJournal('2026-04-17', 'old');
+      const cleared = await journal.setJournalContent('2026-04-17', '');
+      expect(cleared.content).toBe('');
+      expect(cleared.segments).toEqual([]);
     });
   });
 

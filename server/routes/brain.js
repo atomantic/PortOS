@@ -772,7 +772,30 @@ router.post('/sync', asyncHandler(async (req, res) => {
 // DAILY LOG
 // =============================================================================
 
-const resolveJournalDate = (date) => (date && date !== 'today' ? journal.resolveDate(date) : journal.getToday());
+// Validate ISO YYYY-MM-DD including real calendar days (rejects 2026-02-30).
+// Previously we passed any non-'today' string to journal.resolveDate(), which
+// defaults invalid input to today — so e.g. PUT /daily-log/not-a-date would
+// silently overwrite today's entry. Reject malformed dates with a 400 instead.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const isValidIsoDate = (date) => {
+  if (!ISO_DATE_RE.test(date)) return false;
+  const [y, m, d] = date.split('-').map(Number);
+  const parsed = new Date(Date.UTC(y, m - 1, d));
+  return parsed.getUTCFullYear() === y
+    && parsed.getUTCMonth() === m - 1
+    && parsed.getUTCDate() === d;
+};
+
+const resolveJournalDate = async (date) => {
+  if (!date || date === 'today') return journal.getToday();
+  if (!isValidIsoDate(date)) {
+    throw new ServerError('Invalid date. Expected "today" or YYYY-MM-DD.', {
+      status: 400,
+      code: 'BAD_REQUEST',
+    });
+  }
+  return date;
+};
 
 /**
  * GET /api/brain/daily-log
