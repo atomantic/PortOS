@@ -239,18 +239,21 @@ export async function syncToObsidian(entry) {
     return notePath;
   }
   if (update?.error) return null;
-  if (!entry.obsidianPath) await persistObsidianPath(entry.date, notePath);
+  // Persist whenever the path differs — not just when it's missing — so a
+  // folder rename or manual move in Obsidian doesn't leave a stale path
+  // that would later point deleteJournal() at the wrong file.
+  if (entry.obsidianPath !== notePath) await persistObsidianPath(entry.date, notePath);
   return notePath;
 }
 
-// One-shot: the only time an entry doesn't already have its obsidianPath is
-// the very first successful Obsidian create for that date. After that, the
-// early-return in syncToObsidian() skips this call entirely, so steady-state
-// cost is zero extra saves. PortOS is single-user/single-instance (see
-// CLAUDE.md) so we don't guard against concurrent-writer lost-update races
-// here — "while dictating, multiple appends" all run from the same process
-// on a single-threaded Node event loop, and the set-once property above
-// means this function isn't on the hot path for them anyway.
+// Record the note path on the store entry whenever it changes. Typical case
+// is the first successful Obsidian create, but a folder-rename or manual
+// vault move can also shift the path — we want the store to reflect the
+// current location so deleteJournal() unlinks the right file later. The
+// `!== notePath` guard in syncToObsidian() keeps the steady-state cost
+// zero; this function is only invoked on an actual change. PortOS is
+// single-user/single-instance (see CLAUDE.md) so we don't guard against
+// concurrent-writer lost-update races here.
 async function persistObsidianPath(date, notePath) {
   const store = await loadStore();
   const entry = store.records?.[date];
