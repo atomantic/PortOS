@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, RefreshCw, Save, Volume2, Settings,
-  Plus, Trash2, X, FolderOpen, CloudUpload
+  Plus, Trash2, CloudUpload
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';

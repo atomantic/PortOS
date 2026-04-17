@@ -229,12 +229,12 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
 
   const totalMs = Date.now() - turnStart;
   const ttsTotal = ttsTimings.reduce((a, b) => a + b, 0);
-  const source = text ? 'text' : 'voice';
+  const inputKind = text ? 'text' : 'voice';
   const toolSummary = toolRuns.length
     ? ` · tools=${toolRuns.map((r) => `${r.name}(${r.ok ? `${r.ms}ms` : 'err'})`).join(',')}`
     : '';
   console.log(
-    `🎙️  ${source} turn ${totalMs}ms — ` +
+    `🎙️  ${inputKind} turn ${totalMs}ms — ` +
     `stt=${sttLatencyMs}ms · ` +
     `llm[${lastLlm?.model}] ttft=${firstLlm?.ttfbMs ?? '—'}ms total=${lastLlm?.totalMs}ms · ` +
     `tts=${ttsTotal}ms (${ttsTimings.length} sentences)` +
