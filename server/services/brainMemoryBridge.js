@@ -356,7 +356,14 @@ export function initBridge() {
   // backend.) appendJournal/setJournalContent fire 'journals:upserted' with
   // the single affected entry; deleteJournal fires 'journals:deleted'.
   brainEvents.on('journals:upserted', ({ entry }) => handleJournalUpserted(entry));
-  brainEvents.on('journals:deleted', ({ entry }) => handleJournalDeleted(entry));
+  // handleJournalDeleted is async and awaits loadBridgeMap(); wrap the call
+  // in a .catch so a rejection becomes a logged error instead of an
+  // unhandled-rejection warning (or a process crash under strict modes).
+  brainEvents.on('journals:deleted', ({ entry }) => {
+    handleJournalDeleted(entry).catch((err) => {
+      console.error(`❌ Brain bridge delete sync failed for journals/${entry?.id}: ${err.message}`);
+    });
+  });
 
   console.log('🧠🔗 Brain→Memory bridge initialized');
 }

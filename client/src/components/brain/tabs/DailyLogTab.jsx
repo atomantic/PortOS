@@ -8,9 +8,22 @@ import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
 
+// Slim shape kept in the sidebar history list — full `content`/`segments`
+// would accumulate as the log grows and the sidebar never renders them.
+const toHistorySummary = (entry) => ({
+  id: entry.id,
+  date: entry.date,
+  updatedAt: entry.updatedAt,
+  obsidianPath: entry.obsidianPath || null,
+  segmentCount: typeof entry.segmentCount === 'number'
+    ? entry.segmentCount
+    : (Array.isArray(entry.segments) ? entry.segments.length : 0),
+});
+
 const upsertHistory = (prev, entry) => {
-  const others = prev.filter((h) => h.date !== entry.date);
-  return [entry, ...others].sort((a, b) => b.date.localeCompare(a.date));
+  const summary = toHistorySummary(entry);
+  const others = prev.filter((h) => h.date !== summary.date);
+  return [summary, ...others].sort((a, b) => b.date.localeCompare(a.date));
 };
 
 // ISO YYYY-MM-DD fallback — browser local timezone. Used only as an initial
@@ -56,13 +69,27 @@ export default function DailyLogTab() {
   // without adding `content`/`entry` to the effect's dependency list
   // (which would re-subscribe on every keystroke).
   const dirtyRef = useRef(false);
+  // Monotonic counter of outstanding loadEntry() calls so an older fetch
+  // resolving after a newer one can't overwrite the entry state for the
+  // wrong date (common when prev/next is mashed or the server-today fetch
+  // lands after the user has already picked a different date).
+  const loadRequestRef = useRef(0);
+  // Tracks the dictation state the user just requested (null when idle).
+  // Set by toggleDictation; consumed by the voice:dictation echo handler to
+  // fire the success toast, or by the voice:error handler to revert and
+  // surface a failure toast. Without this, clicking toggle while voice is
+  // disabled would show an optimistic "Dictation on" that never actually
+  // happened on the server.
+  const pendingDictationRef = useRef(null);
 
   const dirty = content !== (entry?.content || '');
   dirtyRef.current = dirty;
 
   const loadEntry = useCallback(async (d, { silent = false } = {}) => {
     if (!silent) setLoading(true);
+    const reqId = ++loadRequestRef.current;
     const res = await api.getDailyLog(d).catch(() => null);
+    if (reqId !== loadRequestRef.current) return;
     const data = res?.entry || null;
     setEntry(data);
     setContent(data?.content || '');
@@ -174,19 +201,39 @@ export default function DailyLogTab() {
     };
     const onDictation = (payload) => {
       const nextEnabled = !!payload?.enabled;
-      // Sync local state only. Toasts are owned by the initiator (the UI
-      // toggle button handles its own toast; voice-tool-triggered changes
-      // flow through the CoS reply which speaks confirmation). An earlier
-      // version toasted here on false→true, but under rapid toggles the
-      // server echo could arrive after the UI had already flipped state
-      // again, firing a stale "Dictation on" — source-of-truth belongs to
-      // whoever initiated the change, not the echo.
       setDictation((prev) => (prev === nextEnabled ? prev : nextEnabled));
       if (payload?.date && payload.date !== date) setDate(payload.date);
+      // If this echo is the server's response to a user-initiated toggle,
+      // confirm success with the appropriate toast. Voice-tool-initiated
+      // changes (no pending ref set) are confirmed by the CoS reply, so
+      // we stay quiet.
+      const requested = pendingDictationRef.current;
+      if (requested !== null && nextEnabled === requested) {
+        pendingDictationRef.current = null;
+        if (nextEnabled) {
+          toast('Dictation on — speak your log. Say "stop dictation" to end.', { icon: '🎙️' });
+        } else {
+          toast('Dictation off.', { icon: '🔇' });
+        }
+      }
+    };
+    // A voice:error with stage='dictation' while a toggle is in flight
+    // means the server rejected the change (most commonly: voice mode is
+    // disabled). Revert the optimistic local state and surface a failure
+    // toast. Unrelated voice:error stages (turn/text) are handled by the
+    // VoiceWidget's own listener — don't clobber our pending dictation
+    // state on those.
+    const onVoiceError = (err) => {
+      if (pendingDictationRef.current !== null && err?.stage === 'dictation') {
+        pendingDictationRef.current = null;
+        setDictation(false);
+        toast.error('Voice mode is disabled — can\'t enter dictation. Enable it in Settings → Voice.');
+      }
     };
     const offs = [
       onVoiceEvent('voice:dailyLog:appended', onAppend),
       onVoiceEvent('voice:dictation', onDictation),
+      onVoiceEvent('voice:error', onVoiceError),
     ];
     return () => offs.forEach((off) => off());
   }, [date]);
@@ -225,13 +272,12 @@ export default function DailyLogTab() {
 
   const toggleDictation = () => {
     const next = !dictation;
+    // Optimistic local flip for responsive UI; the success toast waits for
+    // the server echo (voice:dictation) and a voice:error revert will undo
+    // this if the server rejected the change (e.g. voice mode disabled).
+    pendingDictationRef.current = next;
     setDictation(next);
     setVoiceDictation(next, date);
-    if (next) {
-      toast('Dictation on — speak your log. Say "stop dictation" to end.', { icon: '🎙️' });
-    } else {
-      toast('Dictation off.', { icon: '🔇' });
-    }
   };
 
   // Route the read-back through the voice assistant so its TTS pipeline fires
