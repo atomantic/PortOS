@@ -13,6 +13,7 @@
   "dependencies": {
     "express": "5.2.1",
     "googleapis": "171.4.0",
+    "kokoro-js": "^1.2.1",
     "node-pty": "1.2.0-beta.10",
     "pg": "8.19.0",
     "pm2": "5.4.3",

@@ -72,7 +72,8 @@ import {
   HardDrive,
   MessagesSquare,
   BookOpen,
-  Search
+  Search,
+  Mic
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -84,6 +85,7 @@ import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
+import VoiceWidget from './voice/VoiceWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -231,6 +233,7 @@ const navItems = [
       { to: '/settings/backup', label: 'Backup', icon: Download },
       { to: '/settings/database', label: 'Database', icon: Database },
       { to: '/settings/image-gen', label: 'Image Gen', icon: ImageIcon },
+      { to: '/settings/voice', label: 'Voice', icon: Mic },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot },
       { to: '/security', label: 'Security', icon: Camera },
@@ -724,6 +727,8 @@ export default function Layout() {
       <CmdKSearch />
       {/* Keyboard shortcuts help — press ? to toggle */}
       <KeyboardHelp />
+      {/* Push-to-talk voice widget — self-hides when voice.enabled is false */}
+      <VoiceWidget />
     </div>
   );
 }

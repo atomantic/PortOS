@@ -111,6 +111,19 @@ Everything you need to manage your dev environment without leaving the browser.
 - **Browser Control** — Remote Chrome DevTools Protocol integration for headless browser management ([Browser docs](./docs/features/browser.md))
 - **Code Runner** — In-app code execution with syntax highlighting
 
+### Voice Mode (Local)
+
+Push-to-talk and hands-free voice assistant with no PortOS-hosted server dependencies. TTS and LLM run locally; STT is fully offline with whisper.cpp.
+
+- **STT** — browser Web Speech API by default (zero-latency, no PortOS server process needed). **Note:** the Web Speech API in Chrome and most Chromium browsers forwards audio to a vendor cloud speech service (Google); for fully-offline STT with no data leaving the machine, select local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) under *Settings → Voice → STT engine*. Optional CoreML encoder gives 2–3× speedup on Apple Silicon
+- **Local TTS** — [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running in-process via ONNX Runtime (default, cross-platform), or [Piper](https://github.com/rhasspy/piper) CLI as a lightweight alternative
+- **Local LLM** — routed through your existing LM Studio installation
+- **Push-to-talk** — click and hold the mic widget or hold `Space` to speak; release to send
+- **Barge-in** — start a new turn while the assistant is speaking to interrupt and redirect
+- **Configurable** — STT engine, TTS engine, voice, Whisper model size, CoreML, speech rate, system prompt all editable from Settings
+
+Enable under *Settings → Voice*; PortOS provisions required voice components as needed on first enable — `whisper-cpp` via Homebrew (when STT is whisper), Piper + phonemize libs pulled from [rhasspy/piper](https://github.com/rhasspy/piper) GitHub Releases (when TTS is Piper), and selected Whisper/Piper models downloaded into `~/.portos/voice/`. Full setup in [Voice Mode docs](./docs/features/voice.md).
+
 ### Meatspace (Physical Health)
 
 Track your biological self alongside your digital one.
@@ -230,6 +243,8 @@ Configure AI providers for the runner and Chief of Staff:
 - [Troubleshooting](./docs/TROUBLESHOOTING.md) — Common issues and solutions
 
 ### Feature Deep Dives
+
+- [Voice Mode](./docs/features/voice.md) — local STT/TTS/LLM voice assistant setup
 - [Chief of Staff](./docs/features/chief-of-staff.md) — Autonomous agent orchestrator
 - [Agent Skills](./docs/features/agent-skills.md) — Task-type-specific agent prompts
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture

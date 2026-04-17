@@ -37,6 +37,7 @@ import {
 import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
 import * as appDeployer from './appDeployer.js';
+import { registerVoiceHandlers } from '../sockets/voice.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -58,6 +59,7 @@ let ioInstance = null;
 export function initSocket(io) {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
+    registerVoiceHandlers(socket);
 
     // Handle streaming app detection
     socket.on('detect:start', async (rawData) => {
