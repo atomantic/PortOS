@@ -245,7 +245,8 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
 
   // Daily log entries — one memory per day, initial/backfill import only;
   // already-mapped records are skipped by this bulk sync. Content updates
-  // flow through the 'journals:changed' event handler instead.
+  // and deletions flow through the 'journals:upserted' / 'journals:deleted'
+  // event handlers instead (see initBridge).
   {
     const { records: journals } = await listJournals({ limit: 10000 });
     for (const record of journals) {

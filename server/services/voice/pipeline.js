@@ -131,8 +131,10 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       state.dictation = { enabled: false, date: null };
       emit('voice:dictation', { enabled: false });
       const reply = 'Dictation off.';
-      const { wav } = await synthesize(reply, { signal });
-      if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs: 0 });
+      const { wav, latencyMs } = await synthesize(reply, { signal });
+      // Report the real synth latency so the client's TTS timing stats
+      // reflect actual work, not a hardcoded zero.
+      if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
       emit('voice:llm:delta', { delta: reply });
       emit('voice:llm:done', { text: reply });
       emit('voice:idle', { reason: 'turn-complete' });
