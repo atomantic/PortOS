@@ -60,6 +60,15 @@ export default function VoiceWidget() {
         if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
       })
       .catch(() => {});
+    // Settings → Voice writes via PUT /api/voice/config and the route broadcasts
+    // voice:config:changed — keep the widget's enabled/engine/hotkey in sync so
+    // toggling voice mode mid-session takes effect without a reload.
+    const off = onVoiceEvent('voice:config:changed', (cfg) => {
+      if (typeof cfg?.enabled === 'boolean') setEnabled(cfg.enabled);
+      if (cfg?.hotkey) setHotkey(cfg.hotkey);
+      if (cfg?.sttEngine) setSttEngine(cfg.sttEngine);
+    });
+    return off;
   }, []);
 
   useEffect(() => {

@@ -5,6 +5,12 @@ import { synthesizeKokoro, listKokoroVoices } from './tts-kokoro.js';
 import { synthesizePiper, listPiperVoices } from './tts-piper.js';
 import { findPiperVoice } from './piper-voices.js';
 
+const VALID_ENGINES = new Set(['kokoro', 'piper']);
+
+// Normalize `engine` against the allowlist so an invalid value can't silently
+// produce Kokoro audio while the response reports `engine: 'elevenlabs'`.
+const resolveEngine = (engine) => VALID_ENGINES.has(engine) ? engine : 'kokoro';
+
 const backend = (engine) => {
   if (engine === 'piper') return { synth: synthesizePiper, list: listPiperVoices };
   return { synth: synthesizeKokoro, list: listKokoroVoices };
@@ -23,22 +29,28 @@ const backend = (engine) => {
  */
 export const synthesize = async (text, opts = {}) => {
   const cfg = await getVoiceConfig();
-  const engine = opts.engine || cfg.tts.engine || 'kokoro';
+  const engine = resolveEngine(opts.engine || cfg.tts.engine);
   const { synth } = backend(engine);
   let ttsCfg = cfg.tts;
   if (opts.voice) {
-    const catalog = engine === 'piper' ? findPiperVoice(opts.voice) : null;
-    ttsCfg = engine === 'kokoro'
-      ? { ...cfg.tts, kokoro: { ...cfg.tts.kokoro, voice: opts.voice } }
-      : {
-          ...cfg.tts,
-          piper: {
-            ...cfg.tts.piper,
-            voice: opts.voice,
-            voicePath: catalog ? piperVoiceTildePath(opts.voice) : cfg.tts.piper.voicePath,
-            speakerId: null,
-          },
-        };
+    if (engine === 'kokoro') {
+      ttsCfg = { ...cfg.tts, kokoro: { ...cfg.tts.kokoro, voice: opts.voice } };
+    } else {
+      // Reject Piper voice overrides that aren't in the curated catalog —
+      // otherwise `voice` would change but `voicePath` would remain the
+      // previous config value, silently synthesizing the wrong voice.
+      const catalog = findPiperVoice(opts.voice);
+      if (!catalog) throw new Error(`unknown piper voice: ${opts.voice}`);
+      ttsCfg = {
+        ...cfg.tts,
+        piper: {
+          ...cfg.tts.piper,
+          voice: opts.voice,
+          voicePath: piperVoiceTildePath(opts.voice),
+          speakerId: null,
+        },
+      };
+    }
   }
   const result = await synth(text, ttsCfg, opts.signal);
   return { ...result, engine };
@@ -52,7 +64,7 @@ export const synthesize = async (text, opts = {}) => {
  */
 export const listVoices = async (engineOverride) => {
   const cfg = await getVoiceConfig();
-  const engine = engineOverride || cfg.tts.engine || 'kokoro';
+  const engine = resolveEngine(engineOverride || cfg.tts.engine);
   const { list } = backend(engine);
   return { engine, voices: await list() };
 };

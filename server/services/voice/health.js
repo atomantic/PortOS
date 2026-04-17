@@ -4,7 +4,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getVoiceConfig, expandPath, voiceHome } from './config.js';
-import { isReady as kokoroReady } from './tts-kokoro.js';
+import { readyState as kokoroReadyState } from './tts-kokoro.js';
 import { which } from './bootstrap.js';
 
 const PROBE_TIMEOUT_MS = 1500;
@@ -37,10 +37,10 @@ export const checkAll = async (cfg) => {
   const cacheKey = `${sttEngine}|${voice.tts.engine}|${voice.stt.endpoint}`;
   if (cache && cache.key === cacheKey && Date.now() - cache.ts < CACHE_TTL_MS) {
     // Refresh kokoro readiness on every call — it's a cheap in-memory check
-    // and flips from lazy → loaded mid-cache-window after first synthesis.
+    // and flips from lazy → loading → loaded mid-cache-window after first synthesis.
     if (voice.tts.engine === 'kokoro') {
-      const ready = kokoroReady();
-      cache.value.kokoro = { ok: ready, state: ready ? 'loaded' : 'lazy' };
+      const state = kokoroReadyState();
+      cache.value.kokoro = { ok: state === 'loaded', state };
     }
     return cache.value;
   }
@@ -71,8 +71,8 @@ export const checkAll = async (cfg) => {
     out['web-speech'] = { ok: true, state: 'browser-native' };
   }
   if (voice.tts.engine === 'kokoro') {
-    const kr = kokoroReady();
-    out.kokoro = { ok: kr, state: kr ? 'loaded' : 'lazy' };
+    const state = kokoroReadyState();
+    out.kokoro = { ok: state === 'loaded', state };
   }
 
   cache = { key: cacheKey, ts: Date.now(), value: out };

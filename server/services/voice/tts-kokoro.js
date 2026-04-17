@@ -6,21 +6,27 @@ import { KOKORO_VOICES } from './kokoro-voices.js';
 
 let modelPromise = null;
 let loadedKey = null;
+// `loaded` only flips once from_pretrained() resolves, so health reporting
+// can distinguish "loading" (2-3s cold start in progress) from "loaded".
+let loaded = false;
 
 const ensureModel = async ({ modelId, dtype }) => {
   const key = `${modelId}|${dtype}`;
   if (modelPromise && loadedKey === key) return modelPromise;
   loadedKey = key;
+  loaded = false;
   console.log(`🗣  kokoro: loading ${modelId} (dtype=${dtype})`);
   const started = Date.now();
   modelPromise = KokoroTTS.from_pretrained(modelId, { dtype, device: 'cpu' })
     .then((tts) => {
+      loaded = true;
       console.log(`🗣  kokoro: ready in ${Date.now() - started}ms`);
       return tts;
     })
     .catch((err) => {
       modelPromise = null;
       loadedKey = null;
+      loaded = false;
       throw err;
     });
   return modelPromise;
@@ -51,4 +57,9 @@ export const listKokoroVoices = async () =>
     .map(([name, meta]) => ({ name, ...meta }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-export const isReady = () => modelPromise !== null;
+// 'lazy' = never touched; 'loading' = from_pretrained in flight; 'loaded' = usable.
+export const readyState = () => {
+  if (!modelPromise) return 'lazy';
+  return loaded ? 'loaded' : 'loading';
+};
+export const isReady = () => loaded;

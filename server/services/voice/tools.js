@@ -79,6 +79,7 @@ const TOOLS = [
     execute: async ({ text }) => {
       if (!text || typeof text !== 'string') throw new Error('text is required');
       const trimmed = text.trim();
+      if (!trimmed) throw new Error('text must not be empty');
       const entry = await captureThought(trimmed);
       return {
         ok: true,
@@ -109,6 +110,9 @@ const TOOLS = [
     execute: async ({ query, limit = 5 }) => {
       if (!query || typeof query !== 'string') throw new Error('query is required');
       const q = query.trim().toLowerCase();
+      // `String.includes('')` matches everything, so an all-whitespace query
+      // would return unrelated entries — reject instead of surprising the user.
+      if (!q) throw new Error('query must not be empty');
       const max = Math.max(1, Math.min(10, limit || 5));
       // Load a reasonable window — the brain inbox is small enough that an
       // in-memory filter is fine and avoids a second storage pass for ranking.
@@ -148,16 +152,31 @@ const TOOLS = [
     },
     execute: async ({ name, count = 1, oz, abv }) => {
       if (!name || typeof name !== 'string') throw new Error('name is required');
-      const preset = resolveDrinkPreset(name);
+      const trimmedName = name.trim();
+      if (!trimmedName) throw new Error('name must not be empty');
+      // Tool args come from an LLM — guard against negative/NaN counts, absurd
+      // serving sizes (gallons), and impossible ABV (>100%) before persistence.
+      if (!Number.isFinite(count) || count <= 0 || count > 50) {
+        throw new Error('count must be a positive number (≤50)');
+      }
+      const preset = resolveDrinkPreset(trimmedName);
+      const resolvedOz = oz ?? preset.oz;
+      const resolvedAbv = abv ?? preset.abv;
+      if (!Number.isFinite(resolvedOz) || resolvedOz <= 0 || resolvedOz > 128) {
+        throw new Error('oz must be a positive number (≤128)');
+      }
+      if (!Number.isFinite(resolvedAbv) || resolvedAbv < 0 || resolvedAbv > 100) {
+        throw new Error('abv must be between 0 and 100');
+      }
       const result = await logDrink({
-        name,
-        oz: oz ?? preset.oz,
-        abv: abv ?? preset.abv,
+        name: trimmedName,
+        oz: resolvedOz,
+        abv: resolvedAbv,
         count,
       });
       return {
         ok: true,
-        summary: `Logged ${count} ${name} (${result.standardDrinks.toFixed(1)} std drinks). Day total: ${result.dayTotal.toFixed(1)} std drinks.`,
+        summary: `Logged ${count} ${trimmedName} (${result.standardDrinks.toFixed(1)} std drinks). Day total: ${result.dayTotal.toFixed(1)} std drinks.`,
       };
     },
   },
@@ -177,15 +196,24 @@ const TOOLS = [
     },
     execute: async ({ product, count = 1, mgPerUnit }) => {
       if (!product || typeof product !== 'string') throw new Error('product is required');
-      const preset = resolveNicotinePreset(product);
+      const trimmedProduct = product.trim();
+      if (!trimmedProduct) throw new Error('product must not be empty');
+      if (!Number.isFinite(count) || count <= 0 || count > 100) {
+        throw new Error('count must be a positive number (≤100)');
+      }
+      const preset = resolveNicotinePreset(trimmedProduct);
+      const resolvedMg = mgPerUnit ?? preset.mgPerUnit;
+      if (!Number.isFinite(resolvedMg) || resolvedMg < 0 || resolvedMg > 200) {
+        throw new Error('mgPerUnit must be between 0 and 200');
+      }
       const result = await logNicotine({
-        product,
-        mgPerUnit: mgPerUnit ?? preset.mgPerUnit,
+        product: trimmedProduct,
+        mgPerUnit: resolvedMg,
         count,
       });
       return {
         ok: true,
-        summary: `Logged ${count} ${product} (${result.totalMg}mg). Day total: ${result.dayTotal.toFixed(1)}mg nicotine.`,
+        summary: `Logged ${count} ${trimmedProduct} (${result.totalMg}mg). Day total: ${result.dayTotal.toFixed(1)}mg nicotine.`,
       };
     },
   },

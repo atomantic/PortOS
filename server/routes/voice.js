@@ -19,6 +19,10 @@ const router = Router();
 const VALID_TTS_ENGINES = new Set(['kokoro', 'piper']);
 const validEngine = (v) => VALID_TTS_ENGINES.has(v) ? v : undefined;
 
+// Match the Socket.IO-side cap so /test can't be used to bypass it with a
+// multi-megabyte string that would then take minutes to synthesize.
+const MAX_TEST_TEXT_LEN = 4000;
+
 // Partial schema — deepMerge fills in anything omitted, so every field is
 // optional. The point here is to reject unknown engine values and obvious
 // type mistakes, not to exhaustively re-spec the full config tree.
@@ -89,6 +93,14 @@ router.put('/config', asyncHandler(async (req, res) => {
   const next = await updateVoiceConfig(parsed.data);
   invalidateHealthCache();
   const reconciliation = await reconcile(next).catch((err) => ({ error: err.message }));
+  // Notify connected clients (VoiceWidget, etc.) so they can refresh the
+  // enabled flag / STT engine without a page reload when Settings saves.
+  req.app.get('io')?.emit('voice:config:changed', {
+    enabled: next.enabled,
+    sttEngine: next.stt?.engine,
+    ttsEngine: next.tts?.engine,
+    hotkey: next.hotkey,
+  });
   res.json({ config: next, reconciliation });
 }));
 
@@ -132,6 +144,9 @@ router.post('/piper/fetch', asyncHandler(async (req, res) => {
 router.post('/test', asyncHandler(async (req, res) => {
   const text = (req.body?.text || '').toString().trim();
   if (!text) return res.status(400).json({ error: 'text is required' });
+  if (text.length > MAX_TEST_TEXT_LEN) {
+    return res.status(400).json({ error: `text too long (${text.length} > ${MAX_TEST_TEXT_LEN} chars)` });
+  }
   const voice = (req.body?.voice || '').toString().trim() || undefined;
   const engine = validEngine((req.body?.engine || '').toString().trim());
   const { wav, latencyMs } = await synthesize(text, { voice, engine });
