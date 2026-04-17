@@ -22,7 +22,10 @@ const DEFAULT_STT_PROMPT = 'PortOS, Chief of Staff, brain inbox, brain capture, 
 export const transcribe = async (audio, opts = {}) => {
   const cfg = await getVoiceConfig();
   const endpoint = opts.endpoint || cfg.stt.endpoint;
-  const language = opts.language || 'en';
+  // Honor the configured STT language (opts override > settings > 'en').
+  // Without this, changing voice.stt.language in Settings had no effect because
+  // the pipeline calls transcribe(audio, { mimeType }) with no language arg.
+  const language = opts.language || cfg.stt.language || 'en';
   const mimeType = opts.mimeType || 'audio/wav';
   const filename = opts.filename || 'audio.wav';
 

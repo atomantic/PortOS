@@ -4,7 +4,7 @@
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { createServer } from 'net';
 import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
@@ -45,11 +45,11 @@ export const verifyModels = (cfg) => {
   return out;
 };
 
-const parseVoiceName = (voicePath) => voicePath.split('/').pop().replace(/\.onnx$/, '');
+const parseVoiceName = (voicePath) => basename(voicePath).replace(/\.onnx$/, '');
 
 export const runSetupScript = async (cfg) => {
   const scriptPath = join(PATHS.root, 'scripts', 'setup-voice.sh');
-  const modelName = expandPath(cfg.stt.modelPath).split('/').pop();
+  const modelName = basename(expandPath(cfg.stt.modelPath));
   const voiceName = cfg.tts.engine === 'piper' ? parseVoiceName(expandPath(cfg.tts.piper.voicePath)) : '';
   const env = {
     ...process.env,
@@ -94,14 +94,17 @@ const isWhisperRunning = async () => {
 };
 
 // Returns null if the port is free, else a short description of who's there.
+// `port` MUST be coerced to a number — `net.Server.listen(stringPort)` is
+// interpreted as a pipe path and silently misses real TCP port collisions.
 const probePortInUse = (host, port) => new Promise((resolve) => {
+  const portNum = Number(port);
   const s = createServer();
   s.once('error', (err) => {
     s.close();
-    resolve(err.code === 'EADDRINUSE' ? `port ${port} in use (${err.code})` : null);
+    resolve(err.code === 'EADDRINUSE' ? `port ${portNum} in use (${err.code})` : null);
   });
   s.once('listening', () => s.close(() => resolve(null)));
-  s.listen(port, host);
+  s.listen(portNum, host);
 });
 
 // Poll until whisper's /inference endpoint answers (any HTTP status = bound),

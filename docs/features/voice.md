@@ -26,10 +26,10 @@ Use **Piper** instead if you need lower latency per call (~100 ms cold start), a
 3. Toggle **Enable voice mode** and click **Save & Reconcile**.
 
 PortOS will:
-- Install `whisper-cpp` (and `piper-tts` if you chose Piper) via Homebrew if missing
-- Download the selected Whisper GGUF model into `~/.portos/voice/models/`
-- On macOS with CoreML enabled, download the matching `<model>-encoder.mlmodelc` (2–3× faster STT on Apple Silicon)
-- Download Piper voice ONNX into `~/.portos/voice/voices/` (Piper engine only)
+- Install `whisper-cpp` via Homebrew if missing (the whisper.cpp binary + its base models)
+- Download the selected Whisper ggml `.bin` model into `~/.portos/voice/models/`
+- On macOS with CoreML enabled, download the matching `<model>-encoder.mlmodelc` (2–3× faster STT on Apple Silicon, requires a custom whisper.cpp build)
+- If Piper is selected, download the pre-built Piper binary + phonemize libs from [rhasspy/piper](https://github.com/rhasspy/piper) and [rhasspy/piper-phonemize](https://github.com/rhasspy/piper-phonemize) GitHub Releases (Piper is not on Homebrew), then fetch the selected voice `.onnx` into `~/.portos/voice/voices/`
 - Start `portos-whisper` under PM2
 
 Kokoro models live under `~/.cache/huggingface/hub/` and download lazily on first synthesis.
@@ -51,14 +51,14 @@ All options live in `data/settings.json` under `voice` (Settings UI patches this
 | `enabled` | `false` | Master toggle. Triggers reconcile on change. |
 | `hotkey` | `Space` | Held to talk. Ignored while typing in inputs. |
 | `stt.model` | `base.en` | `tiny.en` · `base.en` · `small.en` · `medium.en` · `large-v3` |
-| `stt.coreml` | `true` (macOS) | Use CoreML encoder companion. |
+| `stt.coreml` | `false` | Optional on macOS. Enable to use the CoreML encoder companion (requires a custom whisper.cpp build with `-DWHISPER_COREML=1`). |
 | `stt.endpoint` | `http://127.0.0.1:5562` | whisper-server listen address (whisper engine only). |
 | `tts.engine` | `kokoro` | `kokoro` or `piper` |
 | `tts.rate` | `1.0` | Speech rate, 0.5–2.0 |
 | `tts.kokoro.voice` | `af_heart` | See [Kokoro voices](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) — A-grade are `af_heart`, `af_bella`. |
 | `tts.kokoro.dtype` | `q8` | `q4` · `q8` · `fp16` · `fp32` (size/quality trade-off) |
 | `tts.kokoro.modelId` | `onnx-community/Kokoro-82M-v1.0-ONNX` | HuggingFace repo id |
-| `tts.piper.voice` | `en_US-ryan-high` | Piper voice id (path-encoded) |
+| `tts.piper.voice` | `en_GB-jenny_dioco-medium` | Piper voice id (path-encoded) |
 | `tts.piper.voicePath` | `~/.portos/voice/voices/<voice>.onnx` | ONNX file location |
 | `llm.model` | `auto` | `auto` picks first loaded LM Studio model |
 | `llm.systemPrompt` | (concise voice prompt) | Edit to change personality |

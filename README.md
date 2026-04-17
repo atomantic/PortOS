@@ -115,14 +115,14 @@ Everything you need to manage your dev environment without leaving the browser.
 
 Push-to-talk voice assistant that runs entirely on your machine — no external API calls.
 
-- **Local STT** — [whisper.cpp](https://github.com/ggerganov/whisper.cpp) HTTP server, optional CoreML encoder for 2–3× speedup on Apple Silicon
+- **STT** — browser Web Speech API by default (zero-latency, no server process), or local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) HTTP server as an optional offline alternative with optional CoreML encoder for 2–3× speedup on Apple Silicon
 - **Local TTS** — [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running in-process via ONNX Runtime (default, cross-platform), or [Piper](https://github.com/rhasspy/piper) CLI as a lightweight alternative
 - **Local LLM** — routed through your existing LM Studio installation
 - **Push-to-talk** — click and hold the mic widget or hold `Space` to speak; release to send
 - **Barge-in** — start a new turn while the assistant is speaking to interrupt and redirect
-- **Configurable** — TTS engine, voice, Whisper model size, CoreML, speech rate, system prompt all editable from Settings
+- **Configurable** — STT engine, TTS engine, voice, Whisper model size, CoreML, speech rate, system prompt all editable from Settings
 
-Enable under *Settings → Voice*; PortOS installs missing binaries via Homebrew and downloads selected models on first enable. Full setup in [Voice Mode docs](./docs/features/voice.md).
+Enable under *Settings → Voice*; PortOS provisions required voice components as needed on first enable — `whisper-cpp` via Homebrew (when STT is whisper), Piper + phonemize libs pulled from [rhasspy/piper](https://github.com/rhasspy/piper) GitHub Releases (when TTS is Piper), and selected Whisper/Piper models downloaded into `~/.portos/voice/`. Full setup in [Voice Mode docs](./docs/features/voice.md).
 
 ### Meatspace (Physical Health)
 

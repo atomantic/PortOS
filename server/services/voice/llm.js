@@ -5,11 +5,16 @@ const LM_STUDIO_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:123
 
 // Approximate parameter count from LM Studio model id so 'auto' avoids a 70B
 // when smaller, faster models are available. Returns Infinity for non-matches
-// so they sort last rather than silently winning ties.
+// and utility models so they sort last rather than silently winning ties.
+// Accepts "7B", "7 B", "7b", "1.5B", "8x7B" (matches the B token preceded by a
+// number with optional whitespace). Utility-model filter runs first and is
+// case-insensitive so "BAAI/bge-embed" / "Cohere/rerank" are excluded even
+// when they happen to contain a size token.
 const sizeRank = (id) => {
-  const m = id.toLowerCase().match(/(\d+(?:\.\d+)?)\s*b\b/);
+  const normalized = String(id).toLowerCase();
+  if (/embed|rerank/.test(normalized)) return Infinity;
+  const m = normalized.match(/(\d+(?:\.\d+)?)\s*b\b/);
   if (m) return parseFloat(m[1]);
-  if (/embed|rerank/.test(id)) return Infinity; // exclude utility models
   return Infinity;
 };
 

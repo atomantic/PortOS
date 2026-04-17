@@ -81,7 +81,10 @@ router.get('/config', asyncHandler(async (_req, res) => {
 router.put('/config', asyncHandler(async (req, res) => {
   const parsed = voiceConfigPatchSchema.safeParse(req.body || {});
   if (!parsed.success) {
-    throw new ServerError(`Invalid voice config: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`, 400);
+    throw new ServerError(
+      `Invalid voice config: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
+      { status: 400, code: 'VALIDATION_ERROR' },
+    );
   }
   const next = await updateVoiceConfig(parsed.data);
   invalidateHealthCache();

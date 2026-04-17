@@ -145,7 +145,9 @@ export function VoiceTab() {
         const rec = r.reconciliation || {};
         if (rec.error) {
           toast.error(`Saved, but reconcile failed: ${rec.error}`, { duration: 12000 });
-        } else if (rec.skipped) {
+        } else if (rec.skipped === 'web-speech') {
+          toast.success('Voice settings saved — using Web Speech API for STT');
+        } else if (rec.skipped === true) {
           toast.success('Voice settings saved (disabled)');
         } else if (rec.stopped) {
           toast.success('Voice settings saved — whisper stopped');
