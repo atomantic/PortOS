@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Stub every external side-effect before importing tools.js so the unit test
 // exercises pure validation/dispatch logic without hitting the filesystem.

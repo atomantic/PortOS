@@ -1,12 +1,14 @@
 # Voice Mode
 
-PortOS includes an optional voice assistant that runs entirely on your machine. Supports push-to-talk and hands-free continuous mode with barge-in (start speaking over a reply to interrupt it). No audio leaves your computer.
+PortOS includes an optional voice assistant with support for fully local operation. Supports push-to-talk and hands-free continuous mode with barge-in (start speaking over a reply to interrupt it).
+
+**Privacy note:** LLM, TTS, and pipeline orchestration always run locally. For speech-to-text, the default **Web Speech API** uses your browser's built-in recognition service — in Chrome/Chromium this forwards audio to a Google cloud endpoint. Switch `stt.engine` to **`whisper`** (whisper.cpp, local HTTP server) under *Settings → Voice* for fully-offline STT with no audio leaving the machine.
 
 ## Stack
 
 | Stage | Default engine | Alternatives | Local? |
 |-------|----------------|--------------|--------|
-| Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562) | — | ✅ |
+| Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default — **note**: Chromium browsers forward audio to a vendor cloud speech service) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562, fully local) | — | ✅ (whisper) / ⚠️ (web-speech) |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
 | Text-to-speech | [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) via `kokoro-js` (in-process) | [Piper](https://github.com/rhasspy/piper) (CLI) | ✅ |
 | Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |

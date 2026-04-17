@@ -495,13 +495,19 @@ export function VoiceTab() {
       <details className="text-xs text-gray-500">
         <summary className="cursor-pointer">Binary + model paths</summary>
         <dl className="mt-2 space-y-1 font-mono">
-          <div>whisper-server: {status?.binaries?.whisper || <em className="text-port-error">not found</em>}</div>
+          {sttEngine === 'whisper' ? (
+            <>
+              <div>whisper-server: {status?.binaries?.whisper || <em className="text-port-error">not found</em>}</div>
+              <div>STT model: {status?.models?.sttModel || <em className="text-port-error">missing</em>}</div>
+              {cfg.stt.coreml && (
+                <div>CoreML encoder: {status?.models?.coreml || <em className="text-port-error">missing</em>}</div>
+              )}
+            </>
+          ) : (
+            <div>STT: <em>Web Speech API (browser-native — no server binaries required)</em></div>
+          )}
           {engine === 'piper' && (
             <div>piper: {status?.binaries?.piper || <em className="text-port-error">not found</em>}</div>
-          )}
-          <div>STT model: {status?.models?.sttModel || <em className="text-port-error">missing</em>}</div>
-          {cfg.stt.coreml && (
-            <div>CoreML encoder: {status?.models?.coreml || <em className="text-port-error">missing</em>}</div>
           )}
           <div>TTS voice: {status?.models?.ttsVoice || <em className="text-port-error">missing</em>}</div>
         </dl>
