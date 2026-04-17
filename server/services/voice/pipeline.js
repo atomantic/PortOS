@@ -117,6 +117,10 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
     pending = remainder;
     for (const s of sentences) {
       synthQueue = synthQueue.then(() => speak(s)).catch((err) => {
+        // Barge-in aborts the turn mid-synthesis — Kokoro throws Error('aborted')
+        // and Piper rejects 'piper synthesis aborted'. That's expected, not a
+        // real failure, so don't surface it as voice:error.
+        if (signal?.aborted || /aborted/i.test(err?.message || '')) return;
         emit('voice:error', { stage: 'tts', message: err.message });
       });
     }

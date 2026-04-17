@@ -80,10 +80,12 @@ const TOOLS = [
       if (!text || typeof text !== 'string') throw new Error('text is required');
       const trimmed = text.trim();
       if (!trimmed) throw new Error('text must not be empty');
-      const entry = await captureThought(trimmed);
+      // captureThought returns { inboxLog, message } — the inbox record id
+      // lives inside inboxLog; returning `entry.id` was `undefined`.
+      const { inboxLog } = await captureThought(trimmed);
       return {
         ok: true,
-        id: entry.id,
+        id: inboxLog?.id,
         summary: `Captured "${trimmed.slice(0, 60)}${trimmed.length > 60 ? '…' : ''}"`,
       };
     },
@@ -350,14 +352,17 @@ const TOOLS = [
       required: ['goalQuery', 'progress'],
     },
     execute: async ({ goalQuery, progress }) => {
-      if (!goalQuery) throw new Error('goalQuery is required');
+      if (typeof goalQuery !== 'string' || !goalQuery.trim()) {
+        throw new Error('goalQuery is required');
+      }
       if (typeof progress !== 'number' || !Number.isFinite(progress) || progress < 0 || progress > 100) {
         throw new Error('progress must be a number between 0 and 100');
       }
+      const query = goalQuery.trim();
       const data = await getGoals();
-      const { match, candidates } = findGoalByQuery(data.goals || [], goalQuery);
+      const { match, candidates } = findGoalByQuery(data.goals || [], query);
       if (!match) {
-        return { ok: false, summary: `No active goal matched "${goalQuery}".` };
+        return { ok: false, summary: `No active goal matched "${query}".` };
       }
       const prev = Math.round(match.progress ?? 0);
       const next = Math.round(progress);
@@ -388,12 +393,15 @@ const TOOLS = [
       required: ['goalQuery', 'note'],
     },
     execute: async ({ goalQuery, note, durationMinutes }) => {
-      if (!goalQuery) throw new Error('goalQuery is required');
-      if (!note || !note.trim()) throw new Error('note is required');
+      if (typeof goalQuery !== 'string' || !goalQuery.trim()) {
+        throw new Error('goalQuery is required');
+      }
+      if (typeof note !== 'string' || !note.trim()) throw new Error('note is required');
+      const query = goalQuery.trim();
       const data = await getGoals();
-      const { match } = findGoalByQuery(data.goals || [], goalQuery);
+      const { match } = findGoalByQuery(data.goals || [], query);
       if (!match) {
-        return { ok: false, summary: `No active goal matched "${goalQuery}".` };
+        return { ok: false, summary: `No active goal matched "${query}".` };
       }
       // Server runs TZ=UTC; "today" must be the user's local date, not UTC.
       const today = todayInTimezone(await getUserTimezone());
@@ -443,14 +451,16 @@ const TOOLS = [
       required: ['name'],
     },
     execute: async ({ name }) => {
-      if (!name) throw new Error('name is required');
+      if (typeof name !== 'string' || !name.trim()) throw new Error('name is required');
+      const trimmed = name.trim();
+      const lower = trimmed.toLowerCase();
       const procs = await listProcesses();
-      const exact = procs.find((p) => p.name === name);
+      const exact = procs.find((p) => p.name === trimmed);
       const match = exact
-        || procs.find((p) => p.name?.toLowerCase() === name.toLowerCase())
-        || procs.find((p) => p.name?.toLowerCase().includes(name.toLowerCase()));
+        || procs.find((p) => p.name?.toLowerCase() === lower)
+        || procs.find((p) => p.name?.toLowerCase().includes(lower));
       if (!match) {
-        return { ok: false, summary: `No PM2 process matched "${name}".` };
+        return { ok: false, summary: `No PM2 process matched "${trimmed}".` };
       }
       await restartApp(match.name);
       return { ok: true, name: match.name, summary: `Restarted ${match.name}.` };
