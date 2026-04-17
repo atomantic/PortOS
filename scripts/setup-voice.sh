@@ -4,7 +4,7 @@
 #
 # Env overrides:
 #   MODEL_NAME      Whisper GGUF to fetch (default: ggml-base.en.bin)
-#   VOICE_NAME      Piper voice name      (default: en_US-ryan-high) — only used when TTS_ENGINE=piper
+#   VOICE_NAME      Piper voice name      (default: en_GB-jenny_dioco-medium) — only used when TTS_ENGINE=piper
 #   TTS_ENGINE      'kokoro' (default) | 'piper'
 #   INSTALL_COREML  '1' to download CoreML encoder for Whisper on macOS (default: 0)
 #
@@ -17,7 +17,7 @@ VOICE_HOME="${HOME}/.portos/voice"
 MODELS_DIR="${VOICE_HOME}/models"
 VOICES_DIR="${VOICE_HOME}/voices"
 MODEL_NAME="${MODEL_NAME:-ggml-base.en.bin}"
-VOICE_NAME="${VOICE_NAME:-en_US-ryan-high}"
+VOICE_NAME="${VOICE_NAME:-en_GB-jenny_dioco-medium}"
 TTS_ENGINE="${TTS_ENGINE:-kokoro}"
 INSTALL_COREML="${INSTALL_COREML:-0}"
 
@@ -41,10 +41,40 @@ if ! have whisper-server; then
   install_brew_pkg whisper-cpp
 fi
 
-# piper TTS (only when active engine uses it)
+# piper TTS binary (only when active engine uses it)
+# Not available via Homebrew — download pre-built binary + phonemize libs from
+# GitHub releases. The piper binary links against libespeak-ng, libpiper_phonemize,
+# and libonnxruntime at specific versions bundled in the piper-phonemize release.
+PIPER_DIR="${VOICE_HOME}/piper"
+PIPER_LIB="${PIPER_DIR}/lib"
 if [[ "$TTS_ENGINE" == "piper" ]]; then
-  if ! have piper; then
-    brew install piper-tts 2>/dev/null || install_brew_pkg piper
+  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  ARCH="$(uname -m)"
+  [[ "$OS" == "darwin" ]] && OS="macos"
+  [[ "$ARCH" == "arm64" ]] && ARCH="aarch64"
+  [[ "$ARCH" == "x86_64" ]] && ARCH="x64"
+
+  if [[ ! -x "${PIPER_DIR}/piper" ]]; then
+    PIPER_VERSION="2023.11.14-2"
+    TAR="piper_${OS}_${ARCH}.tar.gz"
+    URL="https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${TAR}"
+    echo "⬇️  Piper TTS → ${PIPER_DIR}/"
+    mkdir -p "${PIPER_DIR}"
+    curl --fail --location --progress-bar "$URL" | tar xz -C "${VOICE_HOME}"
+    chmod +x "${PIPER_DIR}/piper" 2>/dev/null || true
+  fi
+
+  # Companion dylibs (espeak-ng, piper_phonemize, onnxruntime) from piper-phonemize
+  if [[ ! -f "${PIPER_LIB}/libpiper_phonemize.1.dylib" ]] && [[ ! -f "${PIPER_LIB}/libpiper_phonemize.so.1" ]]; then
+    PHONEMIZE_VERSION="2023.11.14-4"
+    PTTAR="piper-phonemize_${OS}_${ARCH}.tar.gz"
+    PTURL="https://github.com/rhasspy/piper-phonemize/releases/download/${PHONEMIZE_VERSION}/${PTTAR}"
+    echo "⬇️  Piper libs → ${PIPER_LIB}/"
+    TMPDIR_PT="$(mktemp -d)"
+    curl --fail --location --progress-bar "$PTURL" | tar xz -C "$TMPDIR_PT"
+    mkdir -p "${PIPER_LIB}"
+    cp "$TMPDIR_PT"/piper-phonemize/lib/*.dylib "$TMPDIR_PT"/piper-phonemize/lib/*.so 2>/dev/null "${PIPER_LIB}/" || true
+    rm -rf "$TMPDIR_PT"
   fi
 fi
 
@@ -98,7 +128,7 @@ if [[ "$INSTALL_COREML" == "1" ]] && is_macos; then
 fi
 echo "   tts engine:     ${TTS_ENGINE}"
 if [[ "$TTS_ENGINE" == "piper" ]]; then
-  echo "   piper:          $(command -v piper)"
+  echo "   piper:          ${PIPER_DIR}/piper"
   echo "   piper voice:    ${VOICES_DIR}/${VOICE_NAME}.onnx"
 else
   echo "   kokoro models:  managed by transformers.js (~/.cache/huggingface/)"

@@ -3,7 +3,7 @@ import { Save, Mic, Play, Zap } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import {
-  getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, testTts,
+  getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, testTts, fetchPiperVoice,
 } from '../../services/apiVoice';
 import { playWav, webSpeechSupported } from '../../services/voiceClient';
 
@@ -35,7 +35,14 @@ const KOKORO_DTYPES = [
 const ACCENT_LABELS = { 'en-US': 'American', 'en-GB': 'British' };
 
 const formatVoiceLabel = (v, engine) => {
-  if (engine !== 'kokoro') return v.name;
+  if (engine === 'piper') {
+    // Always lead with the voice ID so entries are distinguishable even if the
+    // catalog metadata (accent/gender/note) is stripped or missing.
+    const meta = [v.accent, v.gender].filter(Boolean).join(' — ');
+    const dl = v.downloaded ? '' : ' ⬇';
+    const note = v.note ? ` · ${v.note}` : '';
+    return meta ? `${meta}${note}${dl}` : `${v.name}${dl}`;
+  }
   const accent = ACCENT_LABELS[v.language] || v.language || '';
   const [, ...rest] = v.name.split('_');
   const raw = rest.join(' ') || v.name;
@@ -87,27 +94,47 @@ export function VoiceTab() {
   const [voiceList, setVoiceList] = useState({ engine: null, voices: [] });
   const [testing, setTesting] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState(null);
+  const [downloadingVoice, setDownloadingVoice] = useState(null);
+
+  const currentEngine = cfg?.tts?.engine;
 
   const refreshStatus = useCallback(() => {
-    return Promise.all([getVoiceStatus(), listVoices().catch(() => ({ engine: null, voices: [] }))])
+    return Promise.all([
+      getVoiceStatus(),
+      listVoices(currentEngine).catch(() => ({ engine: null, voices: [] })),
+    ])
       .then(([s, v]) => { setStatus(s); setVoiceList(v); })
       .catch(() => setStatus(null));
-  }, []);
+  }, [currentEngine]);
 
   useEffect(() => {
-    Promise.all([getVoiceConfig(), getVoiceStatus(), listVoices().catch(() => ({ engine: null, voices: [] }))])
-      .then(([config, s, v]) => { setCfg(config); setStatus(s); setVoiceList(v); })
+    Promise.all([getVoiceConfig(), getVoiceStatus()])
+      .then(([config, s]) => { setCfg(config); setStatus(s); })
       .catch(() => toast.error('Failed to load voice settings'))
       .finally(() => setLoading(false));
   }, []);
 
+  // Refetch the voice catalog whenever the user flips TTS engine so the picker
+  // reflects the selected engine's voices (without requiring a save first).
+  useEffect(() => {
+    if (!currentEngine) return;
+    listVoices(currentEngine)
+      .then((v) => setVoiceList(v))
+      .catch(() => setVoiceList({ engine: currentEngine, voices: [] }));
+  }, [currentEngine]);
+
+  // Functional setState form so sequential patch() calls in one event handler
+  // compose correctly — each one sees the prior's result instead of cloning
+  // the pre-event `cfg` and silently overwriting earlier changes.
   const patch = (path, value) => {
-    const next = JSON.parse(JSON.stringify(cfg));
-    let cur = next;
-    const keys = path.split('.');
-    for (let i = 0; i < keys.length - 1; i++) cur = cur[keys[i]] ??= {};
-    cur[keys[keys.length - 1]] = value;
-    setCfg(next);
+    setCfg((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      let cur = next;
+      const keys = path.split('.');
+      for (let i = 0; i < keys.length - 1; i++) cur = cur[keys[i]] ??= {};
+      cur[keys[keys.length - 1]] = value;
+      return next;
+    });
   };
 
   const handleSave = async () => {
@@ -135,7 +162,7 @@ export function VoiceTab() {
 
   const handleTest = async () => {
     setTesting(true);
-    await testTts('Voice mode is online. I am ready to help.')
+    await testTts('Voice mode is online. I am ready to help.', undefined, currentEngine)
       .then((buf) => playWav(buf))
       .catch((err) => toast.error(`TTS test failed: ${err.message}`))
       .finally(() => setTesting(false));
@@ -145,7 +172,7 @@ export function VoiceTab() {
   const handlePreviewVoice = async (voiceName) => {
     if (!voiceName || previewingVoice) return;
     setPreviewingVoice(voiceName);
-    await testTts("Hi, I'm your voice. This is how I sound.", voiceName)
+    await testTts("Hi, I'm your voice. This is how I sound.", voiceName, currentEngine)
       .then((buf) => playWav(buf))
       .catch((err) => toast.error(`Preview failed: ${err.message}`))
       .finally(() => setPreviewingVoice(null));
@@ -173,8 +200,8 @@ export function VoiceTab() {
       </div>
       <p className="text-xs text-gray-500 -mt-4">
         Hands-free or push-to-talk voice. Whisper (STT) + Kokoro/Piper (TTS) + LM Studio (LLM)
-        with tool calling for real actions (brain inbox capture, more coming). Everything runs on
-        this machine — no external API calls.
+        with tool calling for real actions (brain capture, goal updates, PM2 control, feed
+        digests, time, and more). Everything runs on this machine — no external API calls.
       </p>
 
       <label className="flex items-center gap-3 cursor-pointer">
@@ -221,17 +248,28 @@ export function VoiceTab() {
         <Field label={`${engine === 'kokoro' ? 'Kokoro' : 'Piper'} voice`} hint={
           engine === 'kokoro'
             ? 'Grade letter = Kokoro author\'s quality rating. ❤️ 🔥 🎧 mark the best-sounding voices. Click ▶ to preview without saving.'
-            : 'ONNX voice file under ~/.portos/voice/voices/. Click ▶ to preview without saving.'
+            : 'Curated Piper catalog — selecting a ⬇ voice fetches it immediately so you can preview. Click ▶ to audition.'
         }>
           <div className="flex items-center gap-2">
             <select
               value={activeVoice || ''}
               onChange={(e) => {
-                if (engine === 'kokoro') patch('tts.kokoro.voice', e.target.value);
-                else {
-                  const v = voices.find((x) => x.name === e.target.value);
-                  patch('tts.piper.voice', e.target.value);
-                  if (v?.path) patch('tts.piper.voicePath', v.path);
+                const val = e.target.value;
+                if (engine === 'kokoro') { patch('tts.kokoro.voice', val); return; }
+                const v = voices.find((x) => x.name === val);
+                patch('tts.piper.voice', val);
+                if (v?.path) patch('tts.piper.voicePath', v.path);
+                patch('tts.piper.speakerId', null);
+                // Fetch voice on select so ▶ preview works without a save.
+                // Safe to kick off fire-and-forget — the UI disables the
+                // preview button while a download is in flight.
+                if (v && v.downloaded === false) {
+                  setDownloadingVoice(val);
+                  fetchPiperVoice(val)
+                    .then(() => listVoices('piper'))
+                    .then((fresh) => setVoiceList(fresh))
+                    .catch((err) => toast.error(`Voice download failed: ${err.message}`))
+                    .finally(() => setDownloadingVoice(null));
                 }
               }}
               className={`${inputCls} flex-1`}
@@ -246,11 +284,13 @@ export function VoiceTab() {
             <button
               type="button"
               onClick={() => handlePreviewVoice(activeVoice)}
-              disabled={!activeVoice || !!previewingVoice}
-              title="Preview this voice"
+              disabled={!activeVoice || !!previewingVoice || !!downloadingVoice}
+              title={downloadingVoice ? `Downloading ${downloadingVoice}…` : 'Preview this voice'}
               className="shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
             >
-              {previewingVoice === activeVoice ? <BrailleSpinner /> : <Play size={14} />}
+              {previewingVoice === activeVoice || downloadingVoice === activeVoice
+                ? <BrailleSpinner />
+                : <Play size={14} />}
             </button>
           </div>
         </Field>
@@ -403,7 +443,7 @@ export function VoiceTab() {
             onChange={(e) => patch('llm.tools.enabled', e.target.checked)}
             className="w-4 h-4"
           />
-          <span className="text-sm text-white">Enable tools (brain inbox capture, more coming)</span>
+          <span className="text-sm text-white">Enable tools (brain, goals, PM2, feeds, time…)</span>
           <span className="text-xs text-gray-500">
             Needs a tool-use-capable model (Qwen2.5, Hermes-3, etc.).
           </span>

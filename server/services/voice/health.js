@@ -1,8 +1,11 @@
 // Voice stack health checks — whisper.cpp + LM Studio + (when active) Piper.
 // Kokoro runs in-process; readiness is reported via the in-memory model flag.
 
-import { getVoiceConfig } from './config.js';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { getVoiceConfig, expandPath, voiceHome } from './config.js';
 import { isReady as kokoroReady } from './tts-kokoro.js';
+import { which } from './bootstrap.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 3000;
@@ -36,7 +39,8 @@ export const checkAll = async (cfg) => {
     // Refresh kokoro readiness on every call — it's a cheap in-memory check
     // and flips from lazy → loaded mid-cache-window after first synthesis.
     if (voice.tts.engine === 'kokoro') {
-      cache.value.kokoro = { ok: kokoroReady(), state: kokoroReady() ? 'loaded' : 'lazy' };
+      const ready = kokoroReady();
+      cache.value.kokoro = { ok: ready, state: ready ? 'loaded' : 'lazy' };
     }
     return cache.value;
   }
@@ -50,19 +54,25 @@ export const checkAll = async (cfg) => {
     labels.unshift('whisper');
   }
 
-  if (voice.tts.engine === 'piper') {
-    probes.push(probe(voice.tts.piper?.endpoint || 'http://127.0.0.1:5002'));
-    labels.push('piper');
-  }
-
   const results = await Promise.all(probes);
   const out = Object.fromEntries(labels.map((k, i) => [k, results[i]]));
+
+  if (voice.tts.engine === 'piper') {
+    // CLI-mode piper has no server to probe — check binary + selected voice.
+    const localPiper = join(voiceHome(), 'piper', 'piper');
+    const [hasBin, voicePath] = [existsSync(localPiper) || !!(await which('piper')), expandPath(voice.tts.piper?.voicePath || '')];
+    const hasVoice = voicePath && existsSync(voicePath);
+    out.piper = hasBin && hasVoice
+      ? { ok: true, state: 'ready' }
+      : { ok: false, state: !hasBin ? 'no binary' : 'voice missing' };
+  }
 
   if (sttEngine === 'web-speech') {
     out['web-speech'] = { ok: true, state: 'browser-native' };
   }
   if (voice.tts.engine === 'kokoro') {
-    out.kokoro = { ok: kokoroReady(), state: kokoroReady() ? 'loaded' : 'lazy' };
+    const kr = kokoroReady();
+    out.kokoro = { ok: kr, state: kr ? 'loaded' : 'lazy' };
   }
 
   cache = { key: cacheKey, ts: Date.now(), value: out };

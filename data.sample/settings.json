@@ -21,8 +21,9 @@
         "voice": "af_heart"
       },
       "piper": {
-        "voice": "en_US-ryan-high",
-        "voicePath": "~/.portos/voice/voices/en_US-ryan-high.onnx"
+        "voice": "en_GB-jenny_dioco-medium",
+        "voicePath": "~/.portos/voice/voices/en_GB-jenny_dioco-medium.onnx",
+        "speakerId": null
       }
     },
     "llm": {
