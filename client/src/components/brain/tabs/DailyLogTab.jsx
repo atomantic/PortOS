@@ -110,30 +110,79 @@ export default function DailyLogTab() {
   }, []);
 
   useEffect(() => {
+    // Server sends only the delta ({date, text, segment, segmentCount,
+    // updatedAt}) — patch local state to avoid repeatedly shipping the
+    // full entry over the socket as the day grows.
     const onAppend = (payload) => {
-      const appended = payload?.entry;
-      if (!appended) return;
-      setHistory((prev) => upsertHistory(prev, appended));
-      if (appended.date === date) {
-        setEntry(appended);
+      if (!payload?.date || typeof payload.text !== 'string') return;
+      const { date: appendedDate, text: appendedText, segment, segmentCount, updatedAt } = payload;
+      const patchEntry = (prev) => {
+        if (!prev || prev.date !== appendedDate) {
+          // Entry didn't exist locally yet — fabricate a minimal one so
+          // the segment count / updatedAt reflect the server state until a
+          // full refetch. Leaves `id`/`createdAt` unset; that's fine since
+          // nothing in this view depends on them for first-append state.
+          return {
+            date: appendedDate,
+            content: appendedText,
+            segments: segment ? [segment] : [],
+            updatedAt: updatedAt || prev?.updatedAt,
+            obsidianPath: prev?.obsidianPath || null,
+          };
+        }
+        const nextContent = prev.content
+          ? `${prev.content.replace(/\s+$/, '')}\n\n${appendedText}`
+          : appendedText;
+        const nextSegments = segment ? [...(prev.segments || []), segment] : (prev.segments || []);
+        return {
+          ...prev,
+          content: nextContent,
+          segments: nextSegments,
+          updatedAt: updatedAt || prev.updatedAt,
+        };
+      };
+      setHistory((prev) => {
+        const existing = prev.find((h) => h.date === appendedDate);
+        const patched = patchEntry(existing);
+        // Sidebar renders `h.segments?.length` — pad/trim so the displayed
+        // count matches the server's authoritative segmentCount even when
+        // our local segments array is out of sync (e.g. initial fetch
+        // returned summary-only records without full segment detail).
+        if (typeof segmentCount === 'number') {
+          const current = patched.segments || [];
+          if (current.length !== segmentCount) {
+            patched.segments = current.length < segmentCount
+              ? [...current, ...Array(segmentCount - current.length).fill(segment || { text: '', at: updatedAt, source: 'voice' })]
+              : current.slice(0, segmentCount);
+          }
+        }
+        return upsertHistory(prev, patched);
+      });
+      if (appendedDate === date) {
+        setEntry((prev) => patchEntry(prev));
         // Only sync the textarea when the user has no unsaved edits —
         // otherwise an incoming voice segment would clobber whatever they're
         // in the middle of typing. The entry state still updates so the
         // segment count badge reflects the append.
-        if (!dirtyRef.current) setContent(appended.content || '');
-        else toast('Voice segment appended while you were editing — save or refresh to see it.', { icon: '📝' });
+        if (!dirtyRef.current) {
+          setContent((prevContent) => (prevContent
+            ? `${prevContent.replace(/\s+$/, '')}\n\n${appendedText}`
+            : appendedText));
+        } else {
+          toast('Voice segment appended while you were editing — save or refresh to see it.', { icon: '📝' });
+        }
       }
     };
     const onDictation = (payload) => {
       const nextEnabled = !!payload?.enabled;
-      setDictation((prev) => {
-        // Only toast on a real false→true transition — the server echoes
-        // dictation state after every set (including our own toggleDictation
-        // click, which already toasted locally), and without this guard we'd
-        // stack "Dictation on" twice per click.
-        if (!prev && nextEnabled) toast('Dictation on — speak your log.', { icon: '🎙️' });
-        return prev === nextEnabled ? prev : nextEnabled;
-      });
+      // Sync local state only. Toasts are owned by the initiator (the UI
+      // toggle button handles its own toast; voice-tool-triggered changes
+      // flow through the CoS reply which speaks confirmation). An earlier
+      // version toasted here on false→true, but under rapid toggles the
+      // server echo could arrive after the UI had already flipped state
+      // again, firing a stale "Dictation on" — source-of-truth belongs to
+      // whoever initiated the change, not the echo.
+      setDictation((prev) => (prev === nextEnabled ? prev : nextEnabled));
       if (payload?.date && payload.date !== date) setDate(payload.date);
     };
     const offs = [
@@ -188,13 +237,24 @@ export default function DailyLogTab() {
 
   // Route the read-back through the voice assistant so its TTS pipeline fires
   // — the browser TTS APIs would skip the project's Kokoro/Piper voice.
+  //
+  // The socket's MAX_TEXT_LEN cap (4000 chars) would reject any reasonably
+  // full log if we inlined the content, so for long entries we delegate to
+  // the daily_log_read tool and let the LLM speak the server-returned body.
+  // Short logs still get inlined so the model can't add commentary or
+  // accidentally skip content by summarizing the tool result.
+  const READ_BACK_INLINE_LIMIT = 3800; // leaves room for prompt scaffolding under MAX_TEXT_LEN
   const readBack = () => {
     const body = content.trim();
     if (!body) {
       toast('Daily log is empty.', { icon: '📖' });
       return;
     }
-    sendText(`Read this back to me verbatim, exactly as written, with no commentary:\n\n${body}`);
+    if (body.length <= READ_BACK_INLINE_LIMIT) {
+      sendText(`Read this back to me verbatim, exactly as written, with no commentary:\n\n${body}`);
+    } else {
+      sendText(`Use the daily_log_read tool for ${date} and speak the full returned content aloud verbatim — no summarization, no commentary, just read it exactly as written.`);
+    }
   };
 
   const handleDelete = async () => {

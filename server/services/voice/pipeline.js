@@ -151,7 +151,20 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       emit('voice:dictation', { enabled: true, date });
     }
     const entry = await appendJournal(date, trimmed, { source: 'voice' });
-    emit('voice:dailyLog:appended', { date, text: trimmed, entry });
+    // Ship only the delta (new segment + metadata) rather than the full
+    // entry. `entry.content` and `entry.segments` grow over the day, so
+    // emitting the whole record per utterance would push socket payload
+    // size and serialization cost toward O(n²) during long dictation
+    // sessions. The client patches local state from these fields.
+    const segments = Array.isArray(entry?.segments) ? entry.segments : [];
+    const segment = segments.length ? segments[segments.length - 1] : null;
+    emit('voice:dailyLog:appended', {
+      date,
+      text: trimmed,
+      segment,
+      segmentCount: segments.length,
+      updatedAt: entry?.updatedAt,
+    });
     console.log(`🎙️  dictation → journal[${date}] +${trimmed.length} chars`);
     emit('voice:idle', { reason: 'dictation-appended' });
     return { transcript: userText, reply: '' };

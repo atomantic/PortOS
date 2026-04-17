@@ -150,8 +150,21 @@ export const registerVoiceHandlers = (socket) => {
   // today) rather than storing garbage. Read the payload defensively — a
   // client emitting `null` or a primitive would otherwise crash the
   // destructure before our validation runs.
-  socket.on('voice:dictation:set', (payload) => {
+  //
+  // Gated on the same voice.enabled toggle as voice:turn / voice:text: if
+  // voice is disabled, turning dictation *on* would leave the UI in a
+  // dictating state while subsequent voice turns would be rejected. Force
+  // dictation off and surface the error instead. Disabling is always
+  // allowed — it's a clean-up path that can run regardless of config.
+  socket.on('voice:dictation:set', async (payload) => {
     const { enabled, date } = payload && typeof payload === 'object' ? payload : {};
+    if (enabled && !(await ensureEnabled('dictation'))) {
+      // Ensure UI and server agree that dictation is off after a blocked
+      // enable, otherwise the UI can silently drift into "dictating" state.
+      state.dictation = { enabled: false, date: null };
+      socket.emit('voice:dictation', { enabled: false });
+      return;
+    }
     const normalizedDate = isIsoDate(date) ? date : (state.dictation.date || null);
     state.dictation = { enabled: !!enabled, date: enabled ? normalizedDate : null };
     socket.emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });

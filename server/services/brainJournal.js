@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { brainEvents, now } from './brainStorage.js';
 import * as obsidian from './obsidian.js';
 import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
@@ -48,6 +49,14 @@ export async function updateSettings(partial) {
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 
+// Serialize every load→mutate→save of journals.json so a fire-and-forget
+// Obsidian path-persist can't interleave with an appendJournal() and clobber
+// newer segments. PortOS is single-user, but dictation bursts schedule
+// overlapping async tasks (appendJournal → fire-and-forget syncToObsidian →
+// persistObsidianPath) that all want to rewrite the same file. This mutex
+// guarantees at most one read-modify-write runs at a time.
+const storeMutex = createMutex();
+
 async function loadStore() {
   await ensureDir(PATHS.brain);
   return readJSONFile(JOURNALS_FILE, { records: {} });
@@ -56,6 +65,24 @@ async function loadStore() {
 async function saveStore(store) {
   await ensureDir(PATHS.brain);
   await writeFile(JOURNALS_FILE, JSON.stringify(store, null, 2));
+}
+
+// Wraps a load→mutate→save sequence so the whole thing runs atomically w.r.t.
+// other writers. The callback receives a fresh store snapshot and must return
+// either the mutated store (it will be saved) or { store, result } to return
+// a value alongside. Returning a falsy store skips saveStore().
+async function withStore(mutator) {
+  return storeMutex(async () => {
+    const store = await loadStore();
+    const out = await mutator(store);
+    if (out === undefined || out === null) return undefined;
+    if (out && typeof out === 'object' && 'store' in out) {
+      if (out.store) await saveStore(out.store);
+      return out.result;
+    }
+    await saveStore(out);
+    return out;
+  });
 }
 
 // Accept YYYY-MM-DD only, and require a real calendar day so we can't create
@@ -124,21 +151,24 @@ function scheduleObsidianSync(entry) {
 
 export async function setJournalContent(date, content) {
   if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
-  const store = await loadStore();
-  const entry = ensureEntry(store, date);
-  const clean = content || '';
-  entry.content = clean;
-  // Full replace invalidates the old segment history: the user rewrote the
-  // whole day, so segment metadata (counts, per-line sources, timestamps)
-  // would otherwise drift from what's actually stored in `content`. Collapse
-  // to a single 'edit' segment that represents the rewrite.
-  entry.segments = clean
-    ? [{ text: clean, at: now(), source: 'edit' }]
-    : [];
-  entry.updatedAt = now();
-  await saveStore(store);
+  const { entry, records } = await storeMutex(async () => {
+    const store = await loadStore();
+    const entryLocal = ensureEntry(store, date);
+    const clean = content || '';
+    entryLocal.content = clean;
+    // Full replace invalidates the old segment history: the user rewrote the
+    // whole day, so segment metadata (counts, per-line sources, timestamps)
+    // would otherwise drift from what's actually stored in `content`. Collapse
+    // to a single 'edit' segment that represents the rewrite.
+    entryLocal.segments = clean
+      ? [{ text: clean, at: now(), source: 'edit' }]
+      : [];
+    entryLocal.updatedAt = now();
+    await saveStore(store);
+    return { entry: entryLocal, records: store.records };
+  });
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records: store.records });
+  brainEvents.emit('journals:changed', { records });
   // Per-entry event so downstream syncers (memory bridge) can update the
   // single affected day without iterating the whole store.
   brainEvents.emit('journals:upserted', { entry });
@@ -155,17 +185,20 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
   const clean = (text || '').trim();
   if (!clean) return null;
 
-  const store = await loadStore();
-  const entry = ensureEntry(store, date);
-  const segment = { text: clean, at: now(), source };
-  entry.segments.push(segment);
-  entry.content = entry.content
-    ? `${entry.content.trimEnd()}\n\n${clean}`
-    : clean;
-  entry.updatedAt = now();
-  await saveStore(store);
+  const { entry, segment, records } = await storeMutex(async () => {
+    const store = await loadStore();
+    const entryLocal = ensureEntry(store, date);
+    const segmentLocal = { text: clean, at: now(), source };
+    entryLocal.segments.push(segmentLocal);
+    entryLocal.content = entryLocal.content
+      ? `${entryLocal.content.trimEnd()}\n\n${clean}`
+      : clean;
+    entryLocal.updatedAt = now();
+    await saveStore(store);
+    return { entry: entryLocal, segment: segmentLocal, records: store.records };
+  });
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records: store.records });
+  brainEvents.emit('journals:changed', { records });
   brainEvents.emit('journals:appended', { entry, segment });
   // Per-entry event so the memory bridge re-embeds only this day, not all
   // of them. (Keep journals:appended separate — it carries the single new
@@ -176,15 +209,20 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
 
 export async function deleteJournal(date) {
   if (!isIsoDate(date)) return false;
-  const store = await loadStore();
-  if (!store.records?.[date]) return false;
-  const entry = store.records[date];
-  delete store.records[date];
-  await saveStore(store);
+  const result = await storeMutex(async () => {
+    const store = await loadStore();
+    if (!store.records?.[date]) return null;
+    const entryLocal = store.records[date];
+    delete store.records[date];
+    await saveStore(store);
+    return { entry: entryLocal, records: store.records };
+  });
+  if (!result) return false;
+  const { entry, records } = result;
   if (entry.obsidianPath) {
     await removeFromObsidian(entry).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
   }
-  brainEvents.emit('journals:changed', { records: store.records });
+  brainEvents.emit('journals:changed', { records });
   // Explicit deletion signal so memory bridges / integrations can archive
   // the corresponding vector entry — the changed event alone doesn't tell
   // the bridge which record vanished.
@@ -258,22 +296,19 @@ export async function syncToObsidian(entry, { force = false } = {}) {
 // `!== notePath` guard in syncToObsidian() keeps the steady-state cost
 // zero; this function is only invoked on an actual change.
 //
-// Note on concurrency: PortOS is single-user/single-instance (see CLAUDE.md)
-// running on a single-threaded Node event loop. The only writers to
-// journals.json are appendJournal / setJournalContent / deleteJournal, all
-// of which await their own saveStore() before returning, and this function,
-// which runs fire-and-forget from syncToObsidian(). In practice: the caller
-// has already written the authoritative content; this load-modify-save only
-// ever flips obsidianPath from unset (or stale) to the current value on an
-// entry the caller already persisted. We intentionally don't add a mutex
-// here — per CLAUDE.md, concurrent-write races are explicitly out of scope.
+// Serialized via storeMutex: this runs fire-and-forget from syncToObsidian(),
+// so without serialization an in-flight Obsidian persist could read a stale
+// store snapshot while a concurrent appendJournal() is writing new segments,
+// then clobber them when its own saveStore() lands last.
 async function persistObsidianPath(date, notePath) {
-  const store = await loadStore();
-  const entry = store.records?.[date];
-  if (entry && entry.obsidianPath !== notePath) {
-    entry.obsidianPath = notePath;
-    await saveStore(store);
-  }
+  return storeMutex(async () => {
+    const store = await loadStore();
+    const entry = store.records?.[date];
+    if (entry && entry.obsidianPath !== notePath) {
+      entry.obsidianPath = notePath;
+      await saveStore(store);
+    }
+  });
 }
 
 async function removeFromObsidian(entry) {
