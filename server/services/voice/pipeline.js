@@ -155,17 +155,30 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
 
     if (!llm.toolCalls?.length) break;
 
+    // Assign stable IDs up-front so the assistant's tool_calls[].id and each
+    // tool response's tool_call_id are guaranteed to match, even when the
+    // upstream stream omitted tc.id. Previously the fallback `call_<index>`
+    // was computed only at the tool-response side, so the assistant entry
+    // could carry a different id and the next LLM iteration wouldn't pair
+    // the result with the call.
+    const callsWithIds = llm.toolCalls.map((tc, i) => ({
+      ...tc,
+      resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
+    }));
+
     // Persist the assistant's tool-call turn, then execute each call and
     // feed the result back as a 'tool' message for the next iteration.
     messages.push({
       role: 'assistant',
       content: llm.text || null,
-      tool_calls: llm.toolCalls.map((tc) => ({
-        id: tc.id, type: tc.type, function: { name: tc.function.name, arguments: tc.function.arguments },
+      tool_calls: callsWithIds.map((tc) => ({
+        id: tc.resolvedId,
+        type: tc.type,
+        function: { name: tc.function.name, arguments: tc.function.arguments },
       })),
     });
 
-    for (const tc of llm.toolCalls) {
+    for (const tc of callsWithIds) {
       if (signal?.aborted) break;
       const t0 = Date.now();
       let result;
@@ -181,7 +194,7 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
       emit('voice:tool', { name: tc.function.name, args, result });
       messages.push({
         role: 'tool',
-        tool_call_id: tc.id || `call_${tc.index ?? 0}`,
+        tool_call_id: tc.resolvedId,
         content: JSON.stringify(result),
       });
     }

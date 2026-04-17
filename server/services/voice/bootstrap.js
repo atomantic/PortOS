@@ -51,14 +51,19 @@ export const runSetupScript = async (cfg) => {
   const scriptPath = join(PATHS.root, 'scripts', 'setup-voice.sh');
   const modelName = basename(expandPath(cfg.stt.modelPath));
   const voiceName = cfg.tts.engine === 'piper' ? parseVoiceName(expandPath(cfg.tts.piper.voicePath)) : '';
+  const sttEngine = cfg.stt?.engine || 'whisper';
   const env = {
     ...process.env,
     MODEL_NAME: modelName,
     VOICE_NAME: voiceName,
+    // Pass STT_ENGINE so the script can skip whisper install + model download
+    // when the user picked Web Speech (browser-native) — they'd otherwise pay
+    // the Homebrew + GGUF model cost for a feature they don't use.
+    STT_ENGINE: sttEngine,
     TTS_ENGINE: cfg.tts.engine || 'kokoro',
     INSTALL_COREML: cfg.stt.coreml ? '1' : '0',
   };
-  console.log(`🔧 voice: setup-voice.sh (stt=${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
+  console.log(`🔧 voice: setup-voice.sh (stt=${sttEngine}/${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
   // 10-minute cap — large models + slow network can legitimately take several
   // minutes, but a hung curl must not pin the HTTP request that triggered us.
   const { stdout, stderr } = await pexec('bash', [scriptPath], {

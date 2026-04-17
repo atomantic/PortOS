@@ -3,6 +3,8 @@
 # Safe to re-run: installs only what's missing, downloads only what's missing.
 #
 # Env overrides:
+#   STT_ENGINE      'whisper' (default) | 'web-speech' — browser-native STT
+#                   skips whisper-cpp install + model download entirely
 #   MODEL_NAME      Whisper GGUF to fetch (default: ggml-base.en.bin)
 #   VOICE_NAME      Piper voice name      (default: en_GB-jenny_dioco-medium) — only used when TTS_ENGINE=piper
 #   TTS_ENGINE      'kokoro' (default) | 'piper'
@@ -19,6 +21,7 @@ VOICES_DIR="${VOICE_HOME}/voices"
 MODEL_NAME="${MODEL_NAME:-ggml-base.en.bin}"
 VOICE_NAME="${VOICE_NAME:-en_GB-jenny_dioco-medium}"
 TTS_ENGINE="${TTS_ENGINE:-kokoro}"
+STT_ENGINE="${STT_ENGINE:-whisper}"
 INSTALL_COREML="${INSTALL_COREML:-0}"
 
 mkdir -p "$MODELS_DIR" "$VOICES_DIR"
@@ -36,9 +39,14 @@ install_brew_pkg() {
   brew install "$pkg"
 }
 
-# whisper.cpp provides whisper-cli + whisper-server binaries
-if ! have whisper-server; then
-  install_brew_pkg whisper-cpp
+# whisper.cpp provides whisper-cli + whisper-server binaries. Skip entirely
+# when STT runs in the browser via Web Speech — no server-side STT needed.
+if [[ "$STT_ENGINE" == "whisper" ]]; then
+  if ! have whisper-server; then
+    install_brew_pkg whisper-cpp
+  fi
+else
+  echo "ℹ️  STT_ENGINE=${STT_ENGINE} — skipping whisper-cpp install and model download"
 fi
 
 # piper TTS binary (only when active engine uses it)
@@ -80,8 +88,8 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
   fi
 fi
 
-# Whisper model (GGUF)
-if [[ ! -f "${MODELS_DIR}/${MODEL_NAME}" ]]; then
+# Whisper model (GGUF) — only when whisper engine is active.
+if [[ "$STT_ENGINE" == "whisper" && ! -f "${MODELS_DIR}/${MODEL_NAME}" ]]; then
   echo "⬇️  Whisper model → ${MODELS_DIR}/${MODEL_NAME}"
   curl --fail --location --progress-bar \
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}" \
@@ -91,7 +99,7 @@ fi
 # CoreML encoder companion (macOS only) — 2–3× faster STT on Apple Silicon.
 # Pairs with `<base>.bin` as `<base>-encoder.mlmodelc/`. whisper.cpp loads it
 # automatically when present.
-if [[ "$INSTALL_COREML" == "1" ]] && is_macos; then
+if [[ "$STT_ENGINE" == "whisper" && "$INSTALL_COREML" == "1" ]] && is_macos; then
   ENCODER_BASE="${MODEL_NAME%.bin}"
   ENCODER_DIR="${MODELS_DIR}/${ENCODER_BASE}-encoder.mlmodelc"
   ENCODER_ZIP="${MODELS_DIR}/${ENCODER_BASE}-encoder.mlmodelc.zip"
@@ -123,10 +131,14 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
 fi
 
 echo "✅ Voice stack ready"
-echo "   whisper-server: $(command -v whisper-server)"
-echo "   stt model:      ${MODELS_DIR}/${MODEL_NAME}"
-if [[ "$INSTALL_COREML" == "1" ]] && is_macos; then
-  echo "   coreml encoder: ${MODELS_DIR}/${MODEL_NAME%.bin}-encoder.mlmodelc/"
+if [[ "$STT_ENGINE" == "whisper" ]]; then
+  echo "   whisper-server: $(command -v whisper-server || echo '<not installed>')"
+  echo "   stt model:      ${MODELS_DIR}/${MODEL_NAME}"
+  if [[ "$INSTALL_COREML" == "1" ]] && is_macos; then
+    echo "   coreml encoder: ${MODELS_DIR}/${MODEL_NAME%.bin}-encoder.mlmodelc/"
+  fi
+else
+  echo "   stt engine:     ${STT_ENGINE} (browser-native, no server provisioning)"
 fi
 echo "   tts engine:     ${TTS_ENGINE}"
 if [[ "$TTS_ENGINE" == "piper" ]]; then

@@ -6,13 +6,16 @@ const LM_STUDIO_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:123
 // Approximate parameter count from LM Studio model id so 'auto' avoids a 70B
 // when smaller, faster models are available. Returns Infinity for non-matches
 // and utility models so they sort last rather than silently winning ties.
-// Accepts "7B", "7 B", "7b", "1.5B", "8x7B" (matches the B token preceded by a
-// number with optional whitespace). Utility-model filter runs first and is
+// Accepts "7B", "7 B", "7b", "1.5B" plus MoE ids like "8x7B" (ranked by total
+// experts × per-expert size; checked first so the naive `\d+\s*b\b` match
+// doesn't silently rank "8x7B" as 7B). Utility-model filter runs first and is
 // case-insensitive so "BAAI/bge-embed" / "Cohere/rerank" are excluded even
 // when they happen to contain a size token.
 const sizeRank = (id) => {
   const normalized = String(id).toLowerCase();
   if (/embed|rerank/.test(normalized)) return Infinity;
+  const moe = normalized.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/);
+  if (moe) return parseFloat(moe[1]) * parseFloat(moe[2]);
   const m = normalized.match(/(\d+(?:\.\d+)?)\s*b\b/);
   if (m) return parseFloat(m[1]);
   return Infinity;
