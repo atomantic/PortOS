@@ -87,7 +87,17 @@ vi.mock('../services/brainJournal.js', () => ({
   updateSettings: vi.fn(),
   resyncAllToObsidian: vi.fn(),
   getToday: vi.fn(() => Promise.resolve('2026-04-17')),
-  resolveDate: vi.fn((d) => Promise.resolve(d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '2026-04-17'))
+  resolveDate: vi.fn((d) => Promise.resolve(d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '2026-04-17')),
+  isIsoDate: vi.fn((date) => {
+    if (typeof date !== 'string') return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    if (!match) return false;
+    const [, y, m, d] = match.map((v, i) => (i === 0 ? v : Number(v)));
+    const parsed = new Date(Date.UTC(y, m - 1, d));
+    return parsed.getUTCFullYear() === y
+      && parsed.getUTCMonth() === m - 1
+      && parsed.getUTCDate() === d;
+  })
 }));
 
 // Import mocked modules

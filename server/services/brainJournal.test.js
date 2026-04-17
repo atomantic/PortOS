@@ -134,15 +134,20 @@ describe('brainJournal', () => {
       expect(obsidian.createNote).not.toHaveBeenCalled();
     });
 
-    it('creates an obsidian note on first append and updates on later appends', async () => {
+    // Test syncToObsidian() directly rather than going through
+    // appendJournal()'s fire-and-forget scheduleObsidianSync() — the
+    // background promise isn't awaited, so assertions against mocked
+    // obsidian calls would otherwise race with the test runner.
+    it('creates an obsidian note on first sync and updates on later syncs', async () => {
       obsidian.getVaultById.mockResolvedValue({ id: 'v1', path: '/' });
       obsidian.updateNote.mockResolvedValueOnce({ error: 'NOTE_NOT_FOUND' });
       obsidian.createNote.mockResolvedValueOnce({ path: 'Daily Log/2026-04-17.md' });
       obsidian.updateNote.mockResolvedValueOnce({ path: 'Daily Log/2026-04-17.md' });
 
       await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: true, obsidianFolder: 'Daily Log' });
-      await journal.appendJournal('2026-04-17', 'first');
-      await journal.appendJournal('2026-04-17', 'second');
+      const entry = { id: 'j1', date: '2026-04-17', content: 'first', segments: [] };
+      await journal.syncToObsidian(entry);
+      await journal.syncToObsidian({ ...entry, content: 'first\n\nsecond' });
 
       expect(obsidian.createNote).toHaveBeenCalledTimes(1);
       const [vaultIdArg, pathArg, markdownArg] = obsidian.createNote.mock.calls[0];
@@ -151,7 +156,7 @@ describe('brainJournal', () => {
       expect(markdownArg).toContain('# Daily Log — 2026-04-17');
       expect(markdownArg).toContain('first');
 
-      // Second append updates, not creates
+      // Second sync updates, not creates
       expect(obsidian.updateNote).toHaveBeenCalled();
     });
   });
