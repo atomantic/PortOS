@@ -112,6 +112,13 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   const isSpokenInput = !text || source === 'voice';
   if (isSpokenInput && state?.dictation?.enabled) {
     const trimmed = userText.trim();
+    // STT can return whitespace-only transcripts (Whisper on silent audio,
+    // trailing partials). Don't fire a bogus append event with { entry: null };
+    // just go idle and wait for the next utterance.
+    if (!trimmed) {
+      emit('voice:idle', { reason: 'empty-transcript' });
+      return { transcript: userText, reply: '' };
+    }
     if (STOP_DICTATION_RE.test(trimmed)) {
       state.dictation = { enabled: false, date: null };
       emit('voice:dictation', { enabled: false });
@@ -244,7 +251,14 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       // client-facing side-effects (navigation) over the socket.
       for (const fx of ctx.sideEffects) {
         if (fx.type === 'dictation' && state) {
-          state.dictation = { enabled: !!fx.enabled, date: fx.date || state.dictation?.date || null };
+          // When disabling dictation, clear the date so it can't leak to the
+          // UI or be picked up by the next enable. A stale date is worse than
+          // null — it can cause surprising "jumped back to April 17" behavior.
+          const enabled = !!fx.enabled;
+          state.dictation = {
+            enabled,
+            date: enabled ? (fx.date || state.dictation?.date || null) : null,
+          };
           emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
         } else if (fx.type === 'navigate') {
           emit('voice:navigate', { path: fx.path });

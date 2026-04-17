@@ -59,7 +59,18 @@ async function saveStore(store) {
   await writeFile(JOURNALS_FILE, JSON.stringify(store, null, 2));
 }
 
-export const isIsoDate = (date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+// Accept YYYY-MM-DD only, and require a real calendar day so we can't create
+// store keys like '2026-02-30' that don't sort meaningfully or round-trip.
+export const isIsoDate = (date) => {
+  if (typeof date !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) return false;
+  const [, y, m, d] = match.map((v, i) => (i === 0 ? v : Number(v)));
+  const parsed = new Date(Date.UTC(y, m - 1, d));
+  return parsed.getUTCFullYear() === y
+    && parsed.getUTCMonth() === m - 1
+    && parsed.getUTCDate() === d;
+};
 
 export async function resolveDate(date) {
   return isIsoDate(date) ? date : getToday();
@@ -167,6 +178,10 @@ export async function deleteJournal(date) {
     await removeFromObsidian(entry).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
   }
   brainEvents.emit('journals:changed', { records: store.records });
+  // Explicit deletion signal so memory bridges / integrations can archive
+  // the corresponding vector entry — the changed event alone doesn't tell
+  // the bridge which record vanished.
+  brainEvents.emit('journals:deleted', { date, entry });
   return true;
 }
 
@@ -223,6 +238,9 @@ export async function syncToObsidian(entry) {
 
 // Initial sync is the only time the entry doesn't already know its obsidianPath;
 // record it in the store so subsequent delete operations can locate the file.
+// We skip the write when the value is unchanged, so the steady-state cost is
+// zero extra saves. PortOS is single-user/single-instance (see CLAUDE.md)
+// so we don't guard against concurrent-writer lost-update races here.
 async function persistObsidianPath(date, notePath) {
   const store = await loadStore();
   const entry = store.records?.[date];

@@ -243,7 +243,9 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     }
   }
 
-  // Daily log entries — one memory per day, re-synced when content changes
+  // Daily log entries — one memory per day, initial/backfill import only;
+  // already-mapped records are skipped by this bulk sync. Content updates
+  // flow through the 'journals:changed' event handler instead.
   {
     const { records: journals } = await listJournals({ limit: 10000 });
     for (const record of journals) {
@@ -345,8 +347,22 @@ export function initBridge() {
 
   // Daily log — entity-store shape, but keyed by date. Reuse handler.
   brainEvents.on('journals:changed', (data) => handleEntityChanged('journals', toEntityStore(data)));
+  // Explicit deletion: archive the mapped memory so agents stop surfacing
+  // a day the user intentionally removed.
+  brainEvents.on('journals:deleted', ({ entry }) => handleJournalDeleted(entry));
 
   console.log('🧠🔗 Brain→Memory bridge initialized');
+}
+
+async function handleJournalDeleted(entry) {
+  if (!entry?.id) return;
+  const map = await loadBridgeMap();
+  const key = bridgeKey('journals', entry.id);
+  const memoryId = map[key];
+  if (!memoryId) return;
+  memory.updateMemory(memoryId, { status: 'archived' }).catch((err) => {
+    console.error(`❌ Brain bridge archive failed for journals/${entry.id}: ${err.message}`);
+  });
 }
 
 // Daily log emits { records: { 'YYYY-MM-DD': entry } } — already entity-shaped

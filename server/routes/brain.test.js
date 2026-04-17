@@ -1114,4 +1114,57 @@ describe('Brain Routes', () => {
       expect(res.body.obsidianVaultId).toBe('v1');
     });
   });
+
+  describe('DELETE /api/brain/daily-log/:date', () => {
+    it('deletes the entry for a valid date', async () => {
+      journal.deleteJournal.mockResolvedValue(true);
+      const res = await request(app).delete('/api/brain/daily-log/2026-04-17');
+      expect(res.status).toBe(204);
+      expect(journal.deleteJournal).toHaveBeenCalledWith('2026-04-17');
+    });
+
+    it('returns 404 when the entry is not found', async () => {
+      journal.deleteJournal.mockResolvedValue(false);
+      const res = await request(app).delete('/api/brain/daily-log/2026-04-17');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/brain/daily-log/sync-obsidian', () => {
+    it('returns bulk sync stats', async () => {
+      journal.resyncAllToObsidian.mockResolvedValue({ synced: 3, skipped: 1 });
+      const res = await request(app).post('/api/brain/daily-log/sync-obsidian');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ synced: 3, skipped: 1 });
+    });
+  });
+
+  describe('invalid date handling', () => {
+    // Previously any non-'today' string fell back to journal.resolveDate()
+    // which defaulted invalid input to today, so PUT /daily-log/not-a-date
+    // silently overwrote today's entry. Reject malformed dates with 400.
+    it('rejects malformed dates with 400 on GET', async () => {
+      const res = await request(app).get('/api/brain/daily-log/not-a-date');
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects malformed dates with 400 on PUT', async () => {
+      const res = await request(app)
+        .put('/api/brain/daily-log/2026-13-40')
+        .send({ content: 'x' });
+      expect(res.status).toBe(400);
+      expect(journal.setJournalContent).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed dates with 400 on DELETE', async () => {
+      const res = await request(app).delete('/api/brain/daily-log/bogus');
+      expect(res.status).toBe(400);
+      expect(journal.deleteJournal).not.toHaveBeenCalled();
+    });
+
+    it('rejects impossible calendar days (2026-02-30)', async () => {
+      const res = await request(app).get('/api/brain/daily-log/2026-02-30');
+      expect(res.status).toBe(400);
+    });
+  });
 });
