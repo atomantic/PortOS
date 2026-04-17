@@ -35,6 +35,8 @@
 
 ## Fixed
 
+- **Voice widget covering page content on mobile** — the floating voice input bar (text field, hands-free toggle, mic button) was fixed at the bottom of the screen and spanned the full width on mobile, blocking form buttons (Cancel/Save) and navigation. On mobile (<768px) the widget now collapses to a single compact mic FAB in the bottom-right corner; tapping it expands the full controls and starts listening in one tap. An X button dismisses back to the FAB. Desktop behavior is unchanged.
+
 - **Cmd prompt windows flashing on Windows** — `fetchJlist` in `pm2.js` was spawning a `node pm2.js jlist` subprocess every 400ms+ during app-status polling. Even with `windowsHide: true`, Windows briefly flashes the console for spawned Node.js processes on some configurations. Fixed by switching to the PM2 Node.js API (`pm2.list()` via IPC) for the default PM2_HOME case, eliminating subprocess spawning entirely. The CLI path is kept only for custom `pm2Home` (managed external apps).
 - **Digital Twin build errors — missing Soul-prefixed API exports** — components used `api.createSoulDocument`, `api.runSoulTests`, etc. but `apiDigitalTwin.js` only exported `DigitalTwin`-prefixed names. Added 10 Soul aliases so the build resolves all imports.
 

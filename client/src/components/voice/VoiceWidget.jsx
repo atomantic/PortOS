@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon } from 'lucide-react';
+import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, X } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
@@ -44,6 +44,7 @@ export default function VoiceWidget() {
   const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
+  const [expanded, setExpanded] = useState(false);
   const [handsFree, setHandsFree] = useState(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
@@ -292,118 +293,143 @@ export default function VoiceWidget() {
   const capturing = ACTIVE_STAGES.has(stage) || isWebSpeechCapturing();
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2 w-96 max-w-[calc(100vw-2rem)]">
-      {!collapsed && history.length > 0 && (
-        <div className="bg-port-card/95 backdrop-blur border border-port-border rounded-xl shadow-lg w-full flex flex-col">
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-port-border/50">
-            <span className="text-xs text-gray-400">Conversation</span>
-            <button
-              onClick={handleClear}
-              title="Clear conversation"
-              className="p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-error/10"
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-          <div ref={scrollRef} className="text-xs p-3 space-y-2 overflow-y-auto max-h-80">
-            {history.map((turn, i) => (
-              <div key={i} className={turn.role === 'user' ? 'text-gray-400' : 'text-white'}>
-                <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">
-                  {turn.role === 'user' ? 'you' : 'assistant'}
-                </span>
-                {turn.text}
-              </div>
-            ))}
-            {interimTranscript && (
-              <div className="text-gray-500 italic">
-                <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">you</span>
-                {interimTranscript}
-              </div>
-            )}
-          </div>
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+      {!expanded && (
+        <div className="md:hidden flex items-center gap-2">
+          {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border border-port-border rounded-full px-2 py-1`}>{label}</span>}
+          <button
+            onClick={() => { setExpanded(true); toggleCapture(); }}
+            className={`p-3 rounded-full shadow-lg transition-colors ${
+              capturing
+                ? 'bg-port-accent text-white animate-pulse'
+                : 'bg-port-card border border-port-border text-white'
+            }`}
+            title="Open voice controls"
+          >
+            <Icon size={20} />
+          </button>
         </div>
       )}
-      <form
-        onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-        className="flex items-center gap-1 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-4 pr-1 py-1 shadow-lg w-full"
-      >
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Type a message…"
-          className="flex-1 bg-transparent text-sm text-white placeholder-gray-500 focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={!draft.trim()}
-          title="Send text (Enter)"
-          className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+      <div className={`${expanded ? 'flex' : 'hidden'} md:flex flex-col items-end gap-2 w-96 max-w-[calc(100vw-2rem)]`}>
+        {!collapsed && history.length > 0 && (
+          <div className="bg-port-card/95 backdrop-blur border border-port-border rounded-xl shadow-lg w-full flex flex-col">
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-port-border/50">
+              <span className="text-xs text-gray-400">Conversation</span>
+              <button
+                onClick={handleClear}
+                title="Clear conversation"
+                className="p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-error/10"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+            <div ref={scrollRef} className="text-xs p-3 space-y-2 overflow-y-auto max-h-80">
+              {history.map((turn, i) => (
+                <div key={i} className={turn.role === 'user' ? 'text-gray-400' : 'text-white'}>
+                  <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">
+                    {turn.role === 'user' ? 'you' : 'assistant'}
+                  </span>
+                  {turn.text}
+                </div>
+              ))}
+              {interimTranscript && (
+                <div className="text-gray-500 italic">
+                  <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">you</span>
+                  {interimTranscript}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        <form
+          onSubmit={(e) => { e.preventDefault(); handleSend(); }}
+          className="flex items-center gap-1 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-4 pr-1 py-1 shadow-lg w-full"
         >
-          <Send size={14} />
-        </button>
-      </form>
-      <div className="flex items-center gap-2 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-3 pr-1 py-1 shadow-lg">
-        <span className={`text-xs ${tone}`}>{label}</span>
-        {!useWebSpeech && handsFree && isContinuous() && (
-          <span
-            className="w-1.5 rounded-full bg-port-accent transition-all"
-            style={{ height: `${Math.min(20, 4 + level * 120)}px` }}
-            title={`mic level ${level.toFixed(3)}`}
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Type a message…"
+            className="flex-1 bg-transparent text-sm text-white placeholder-gray-500 focus:outline-none"
           />
-        )}
-        {!useWebSpeech && (
           <button
-            onClick={toggleHandsFree}
-            title={handsFree
-              ? 'Hands-free ON — mic stays open, auto-submits on pause, talk over the bot to interrupt. Click to switch to push-to-talk.'
-              : 'Push-to-talk ON — click mic to start, click again to send. Click to switch to hands-free.'}
-            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${handsFree
-              ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
-              : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
+            type="submit"
+            disabled={!draft.trim()}
+            title="Send text (Enter)"
+            className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
           >
-            <InfinityIcon size={12} />
-            {handsFree ? 'hands-free' : 'push-to-talk'}
+            <Send size={14} />
           </button>
-        )}
-        {history.length > 0 && (
+        </form>
+        <div className="flex items-center gap-2 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-3 pr-1 py-1 shadow-lg">
+          <span className={`text-xs ${tone}`}>{label}</span>
+          {!useWebSpeech && handsFree && isContinuous() && (
+            <span
+              className="w-1.5 rounded-full bg-port-accent transition-all"
+              style={{ height: `${Math.min(20, 4 + level * 120)}px` }}
+              title={`mic level ${level.toFixed(3)}`}
+            />
+          )}
+          {!useWebSpeech && (
+            <button
+              onClick={toggleHandsFree}
+              title={handsFree
+                ? 'Hands-free ON — mic stays open, auto-submits on pause, talk over the bot to interrupt. Click to switch to push-to-talk.'
+                : 'Push-to-talk ON — click mic to start, click again to send. Click to switch to hands-free.'}
+              className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${handsFree
+                ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
+                : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
+            >
+              <InfinityIcon size={12} />
+              {handsFree ? 'hands-free' : 'push-to-talk'}
+            </button>
+          )}
+          {history.length > 0 && (
+            <button
+              onClick={() => setCollapsed((c) => !c)}
+              title={collapsed ? 'Show conversation' : 'Hide conversation'}
+              className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+            >
+              {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+          )}
+          {stage === 'speaking' && (
+            <button
+              onClick={interrupt}
+              title="Interrupt"
+              className="p-2 rounded-full text-port-error hover:bg-port-error/10"
+            >
+              <Square size={14} />
+            </button>
+          )}
           <button
-            onClick={() => setCollapsed((c) => !c)}
-            title={collapsed ? 'Show conversation' : 'Hide conversation'}
-            className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
-          >
-            {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          </button>
-        )}
-        {stage === 'speaking' && (
-          <button
-            onClick={interrupt}
-            title="Interrupt"
-            className="p-2 rounded-full text-port-error hover:bg-port-error/10"
-          >
-            <Square size={14} />
-          </button>
-        )}
-        <button
-          onClick={toggleCapture}
-          className={`p-3 rounded-full transition-colors ${
-            capturing
-              ? 'bg-port-accent text-white animate-pulse'
-              : 'bg-port-border hover:bg-port-border/70 text-white'
-          }`}
-          title={(() => {
-            if (handsFree) {
+            onClick={toggleCapture}
+            className={`p-3 rounded-full transition-colors ${
+              capturing
+                ? 'bg-port-accent text-white animate-pulse'
+                : 'bg-port-border hover:bg-port-border/70 text-white'
+            }`}
+            title={(() => {
+              if (handsFree) {
+                return capturing
+                  ? `Click or press ${hotkey} to stop hands-free listening`
+                  : `Click or press ${hotkey} to start hands-free listening`;
+              }
               return capturing
-                ? `Click or press ${hotkey} to stop hands-free listening`
-                : `Click or press ${hotkey} to start hands-free listening`;
-            }
-            return capturing
-              ? `Click or press ${hotkey} to send`
-              : `Click or press ${hotkey} to listen`;
-          })()}
-        >
-          <Icon size={16} />
-        </button>
+                ? `Click or press ${hotkey} to send`
+                : `Click or press ${hotkey} to listen`;
+            })()}
+          >
+            <Icon size={16} />
+          </button>
+          <button
+            onClick={() => setExpanded(false)}
+            title="Minimize voice controls"
+            className="md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+          >
+            <X size={14} />
+          </button>
+        </div>
       </div>
     </div>
   );
