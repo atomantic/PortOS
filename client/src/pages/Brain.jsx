@@ -14,6 +14,7 @@ import DigestTab from '../components/brain/tabs/DigestTab';
 import FeedsTab from '../components/brain/tabs/FeedsTab';
 import TrustTab from '../components/brain/tabs/TrustTab';
 import NotesTab from '../components/brain/tabs/NotesTab';
+import DailyLogTab from '../components/brain/tabs/DailyLogTab';
 import ConfigTab from '../components/brain/tabs/ConfigTab';
 
 export default function Brain() {
@@ -55,6 +56,8 @@ export default function Brain() {
         return <MemoryTab onRefresh={fetchData} />;
       case 'notes':
         return <NotesTab onRefresh={fetchData} />;
+      case 'daily-log':
+        return <DailyLogTab />;
       case 'graph':
         return <BrainGraph />;
       case 'digest':

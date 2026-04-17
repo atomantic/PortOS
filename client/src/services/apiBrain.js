@@ -159,3 +159,30 @@ export const getBrainGraph = () => request('/brain/graph');
 
 // Brain - Bridge Sync (brain data to CoS memory system)
 export const syncBrainData = () => request('/brain/bridge-sync', { method: 'POST' });
+
+// Brain - Daily Log
+export const listDailyLogs = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  return request(`/brain/daily-log?${params}`);
+};
+export const getDailyLog = (date = 'today') => request(`/brain/daily-log/${encodeURIComponent(date)}`);
+export const appendDailyLog = (date, text, source = 'text') => request(
+  `/brain/daily-log/${encodeURIComponent(date)}/append`,
+  { method: 'POST', body: JSON.stringify({ text, source }) }
+);
+export const updateDailyLog = (date, content) => request(
+  `/brain/daily-log/${encodeURIComponent(date)}`,
+  { method: 'PUT', body: JSON.stringify({ content }) }
+);
+export const deleteDailyLog = (date) => request(
+  `/brain/daily-log/${encodeURIComponent(date)}`,
+  { method: 'DELETE' }
+);
+export const getDailyLogSettings = () => request('/brain/daily-log/settings');
+export const updateDailyLogSettings = (settings) => request('/brain/daily-log/settings', {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+export const syncDailyLogsToObsidian = () => request('/brain/daily-log/sync-obsidian', { method: 'POST' });

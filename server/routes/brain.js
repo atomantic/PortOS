@@ -38,6 +38,7 @@ import { getBrainGraphData } from '../services/brainGraph.js';
 import { syncAllBrainData } from '../services/brainMemoryBridge.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
 import * as brainSync from '../services/brainSync.js';
+import * as journal from '../services/brainJournal.js';
 
 const router = Router();
 
@@ -765,6 +766,96 @@ router.post('/sync', asyncHandler(async (req, res) => {
   const { changes } = validateRequest(brainSyncPushSchema, req.body);
   const result = await brainSync.applyRemoteChanges(changes);
   res.json(result);
+}));
+
+// =============================================================================
+// DAILY LOG
+// =============================================================================
+
+const resolveJournalDate = (date) => (date && date !== 'today' ? journal.resolveDate(date) : journal.getToday());
+
+/**
+ * GET /api/brain/daily-log
+ * List daily log entries (most recent first)
+ */
+router.get('/daily-log', asyncHandler(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const offset = parseInt(req.query.offset, 10) || 0;
+  const result = await journal.listJournals({ limit, offset });
+  res.json(result);
+}));
+
+/**
+ * GET /api/brain/daily-log/settings
+ * Get daily log configuration (obsidian vault/folder, auto-sync)
+ */
+router.get('/daily-log/settings', asyncHandler(async (req, res) => {
+  const settings = await journal.getSettings();
+  res.json(settings);
+}));
+
+/**
+ * PUT /api/brain/daily-log/settings
+ */
+router.put('/daily-log/settings', asyncHandler(async (req, res) => {
+  const next = await journal.updateSettings(req.body || {});
+  res.json(next);
+}));
+
+/**
+ * POST /api/brain/daily-log/sync-obsidian
+ * Re-mirror every existing entry into the currently-configured Obsidian vault.
+ */
+router.post('/daily-log/sync-obsidian', asyncHandler(async (req, res) => {
+  const stats = await journal.resyncAllToObsidian();
+  res.json(stats);
+}));
+
+/**
+ * GET /api/brain/daily-log/:date (accepts 'today')
+ */
+router.get('/daily-log/:date', asyncHandler(async (req, res) => {
+  const date = await resolveJournalDate(req.params.date);
+  const entry = await journal.getJournal(date);
+  res.json({ date, entry });
+}));
+
+/**
+ * POST /api/brain/daily-log/:date/append — append a text segment
+ */
+router.post('/daily-log/:date/append', asyncHandler(async (req, res) => {
+  const date = await resolveJournalDate(req.params.date);
+  const { text, source } = req.body || {};
+  if (!text || typeof text !== 'string') {
+    throw new ServerError('text is required', { status: 400, code: 'BAD_REQUEST' });
+  }
+  const entry = await journal.appendJournal(date, text, { source });
+  res.json({ date, entry });
+}));
+
+/**
+ * PUT /api/brain/daily-log/:date — full content replace
+ */
+router.put('/daily-log/:date', asyncHandler(async (req, res) => {
+  const date = await resolveJournalDate(req.params.date);
+  const { content } = req.body || {};
+  if (typeof content !== 'string') {
+    throw new ServerError('content is required', { status: 400, code: 'BAD_REQUEST' });
+  }
+  const entry = await journal.setJournalContent(date, content);
+  res.json({ date, entry });
+}));
+
+/**
+ * DELETE /api/brain/daily-log/:date
+ */
+router.delete('/daily-log/:date', asyncHandler(async (req, res) => {
+  const date = await resolveJournalDate(req.params.date);
+  const deleted = await journal.deleteJournal(date);
+  if (!deleted) {
+    throw new ServerError('Journal not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.status(204).send();
 }));
 
 export default router;

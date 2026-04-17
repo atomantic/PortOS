@@ -76,12 +76,27 @@ vi.mock('../services/brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
+// Mock the brain journal service
+vi.mock('../services/brainJournal.js', () => ({
+  listJournals: vi.fn(),
+  getJournal: vi.fn(),
+  appendJournal: vi.fn(),
+  setJournalContent: vi.fn(),
+  deleteJournal: vi.fn(),
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+  resyncAllToObsidian: vi.fn(),
+  getToday: vi.fn(() => Promise.resolve('2026-04-17')),
+  resolveDate: vi.fn((d) => Promise.resolve(d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '2026-04-17'))
+}));
+
 // Import mocked modules
 import * as brainService from '../services/brain.js';
 import { getBrainGraphData } from '../services/brainGraph.js';
 import { syncAllBrainData } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
 import { applyRemoteChanges } from '../services/brainSync.js';
+import * as journal from '../services/brainJournal.js';
 
 describe('Brain Routes', () => {
   let app;
@@ -1014,6 +1029,89 @@ describe('Brain Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  // ===========================================================================
+  // DAILY LOG
+  // ===========================================================================
+
+  describe('GET /api/brain/daily-log', () => {
+    it('lists entries', async () => {
+      journal.listJournals.mockResolvedValue({
+        records: [{ id: 'j1', date: '2026-04-17', content: 'hi', segments: [] }],
+        total: 1,
+      });
+      const res = await request(app).get('/api/brain/daily-log');
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(1);
+      expect(res.body.records[0].date).toBe('2026-04-17');
+    });
+  });
+
+  describe('GET /api/brain/daily-log/:date', () => {
+    it('resolves "today" to current local date', async () => {
+      journal.getJournal.mockResolvedValue({ id: 'j1', date: '2026-04-17', content: 'x', segments: [] });
+      const res = await request(app).get('/api/brain/daily-log/today');
+      expect(res.status).toBe(200);
+      expect(res.body.date).toBe('2026-04-17');
+      expect(journal.getJournal).toHaveBeenCalledWith('2026-04-17');
+    });
+
+    it('returns null entry for unknown date', async () => {
+      journal.getJournal.mockResolvedValue(null);
+      const res = await request(app).get('/api/brain/daily-log/2020-01-01');
+      expect(res.status).toBe(200);
+      expect(res.body.entry).toBeNull();
+    });
+  });
+
+  describe('POST /api/brain/daily-log/:date/append', () => {
+    it('appends text', async () => {
+      journal.appendJournal.mockResolvedValue({
+        id: 'j1', date: '2026-04-17', content: 'hello', segments: [{ text: 'hello' }]
+      });
+      const res = await request(app)
+        .post('/api/brain/daily-log/today/append')
+        .send({ text: 'hello', source: 'voice' });
+      expect(res.status).toBe(200);
+      expect(journal.appendJournal).toHaveBeenCalledWith('2026-04-17', 'hello', { source: 'voice' });
+    });
+
+    it('rejects empty text', async () => {
+      const res = await request(app)
+        .post('/api/brain/daily-log/today/append')
+        .send({});
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('PUT /api/brain/daily-log/:date', () => {
+    it('replaces content', async () => {
+      journal.setJournalContent.mockResolvedValue({ id: 'j1', date: '2026-04-17', content: 'replaced', segments: [] });
+      const res = await request(app)
+        .put('/api/brain/daily-log/today')
+        .send({ content: 'replaced' });
+      expect(res.status).toBe(200);
+      expect(res.body.entry.content).toBe('replaced');
+    });
+  });
+
+  describe('daily-log settings', () => {
+    it('reads settings', async () => {
+      journal.getSettings.mockResolvedValue({ obsidianVaultId: null, obsidianFolder: 'Daily Log', autoSync: true });
+      const res = await request(app).get('/api/brain/daily-log/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.obsidianFolder).toBe('Daily Log');
+    });
+
+    it('updates settings', async () => {
+      journal.updateSettings.mockResolvedValue({ obsidianVaultId: 'v1', obsidianFolder: 'Diary', autoSync: true });
+      const res = await request(app)
+        .put('/api/brain/daily-log/settings')
+        .send({ obsidianVaultId: 'v1', obsidianFolder: 'Diary' });
+      expect(res.status).toBe(200);
+      expect(res.body.obsidianVaultId).toBe('v1');
     });
   });
 });

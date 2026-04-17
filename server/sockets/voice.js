@@ -25,6 +25,7 @@ export const registerVoiceHandlers = (socket) => {
   const state = {
     history: [],
     ctrl: null,
+    dictation: { enabled: false, date: null },
   };
 
   const pushHistory = (role, content) => {
@@ -35,7 +36,7 @@ export const registerVoiceHandlers = (socket) => {
     }
   };
 
-  const runTurnWithState = async ({ audio, mimeType, text, errorStage }) => {
+  const runTurnWithState = async ({ audio, mimeType, text, source, errorStage }) => {
     state.ctrl?.abort();
     state.ctrl = new AbortController();
     const { signal } = state.ctrl;
@@ -47,14 +48,19 @@ export const registerVoiceHandlers = (socket) => {
 
     try {
       const { transcript, reply } = await runTurn({
-        audio, mimeType, text, history: state.history, emit, signal,
+        audio, mimeType, text, source, history: state.history, emit, signal, state,
       });
       // Don't persist transcript/reply when the turn was aborted or superseded
       // by a newer turn — the user interrupted, and that output shouldn't
       // re-enter context on the next turn.
       if (signal.aborted || state.ctrl?.signal !== signal) return;
-      pushHistory('user', transcript);
-      pushHistory('assistant', reply);
+      // Skip history push while dictating — the transcripts aren't part of
+      // the conversation with the CoS, just raw journal content. An exception:
+      // the stop-dictation reply IS a normal assistant turn, push both sides.
+      if (!state.dictation.enabled || reply) {
+        pushHistory('user', transcript);
+        pushHistory('assistant', reply);
+      }
     } catch (err) {
       if (signal.aborted) return;
       console.error(`🎙️  ${errorStage} failed: ${err.message}`);
@@ -120,7 +126,7 @@ export const registerVoiceHandlers = (socket) => {
       socket.emit('voice:error', { stage: 'text', message: `text too long (${text.length} > ${MAX_TEXT_LEN} chars)` });
       return;
     }
-    await runTurnWithState({ text, errorStage: 'text' });
+    await runTurnWithState({ text, source: payload.source, errorStage: 'text' });
   });
 
   socket.on('voice:interrupt', () => {
@@ -131,7 +137,15 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:reset', () => {
     state.ctrl?.abort();
     state.history = [];
+    state.dictation = { enabled: false, date: null };
+    socket.emit('voice:dictation', { enabled: false });
     socket.emit('voice:idle', { reason: 'reset' });
+  });
+
+  // Explicit UI control — user toggled dictation from the Daily Log page.
+  socket.on('voice:dictation:set', ({ enabled, date } = {}) => {
+    state.dictation = { enabled: !!enabled, date: date || null };
+    socket.emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
   });
 
   socket.on('disconnect', () => {
