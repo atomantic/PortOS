@@ -151,7 +151,11 @@ export default function DailyLogTab() {
   };
 
   const handleDelete = async () => {
-    await api.deleteDailyLog(date).catch(() => null);
+    const ok = await api.deleteDailyLog(date).then(() => true, () => false);
+    if (!ok) {
+      toast.error('Delete failed');
+      return;
+    }
     toast.success('Deleted');
     setConfirmDelete(false);
     setEntry(null);
