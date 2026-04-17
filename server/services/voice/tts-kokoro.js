@@ -17,18 +17,27 @@ const ensureModel = async ({ modelId, dtype }) => {
   loaded = false;
   console.log(`🗣  kokoro: loading ${modelId} (dtype=${dtype})`);
   const started = Date.now();
-  modelPromise = KokoroTTS.from_pretrained(modelId, { dtype, device: 'cpu' })
+  // Capture the in-flight promise so the then/catch handlers only mutate
+  // shared state when they're still the active load. Without this, a second
+  // load (different modelId/dtype) could race the first to completion and
+  // corrupt `loaded`/`modelPromise`.
+  const current = KokoroTTS.from_pretrained(modelId, { dtype, device: 'cpu' })
     .then((tts) => {
-      loaded = true;
-      console.log(`🗣  kokoro: ready in ${Date.now() - started}ms`);
+      if (modelPromise === current && loadedKey === key) {
+        loaded = true;
+        console.log(`🗣  kokoro: ready in ${Date.now() - started}ms`);
+      }
       return tts;
     })
     .catch((err) => {
-      modelPromise = null;
-      loadedKey = null;
-      loaded = false;
+      if (modelPromise === current && loadedKey === key) {
+        modelPromise = null;
+        loadedKey = null;
+        loaded = false;
+      }
       throw err;
     });
+  modelPromise = current;
   return modelPromise;
 };
 

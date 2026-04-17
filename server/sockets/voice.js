@@ -6,7 +6,8 @@
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 
-const HISTORY_TURNS = 12; // keep last N messages (user+assistant) per socket
+// Cap by messages (each user utterance + assistant reply is ~2). 24 → ~12 turns.
+const HISTORY_MESSAGES = 24;
 // Payload size caps. Voice audio is typically 16 kHz mono PCM/WebM (~32 KB/s),
 // so 8 MB leaves headroom for ~4 min of audio even in WAV. Text utterances are
 // short; 4 KB covers any realistic spoken turn and rejects prompt-stuffing.
@@ -29,8 +30,8 @@ export const registerVoiceHandlers = (socket) => {
   const pushHistory = (role, content) => {
     if (!content) return;
     state.history.push({ role, content });
-    if (state.history.length > HISTORY_TURNS) {
-      state.history = state.history.slice(-HISTORY_TURNS);
+    if (state.history.length > HISTORY_MESSAGES) {
+      state.history = state.history.slice(-HISTORY_MESSAGES);
     }
   };
 

@@ -141,7 +141,11 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
     });
     if (!firstLlm) firstLlm = llm;
     lastLlm = llm;
-    finalText = llm.text;
+    // Accumulate spoken text across tool-calling iterations. The old single-
+    // assignment version dropped every earlier segment, so the persisted
+    // `reply` (and next turn's history) diverged from what the user actually
+    // heard when the model spoke before/between tool calls.
+    if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
 
     if (!llm.toolCalls?.length) break;
 

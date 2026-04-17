@@ -96,12 +96,19 @@ const isWhisperRunning = async () => {
 // Returns null if the port is free, else a short description of who's there.
 // `port` MUST be coerced to a number — `net.Server.listen(stringPort)` is
 // interpreted as a pipe path and silently misses real TCP port collisions.
+// Any listen() error other than EADDRINUSE (EACCES, EADDRNOTAVAIL, EINVAL…)
+// indicates endpoint misconfiguration — surface it instead of silently
+// proceeding to a more confusing PM2 failure downstream.
 const probePortInUse = (host, port) => new Promise((resolve) => {
   const portNum = Number(port);
   const s = createServer();
   s.once('error', (err) => {
     s.close();
-    resolve(err.code === 'EADDRINUSE' ? `port ${portNum} in use (${err.code})` : null);
+    if (err.code === 'EADDRINUSE') {
+      resolve(`port ${portNum} in use (${err.code})`);
+    } else {
+      resolve(`cannot bind ${host}:${portNum} (${err.code || err.message})`);
+    }
   });
   s.once('listening', () => s.close(() => resolve(null)));
   s.listen(portNum, host);
@@ -109,13 +116,23 @@ const probePortInUse = (host, port) => new Promise((resolve) => {
 
 // Poll until whisper's /inference endpoint answers (any HTTP status = bound),
 // or give up after `timeoutMs`. Distinguishes "bound but slow" from "crashed".
+// Each probe has its own abort-based timeout so a hung connect (firewall,
+// half-open socket) can't stall the loop past the overall deadline.
 const waitForWhisper = async (host, port, timeoutMs = 8000) => {
   const deadline = Date.now() + timeoutMs;
   const url = `http://${host}:${port}/`;
   while (Date.now() < deadline) {
-    const ok = await fetch(url, { method: 'GET' }).then(() => true).catch(() => false);
+    const remaining = deadline - Date.now();
+    const probeTimeout = Math.max(1, Math.min(1000, remaining));
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), probeTimeout);
+    const ok = await fetch(url, { method: 'GET', signal: ctrl.signal })
+      .then(() => true)
+      .catch(() => false)
+      .finally(() => clearTimeout(t));
     if (ok) return true;
-    await new Promise((r) => setTimeout(r, 250));
+    const sleep = Math.min(250, Math.max(0, deadline - Date.now()));
+    if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));
   }
   return false;
 };

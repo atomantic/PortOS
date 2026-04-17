@@ -97,16 +97,26 @@ export const expandPath = (p) => {
   return p;
 };
 
+// Tiny in-memory cache so hot paths (per-turn enabled check in voice sockets)
+// don't hit disk on every dispatch. Invalidated on updateVoiceConfig and
+// manually via invalidateVoiceConfigCache() from the reconcile flow.
+let cachedConfig = null;
+
 export const getVoiceConfig = async () => {
+  if (cachedConfig) return cachedConfig;
   const settings = await getSettings();
-  return deepMerge(VOICE_DEFAULTS, settings.voice || {});
+  cachedConfig = deepMerge(VOICE_DEFAULTS, settings.voice || {});
+  return cachedConfig;
 };
+
+export const invalidateVoiceConfigCache = () => { cachedConfig = null; };
 
 export const updateVoiceConfig = async (patch) => {
   const settings = await getSettings();
   const current = deepMerge(VOICE_DEFAULTS, settings.voice || {});
   const next = deepMerge(current, patch || {});
   await updateSettings({ voice: next });
+  cachedConfig = next;
   return next;
 };
 
