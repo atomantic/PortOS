@@ -89,8 +89,12 @@ const encodePcmToWav = (float32, sampleRate) => {
 const blobToWav16k = async (blob) => {
   const bytes = await blob.arrayBuffer();
   const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const decoded = await decodeCtx.decodeAudioData(bytes);
-  decodeCtx.close();
+  // Chain .finally() so a decode failure (unsupported codec, corrupt blob)
+  // still releases the AudioContext — otherwise repeated failures leak a
+  // context per retry.
+  const decoded = await decodeCtx.decodeAudioData(bytes).finally(() => {
+    decodeCtx.close().catch(() => {});
+  });
 
   // OfflineAudioContext handles resampling natively when we render at the target rate.
   const frames = Math.ceil(decoded.duration * TARGET_SAMPLE_RATE);

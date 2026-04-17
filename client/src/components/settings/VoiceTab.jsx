@@ -41,7 +41,7 @@ const formatVoiceLabel = (v, engine) => {
     const meta = [v.accent, v.gender].filter(Boolean).join(' — ');
     const dl = v.downloaded ? '' : ' ⬇';
     const note = v.note ? ` · ${v.note}` : '';
-    return meta ? `${meta}${note}${dl}` : `${v.name}${dl}`;
+    return meta ? `${v.name} — ${meta}${note}${dl}` : `${v.name}${note}${dl}`;
   }
   const accent = ACCENT_LABELS[v.language] || v.language || '';
   const [, ...rest] = v.name.split('_');
