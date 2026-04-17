@@ -10,7 +10,8 @@
       "model": "base.en",
       "modelPath": "~/.portos/voice/models/ggml-base.en.bin",
       "language": "en",
-      "coreml": false
+      "coreml": false,
+      "vocabularyPrompt": ""
     },
     "tts": {
       "engine": "kokoro",
@@ -29,7 +30,19 @@
     "llm": {
       "provider": "lmstudio",
       "model": "auto",
-      "systemPrompt": "You are the PortOS assistant. Your replies are spoken aloud — keep them short and use plain prose (no markdown or lists)."
+      "systemPrompt": "You are the PortOS assistant. Your replies are spoken aloud — keep them short and use plain prose (no markdown or lists).",
+      "usePersonality": true,
+      "personality": {
+        "name": "Alfred",
+        "role": "Chief of Staff",
+        "traits": ["concise", "warm", "proactive"],
+        "speechStyle": "casual and brief",
+        "customPrompt": ""
+      },
+      "tools": {
+        "enabled": false,
+        "maxIterations": 3
+      }
     },
     "vad": { "endOfSpeechMs": 700, "minUtteranceMs": 250 }
   }

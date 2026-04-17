@@ -59,7 +59,13 @@ export const runSetupScript = async (cfg) => {
     INSTALL_COREML: cfg.stt.coreml ? '1' : '0',
   };
   console.log(`🔧 voice: setup-voice.sh (stt=${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
-  const { stdout, stderr } = await pexec('bash', [scriptPath], { env, maxBuffer: 64 * 1024 * 1024 });
+  // 10-minute cap — large models + slow network can legitimately take several
+  // minutes, but a hung curl must not pin the HTTP request that triggered us.
+  const { stdout, stderr } = await pexec('bash', [scriptPath], {
+    env,
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 10 * 60 * 1000,
+  });
   return { stdout, stderr };
 };
 

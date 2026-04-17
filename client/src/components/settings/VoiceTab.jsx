@@ -439,7 +439,7 @@ export function VoiceTab() {
         <label className="flex items-center gap-3 cursor-pointer md:col-span-2">
           <input
             type="checkbox"
-            checked={cfg.llm.tools?.enabled !== false}
+            checked={cfg.llm.tools?.enabled === true}
             onChange={(e) => patch('llm.tools.enabled', e.target.checked)}
             className="w-4 h-4"
           />

@@ -73,7 +73,9 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
     TMPDIR_PT="$(mktemp -d)"
     curl --fail --location --progress-bar "$PTURL" | tar xz -C "$TMPDIR_PT"
     mkdir -p "${PIPER_LIB}"
-    cp "$TMPDIR_PT"/piper-phonemize/lib/*.dylib "$TMPDIR_PT"/piper-phonemize/lib/*.so 2>/dev/null "${PIPER_LIB}/" || true
+    # Copy whichever extension is present; let one pattern miss without aborting.
+    cp "$TMPDIR_PT"/piper-phonemize/lib/*.dylib "${PIPER_LIB}/" 2>/dev/null || true
+    cp "$TMPDIR_PT"/piper-phonemize/lib/*.so "${PIPER_LIB}/" 2>/dev/null || true
     rm -rf "$TMPDIR_PT"
   fi
 fi

@@ -91,7 +91,10 @@ export const streamChat = async (messages, opts = {}) => {
         const toolCalls = [...toolCallFrags.values()].sort((a, b) => a.index - b.index);
         return { text, toolCalls, model, ttfbMs, totalMs: Date.now() - started, finishReason };
       }
-      const obj = JSON.parse(payload);
+      // Malformed SSE frames (proxy keep-alive, truncated write) would otherwise
+      // abort the whole turn; skip the line and keep streaming.
+      let obj;
+      try { obj = JSON.parse(payload); } catch { continue; }
       const choice = obj?.choices?.[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       const delta = choice?.delta || {};

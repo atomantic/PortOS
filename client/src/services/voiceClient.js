@@ -551,6 +551,13 @@ const SpeechRecognition = typeof window !== 'undefined'
 let webSpeechRecognition = null;
 let webSpeechShouldListen = false;
 let webSpeechCallbacks = null;
+// Chrome fires onend immediately when a mic error, OS permission flicker, or
+// driver glitch prevents recognition from ever binding. Blindly calling
+// start() from onend in that state hot-loops the CPU. Count consecutive
+// restarts that never produced a result and back off.
+let webSpeechRestartFailures = 0;
+let webSpeechRestartTimer = null;
+const WEB_SPEECH_MAX_RESTART_FAILURES = 5;
 
 export const webSpeechSupported = !!SpeechRecognition;
 
@@ -582,16 +589,29 @@ export const startWebSpeechCapture = (callbacks = {}) => {
     if (final) {
       callbacks.onInterim?.('');
       callbacks.onFinal?.(final);
+      // Any successful result resets the restart-failure counter.
+      webSpeechRestartFailures = 0;
       // Send as text — server pipeline skips STT and goes straight to LLM
       sendText(final);
     }
   };
 
   recognition.onend = () => {
-    // Chrome stops after silence; restart if user hasn't toggled off
-    if (webSpeechShouldListen) {
-      recognition.start();
+    if (!webSpeechShouldListen) return;
+    webSpeechRestartFailures += 1;
+    if (webSpeechRestartFailures >= WEB_SPEECH_MAX_RESTART_FAILURES) {
+      webSpeechShouldListen = false;
+      callbacks.onError?.('restart-loop');
+      return;
     }
+    // Exponential backoff (50ms → 800ms) so a broken driver doesn't pin the CPU.
+    const delay = Math.min(50 * 2 ** (webSpeechRestartFailures - 1), 800);
+    clearTimeout(webSpeechRestartTimer);
+    webSpeechRestartTimer = setTimeout(() => {
+      if (webSpeechShouldListen && webSpeechRecognition === recognition) {
+        recognition.start();
+      }
+    }, delay);
   };
 
   recognition.onerror = (event) => {
@@ -605,11 +625,15 @@ export const startWebSpeechCapture = (callbacks = {}) => {
   webSpeechRecognition = recognition;
   webSpeechShouldListen = true;
   webSpeechCallbacks = callbacks;
+  webSpeechRestartFailures = 0;
   recognition.start();
 };
 
 export const stopWebSpeechCapture = () => {
   webSpeechShouldListen = false;
+  clearTimeout(webSpeechRestartTimer);
+  webSpeechRestartTimer = null;
+  webSpeechRestartFailures = 0;
   if (webSpeechRecognition) {
     webSpeechRecognition.stop();
     webSpeechRecognition = null;

@@ -6,7 +6,7 @@ PortOS includes an optional push-to-talk voice assistant that runs entirely on y
 
 | Stage | Default engine | Alternatives | Local? |
 |-------|----------------|--------------|--------|
-| Speech-to-text | [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :8080) | — | ✅ |
+| Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562) | — | ✅ |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
 | Text-to-speech | [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) via `kokoro-js` (in-process) | [Piper](https://github.com/rhasspy/piper) (CLI) | ✅ |
 | Voice activity | Browser `MediaRecorder` (push-to-talk) | — | ✅ |
@@ -52,7 +52,7 @@ All options live in `data/settings.json` under `voice` (Settings UI patches this
 | `hotkey` | `Space` | Held to talk. Ignored while typing in inputs. |
 | `stt.model` | `base.en` | `tiny.en` · `base.en` · `small.en` · `medium.en` · `large-v3` |
 | `stt.coreml` | `true` (macOS) | Use CoreML encoder companion. |
-| `stt.endpoint` | `http://127.0.0.1:8080` | whisper-server listen address. |
+| `stt.endpoint` | `http://127.0.0.1:5562` | whisper-server listen address (whisper engine only). |
 | `tts.engine` | `kokoro` | `kokoro` or `piper` |
 | `tts.rate` | `1.0` | Speech rate, 0.5–2.0 |
 | `tts.kokoro.voice` | `af_heart` | See [Kokoro voices](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) — A-grade are `af_heart`, `af_bella`. |
