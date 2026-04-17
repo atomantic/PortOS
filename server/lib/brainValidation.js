@@ -399,3 +399,12 @@ const brainSyncChangeSchema = z.object({
 export const brainSyncPushSchema = z.object({
   changes: z.array(brainSyncChangeSchema).min(1).max(1000)
 });
+
+// Daily log settings schema (PUT /api/brain/daily-log/settings body).
+// Only these three keys are persisted — strict() rejects unknown keys so
+// a typo or stray payload field can't corrupt the settings file.
+export const dailyLogSettingsSchema = z.object({
+  obsidianVaultId: z.string().nullable().optional(),
+  obsidianFolder: z.string().optional(),
+  autoSync: z.boolean().optional()
+}).strict();

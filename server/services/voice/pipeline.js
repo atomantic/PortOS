@@ -87,10 +87,18 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     userText = isNonSpeechMarker(stt.text) ? '' : stt.text;
     emit('voice:transcript', { text: userText, latencyMs: stt.latencyMs });
   } else {
-    // Web Speech mode sends spoken transcripts through voice:text with
-    // source='voice', so propagate the caller's hint (defaulting to 'text'
-    // for the Read-back button, assistant sendText, typed input).
-    emit('voice:transcript', { text: userText, latencyMs: 0, source: source || 'text' });
+    // VoiceWidget treats transcripts with source !== 'text' as server-STT
+    // output and appends them to the chat log. Web Speech already appended
+    // the user's words locally on onFinal, so reclassifying this echo as
+    // 'voice' would duplicate the message. Keep `source` stable and expose
+    // the caller's routing hint separately so dictation/Origin-aware code
+    // can still distinguish typed vs spoken without breaking chat history.
+    emit('voice:transcript', {
+      text: userText,
+      latencyMs: 0,
+      source: 'text',
+      inputSource: source || 'text',
+    });
   }
 
   if (!userText) {

@@ -10,10 +10,10 @@
  *
  * Storage files:
  *   data/brain/journals.json          — { records: { 'YYYY-MM-DD': entry } }
- *   data/brain/journal-settings.json  — { obsidianVaultId, obsidianFolder, filenamePattern }
+ *   data/brain/journal-settings.json  — { obsidianVaultId, obsidianFolder, autoSync }
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -28,7 +28,6 @@ const SETTINGS_FILE = join(PATHS.brain, 'journal-settings.json');
 const DEFAULT_SETTINGS = {
   obsidianVaultId: null,
   obsidianFolder: 'Daily Log',
-  filenamePattern: 'YYYY-MM-DD',
   autoSync: true,
 };
 
@@ -115,9 +114,10 @@ function ensureEntry(store, date) {
 }
 
 // Fire-and-forget: Obsidian lives on iCloud and writes can stall for hundreds
-// of ms; callers shouldn't wait on it. Any persisted obsidianPath from the
-// FIRST successful create is set on the same entry object that's already in
-// the store, so the next saveStore() in whatever caller runs next picks it up.
+// of ms; callers shouldn't wait on it. The sync path persists any discovered
+// obsidianPath itself via persistObsidianPath() — callers must not assume
+// this async work mutates the `entry` they passed in or that a later
+// saveStore() in their flow will pick up the path.
 function scheduleObsidianSync(entry) {
   syncToObsidian(entry).catch((err) => console.error(`📓 Obsidian sync failed: ${err.message}`));
 }

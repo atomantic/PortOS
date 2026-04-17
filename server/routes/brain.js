@@ -31,7 +31,8 @@ import {
   linkUpdateInputSchema,
   linksQuerySchema,
   brainSyncQuerySchema,
-  brainSyncPushSchema
+  brainSyncPushSchema,
+  dailyLogSettingsSchema
 } from '../lib/brainValidation.js';
 import * as githubCloner from '../services/githubCloner.js';
 import { getBrainGraphData } from '../services/brainGraph.js';
@@ -772,23 +773,13 @@ router.post('/sync', asyncHandler(async (req, res) => {
 // DAILY LOG
 // =============================================================================
 
-// Validate ISO YYYY-MM-DD including real calendar days (rejects 2026-02-30).
-// Previously we passed any non-'today' string to journal.resolveDate(), which
-// defaults invalid input to today — so e.g. PUT /daily-log/not-a-date would
-// silently overwrite today's entry. Reject malformed dates with a 400 instead.
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const isValidIsoDate = (date) => {
-  if (!ISO_DATE_RE.test(date)) return false;
-  const [y, m, d] = date.split('-').map(Number);
-  const parsed = new Date(Date.UTC(y, m - 1, d));
-  return parsed.getUTCFullYear() === y
-    && parsed.getUTCMonth() === m - 1
-    && parsed.getUTCDate() === d;
-};
-
+// Resolve the :date route param: either 'today' → current local date, or a
+// real ISO YYYY-MM-DD calendar day. Delegates to journal.isIsoDate so the
+// date rules stay in one place (service layer) and can't drift between
+// routes and internal callers.
 const resolveJournalDate = async (date) => {
   if (!date || date === 'today') return journal.getToday();
-  if (!isValidIsoDate(date)) {
+  if (!journal.isIsoDate(date)) {
     throw new ServerError('Invalid date. Expected "today" or YYYY-MM-DD.', {
       status: 400,
       code: 'BAD_REQUEST',
@@ -821,7 +812,8 @@ router.get('/daily-log/settings', asyncHandler(async (req, res) => {
  * PUT /api/brain/daily-log/settings
  */
 router.put('/daily-log/settings', asyncHandler(async (req, res) => {
-  const next = await journal.updateSettings(req.body || {});
+  const data = validateRequest(dailyLogSettingsSchema, req.body || {});
+  const next = await journal.updateSettings(data);
   res.json(next);
 }));
 
@@ -849,7 +841,10 @@ router.get('/daily-log/:date', asyncHandler(async (req, res) => {
 router.post('/daily-log/:date/append', asyncHandler(async (req, res) => {
   const date = await resolveJournalDate(req.params.date);
   const { text, source } = req.body || {};
-  if (!text || typeof text !== 'string') {
+  // Trim-check here too so a whitespace-only payload doesn't no-op all the
+  // way through appendJournal() and still return a 200 — clients would read
+  // that as a successful append.
+  if (typeof text !== 'string' || text.trim().length === 0) {
     throw new ServerError('text is required', { status: 400, code: 'BAD_REQUEST' });
   }
   const entry = await journal.appendJournal(date, text, { source });
