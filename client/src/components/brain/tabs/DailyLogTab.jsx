@@ -52,8 +52,13 @@ export default function DailyLogTab() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const editorRef = useRef(null);
+  // Ref mirror of the dirty flag so the socket event handler can check it
+  // without adding `content`/`entry` to the effect's dependency list
+  // (which would re-subscribe on every keystroke).
+  const dirtyRef = useRef(false);
 
   const dirty = content !== (entry?.content || '');
+  dirtyRef.current = dirty;
 
   const loadEntry = useCallback(async (d, { silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -111,7 +116,12 @@ export default function DailyLogTab() {
       setHistory((prev) => upsertHistory(prev, appended));
       if (appended.date === date) {
         setEntry(appended);
-        setContent(appended.content || '');
+        // Only sync the textarea when the user has no unsaved edits —
+        // otherwise an incoming voice segment would clobber whatever they're
+        // in the middle of typing. The entry state still updates so the
+        // segment count badge reflects the append.
+        if (!dirtyRef.current) setContent(appended.content || '');
+        else toast('Voice segment appended while you were editing — save or refresh to see it.', { icon: '📝' });
       }
     };
     const onDictation = (payload) => {
