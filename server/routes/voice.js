@@ -98,6 +98,7 @@ router.put('/config', asyncHandler(async (req, res) => {
   req.app.get('io')?.emit('voice:config:changed', {
     enabled: next.enabled,
     sttEngine: next.stt?.engine,
+    sttLanguage: next.stt?.language,
     ttsEngine: next.tts?.engine,
     hotkey: next.hotkey,
   });

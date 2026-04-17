@@ -38,6 +38,7 @@ export default function VoiceWidget() {
   const [enabled, setEnabled] = useState(false);
   const [hotkey, setHotkey] = useState('Space');
   const [sttEngine, setSttEngine] = useState('whisper');
+  const [sttLanguage, setSttLanguage] = useState('en');
   const [stage, setStage] = useState('idle');
   const [history, setHistory] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
@@ -71,6 +72,7 @@ export default function VoiceWidget() {
         setEnabled(!!cfg?.enabled);
         setHotkey(cfg?.hotkey || 'Space');
         if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
+        if (cfg?.stt?.language) setSttLanguage(cfg.stt.language);
       })
       .catch(() => {});
     // Settings → Voice writes via PUT /api/voice/config and the route broadcasts
@@ -80,6 +82,7 @@ export default function VoiceWidget() {
       if (typeof cfg?.enabled === 'boolean') setEnabled(cfg.enabled);
       if (cfg?.hotkey) setHotkey(cfg.hotkey);
       if (cfg?.sttEngine) setSttEngine(cfg.sttEngine);
+      if (cfg?.sttLanguage) setSttLanguage(cfg.sttLanguage);
     });
     return off;
   }, []);
@@ -150,6 +153,7 @@ export default function VoiceWidget() {
       setStage('listening');
       setInterimTranscript('');
       startWebSpeechCapture({
+        language: sttLanguage,
         onInterim: (text) => setInterimTranscript(text),
         onFinal: (text) => {
           setInterimTranscript('');
@@ -189,7 +193,7 @@ export default function VoiceWidget() {
       toast.error(`Mic: ${err.message}`);
       setStage('idle');
     });
-  }, [enabled, handsFree, useWebSpeech]);
+  }, [enabled, handsFree, useWebSpeech, sttLanguage]);
 
   const handleStop = useCallback(async () => {
     if (useWebSpeech) {

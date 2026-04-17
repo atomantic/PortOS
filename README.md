@@ -113,9 +113,9 @@ Everything you need to manage your dev environment without leaving the browser.
 
 ### Voice Mode (Local)
 
-Push-to-talk voice assistant that runs entirely on your machine — no external API calls.
+Push-to-talk and hands-free voice assistant with no PortOS-hosted server dependencies. TTS and LLM run locally; STT is fully offline with whisper.cpp.
 
-- **STT** — browser Web Speech API by default (zero-latency, no server process), or local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) HTTP server as an optional offline alternative with optional CoreML encoder for 2–3× speedup on Apple Silicon
+- **STT** — browser Web Speech API by default (zero-latency, no PortOS server process needed). **Note:** the Web Speech API in Chrome and most Chromium browsers forwards audio to a vendor cloud speech service (Google); for fully-offline STT with no data leaving the machine, select local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) under *Settings → Voice → STT engine*. Optional CoreML encoder gives 2–3× speedup on Apple Silicon
 - **Local TTS** — [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running in-process via ONNX Runtime (default, cross-platform), or [Piper](https://github.com/rhasspy/piper) CLI as a lightweight alternative
 - **Local LLM** — routed through your existing LM Studio installation
 - **Push-to-talk** — click and hold the mic widget or hold `Space` to speak; release to send

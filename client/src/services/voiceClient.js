@@ -574,7 +574,19 @@ const WEB_SPEECH_MAX_RESTART_FAILURES = 5;
 
 export const webSpeechSupported = !!SpeechRecognition;
 
-export const startWebSpeechCapture = (callbacks = {}) => {
+// BCP-47 tag that SpeechRecognition expects. Short codes like 'en' → 'en-US',
+// 'es' → 'es-ES', 'fr' → 'fr-FR'. Anything already region-tagged or unknown
+// passes through; finally fall back to navigator.language then en-US.
+const SHORT_LANG_TO_BCP47 = { en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT', pt: 'pt-BR', ja: 'ja-JP', ko: 'ko-KR', zh: 'zh-CN' };
+const resolveRecognitionLang = (configured) => {
+  const raw = (configured || '').trim();
+  if (raw.includes('-')) return raw;
+  if (raw && SHORT_LANG_TO_BCP47[raw.toLowerCase()]) return SHORT_LANG_TO_BCP47[raw.toLowerCase()];
+  if (typeof navigator !== 'undefined' && navigator.language) return navigator.language;
+  return 'en-US';
+};
+
+export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
   if (!SpeechRecognition) return;
   stopWebSpeechCapture();
 
@@ -585,7 +597,9 @@ export const startWebSpeechCapture = (callbacks = {}) => {
   const recognition = new SpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
-  recognition.lang = 'en-US';
+  // Honor cfg.stt.language (threaded in by VoiceWidget) so a user on a
+  // non-English locale doesn't silently get US English STT.
+  recognition.lang = resolveRecognitionLang(language);
 
   recognition.onresult = (event) => {
     let interim = '';
