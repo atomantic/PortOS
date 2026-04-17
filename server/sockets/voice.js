@@ -49,6 +49,10 @@ export const registerVoiceHandlers = (socket) => {
       const { transcript, reply } = await runTurn({
         audio, mimeType, text, history: state.history, emit, signal,
       });
+      // Don't persist transcript/reply when the turn was aborted or superseded
+      // by a newer turn — the user interrupted, and that output shouldn't
+      // re-enter context on the next turn.
+      if (signal.aborted || state.ctrl?.signal !== signal) return;
       pushHistory('user', transcript);
       pushHistory('assistant', reply);
     } catch (err) {

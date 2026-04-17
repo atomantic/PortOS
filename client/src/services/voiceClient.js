@@ -141,14 +141,24 @@ const enqueuePlay = async (bytes) => {
 const isTtsActive = () => ttsQueueDepth > 0 || currentSource !== null;
 const isInTtsEchoWindow = () => isTtsActive() || performance.now() < ttsCooldownUntil;
 
+// socket.io may deliver a plain ArrayBuffer, a sliced TypedArray/DataView,
+// or a serialized Buffer-like { type: 'Buffer', data: [...] }. Using the raw
+// `wav.buffer` for a sliced view would pass extra bytes to decodeAudioData,
+// causing intermittent decode failures; always hand off an exact slice.
+const toExactArrayBuffer = (wav) => {
+  if (wav instanceof ArrayBuffer) return wav;
+  if (ArrayBuffer.isView(wav)) {
+    return wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength);
+  }
+  if (wav?.type === 'Buffer' && Array.isArray(wav.data)) {
+    return new Uint8Array(wav.data).buffer;
+  }
+  return null;
+};
+
 socket.on('voice:tts:audio', ({ wav }) => {
   if (rejectingTts) return; // stale chunk from a cancelled turn — drop it
-  // socket.io serializes Node Buffers to ArrayBuffer/Uint8Array in the browser
-  const ab = wav instanceof ArrayBuffer
-    ? wav
-    : wav?.buffer instanceof ArrayBuffer
-      ? wav.buffer
-      : null;
+  const ab = toExactArrayBuffer(wav);
   if (!ab) return;
   enqueuePlay(ab).catch((err) => console.warn('[voice] playback failed:', err));
 });

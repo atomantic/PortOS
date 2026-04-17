@@ -52,6 +52,19 @@ export default function VoiceWidget() {
   const scrollRef = useRef(null);
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
+  // Disabling voice mode (via Settings or the socket broadcast) must release
+  // every mic path — MediaRecorder, AudioWorklet VAD, and Web Speech — plus
+  // drop any queued TTS. Without this, a user who turns voice off while
+  // hands-free is listening leaves the mic active in the background.
+  useEffect(() => {
+    if (enabled) return;
+    if (isWebSpeechCapturing()) stopWebSpeechCapture();
+    if (isContinuous()) stopContinuous();
+    if (isCapturing()) stopCapture({ submit: false });
+    interrupt();
+    setStage('idle');
+  }, [enabled]);
+
   useEffect(() => {
     getVoiceConfig()
       .then((cfg) => {
