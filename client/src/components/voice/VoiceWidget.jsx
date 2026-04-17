@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X } from 'lucide-react';
+import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
@@ -13,6 +13,8 @@ import toast from '../ui/Toast';
 const QUIET_MIC_THRESHOLD = 0.02;
 
 const HANDS_FREE_KEY = 'portos.voice.handsFree';
+const HIDDEN_KEY = 'portos.voice.hidden';
+const VISIBILITY_EVENT = 'portos:voice:visibility';
 
 const STAGE = {
   idle: { icon: Mic, label: '', tone: 'text-gray-300' },
@@ -52,6 +54,10 @@ export default function VoiceWidget() {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
     return stored === null ? true : stored === '1';
+  });
+  const [hidden, setHidden] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(HIDDEN_KEY) === '1';
   });
   const [level, setLevel] = useState(0);
   const scrollRef = useRef(null);
@@ -302,7 +308,32 @@ export default function VoiceWidget() {
     return () => window.removeEventListener('keydown', onKey);
   }, [enabled, hotkey, toggleCapture]);
 
-  if (!enabled) return null;
+  // Settings → Voice can toggle widget visibility without a reload. Listen for
+  // the custom event and the storage event (covers other tabs).
+  useEffect(() => {
+    const sync = () => {
+      setHidden(window.localStorage.getItem(HIDDEN_KEY) === '1');
+    };
+    window.addEventListener(VISIBILITY_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(VISIBILITY_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+
+  const hideWidget = useCallback(() => {
+    if (isWebSpeechCapturing()) stopWebSpeechCapture();
+    if (isContinuous()) stopContinuous();
+    if (isCapturing()) stopCapture({ submit: false });
+    interrupt();
+    window.localStorage.setItem(HIDDEN_KEY, '1');
+    window.dispatchEvent(new Event(VISIBILITY_EVENT));
+    setHidden(true);
+    toast('Voice widget hidden. Re-enable in Settings → Voice.');
+  }, []);
+
+  if (!enabled || hidden) return null;
 
   const { icon: Icon, label, tone } = STAGE[stage] || STAGE.idle;
   const capturing = ACTIVE_STAGES.has(stage) || isWebSpeechCapturing();
@@ -312,6 +343,13 @@ export default function VoiceWidget() {
       {!expanded && (
         <div className="md:hidden flex items-center gap-2">
           {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border border-port-border rounded-full px-2 py-1`}>{label}</span>}
+          <button
+            onClick={hideWidget}
+            title="Hide voice widget (restore in Settings → Voice)"
+            className="p-2 rounded-full bg-port-card border border-port-border text-gray-400 hover:text-white shadow-lg"
+          >
+            <EyeOff size={14} />
+          </button>
           <button
             onClick={() => { setExpanded(true); toggleCapture(); }}
             className={`p-3 rounded-full shadow-lg transition-colors ${
@@ -449,6 +487,13 @@ export default function VoiceWidget() {
             className="md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <X size={14} />
+          </button>
+          <button
+            onClick={hideWidget}
+            title="Hide voice widget (restore in Settings → Voice)"
+            className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+          >
+            <EyeOff size={14} />
           </button>
         </div>
       </div>

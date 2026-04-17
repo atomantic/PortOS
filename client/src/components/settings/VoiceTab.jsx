@@ -34,6 +34,9 @@ const KOKORO_DTYPES = [
 
 const ACCENT_LABELS = { 'en-US': 'American', 'en-GB': 'British' };
 
+const HIDDEN_KEY = 'portos.voice.hidden';
+const VISIBILITY_EVENT = 'portos:voice:visibility';
+
 const formatVoiceLabel = (v, engine) => {
   if (engine === 'piper') {
     // Always lead with the voice ID so entries are distinguishable even if the
@@ -95,6 +98,17 @@ export function VoiceTab() {
   const [testing, setTesting] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState(null);
   const [downloadingVoice, setDownloadingVoice] = useState(null);
+  const [widgetHidden, setWidgetHidden] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(HIDDEN_KEY) === '1';
+  });
+
+  const toggleWidgetHidden = (next) => {
+    if (next) window.localStorage.setItem(HIDDEN_KEY, '1');
+    else window.localStorage.removeItem(HIDDEN_KEY);
+    window.dispatchEvent(new Event(VISIBILITY_EVENT));
+    setWidgetHidden(next);
+  };
 
   const currentEngine = cfg?.tts?.engine;
 
@@ -216,6 +230,19 @@ export function VoiceTab() {
         <span className="text-sm text-white">Enable voice mode</span>
         <span className="text-xs text-gray-500">
           (toggling on installs missing binaries + downloads selected models)
+        </span>
+      </label>
+
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!widgetHidden}
+          onChange={(e) => toggleWidgetHidden(!e.target.checked)}
+          className="w-4 h-4"
+        />
+        <span className="text-sm text-white">Show floating voice widget</span>
+        <span className="text-xs text-gray-500">
+          (per-browser preference — Safari on iPhone does not support the mic APIs this widget uses)
         </span>
       </label>
 
