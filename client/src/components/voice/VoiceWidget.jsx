@@ -14,7 +14,7 @@ const QUIET_MIC_THRESHOLD = 0.02;
 const HANDS_FREE_KEY = 'portos.voice.handsFree';
 
 const STAGE = {
-  idle: { icon: Mic, label: 'Click to listen', tone: 'text-gray-300' },
+  idle: { icon: Mic, label: '', tone: 'text-gray-300' },
   listening: { icon: MicOff, label: 'Listening… (click to send)', tone: 'text-port-accent' },
   handsfree: { icon: MicOff, label: 'Hands-free — speak anytime', tone: 'text-port-accent' },
   capturing: { icon: MicOff, label: 'Capturing your voice…', tone: 'text-port-accent animate-pulse' },

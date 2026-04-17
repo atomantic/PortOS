@@ -45,8 +45,11 @@ export const VOICE_DEFAULTS = Object.freeze({
       voice: 'af_heart',
     },
     piper: {
-      voice: 'en_US-ryan-high',
-      voicePath: '~/.portos/voice/voices/en_US-ryan-high.onnx',
+      voice: 'en_GB-jenny_dioco-medium',
+      voicePath: '~/.portos/voice/voices/en_GB-jenny_dioco-medium.onnx',
+      // Null = use the catalog default (set per-voice in piper-voices.js).
+      // Override here when experimenting with other VCTK speaker indices.
+      speakerId: null,
     },
   },
 
@@ -108,3 +111,4 @@ export const updateVoiceConfig = async (patch) => {
 };
 
 export const voiceHome = () => VOICE_HOME;
+export const piperVoiceTildePath = (id) => `~/.portos/voice/voices/${id}.onnx`;

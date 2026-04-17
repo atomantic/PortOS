@@ -8,13 +8,13 @@ import { join } from 'path';
 import { createServer } from 'net';
 import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
-import { expandPath } from './config.js';
+import { expandPath, piperVoiceTildePath } from './config.js';
 
-const pexec = promisify(execFile);
+export const pexec = promisify(execFile);
 
 export const WHISPER_APP = 'portos-whisper';
 
-const which = async (bin) => {
+export const which = async (bin) => {
   const res = await pexec('which', [bin]).catch(() => null);
   return res?.stdout.trim() || null;
 };
@@ -61,6 +61,25 @@ export const runSetupScript = async (cfg) => {
   console.log(`🔧 voice: setup-voice.sh (stt=${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
   const { stdout, stderr } = await pexec('bash', [scriptPath], { env, maxBuffer: 64 * 1024 * 1024 });
   return { stdout, stderr };
+};
+
+/**
+ * Download a single Piper voice without touching whisper/STT state. Used by
+ * the Settings voice-picker so users can audition voices as they browse the
+ * catalog rather than waiting for Save & Reconcile.
+ */
+export const downloadPiperVoice = async (voiceId, currentCfg) => {
+  if (!voiceId || typeof voiceId !== 'string') throw new Error('voiceId required');
+  const voicePath = piperVoiceTildePath(voiceId);
+  if (existsSync(expandPath(voicePath))) return { skipped: true, voicePath };
+  // Re-use the existing setup script but force it into Piper-only mode. The
+  // script already short-circuits whisper steps when the model/binary are
+  // present, so this is cheap on repeat invocations.
+  await runSetupScript({
+    ...currentCfg,
+    tts: { engine: 'piper', piper: { voicePath } },
+  });
+  return { downloaded: true, voicePath };
 };
 
 const isWhisperRunning = async () => {
@@ -147,19 +166,22 @@ export const stopWhisper = async () => {
 export const reconcile = async (cfg) => {
   if (!cfg.enabled) return stopWhisper();
 
-  // Web Speech STT runs entirely in the browser — no whisper process needed.
-  // Stop any leftover whisper instance so we aren't paying for an unused model.
-  if (cfg.stt?.engine === 'web-speech') {
-    await stopWhisper().catch(() => null);
-    return { skipped: 'web-speech' };
-  }
-
   const bins = await verifyBinaries(cfg);
   const models = verifyModels(cfg);
   const piperMissing = bins.piperRequired && (!bins.piper || !models.ttsVoice);
+  const webSpeech = cfg.stt?.engine === 'web-speech';
+
+  // Web Speech STT runs entirely in the browser — stop any leftover whisper
+  // instance and skip STT provisioning. Piper voice provisioning still runs.
+  if (webSpeech) {
+    if (piperMissing) await runSetupScript(cfg);
+    await stopWhisper().catch(() => null);
+    return { skipped: 'web-speech', piperProvisioned: piperMissing };
+  }
+
   const coremlMissing = cfg.stt.coreml && !models.coreml;
-  const missing = !bins.whisper || !models.sttModel || piperMissing || coremlMissing;
-  if (missing) await runSetupScript(cfg);
+  const sttMissing = !bins.whisper || !models.sttModel || coremlMissing;
+  if (piperMissing || sttMissing) await runSetupScript(cfg);
 
   return startWhisper(cfg);
 };

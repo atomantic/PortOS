@@ -10,6 +10,12 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Backlog
 
+- [ ] **Voice CoS tool expansion** — 14 tools registered in `server/services/voice/tools.js`: `brain_capture`, `brain_search`, `brain_list_recent`, `meatspace_log_drink`, `meatspace_log_nicotine`, `meatspace_log_weight`, `meatspace_summary_today`, `goal_list`, `goal_update_progress`, `goal_log_note`, `pm2_status`, `pm2_restart`, `feeds_digest`, `time_now`. Remaining candidates:
+  - `calendar_today` / `calendar_next` — surface today's Google Calendar events through the existing Google MCP integration
+  - `meatspace_log_workout` — wrap `meatspaceHealth.js` workout/activity exports
+  - `weather_now` — needs an external API choice (OpenWeather / Apple WeatherKit / NWS)
+  - `timer_set` — set a voice-triggered reminder; likely reuses `agentActionExecutor.js` scheduled actions
+  - `feeds_mark_read` — pair with `feeds_digest` for "mark that one read"
 - [x] **Test coverage** — cosRunnerClient.js ✅ (37 tests), agentActionExecutor.js ✅ (27 tests), CoS routes ✅ (170 tests across 6 test files, 83-100% route coverage). Remaining gap: cos.js service (~4% coverage)
 - [ ] **CyberCity v2** — Transform from decorative scene to living systems dashboard. See [cybercity-v2.md](./docs/features/cybercity-v2.md) for full plan. Top priorities: system health atmosphere, richer billboards, brain inbox pulse, agent activity visualization, chronotype energy overlay.
 - [ ] **M50 P9**: CoS Automation & Rules — Automated email classification, rule-based pre-filtering, email-to-task pipeline
