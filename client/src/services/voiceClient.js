@@ -202,11 +202,15 @@ export const stopCapture = async () => {
   return { mimeType: 'audio/wav', size: wav.byteLength, sourceSize: blob.size, peak };
 };
 
-export const sendText = (text) => {
+export const sendText = (text, source = 'text') => {
   const trimmed = (text || '').trim();
   if (!trimmed) return;
   stopPlayback();
-  socket.emit('voice:text', { text: trimmed });
+  socket.emit('voice:text', { text: trimmed, source });
+};
+
+export const setDictation = (enabled, date) => {
+  socket.emit('voice:dictation:set', { enabled: !!enabled, date: date || null });
 };
 
 export const interrupt = () => {
@@ -582,8 +586,9 @@ export const startWebSpeechCapture = (callbacks = {}) => {
     if (final) {
       callbacks.onInterim?.('');
       callbacks.onFinal?.(final);
-      // Send as text — server pipeline skips STT and goes straight to LLM
-      sendText(final);
+      // source='voice' so the server still treats this as a spoken utterance
+      // for dictation-mode routing — the text path otherwise bypasses it.
+      sendText(final, 'voice');
     }
   };
 

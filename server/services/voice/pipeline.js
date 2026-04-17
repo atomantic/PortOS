@@ -11,6 +11,7 @@ import { synthesize } from './tts.js';
 import { streamChat } from './llm.js';
 import { getVoiceConfig } from './config.js';
 import { getToolSpecs, dispatchTool } from './tools.js';
+import { appendJournal } from '../brainJournal.js';
 
 const buildSystemPrompt = (cfg) => {
   if (!cfg.llm.usePersonality) return cfg.llm.systemPrompt;
@@ -66,7 +67,11 @@ const splitSentences = (buffer) => {
 // [LAUGHTER], [INAUDIBLE]. Treat those as empty so we don't waste an LLM turn.
 const isNonSpeechMarker = (text) => /^\s*\[[A-Z_ ]+\]\s*$/i.test(text);
 
-export const runTurn = async ({ audio, text, mimeType, history = [], emit, signal }) => {
+// Recognize spoken phrases that should end dictation without going through the
+// LLM. Intentionally narrow — "I'm done writing" shouldn't match.
+const STOP_DICTATION_RE = /^(stop|end|exit|cancel|pause)\s+(dictation|dictating|logging|recording)[\.\!\s]*$/i;
+
+export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state }) => {
   const cfg = await getVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
 
@@ -89,6 +94,37 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
     return { transcript: '', reply: '' };
   }
   if (signal?.aborted) return { transcript: userText, reply: '' };
+
+  // Dictation mode short-circuits the LLM: the user's speech goes straight
+  // into the daily-log entry unless they say the stop phrase, which ends
+  // dictation and falls through to a normal confirmation turn.
+  //
+  // Only applies to spoken input. Typed input (the "Read back" button,
+  // assistant-issued sendText, manual typing) bypasses dictation so the
+  // user can still drive the app while dictation is live. Web Speech mode
+  // hands transcripts over as voice:text with source='voice', so we honor
+  // that hint in addition to the no-text case.
+  const isSpokenInput = !text || source === 'voice';
+  if (isSpokenInput && state?.dictation?.enabled) {
+    const trimmed = userText.trim();
+    if (STOP_DICTATION_RE.test(trimmed)) {
+      state.dictation = { enabled: false, date: null };
+      emit('voice:dictation', { enabled: false });
+      const reply = 'Dictation off.';
+      const { wav } = await synthesize(reply, { signal });
+      if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs: 0 });
+      emit('voice:llm:delta', { delta: reply });
+      emit('voice:llm:done', { text: reply });
+      emit('voice:idle', { reason: 'turn-complete' });
+      return { transcript: userText, reply };
+    }
+    const date = state.dictation.date;
+    const entry = await appendJournal(date, trimmed, { source: 'voice' });
+    emit('voice:dailyLog:appended', { date, text: trimmed, entry });
+    console.log(`🎙️  dictation → journal[${date}] +${trimmed.length} chars`);
+    emit('voice:idle', { reason: 'dictation-appended' });
+    return { transcript: userText, reply: '' };
+  }
 
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
@@ -160,13 +196,24 @@ export const runTurn = async ({ audio, text, mimeType, history = [], emit, signa
       const t0 = Date.now();
       let result;
       let args = {};
+      const ctx = { sideEffects: [] };
       try {
         args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-        result = await dispatchTool(tc.function.name, args);
+        result = await dispatchTool(tc.function.name, args, ctx);
         toolRuns.push({ name: tc.function.name, ok: true, ms: Date.now() - t0 });
       } catch (err) {
         result = { ok: false, error: err.message };
         toolRuns.push({ name: tc.function.name, ok: false, ms: Date.now() - t0, error: err.message });
+      }
+      // Apply server-side side-effects (dictation state) and forward
+      // client-facing side-effects (navigation) over the socket.
+      for (const fx of ctx.sideEffects) {
+        if (fx.type === 'dictation' && state) {
+          state.dictation = { enabled: !!fx.enabled, date: fx.date || state.dictation?.date || null };
+          emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
+        } else if (fx.type === 'navigate') {
+          emit('voice:navigate', { path: fx.path });
+        }
       }
       emit('voice:tool', { name: tc.function.name, args, result });
       messages.push({

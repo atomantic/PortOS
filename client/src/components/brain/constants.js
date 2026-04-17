@@ -1,8 +1,9 @@
-import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen } from 'lucide-react';
 
 // Main navigation tabs
 export const TABS = [
   { id: 'inbox', label: 'Inbox', icon: MessageSquare },
+  { id: 'daily-log', label: 'Daily Log', icon: NotebookPen },
   { id: 'links', label: 'Links', icon: Link2 },
   { id: 'memory', label: 'Memory', icon: Database },
   { id: 'notes', label: 'Notes', icon: FileText },

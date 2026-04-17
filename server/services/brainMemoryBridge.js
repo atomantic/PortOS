@@ -17,6 +17,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { listJournals } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
 
@@ -28,7 +29,8 @@ const TYPE_MAP = {
   admin:    { type: 'fact',        category: 'admin' },
   memories: { type: 'observation', category: 'personal' },
   digests:  { type: 'context',     category: 'digest' },
-  reviews:  { type: 'context',     category: 'review' }
+  reviews:  { type: 'context',     category: 'review' },
+  journals: { type: 'observation', category: 'daily-log' }
 };
 
 // ─── Bridge Map ─────────────────────────────────────────────────────────────
@@ -121,6 +123,12 @@ function composeReviewContent(r) {
   return parts.join('\n');
 }
 
+function composeDailyLogContent(r) {
+  const parts = [`Daily Log — ${r.date}`];
+  if (r.content) parts.push(r.content);
+  return parts.join('\n');
+}
+
 export const CONTENT_COMPOSERS = {
   people: composePeopleContent,
   projects: composeProjectContent,
@@ -128,7 +136,8 @@ export const CONTENT_COMPOSERS = {
   admin: composeAdminContent,
   memories: composeJournalContent,
   digests: composeDigestContent,
-  reviews: composeReviewContent
+  reviews: composeReviewContent,
+  journals: composeDailyLogContent
 };
 
 // ─── Core Mapping ───────────────────────────────────────────────────────────
@@ -234,6 +243,29 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     }
   }
 
+  // Daily log entries — one memory per day, re-synced when content changes
+  {
+    const { records: journals } = await listJournals({ limit: 10000 });
+    for (const record of journals) {
+      const key = bridgeKey('journals', record.id);
+      if (map[key] && !dryRun) {
+        stats.skipped += 1;
+        continue;
+      }
+      if (dryRun) {
+        console.log(`🧠🔗 [dry-run] Would sync journals/${record.date}`);
+        stats.synced += 1;
+        continue;
+      }
+      const memoryId = await syncBrainRecord('journals', record).catch((err) => {
+        console.error(`❌ Failed to sync journals/${record.date}: ${err.message}`);
+        stats.errors += 1;
+        return null;
+      });
+      if (memoryId) stats.synced += 1;
+    }
+  }
+
   // JSONL stores (digests, reviews)
   const jsonlTypes = ['digests', 'reviews'];
   for (const type of jsonlTypes) {
@@ -311,5 +343,19 @@ export function initBridge() {
   brainEvents.on('digests:added', (record) => handleJsonlAdded('digests', record));
   brainEvents.on('reviews:added', (record) => handleJsonlAdded('reviews', record));
 
+  // Daily log — entity-store shape, but keyed by date. Reuse handler.
+  brainEvents.on('journals:changed', (data) => handleEntityChanged('journals', toEntityStore(data)));
+
   console.log('🧠🔗 Brain→Memory bridge initialized');
+}
+
+// Daily log emits { records: { 'YYYY-MM-DD': entry } } — already entity-shaped
+function toEntityStore(data) {
+  if (!data?.records) return { records: {} };
+  // handleEntityChanged keys on the id field, so inject entry.id as the map key
+  const out = { records: {} };
+  for (const entry of Object.values(data.records)) {
+    if (entry?.id) out.records[entry.id] = entry;
+  }
+  return out;
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
@@ -35,6 +36,7 @@ const warnIfQuiet = (peak) => {
 };
 
 export default function VoiceWidget() {
+  const navigate = useNavigate();
   const [enabled, setEnabled] = useState(false);
   const [hotkey, setHotkey] = useState('Space');
   const [sttEngine, setSttEngine] = useState('whisper');
@@ -43,6 +45,7 @@ export default function VoiceWidget() {
   const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
+  const [dictationActive, setDictationActive] = useState(false);
   const [handsFree, setHandsFree] = useState(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
@@ -110,9 +113,21 @@ export default function VoiceWidget() {
         toast.error(`Voice: ${d.message}`);
         setStage(restState());
       }),
+      onVoiceEvent('voice:navigate', (d) => {
+        if (d?.path && typeof d.path === 'string') navigate(d.path);
+      }),
+      onVoiceEvent('voice:dictation', (d) => {
+        setDictationActive((prev) => (prev === !!d?.enabled ? prev : !!d?.enabled));
+      }),
+      onVoiceEvent('voice:dailyLog:appended', (d) => {
+        if (d?.text) {
+          const preview = d.text.length > 60 ? `${d.text.slice(0, 60)}…` : d.text;
+          toast(`📓 +"${preview}"`);
+        }
+      }),
     ];
     return () => offs.forEach((off) => off());
-  }, [enabled]);
+  }, [enabled, navigate]);
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -314,6 +329,12 @@ export default function VoiceWidget() {
           <Send size={14} />
         </button>
       </form>
+      {dictationActive && (
+        <div className="flex items-center gap-2 bg-port-accent/15 border border-port-accent/40 rounded-full px-3 py-1 text-xs text-port-accent shadow-lg">
+          <NotebookPen size={12} className="animate-pulse" />
+          Dictating to Daily Log — say &quot;stop dictation&quot; to end
+        </div>
+      )}
       <div className="flex items-center gap-2 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-3 pr-1 py-1 shadow-lg">
         <span className={`text-xs ${tone}`}>{label}</span>
         {!useWebSpeech && handsFree && isContinuous() && (

@@ -1,0 +1,252 @@
+/**
+ * Daily Log (Journal) Service
+ *
+ * Single-entry-per-date diary store. Supports:
+ *   - Free-form typed or dictated content per calendar date
+ *   - Append-style segments from voice dictation
+ *   - Mirroring to an optional Obsidian vault (so Apple Notes / iCloud backups
+ *     pick up the file) — configured via brain meta (obsidianVaultId, obsidianFolder)
+ *   - Emission of brainEvents so brainMemoryBridge can vector-embed each day
+ *
+ * Storage files:
+ *   data/brain/journals.json          — { records: { 'YYYY-MM-DD': entry } }
+ *   data/brain/journal-settings.json  — { obsidianVaultId, obsidianFolder, filenamePattern }
+ */
+
+import { readFile, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { v4 as uuidv4 } from '../lib/uuid.js';
+import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { brainEvents, now } from './brainStorage.js';
+import * as obsidian from './obsidian.js';
+import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+
+const JOURNALS_FILE = join(PATHS.brain, 'journals.json');
+const SETTINGS_FILE = join(PATHS.brain, 'journal-settings.json');
+
+const DEFAULT_SETTINGS = {
+  obsidianVaultId: null,
+  obsidianFolder: 'Daily Log',
+  filenamePattern: 'YYYY-MM-DD',
+  autoSync: true,
+};
+
+// ─── Settings ──────────────────────────────────────────────────────────────
+
+export async function getSettings() {
+  await ensureDir(PATHS.brain);
+  const loaded = await readJSONFile(SETTINGS_FILE, null);
+  return loaded ? { ...DEFAULT_SETTINGS, ...loaded } : { ...DEFAULT_SETTINGS };
+}
+
+export async function updateSettings(partial) {
+  const current = await getSettings();
+  const next = { ...current, ...partial };
+  await writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2));
+  return next;
+}
+
+// ─── Store ─────────────────────────────────────────────────────────────────
+
+async function loadStore() {
+  await ensureDir(PATHS.brain);
+  return readJSONFile(JOURNALS_FILE, { records: {} });
+}
+
+async function saveStore(store) {
+  await ensureDir(PATHS.brain);
+  await writeFile(JOURNALS_FILE, JSON.stringify(store, null, 2));
+}
+
+export const isIsoDate = (date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+
+export async function resolveDate(date) {
+  return isIsoDate(date) ? date : getToday();
+}
+
+export async function getToday() {
+  return todayInTimezone(await getUserTimezone());
+}
+
+// ─── Reads ─────────────────────────────────────────────────────────────────
+
+export async function listJournals({ limit = 50, offset = 0 } = {}) {
+  const store = await loadStore();
+  const records = Object.values(store.records || {});
+  records.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const total = records.length;
+  return { records: records.slice(offset, offset + limit), total };
+}
+
+export async function getJournal(date) {
+  if (!isIsoDate(date)) return null;
+  const store = await loadStore();
+  return store.records?.[date] || null;
+}
+
+// ─── Writes ────────────────────────────────────────────────────────────────
+
+function ensureEntry(store, date) {
+  if (!store.records) store.records = {};
+  if (store.records[date]) return store.records[date];
+  const entry = {
+    id: uuidv4(),
+    date,
+    content: '',
+    segments: [],
+    createdAt: now(),
+    updatedAt: now(),
+    obsidianPath: null,
+  };
+  store.records[date] = entry;
+  return entry;
+}
+
+// Fire-and-forget: Obsidian lives on iCloud and writes can stall for hundreds
+// of ms; callers shouldn't wait on it. Any persisted obsidianPath from the
+// FIRST successful create is set on the same entry object that's already in
+// the store, so the next saveStore() in whatever caller runs next picks it up.
+function scheduleObsidianSync(entry) {
+  syncToObsidian(entry).catch((err) => console.error(`📓 Obsidian sync failed: ${err.message}`));
+}
+
+export async function setJournalContent(date, content) {
+  if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
+  const store = await loadStore();
+  const entry = ensureEntry(store, date);
+  entry.content = content || '';
+  entry.updatedAt = now();
+  await saveStore(store);
+  scheduleObsidianSync(entry);
+  brainEvents.emit('journals:changed', { records: store.records });
+  return entry;
+}
+
+/**
+ * Append a text segment (typed or dictated) to the given date's entry.
+ * Preserves segment metadata (source, timestamp) so the entry can be
+ * re-played later with provenance.
+ */
+export async function appendJournal(date, text, { source = 'text' } = {}) {
+  if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
+  const clean = (text || '').trim();
+  if (!clean) return null;
+
+  const store = await loadStore();
+  const entry = ensureEntry(store, date);
+  const segment = { text: clean, at: now(), source };
+  entry.segments.push(segment);
+  entry.content = entry.content
+    ? `${entry.content.trimEnd()}\n\n${clean}`
+    : clean;
+  entry.updatedAt = now();
+  await saveStore(store);
+  scheduleObsidianSync(entry);
+  brainEvents.emit('journals:changed', { records: store.records });
+  brainEvents.emit('journals:appended', { entry, segment });
+  return entry;
+}
+
+export async function deleteJournal(date) {
+  if (!isIsoDate(date)) return false;
+  const store = await loadStore();
+  if (!store.records?.[date]) return false;
+  const entry = store.records[date];
+  delete store.records[date];
+  await saveStore(store);
+  if (entry.obsidianPath) {
+    await removeFromObsidian(entry).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
+  }
+  brainEvents.emit('journals:changed', { records: store.records });
+  return true;
+}
+
+// ─── Obsidian mirror ───────────────────────────────────────────────────────
+
+function buildMarkdown(entry) {
+  const lines = [
+    '---',
+    `date: ${entry.date}`,
+    `tags: [daily-log, portos]`,
+    '---',
+    '',
+    `# Daily Log — ${entry.date}`,
+    '',
+    entry.content || '',
+    '',
+  ];
+  return lines.join('\n');
+}
+
+function buildObsidianNotePath(settings, date) {
+  const folder = (settings.obsidianFolder || '').replace(/^\/+|\/+$/g, '');
+  const filename = `${date}.md`;
+  return folder ? `${folder}/${filename}` : filename;
+}
+
+/**
+ * Write the entry's markdown to the configured Obsidian vault. If the file
+ * doesn't exist yet, create it; otherwise update. Records the path on the
+ * entry so delete can unlink it later.
+ */
+export async function syncToObsidian(entry) {
+  const settings = await getSettings();
+  if (!settings.autoSync || !settings.obsidianVaultId) return null;
+
+  const vault = await obsidian.getVaultById(settings.obsidianVaultId);
+  if (!vault || !existsSync(vault.path)) return null;
+
+  const notePath = buildObsidianNotePath(settings, entry.date);
+  const markdown = buildMarkdown(entry);
+
+  // createNote errors when the file exists; try update first then create.
+  const update = await obsidian.updateNote(settings.obsidianVaultId, notePath, markdown);
+  if (update?.error === 'NOTE_NOT_FOUND') {
+    const created = await obsidian.createNote(settings.obsidianVaultId, notePath, markdown);
+    if (created?.error) return null;
+    await persistObsidianPath(entry.date, notePath);
+    return notePath;
+  }
+  if (update?.error) return null;
+  if (!entry.obsidianPath) await persistObsidianPath(entry.date, notePath);
+  return notePath;
+}
+
+// Initial sync is the only time the entry doesn't already know its obsidianPath;
+// record it in the store so subsequent delete operations can locate the file.
+async function persistObsidianPath(date, notePath) {
+  const store = await loadStore();
+  const entry = store.records?.[date];
+  if (entry && entry.obsidianPath !== notePath) {
+    entry.obsidianPath = notePath;
+    await saveStore(store);
+  }
+}
+
+async function removeFromObsidian(entry) {
+  const settings = await getSettings();
+  if (!settings.obsidianVaultId || !entry.obsidianPath) return false;
+  const result = await obsidian.deleteNote(settings.obsidianVaultId, entry.obsidianPath);
+  return result === true;
+}
+
+/**
+ * Rewrite every existing daily-log entry to the currently-configured Obsidian
+ * vault. Used when the user first points the daily log at a vault or changes
+ * which vault it targets.
+ */
+export async function resyncAllToObsidian() {
+  const settings = await getSettings();
+  if (!settings.obsidianVaultId) return { synced: 0, skipped: 0 };
+
+  const { records } = await listJournals({ limit: 10000 });
+  let synced = 0;
+  let skipped = 0;
+  for (const entry of records) {
+    const path = await syncToObsidian(entry).catch(() => null);
+    if (path) synced += 1;
+    else skipped += 1;
+  }
+  return { synced, skipped };
+}

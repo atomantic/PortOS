@@ -10,6 +10,9 @@ import { getGoals, updateGoalProgress, addProgressEntry } from '../identity.js';
 import { listProcesses, restartApp } from '../pm2.js';
 import { getItems, getFeeds } from '../feeds.js';
 import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timezone.js';
+import * as journal from '../brainJournal.js';
+
+const DAILY_LOG_PATH = '/brain/daily-log';
 
 // Shorthand presets for voice logging. A user saying "I had a beer" should
 // not need to recite oz + ABV — these defaults match typical US servings.
@@ -455,6 +458,116 @@ const TOOLS = [
   },
 
   {
+    name: 'daily_log_open',
+    description:
+      'Open the Daily Log page in the UI and optionally start voice dictation mode. Use when the user says "open my daily log", "take me to my daily log", "go to daily log", "I want to dictate my daily log", "start my daily log". Set startDictation=true when the user wants to speak entries (explicit dictation verbs: "dictate", "record", "start logging"). The tool navigates the browser to the Daily Log page; the confirmation spoken back to the user should be one short sentence.',
+    parameters: {
+      type: 'object',
+      properties: {
+        startDictation: {
+          type: 'boolean',
+          description: 'Immediately enter dictation mode where subsequent speech is appended to the log verbatim instead of sent to you as conversation.',
+        },
+      },
+    },
+    execute: async ({ startDictation = false } = {}, ctx = {}) => {
+      const date = await journal.getToday();
+      const entry = await journal.getJournal(date);
+      ctx.sideEffects?.push({ type: 'navigate', path: DAILY_LOG_PATH });
+      if (startDictation) {
+        ctx.sideEffects?.push({ type: 'dictation', enabled: true, date });
+      }
+      const existingLen = entry?.content?.length || 0;
+      const parts = [`Opened daily log for ${date}`];
+      if (startDictation) parts.push('Dictation mode on — everything you say now will be added to today\'s log. Say "stop dictation" when done.');
+      else if (existingLen) parts.push(`(${entry.segments?.length || 1} segment${entry.segments?.length === 1 ? '' : 's'} so far).`);
+      else parts.push('(empty so far).');
+      return { ok: true, date, dictation: !!startDictation, summary: parts.join(' ') };
+    },
+  },
+
+  {
+    name: 'daily_log_start_dictation',
+    description:
+      'Begin voice dictation into the Daily Log: subsequent user speech is transcribed and appended verbatim to today\'s log until they say stop. Use when the user says "start dictation", "record my log", "begin logging", "dictate this", "I want to start talking into my daily log". After calling, do not comment further — just confirm briefly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'Target date YYYY-MM-DD; defaults to today.' },
+      },
+    },
+    execute: async ({ date } = {}, ctx = {}) => {
+      const target = await journal.resolveDate(date);
+      ctx.sideEffects?.push({ type: 'navigate', path: DAILY_LOG_PATH });
+      ctx.sideEffects?.push({ type: 'dictation', enabled: true, date: target });
+      return { ok: true, date: target, summary: `Dictation on for ${target}. Everything you say will be added to the log. Say "stop dictation" when finished.` };
+    },
+  },
+
+  {
+    name: 'daily_log_stop_dictation',
+    description:
+      'End voice dictation and return to normal conversation mode. Only useful if dictation is currently active. Use when the user says "stop dictation", "end dictation", "I\'m done", "exit dictation mode".',
+    parameters: { type: 'object', properties: {} },
+    execute: async (_args, ctx = {}) => {
+      ctx.sideEffects?.push({ type: 'dictation', enabled: false });
+      return { ok: true, summary: 'Dictation off.' };
+    },
+  },
+
+  {
+    name: 'daily_log_append',
+    description:
+      'Append a text segment to a Daily Log entry (does NOT enter dictation mode — one-shot). Use when the user says "add to my daily log: X", "write in my daily log that X", "note in today\'s log: X". Exact text goes in; do not summarize.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The exact text to append, in the user\'s words.' },
+        date: { type: 'string', description: 'YYYY-MM-DD; defaults to today.' },
+      },
+      required: ['text'],
+    },
+    execute: async ({ text, date }) => {
+      if (!text || !text.trim()) throw new Error('text is required');
+      const target = await journal.resolveDate(date);
+      const entry = await journal.appendJournal(target, text.trim(), { source: 'voice' });
+      return {
+        ok: true,
+        date: target,
+        segments: entry.segments.length,
+        summary: `Added to daily log for ${target}.`,
+      };
+    },
+  },
+
+  {
+    name: 'daily_log_read',
+    description:
+      'Read back the full content of a Daily Log entry aloud. Use when the user says "read me my daily log", "what did I write today?", "play back yesterday\'s log". Defaults to today. Returns content so the LLM can read it verbatim — do NOT summarize, speak the content as-is.',
+    parameters: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'YYYY-MM-DD; defaults to today.' },
+      },
+    },
+    execute: async ({ date } = {}, ctx = {}) => {
+      const target = await journal.resolveDate(date);
+      ctx.sideEffects?.push({ type: 'navigate', path: DAILY_LOG_PATH });
+      const entry = await journal.getJournal(target);
+      if (!entry || !entry.content?.trim()) {
+        return { ok: true, date: target, empty: true, summary: `Daily log for ${target} is empty.` };
+      }
+      return {
+        ok: true,
+        date: target,
+        content: entry.content,
+        segments: entry.segments?.length || 0,
+        summary: `Daily log for ${target}:\n${entry.content}`,
+      };
+    },
+  },
+
+  {
     name: 'time_now',
     description:
       'Report the current local date, time, and day of week. Use when the user asks "what time is it?", "what day is today?", "what\'s the date?". LLMs don\'t know the current time on their own — always call this tool rather than guessing.',
@@ -483,8 +596,8 @@ export const getToolSpecs = () => TOOLS.map((t) => ({
   function: { name: t.name, description: t.description, parameters: t.parameters },
 }));
 
-export const dispatchTool = async (name, args) => {
+export const dispatchTool = async (name, args, ctx) => {
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) throw new Error(`Unknown tool: ${name}`);
-  return tool.execute(args || {});
+  return tool.execute(args || {}, ctx || { sideEffects: [] });
 };
