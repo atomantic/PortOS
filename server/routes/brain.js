@@ -793,8 +793,13 @@ const resolveJournalDate = async (date) => {
  * List daily log entries (most recent first)
  */
 router.get('/daily-log', asyncHandler(async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-  const offset = parseInt(req.query.offset, 10) || 0;
+  // Clamp pagination: negative or zero limit / negative offset would slice
+  // unpredictably (or from the end of the array). Match the convention used
+  // by other paginated brain routes.
+  const parsedLimit = parseInt(req.query.limit, 10);
+  const parsedOffset = parseInt(req.query.offset, 10);
+  const limit = Math.min(Math.max(Number.isNaN(parsedLimit) ? 50 : parsedLimit, 1), 200);
+  const offset = Math.max(Number.isNaN(parsedOffset) ? 0 : parsedOffset, 0);
   const result = await journal.listJournals({ limit, offset });
   res.json(result);
 }));

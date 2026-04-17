@@ -147,8 +147,11 @@ export const registerVoiceHandlers = (socket) => {
   // Validate the date to prevent malformed values from flowing into
   // appendJournal(), which would throw and break the dictation turn. Fall
   // back to the existing state date (or null to let the pipeline default to
-  // today) rather than storing garbage.
-  socket.on('voice:dictation:set', ({ enabled, date } = {}) => {
+  // today) rather than storing garbage. Read the payload defensively — a
+  // client emitting `null` or a primitive would otherwise crash the
+  // destructure before our validation runs.
+  socket.on('voice:dictation:set', (payload) => {
+    const { enabled, date } = payload && typeof payload === 'object' ? payload : {};
     const normalizedDate = isIsoDate(date) ? date : (state.dictation.date || null);
     state.dictation = { enabled: !!enabled, date: enabled ? normalizedDate : null };
     socket.emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });

@@ -139,6 +139,9 @@ export async function setJournalContent(date, content) {
   await saveStore(store);
   scheduleObsidianSync(entry);
   brainEvents.emit('journals:changed', { records: store.records });
+  // Per-entry event so downstream syncers (memory bridge) can update the
+  // single affected day without iterating the whole store.
+  brainEvents.emit('journals:upserted', { entry });
   return entry;
 }
 
@@ -164,6 +167,10 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
   scheduleObsidianSync(entry);
   brainEvents.emit('journals:changed', { records: store.records });
   brainEvents.emit('journals:appended', { entry, segment });
+  // Per-entry event so the memory bridge re-embeds only this day, not all
+  // of them. (Keep journals:appended separate — it carries the single new
+  // segment for UI live-updates, which is a different consumer.)
+  brainEvents.emit('journals:upserted', { entry });
   return entry;
 }
 
@@ -236,11 +243,14 @@ export async function syncToObsidian(entry) {
   return notePath;
 }
 
-// Initial sync is the only time the entry doesn't already know its obsidianPath;
-// record it in the store so subsequent delete operations can locate the file.
-// We skip the write when the value is unchanged, so the steady-state cost is
-// zero extra saves. PortOS is single-user/single-instance (see CLAUDE.md)
-// so we don't guard against concurrent-writer lost-update races here.
+// One-shot: the only time an entry doesn't already have its obsidianPath is
+// the very first successful Obsidian create for that date. After that, the
+// early-return in syncToObsidian() skips this call entirely, so steady-state
+// cost is zero extra saves. PortOS is single-user/single-instance (see
+// CLAUDE.md) so we don't guard against concurrent-writer lost-update races
+// here — "while dictating, multiple appends" all run from the same process
+// on a single-threaded Node event loop, and the set-once property above
+// means this function isn't on the hot path for them anyway.
 async function persistObsidianPath(date, notePath) {
   const store = await loadStore();
   const entry = store.records?.[date];

@@ -13,7 +13,10 @@ const upsertHistory = (prev, entry) => {
   return [entry, ...others].sort((a, b) => b.date.localeCompare(a.date));
 };
 
-// ISO YYYY-MM-DD in the user's local timezone
+// ISO YYYY-MM-DD fallback — browser local timezone. Used only as an initial
+// value before the backend responds with its canonical "today" (which honors
+// the user's configured timezone, so remote/VPN access doesn't desync the
+// day). Replaced on mount via a GET /daily-log/today.
 const localToday = () => {
   const d = new Date();
   const y = d.getFullYear();
@@ -31,6 +34,10 @@ const shiftDate = (iso, days) => {
 
 export default function DailyLogTab() {
   const [date, setDate] = useState(localToday());
+  // Backend today — resolved via GET /daily-log/today on mount so the
+  // "Today" button, disabled-forward-nav check, and isToday chip all match
+  // the server's timezone. Falls back to localToday() until fetched.
+  const [serverToday, setServerToday] = useState(localToday());
   const [entry, setEntry] = useState(null);
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -73,6 +80,21 @@ export default function DailyLogTab() {
 
   useEffect(() => { loadEntry(date); }, [date, loadEntry]);
   useEffect(() => { loadHistory(); loadSettings(); }, [loadHistory, loadSettings]);
+
+  // Ask the server for its canonical "today" so a user in a different timezone
+  // than the browser (remote/VPN access) doesn't open the tab on the wrong day.
+  useEffect(() => {
+    let cancelled = false;
+    api.getDailyLog('today').then((res) => {
+      if (cancelled || !res?.date) return;
+      setServerToday(res.date);
+      // If we initialized with a wrong local date, hop to the real one.
+      if (date === localToday() && res.date !== date) setDate(res.date);
+    }).catch(() => null);
+    return () => { cancelled = true; };
+    // Only on mount — we intentionally don't re-run when date changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const onAppend = (payload) => {
@@ -179,7 +201,7 @@ export default function DailyLogTab() {
     }
   };
 
-  const isToday = date === localToday();
+  const isToday = date === serverToday;
   const segmentCount = entry?.segments?.length || 0;
 
   const dateLabel = useMemo(() => {
@@ -296,12 +318,12 @@ export default function DailyLogTab() {
           <input
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value || localToday())}
+            onChange={(e) => setDate(e.target.value || serverToday)}
             className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
           />
           <button
             onClick={() => setDate(shiftDate(date, 1))}
-            disabled={date >= localToday()}
+            disabled={date >= serverToday}
             className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
             title="Next day"
           >
@@ -309,7 +331,7 @@ export default function DailyLogTab() {
           </button>
           {!isToday && (
             <button
-              onClick={() => setDate(localToday())}
+              onClick={() => setDate(serverToday)}
               className="px-2 py-1 rounded bg-port-card text-xs text-gray-300 hover:text-white"
             >
               Today
