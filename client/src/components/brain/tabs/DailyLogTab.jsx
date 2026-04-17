@@ -248,7 +248,7 @@ export default function DailyLogTab() {
               <input
                 type="text"
                 value={settings?.obsidianFolder || ''}
-                onChange={(e) => setSettings((s) => ({ ...s, obsidianFolder: e.target.value }))}
+                onChange={(e) => setSettings((s) => ({ ...(s || {}), obsidianFolder: e.target.value }))}
                 onBlur={(e) => saveSettings({ obsidianFolder: e.target.value })}
                 className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
                 placeholder="Daily Log"
