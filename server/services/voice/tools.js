@@ -601,12 +601,16 @@ const TOOLS = [
       if (!entry || !entry.content?.trim()) {
         return { ok: true, date: target, empty: true, summary: `Daily log for ${target} is empty.` };
       }
+      // Keep `summary` short — tool results are JSON-stringified into the
+      // LLM message history, and duplicating the full content here would
+      // double the token cost of every subsequent turn for no benefit.
+      // Content is returned once in `content`.
       return {
         ok: true,
         date: target,
         content: entry.content,
         segments: entry.segments?.length || 0,
-        summary: `Daily log for ${target}:\n${entry.content}`,
+        summary: `Daily log for ${target} (${entry.segments?.length || 0} segments).`,
       };
     },
   },

@@ -81,6 +81,14 @@ export default function DailyLogTab() {
   useEffect(() => { loadEntry(date); }, [date, loadEntry]);
   useEffect(() => { loadHistory(); loadSettings(); }, [loadHistory, loadSettings]);
 
+  // Keep the server's dictation target date aligned with the UI while
+  // dictation is active — otherwise navigating to an earlier day (prev/next
+  // button, date picker) would still route new voice utterances into the
+  // day that was active when the user toggled dictation on.
+  useEffect(() => {
+    if (dictation) setVoiceDictation(true, date);
+  }, [date, dictation]);
+
   // Ask the server for its canonical "today" so a user in a different timezone
   // than the browser (remote/VPN access) doesn't open the tab on the wrong day.
   useEffect(() => {
