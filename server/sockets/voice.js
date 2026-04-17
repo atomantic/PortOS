@@ -63,13 +63,17 @@ export const registerVoiceHandlers = (socket) => {
     await runTurnWithState({ audio: buffer, mimeType, errorStage: 'turn' });
   });
 
-  socket.on('voice:text', async (payload = {}) => {
-    const text = (payload.text || '').toString().trim();
+  socket.on('voice:text', async (payload) => {
+    // Default-param only kicks in for `undefined` — a client that emits
+    // `null` or a primitive would crash the property access below. Guard
+    // explicitly like voice:dictation:set does.
+    const safe = payload && typeof payload === 'object' ? payload : {};
+    const text = (safe.text || '').toString().trim();
     if (!text) {
       socket.emit('voice:error', { stage: 'text', message: 'text is required' });
       return;
     }
-    await runTurnWithState({ text, source: payload.source, errorStage: 'text' });
+    await runTurnWithState({ text, source: safe.source, errorStage: 'text' });
   });
 
   socket.on('voice:interrupt', () => {

@@ -138,6 +138,23 @@ describe('brainJournal', () => {
       expect(obsidian.createNote).not.toHaveBeenCalled();
     });
 
+    it('honors force:true even when autoSync is false (manual resync path)', async () => {
+      obsidian.getVaultById.mockResolvedValue({ id: 'v1', path: '/' });
+      obsidian.updateNote.mockResolvedValueOnce({ path: 'Daily Log/2026-04-17.md' });
+
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false, obsidianFolder: 'Daily Log' });
+      // Regular syncToObsidian() still no-ops without force.
+      await journal.syncToObsidian({ id: 'j1', date: '2026-04-17', content: 'hi', segments: [] });
+      expect(obsidian.updateNote).not.toHaveBeenCalled();
+
+      // force bypasses autoSync so the manual "Re-sync all" action works.
+      await journal.syncToObsidian(
+        { id: 'j1', date: '2026-04-17', content: 'hi', segments: [] },
+        { force: true },
+      );
+      expect(obsidian.updateNote).toHaveBeenCalled();
+    });
+
     // Test syncToObsidian() directly rather than going through
     // appendJournal()'s fire-and-forget scheduleObsidianSync() — the
     // background promise isn't awaited, so assertions against mocked
