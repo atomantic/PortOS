@@ -152,9 +152,14 @@ export const startWhisper = async (cfg) => {
 
   // Pre-flight: refuse to start if something ELSE is already on the port —
   // whisper-server crashes on bind failure and takes the model with it.
+  // Distinguish "port collision" (use a different port) from "bind error"
+  // (EACCES / EINVAL / EADDRNOTAVAIL → host/IP itself is wrong).
   const occupied = await probePortInUse(host, port);
   if (occupied) {
-    throw new Error(`${occupied} — another service is bound to ${host}:${port}. Change voice.stt.endpoint (e.g. http://127.0.0.1:5563) under Settings → Voice.`);
+    if (/EADDRINUSE|in use/i.test(occupied)) {
+      throw new Error(`${occupied} — another service is bound to ${host}:${port}. Change voice.stt.endpoint (e.g. http://127.0.0.1:5563) under Settings → Voice.`);
+    }
+    throw new Error(`${occupied} — voice.stt.endpoint is misconfigured for ${host}:${port}. Check Settings → Voice and ensure the host/IP is valid and bindable on this machine.`);
   }
 
   await execPm2([

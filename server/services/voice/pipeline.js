@@ -37,7 +37,9 @@ const buildSystemPrompt = (cfg) => {
 
 const SENTENCE_RE = /[.!?\n](?:\s+|$)/;
 
-const splitSentences = (buffer) => {
+// Exported for unit testing — the sentence-boundary logic is too central to
+// leave untested.
+export const splitSentences = (buffer) => {
   const out = [];
   let rest = buffer;
   while (true) {
@@ -64,7 +66,7 @@ const splitSentences = (buffer) => {
  */
 // Whisper tags non-speech as bracketed markers like [BLANK_AUDIO], [MUSIC],
 // [LAUGHTER], [INAUDIBLE]. Treat those as empty so we don't waste an LLM turn.
-const isNonSpeechMarker = (text) => /^\s*\[[A-Z_ ]+\]\s*$/i.test(text);
+export const isNonSpeechMarker = (text) => /^\s*\[[A-Z_ ]+\]\s*$/i.test(text);
 
 export const runTurn = async ({ audio, text, mimeType, history = [], emit, signal }) => {
   const cfg = await getVoiceConfig();

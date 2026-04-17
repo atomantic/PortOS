@@ -181,7 +181,7 @@ export const startCapture = async () => {
   return { mimeType };
 };
 
-export const stopCapture = async () => {
+export const stopCapture = async ({ submit = true } = {}) => {
   if (!recorder) return null;
   const rec = recorder;
   recorder = null;
@@ -195,6 +195,9 @@ export const stopCapture = async () => {
 
   const blob = new Blob(chunks, { type: rec.mimeType });
   chunks = [];
+  // Mode-switch cancellation (e.g. user toggled hands-free mid-utterance):
+  // drop the buffered audio instead of submitting a partial sentence.
+  if (!submit) return null;
   if (blob.size < 800) return null; // discard sub-25ms empty recordings
 
   const { wav, peak } = await blobToWav16k(blob);

@@ -227,8 +227,11 @@ export default function VoiceWidget() {
     setHandsFree((prev) => {
       const next = !prev;
       window.localStorage.setItem(HANDS_FREE_KEY, next ? '1' : '0');
-      if (isCapturing()) stopCapture();
+      // Discard any in-flight PTT recording — toggling modes mid-utterance
+      // shouldn't send a partial turn to the server.
+      if (isCapturing()) stopCapture({ submit: false });
       if (isContinuous()) stopContinuous();
+      interrupt();
       setStage('idle');
       return next;
     });

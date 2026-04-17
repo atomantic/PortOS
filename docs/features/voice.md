@@ -1,6 +1,6 @@
 # Voice Mode
 
-PortOS includes an optional push-to-talk voice assistant that runs entirely on your machine. No audio ever leaves your computer.
+PortOS includes an optional voice assistant that runs entirely on your machine. Supports push-to-talk and hands-free continuous mode with barge-in (start speaking over a reply to interrupt it). No audio leaves your computer.
 
 ## Stack
 
@@ -9,7 +9,7 @@ PortOS includes an optional push-to-talk voice assistant that runs entirely on y
 | Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562) | — | ✅ |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
 | Text-to-speech | [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) via `kokoro-js` (in-process) | [Piper](https://github.com/rhasspy/piper) (CLI) | ✅ |
-| Voice activity | Browser `MediaRecorder` (push-to-talk) | — | ✅ |
+| Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
 
@@ -65,18 +65,21 @@ All options live in `data/settings.json` under `voice` (Settings UI patches this
 
 ## Using voice mode
 
-- Click and hold the mic in the lower-right or hold the configured hotkey to speak.
-- Release to send. You'll see `you: …` (transcript) then `assistant: …` streaming as the LLM responds.
-- Start a new turn while the assistant is speaking to interrupt (barge-in).
-- Click the square button during playback to stop the current utterance.
+Two modes, toggle with the headset icon in the voice widget:
 
-The hotkey ignores keypresses while inputs/textareas are focused.
+- **Push-to-talk**: click/hold the mic or hold the configured hotkey. Release to send. The hotkey ignores keypresses while an input/textarea is focused.
+- **Hands-free**: the mic stays live; an AudioWorklet computes an RMS envelope and auto-submits once you've been silent for `vad.endOfSpeechMs` (default 700 ms). Ambient noise is calibrated at session start.
+
+Either mode: start speaking while the assistant is replying to interrupt it (barge-in). Click the square button to stop current TTS playback without sending a new turn.
+
+With `stt.engine = 'web-speech'` the browser's SpeechRecognition handles STT entirely client-side; PortOS sends the final transcript as `voice:text` instead of shipping audio, which skips whisper.cpp and avoids a 250–800 ms server-side round-trip.
 
 ## Architecture
 
 ```
-browser mic → MediaRecorder → Socket.IO 'voice:turn'
-  → whisper.cpp /inference          (STT, with CoreML encoder on Apple Silicon)
+browser mic → MediaRecorder (PTT) OR AudioWorklet + RMS VAD (hands-free)
+  → Socket.IO 'voice:turn' (audio) OR 'voice:text' (Web Speech final)
+  → whisper.cpp /inference          (STT for audio path)
   → LM Studio /v1/chat (streaming)  (LLM)
   → sentence-boundary TTS dispatch  (Kokoro in-process | Piper CLI)
   → Socket.IO 'voice:tts:audio'     → Web Audio playback queue
