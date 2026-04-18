@@ -24,6 +24,8 @@ export const METRIC_CATEGORIES = [
       { key: 'blood_oxygen_saturation', label: 'Blood Oxygen', unit: '%', color: '#3b82f6', aggregation: 'avg', formatValue: v => v.toFixed(1) },
       { key: 'respiratory_rate', label: 'Respiratory Rate', unit: 'breaths/min', color: '#06b6d4', aggregation: 'avg', formatValue: v => v.toFixed(1) },
       { key: 'vo2_max', label: 'VO2 Max', unit: 'mL/min/kg', color: '#8b5cf6', aggregation: 'avg', formatValue: v => v.toFixed(1) },
+      { key: 'blood_pressure_systolic', label: 'BP Systolic', unit: 'mmHg', color: '#ef4444', aggregation: 'avg', formatValue: v => Math.round(v).toString() },
+      { key: 'blood_pressure_diastolic', label: 'BP Diastolic', unit: 'mmHg', color: '#3b82f6', aggregation: 'avg', formatValue: v => Math.round(v).toString() },
     ]
   },
   {

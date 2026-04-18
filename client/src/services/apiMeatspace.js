@@ -138,6 +138,11 @@ export const addBodyEntry = (data) => request('/meatspace/body', {
   method: 'POST',
   body: JSON.stringify(data)
 });
+export const getBloodPressure = () => request('/meatspace/blood-pressure');
+export const addBloodPressure = (data) => request('/meatspace/blood-pressure', {
+  method: 'POST',
+  body: JSON.stringify(data)
+});
 export const getEpigeneticTests = () => request('/meatspace/epigenetic');
 export const addEpigeneticTest = (data) => request('/meatspace/epigenetic', {
   method: 'POST',

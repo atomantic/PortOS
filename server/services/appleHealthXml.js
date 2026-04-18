@@ -61,6 +61,10 @@ const XML_TO_METRIC_NAME = {
   'hkquantitytypeidentifiercyclingpower': 'cycling_power',
   'hkquantitytypeidentifiercyclingfunctionalthresholdpower': 'cycling_ftp',
 
+  // Cardiovascular
+  'hkquantitytypeidentifierbloodpressuresystolic': 'blood_pressure_systolic',
+  'hkquantitytypeidentifierbloodpressurediastolic': 'blood_pressure_diastolic',
+
   // Body measurements
   'hkquantitytypeidentifierbodymass': 'body_mass',
   'hkquantitytypeidentifierbodymassindex': 'body_mass_index',

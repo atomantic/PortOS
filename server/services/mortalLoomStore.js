@@ -98,6 +98,26 @@ export async function mlReplace(key, array) {
 }
 
 /**
+ * Upsert a HealthMetricEntry by date — merges non-null fields into the
+ * existing entry for that date, or appends a new one. Mirrors Swift's
+ * DataStore.upsertHealthMetric + HealthMetricEntry.mergeFields.
+ */
+export async function mlUpsertHealthMetricByDate(date, patch) {
+  return updateStore(store => {
+    const existing = store.healthMetrics.find(m => m.date === date);
+    if (existing) {
+      for (const [k, v] of Object.entries(patch)) {
+        if (v !== undefined && v !== null) existing[k] = v;
+      }
+      return existing;
+    }
+    const created = { id: newMortalLoomId(), date, ...patch };
+    store.healthMetrics.push(created);
+    return created;
+  });
+}
+
+/**
  * Alcohol/nicotine use (date, positional-index) addressing in the PortOS daily-log.
  * Return the id of the N-th record in store[key] with the given date (in stored order).
  */

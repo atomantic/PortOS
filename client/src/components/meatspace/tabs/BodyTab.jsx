@@ -3,6 +3,7 @@ import { Scale, Eye, Plus, Pencil, Trash2, Check, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import BodyCompChart from '../BodyCompChart';
+import BloodPressureCard from '../BloodPressureCard';
 
 const EMPTY_EYE_FORM = {
   date: '', leftSphere: '', leftCylinder: '', leftAxis: '',
@@ -92,6 +93,9 @@ export default function BodyTab() {
         </div>
         <BodyCompChart />
       </div>
+
+      {/* Blood Pressure */}
+      <BloodPressureCard />
 
       {/* Eye Prescriptions */}
       <div>

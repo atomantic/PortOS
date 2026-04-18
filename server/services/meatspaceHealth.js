@@ -14,7 +14,8 @@ import {
   mlArrayIfEnabled,
   mlPush,
   mlPatchById,
-  mlRemoveById
+  mlRemoveById,
+  mlUpsertHealthMetricByDate
 } from './mortalLoomStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -22,6 +23,7 @@ const DAILY_LOG_FILE = join(MEATSPACE_DIR, 'daily-log.json');
 const BLOOD_TESTS_FILE = join(MEATSPACE_DIR, 'blood-tests.json');
 const EPIGENETIC_TESTS_FILE = join(MEATSPACE_DIR, 'epigenetic-tests.json');
 const EYES_FILE = join(MEATSPACE_DIR, 'eyes.json');
+const HEALTH_METRICS_FILE = join(MEATSPACE_DIR, 'health-metrics.json');
 
 const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
@@ -176,4 +178,42 @@ export async function removeEyeExam(index) {
   await writeLocal(EYES_FILE, data);
   console.log(`👁️ Eye exam removed: ${removed.date}`);
   return removed;
+}
+
+// === Blood Pressure ===
+// Matches MortalLoom's HealthMetricEntry.bloodPressureSystolic/Diastolic (mmHg),
+// upserted by date so multiple readings on the same day (e.g. from Apple Health
+// sync + manual entry) merge into one row.
+
+export async function getBloodPressureHistory() {
+  const ml = await mlArrayIfEnabled('healthMetrics');
+  const source = ml ?? (await readJSONFile(HEALTH_METRICS_FILE, { entries: [] })).entries;
+  return source
+    .filter(m => m?.bloodPressureSystolic != null && m?.bloodPressureDiastolic != null)
+    .map(m => ({
+      date: m.date,
+      systolic: m.bloodPressureSystolic,
+      diastolic: m.bloodPressureDiastolic
+    }))
+    .sort(byDate);
+}
+
+export async function addBloodPressureReading({ date, systolic, diastolic }) {
+  const targetDate = date || new Date().toISOString().split('T')[0];
+  const patch = { bloodPressureSystolic: systolic, bloodPressureDiastolic: diastolic };
+
+  if (await isMortalLoomEnabled()) {
+    await mlUpsertHealthMetricByDate(targetDate, patch);
+    console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate} (MortalLoom)`);
+    return { date: targetDate, systolic, diastolic };
+  }
+
+  const log = await readJSONFile(HEALTH_METRICS_FILE, { entries: [] });
+  let entry = log.entries.find(e => e.date === targetDate);
+  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+  Object.assign(entry, patch);
+  log.entries.sort(byDate);
+  await writeLocal(HEALTH_METRICS_FILE, log);
+  console.log(`🩺 Blood pressure ${systolic}/${diastolic} logged for ${targetDate}`);
+  return { date: targetDate, systolic, diastolic };
 }
