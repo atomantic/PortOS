@@ -30,6 +30,9 @@ const sizeRank = (id) => {
 export const TOOL_CAPABLE_PATTERNS = [
   /qwen2\.5.*instruct/,
   /qwen3.*instruct/,
+  /qwen3(\.\d+)?-?\d+b-2507/,    // Qwen3 / 3.5 / 3.6 non-thinking dated variants
+  /qwen3\.5/,                     // Qwen3.5 family (e.g., qwen3.5-9b)
+  /qwen3\.6/,                     // Qwen3.6 family
   /hermes-?3/,
   /mistral-small/,
   /mistral.*instruct-v0\.[3-9]/,
@@ -51,6 +54,25 @@ export const TOOL_INCOMPATIBLE_PATTERNS = [
   /gemma-?[23].*\b\d+m\b/, // small non-instruct gemmas
 ];
 
+// Reasoning models burn 10–30s on internal `<think>` tokens before emitting
+// the spoken reply. For a voice agent that's death — even short answers feel
+// like the assistant froze. We try to suppress thinking via prompt directives
+// and chat-template kwargs (see `streamChat`), but the only reliable speedup
+// is to PREFER non-reasoning models when both kinds are installed.
+export const REASONING_PATTERNS = [
+  /reasoning/,
+  /\br1\b/,
+  /\bqwq\b/,
+  /thinking/,
+  /\bo1\b/,
+  /deepseek-r1/,
+];
+
+export const isReasoningModel = (id) => {
+  const n = String(id).toLowerCase();
+  return REASONING_PATTERNS.some((re) => re.test(n));
+};
+
 export const isToolCapable = (id) => {
   const n = String(id).toLowerCase();
   if (TOOL_CAPABLE_PATTERNS.some((re) => re.test(n))) return true;
@@ -62,6 +84,17 @@ const isToolIncompatible = (id) => {
   return TOOL_INCOMPATIBLE_PATTERNS.some((re) => re.test(n));
 };
 
+// Multi-key sort: non-reasoning before reasoning, then smaller before larger.
+// Sort is stable in V8, so equal keys keep input order — list inputs in a
+// preferred order if you want a tiebreaker beyond size.
+const rankForSpeed = (id) => [isReasoningModel(id) ? 1 : 0, sizeRank(id)];
+const sortBySpeed = (list) => list.slice().sort((a, b) => {
+  const [ar, as] = rankForSpeed(a);
+  const [br, bs] = rankForSpeed(b);
+  if (ar !== br) return ar - br;
+  return as - bs;
+});
+
 const resolveModel = async (requested, { requireTools = false } = {}) => {
   const res = await fetch(`${LM_STUDIO_BASE()}/v1/models`).catch(() => null);
   if (!res || !res.ok) return requested && requested !== 'auto' ? requested : null;
@@ -70,24 +103,21 @@ const resolveModel = async (requested, { requireTools = false } = {}) => {
   if (requested && requested !== 'auto') {
     return ids.includes(requested) ? requested : ids[0] || null;
   }
-  // 'auto' with tools on → pick the smallest tool-capable model if one is
-  // available. Fall back to smallest non-utility model otherwise. This avoids
-  // the classic bug where 'auto' picks Granite (smallest B by name) and the
-  // stream silently returns empty because Granite doesn't emit OpenAI
-  // tool_calls. The inline-`<tool_call>` parser at stream end still rescues
-  // Granite for simple cases, but a proper tool-use model is the right default.
-  const sortBySize = (list) => list.slice().sort((a, b) => sizeRank(a) - sizeRank(b));
+  // 'auto' selection priority for voice latency:
+  //   1. tool-capable + non-reasoning, smallest first  (the sweet spot)
+  //   2. tool-capable + reasoning, smallest first      (slow but works)
+  //   3. anything not known-incompatible, smallest     (fallback)
+  // Reasoning models are deprioritized because they pre-generate a
+  // `<think>` block before any spoken token — fatal for voice TTFT even
+  // when the final reply is short.
   if (requireTools) {
     const capable = ids.filter(isToolCapable);
-    const sorted = sortBySize(capable);
+    const sorted = sortBySpeed(capable);
     if (sorted[0]) return sorted[0];
-    // No known tool-capable model — fall through to size-ranked pick, but
-    // skip known-incompatible families so we at least get inline `<tool_call>`
-    // content rather than an empty stream on a base model.
-    const safe = sortBySize(ids.filter((id) => !isToolIncompatible(id)));
+    const safe = sortBySpeed(ids.filter((id) => !isToolIncompatible(id)));
     return safe[0] || ids[0] || null;
   }
-  return sortBySize(ids)[0] || null;
+  return sortBySpeed(ids)[0] || null;
 };
 
 // Parse IBM Granite / Llama-3 tool-use formats that are emitted as
@@ -206,13 +236,35 @@ export const streamChat = async (messages, opts = {}) => {
   console.log(`🤖 ${tag}lmstudio.resolve requested=${opts.model || 'auto'} → ${model} in ${resolveMs}ms`);
 
   const started = Date.now();
+  // When the resolved model has a reasoning mode, try every known disable
+  // switch — different model families honor different ones and unknown fields
+  // are silently ignored by LM Studio:
+  //   - Qwen3:    `/no_think` directive appended to last system message
+  //   - Granite:  `chat_template_kwargs: { thinking: false }`
+  //   - vLLM:     `chat_template_kwargs: { enable_thinking: false }`
+  //   - generic:  `extra_body.thinking = false`, `reasoning_effort = "minimal"`
+  // None of these are guaranteed to work — some models (DeepSeek-R1, native
+  // o1) emit `<think>` unconditionally. The deprioritization in resolveModel
+  // is the durable fix; this is best-effort speedup for the rare case where
+  // a reasoning model is the only tool-capable option.
+  const reasoning = isReasoningModel(model);
+  const sentMessages = reasoning ? messages.map((m, i, arr) => {
+    if (m.role !== 'system' || i !== arr.findLastIndex((x) => x.role === 'system')) return m;
+    const directive = (m.content || '').includes('/no_think') ? '' : '\n/no_think';
+    return { ...m, content: (m.content || '') + directive };
+  }) : messages;
+
   const body = {
     model,
-    messages,
+    messages: sentMessages,
     stream: true,
     temperature: 0.5,
-    max_tokens: opts.maxTokens ?? 250,
+    max_tokens: opts.maxTokens ?? 180,
   };
+  if (reasoning) {
+    body.chat_template_kwargs = { thinking: false, enable_thinking: false };
+    body.reasoning_effort = 'minimal';
+  }
   if (opts.tools?.length) {
     body.tools = opts.tools;
     body.tool_choice = opts.toolChoice ?? 'auto';
@@ -243,12 +295,14 @@ export const streamChat = async (messages, opts = {}) => {
   // Streaming tool-call stripper: when a model emits Granite-style inline
   // `<tool_call>[...]</tool_call>` or `<tool_request>[...]` in `delta.content`,
   // we must NOT forward those chunks to onDelta — the pipeline feeds deltas to
-  // TTS and would speak the raw JSON. We still accumulate everything into
-  // `text` so the post-stream parser can hoist into structured `toolCalls`.
-  // Tail characters that could be a partial open/close tag are held across
-  // chunks. Supports both tag spellings in parallel.
-  const OPEN_TAGS = TOOL_TAG_SPELLINGS.map((s) => `<${s}>`);
-  const CLOSE_TAGS = TOOL_TAG_SPELLINGS.map((s) => `</${s}>`);
+  // TTS and would speak the raw JSON. Reasoning models likewise emit `<think>`
+  // blocks that should be hidden even when our disable directives don't take.
+  // We still accumulate everything into `text` so the post-stream parser can
+  // hoist into structured `toolCalls`. Tail characters that could be a partial
+  // open/close tag are held across chunks. All tag spellings handled in parallel.
+  const STRIP_TAGS = [...TOOL_TAG_SPELLINGS, 'think', 'thinking', 'reasoning'];
+  const OPEN_TAGS = STRIP_TAGS.map((s) => `<${s}>`);
+  const CLOSE_TAGS = STRIP_TAGS.map((s) => `</${s}>`);
   let activeClose = null; // set when we entered a tool block
   let tailHold = '';
   // Find the earliest match of any candidate in `data`, starting at 0.
@@ -363,8 +417,12 @@ export const streamChat = async (messages, opts = {}) => {
       ? { text, toolCalls: [] }
       : extractInlineToolCalls(text);
     const toolCalls = streamed.length ? streamed : inlineCalls;
+    // Strip any `<think>...`/`<reasoning>...` blocks from the canonical text
+    // too — the streaming stripper kept them out of TTS, but they'd still
+    // pollute conversation history and the assistant.content we persist.
+    const finalText = stripReasoningTags(cleanedText);
     return {
-      text: cleanedText,
+      text: finalText,
       toolCalls,
       model,
       ttfbMs,
@@ -373,3 +431,6 @@ export const streamChat = async (messages, opts = {}) => {
     };
   }
 };
+
+const REASONING_TAG_RE = /<(think|thinking|reasoning)>[\s\S]*?(?:<\/\1>|$)/gi;
+const stripReasoningTags = (text) => (text || '').replace(REASONING_TAG_RE, '').replace(/\s+/g, ' ').trim();

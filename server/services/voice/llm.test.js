@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractInlineToolCalls, isToolCapable, TOOL_CAPABLE_PATTERNS } from './llm.js';
+import { extractInlineToolCalls, isToolCapable, isReasoningModel, TOOL_CAPABLE_PATTERNS, REASONING_PATTERNS } from './llm.js';
 
 describe('extractInlineToolCalls', () => {
   it('returns empty when no tag is present', () => {
@@ -98,6 +98,9 @@ describe('isToolCapable', () => {
       'qwen2.5-7b-instruct',
       'Qwen2.5-14B-Instruct',
       'lmstudio-community/Qwen2.5-7B-Instruct-GGUF',
+      'qwen/qwen3-4b-2507',
+      'qwen/qwen3.5-9b',
+      'qwen/qwen3.6-35b-a3b',
       'NousResearch/Hermes-3-Llama-3.1-8B',
       'mistralai/Mistral-Small-24B-Instruct',
       'mistralai/devstral-small-2-2512',
@@ -123,5 +126,36 @@ describe('isToolCapable', () => {
   it('exports the pattern list for introspection', () => {
     expect(Array.isArray(TOOL_CAPABLE_PATTERNS)).toBe(true);
     expect(TOOL_CAPABLE_PATTERNS.every((p) => p instanceof RegExp)).toBe(true);
+  });
+});
+
+describe('isReasoningModel', () => {
+  it('flags reasoning models that pre-generate <think> tokens', () => {
+    for (const id of [
+      'mistralai/ministral-3-14b-reasoning',
+      'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+      'qwen/qwq-32b-preview',
+      'openai/o1-mini',
+      'qwen3-7b-thinking',
+    ]) {
+      expect(isReasoningModel(id), id).toBe(true);
+    }
+  });
+
+  it('does not flag fast non-reasoning instruct models', () => {
+    for (const id of [
+      'qwen2.5-7b-instruct',
+      'lmstudio-community/Qwen2.5-7B-Instruct-GGUF',
+      'mistralai/Mistral-Small-24B-Instruct',
+      'mistralai/devstral-small-2-2512',
+      'NousResearch/Hermes-3-Llama-3.1-8B',
+      'meta-llama/Llama-3.1-8B-Instruct',
+    ]) {
+      expect(isReasoningModel(id), id).toBe(false);
+    }
+  });
+
+  it('exports the pattern list for introspection', () => {
+    expect(Array.isArray(REASONING_PATTERNS)).toBe(true);
   });
 });

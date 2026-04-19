@@ -9,7 +9,7 @@ import { createServer } from 'net';
 import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
 import { expandPath, piperVoiceTildePath } from './config.js';
-import { isToolCapable } from './llm.js';
+import { isToolCapable, isReasoningModel } from './llm.js';
 
 export const pexec = promisify(execFile);
 
@@ -198,11 +198,22 @@ export const stopWhisper = async () => {
 
 // Default tool-capable model to auto-install via `lms get` when the user has
 // voice.enabled + tools.enabled + model='auto' but LM Studio has no model that
-// speaks OpenAI structured tool_calls. Qwen2.5-7B-Instruct is the smallest
-// widely-supported option with good tool-use training (~4.5 GB Q4). Can be
-// overridden via PORTOS_VOICE_DEFAULT_TOOL_MODEL.
-const DEFAULT_TOOL_MODEL = () =>
-  process.env.PORTOS_VOICE_DEFAULT_TOOL_MODEL || 'lmstudio-community/Qwen2.5-7B-Instruct-GGUF';
+// speaks OpenAI structured tool_calls. We try a small list in order — first
+// one resolved successfully wins. Picks favor: small (≤7B), explicitly
+// non-reasoning ("instruct"/"2507" non-thinking variants), and currently
+// available in the LM Studio Hub catalog (the catalog evolves, so we try
+// newer slugs first and keep older ones as fallbacks). Override the entire
+// chain with PORTOS_VOICE_DEFAULT_TOOL_MODEL (single id).
+const DEFAULT_TOOL_MODEL_CHAIN = () => {
+  const override = process.env.PORTOS_VOICE_DEFAULT_TOOL_MODEL;
+  if (override) return [override];
+  return [
+    'qwen/qwen3-4b-2507',                             // 4B, non-thinking, ~2.3 GB MLX, fast TTFT
+    'qwen/qwen3.5-9b',                                // 9B, current Qwen3.5 line
+    'lmstudio-community/Qwen2.5-7B-Instruct-GGUF',    // older, kept for older catalogs
+    'meta-llama/Llama-3.1-8B-Instruct',               // Llama fallback
+  ];
+};
 
 const LMS_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:1234')
   .replace(/\/+$/, '').replace(/\/v1$/, '');
@@ -214,6 +225,23 @@ const listLmStudioModels = async () => {
   return (body?.data || []).map((m) => m.id);
 };
 
+// Approximate parameter count from id, mirroring `sizeRank` in llm.js but
+// hoisted here so bootstrap doesn't need to import it. Returns Infinity for
+// model ids without a `<n>B` suffix (utility models, embeddings, etc.).
+const sizeOf = (id) => {
+  const n = String(id).toLowerCase();
+  const moe = n.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/);
+  if (moe) return parseFloat(moe[1]) * parseFloat(moe[2]);
+  const m = n.match(/(\d+(?:\.\d+)?)\s*b\b/);
+  return m ? parseFloat(m[1]) : Infinity;
+};
+
+// Above this rough parameter count (in B), a model is too heavy for a
+// snappy single-user voice agent on Apple Silicon — TTFT balloons and
+// it competes for VRAM with anything else loaded. We treat "tool-capable
+// but huge" as effectively missing and install a small one alongside.
+const FAST_VOICE_MODEL_MAX_B = 10;
+
 export const ensureToolCapableModel = async (cfg) => {
   // Only intervene when the user opted in: tools on AND model is 'auto'.
   // An explicit model id means they know what they want — respect it even
@@ -222,34 +250,88 @@ export const ensureToolCapableModel = async (cfg) => {
   if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
 
   const installed = await listLmStudioModels();
-  if (installed.length && installed.some(isToolCapable)) {
-    return { skipped: 'already-capable', model: installed.find(isToolCapable) };
+  // Tool-capable AND non-reasoning AND under the size cap. The size cap is
+  // important: a user with only `mistral-small-24B` installed gets a model
+  // that thrashes VRAM on every turn; we'd rather download Qwen2.5-7B and
+  // give them snappy responses out of the box.
+  const fastCapable = installed.find(
+    (id) => isToolCapable(id) && !isReasoningModel(id) && sizeOf(id) <= FAST_VOICE_MODEL_MAX_B
+  );
+  if (fastCapable) {
+    return { skipped: 'already-capable', model: fastCapable };
   }
 
   const lms = await which('lms');
   if (!lms) {
-    console.warn(`🎙️  voice: no tool-capable model installed and 'lms' CLI not on PATH — install LM Studio CLI or set voice.llm.model explicitly.`);
+    console.warn(`🎙️  voice: no fast tool-capable model installed and 'lms' CLI not on PATH — install LM Studio CLI or set voice.llm.model explicitly.`);
     return { skipped: 'no-lms-cli' };
   }
 
-  const target = DEFAULT_TOOL_MODEL();
-  console.log(`🎙️  voice: no tool-capable model found — installing ${target} via lms get (multi-GB download, this may take a while)`);
-  const { stdout, stderr } = await pexec(lms, ['get', '-y', target], {
-    maxBuffer: 64 * 1024 * 1024,
-    // 30 min cap — a 4-5 GB GGUF on a slow link can legitimately take this long.
-    timeout: 30 * 60 * 1000,
-  }).catch((err) => ({ stdout: '', stderr: err?.message || String(err) }));
-  if (stderr && /error|failed|not found/i.test(stderr)) {
-    console.warn(`🎙️  voice: lms get ${target} stderr — ${stderr.slice(0, 400)}`);
+  // Snapshot the model set BEFORE install so we can detect which id LM Studio
+  // actually registered the new download under (LM Studio sometimes
+  // normalizes case or appends quant suffix). Without this snapshot we
+  // mis-attributed success to whichever existing tool-capable model
+  // happened to match — including the slow 14B reasoning model we were
+  // trying to escape.
+  const before = new Set(installed);
+  const chain = DEFAULT_TOOL_MODEL_CHAIN();
+  for (const target of chain) {
+    console.log(`🎙️  voice: installing fast tool-capable model ${target} via lms get (this may take a few minutes)`);
+    const { stdout, stderr } = await pexec(lms, ['get', '-y', target], {
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 30 * 60 * 1000,
+    }).catch((err) => ({ stdout: '', stderr: err?.message || String(err) }));
+    const after = await listLmStudioModels();
+    const newOnes = after.filter((id) => !before.has(id));
+    const fastNew = newOnes.find(
+      (id) => isToolCapable(id) && !isReasoningModel(id) && sizeOf(id) <= FAST_VOICE_MODEL_MAX_B
+    );
+    if (fastNew) {
+      console.log(`🎙️  voice: fast tool-capable model ready — ${fastNew}`);
+      return { installed: fastNew };
+    }
+    if (stderr && /not exist|not found|permission|failed/i.test(stderr)) {
+      console.warn(`🎙️  voice: ${target} unavailable (${stderr.split('\n').pop().slice(0, 160)}) — trying next`);
+      continue;
+    }
+    console.warn(`🎙️  voice: lms get ${target} returned but no new fast model detected — trying next`);
   }
-  const after = await listLmStudioModels();
-  const got = after.find(isToolCapable);
-  if (got) {
-    console.log(`🎙️  voice: tool-capable model ready — ${got}`);
-    return { installed: got };
-  }
-  console.warn(`🎙️  voice: lms get completed but no tool-capable model detected — stdout=${(stdout || '').slice(0, 200)}`);
-  return { failed: target };
+  console.warn(`🎙️  voice: exhausted install chain ${chain.join(', ')} — set voice.llm.model explicitly in Settings`);
+  return { failed: chain };
+};
+
+// Pre-warm the model that 'auto' will pick on the first turn so the user
+// doesn't pay a 5–30 s cold-load on their first question. `lms load` is
+// idempotent — if the model is already loaded LM Studio returns success
+// immediately. We mirror the resolveModel preference order: tool-capable,
+// non-reasoning, smallest first.
+export const preloadModel = async (cfg) => {
+  if (!cfg?.enabled) return { skipped: 'voice-disabled' };
+  if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
+  const lms = await which('lms');
+  if (!lms) return { skipped: 'no-lms-cli' };
+  const installed = await listLmStudioModels();
+  if (!installed.length) return { skipped: 'no-models' };
+
+  const sortPreferred = (list) => list.slice().sort((a, b) => {
+    const ar = isReasoningModel(a) ? 1 : 0;
+    const br = isReasoningModel(b) ? 1 : 0;
+    if (ar !== br) return ar - br;
+    return sizeOf(a) - sizeOf(b);
+  });
+
+  const wantsTools = !!cfg.llm?.tools?.enabled;
+  const candidates = wantsTools ? installed.filter(isToolCapable) : installed;
+  const target = sortPreferred(candidates)[0] || sortPreferred(installed)[0];
+  if (!target) return { skipped: 'no-candidate' };
+
+  // `lms load` blocks until ready (5-30s cold). Run as fire-and-forget so
+  // reconcile returns immediately; whisper/TTS can come up in parallel.
+  console.log(`🎙️  voice: preloading ${target} (warming GPU/cache for first turn)`);
+  pexec(lms, ['load', target], { timeout: 5 * 60 * 1000 })
+    .then(() => console.log(`🎙️  voice: ${target} loaded and ready`))
+    .catch((err) => console.warn(`🎙️  voice: preload ${target} failed: ${err.message}`));
+  return { preloading: target };
 };
 
 /**
@@ -262,10 +344,17 @@ export const reconcile = async (cfg) => {
   // Don't block reconcile on this — it can take minutes on first install.
   // The user will see a clear log line and their first turn may fail with the
   // new `voice:error` hint until the model finishes downloading, but voice
-  // STT + TTS + whisper are ready immediately.
-  ensureToolCapableModel(cfg).catch((err) => {
-    console.warn(`🎙️  voice: ensureToolCapableModel failed: ${err.message}`);
-  });
+  // STT + TTS + whisper are ready immediately. Once install resolves (or
+  // immediately if no install was needed), pre-warm the chosen model so the
+  // first voice turn doesn't pay a 5-30s cold-load.
+  ensureToolCapableModel(cfg)
+    .catch((err) => {
+      console.warn(`🎙️  voice: ensureToolCapableModel failed: ${err.message}`);
+    })
+    .then(() => preloadModel(cfg))
+    .catch((err) => {
+      console.warn(`🎙️  voice: preloadModel failed: ${err.message}`);
+    });
 
   const bins = await verifyBinaries(cfg);
   const models = verifyModels(cfg);
