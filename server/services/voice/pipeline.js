@@ -36,8 +36,9 @@ const buildSystemPrompt = (cfg) => {
       'You MUST call the matching tool whenever the user requests an action — ' +
       'never describe the action in words instead of calling the tool. ' +
       'Trigger phrases that REQUIRE a tool call: ' +
-      '"open"/"go to"/"take me to"/"show me"/"navigate to" → matching navigation tool (e.g., daily_log_open). ' +
-      'Anything mentioning "daily log" without a clear intent of just discussing it (e.g., "let\'s make a daily log", "I want to make a log entry", "let me log something today", "new daily log") → daily_log_open (set startDictation=true if they said "dictate" / "talk into" / "record"). ' +
+      '"open"/"go to"/"take me to"/"show me"/"navigate to" → matching navigation tool (e.g., daily_log_open with startDictation=false). ' +
+      'INTENT TO CREATE / WRITE in the daily log — phrases like "let\'s make a daily log", "let\'s make a new daily log", "start a daily log", "I want to make a log entry", "let me log something today", "new daily log", "let me add to my log" → call daily_log_open with startDictation=true. After this single tool call, STOP TALKING and let the user dictate freely — the dictation system handles every following utterance automatically without you. Do NOT say "I\'ll append it" or "what would you like to add" — the user already knows. Just confirm in one short sentence ("Daily log open, dictating now.") and stay quiet. ' +
+      'When the user is asking you to write something specific into the log right now (e.g., "add to my log: I went to the gym", "note in today\'s log that X") → call daily_log_append with the exact text — never just say "Appending …" without actually issuing the tool call. ' +
       '"save"/"capture"/"add"/"remember"/"note"/"file"/"log it" → matching capture tool (e.g., brain_capture, meatspace_log_*, daily_log_append, goal_log_note). ' +
       '"start dictation"/"dictate"/"record my log" → daily_log_start_dictation. ' +
       '"what time"/"what day"/"what date" → time_now. ' +

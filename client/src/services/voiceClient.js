@@ -226,9 +226,27 @@ export const sendText = (text, source = 'text') => {
   socket.emit('voice:text', { text: trimmed, source });
 };
 
+// Last requested dictation state — used to re-sync the server on socket
+// reconnect. Without this, a brief network blip silently flips the server's
+// per-connection dictation state back to false while the UI still shows
+// "Dictating" — every utterance after the reconnect would be routed to the
+// LLM (Conversation panel) instead of appended to the Daily Log.
+let lastDictationRequest = { enabled: false, date: null };
+
 export const setDictation = (enabled, date) => {
-  socket.emit('voice:dictation:set', { enabled: !!enabled, date: date || null });
+  lastDictationRequest = { enabled: !!enabled, date: date || null };
+  socket.emit('voice:dictation:set', lastDictationRequest);
 };
+
+// On every (re)connect, push the latest dictation request back to the server
+// so its fresh per-socket state matches the UI. The 'connect' event fires for
+// both the initial connection (no-op since enabled=false by default) and
+// every reconnect — both are safe to handle the same way.
+socket.on('connect', () => {
+  if (lastDictationRequest.enabled) {
+    socket.emit('voice:dictation:set', lastDictationRequest);
+  }
+});
 
 export const interrupt = () => {
   socket.emit('voice:interrupt');

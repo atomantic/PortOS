@@ -504,13 +504,18 @@ const TOOLS = [
   {
     name: 'daily_log_open',
     description:
-      'Open the Daily Log page in the UI and optionally start voice dictation mode. Use when the user says "open my daily log", "take me to my daily log", "go to daily log", "I want to dictate my daily log", "start my daily log". Set startDictation=true when the user wants to speak entries (explicit dictation verbs: "dictate", "record", "start logging"). The tool navigates the browser to the Daily Log page; the confirmation spoken back to the user should be one short sentence.',
+      'Open the Daily Log page in the UI and optionally start voice dictation mode. ' +
+      'Use when the user says "open my daily log", "take me to my daily log", "go to daily log", "let\'s make a daily log", "let\'s make a new daily log", "I want to make a log entry", "start my daily log", "new daily log", "let me add to my log". ' +
+      'Set startDictation=true (DEFAULT for create-intent phrasings) when the user wants to write content right now — i.e., they said any of: "make"/"start"/"new"/"create"/"dictate"/"record"/"talk into"/"log something". ' +
+      'Set startDictation=false ONLY when the user explicitly just wants to LOOK at the page without writing — i.e., they said "show me", "open"/"go to" without any create/write verb. ' +
+      'When in doubt, prefer startDictation=true — voice users almost always want to write, and they can say "stop dictation" to exit. ' +
+      'After calling, confirm briefly in one short sentence and stay quiet so the dictation system can capture freely.',
     parameters: {
       type: 'object',
       properties: {
         startDictation: {
           type: 'boolean',
-          description: 'Immediately enter dictation mode where subsequent speech is appended to the log verbatim instead of sent to you as conversation.',
+          description: 'Immediately enter dictation mode — subsequent speech is appended to the log verbatim instead of sent to you as conversation. DEFAULT TRUE for create/write intent ("make"/"start"/"new"/"dictate"); only false when the user explicitly just wants to view the page.',
         },
       },
     },
