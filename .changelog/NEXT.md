@@ -39,6 +39,8 @@
 
 ## Fixed
 
+- **Daily Log unusable on mobile** — the tab split into a fixed 256px history sidebar plus a desktop-only toolbar (back/forward/date/today/read-back/dictate/save/delete all on one non-wrapping row), so on phones the history ate most of the screen and the action buttons overflowed offscreen. Sidebar now collapses into a slide-in drawer (hamburger in the toolbar opens it, tap outside to dismiss), toolbar wraps with the full date label breaking to its own row, and action-button text hides below `sm` leaving icon-only buttons with tooltips + aria-labels. All interactive targets bumped to 40px minimum height per the mobile touch-target rule, banner/form paddings tightened for narrow viewports.
+
 - **Server crash on startup when `kokoro-js` not installed** — `tts-kokoro.js` used a top-level `import` of `kokoro-js`, which crashed the entire server module graph if the package was missing. Moved to a dynamic `import()` inside `ensureModel()` so the server starts normally and Kokoro TTS fails gracefully only at synthesis time.
 
 - **Daily Log (and schedulers) could land on tomorrow's date for a UTC-configured server** — `ecosystem.config.cjs` forces `TZ=UTC` on the server process, so `getUserTimezone()`'s fallback (`Intl.DateTimeFormat().resolvedOptions().timeZone`) resolved to `UTC` whenever `settings.timezone` was unset. After 5pm PDT the daily-log "today" key flipped to tomorrow, creating entries like `2026-04-20` on a Sunday evening. `App.jsx` now bootstraps `settings.timezone` from the browser's IANA zone on first load if the setting is empty, so remote/VPN clients self-heal without visiting Settings → General. Skips the write if the browser itself resolves to UTC (avoids persisting a useless value).

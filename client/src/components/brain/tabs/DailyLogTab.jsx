@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, RefreshCw, Save, Volume2, Settings,
-  Plus, Trash2, CloudUpload
+  Plus, Trash2, CloudUpload, Menu, X
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
@@ -64,6 +64,7 @@ export default function DailyLogTab() {
   const [vaults, setVaults] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const editorRef = useRef(null);
   // Ref mirror of the dirty flag so the socket event handler can check it
   // without adding `content`/`entry` to the effect's dependency list
@@ -343,18 +344,35 @@ export default function DailyLogTab() {
   }, [date]);
 
   return (
-    <div className="flex h-full -m-4" style={{ height: 'calc(100vh - 180px)' }}>
-      {/* Left: history + settings */}
-      <div className="w-64 border-r border-port-border flex flex-col shrink-0">
+    <div className="flex h-full -m-4 relative" style={{ height: 'calc(100vh - 180px)', minHeight: '420px' }}>
+      {/* Left: history + settings. Drawer on mobile, persistent column on md+. */}
+      {historyOpen && (
+        <button
+          type="button"
+          aria-label="Close history"
+          onClick={() => setHistoryOpen(false)}
+          className="md:hidden absolute inset-0 bg-black/50 z-10"
+        />
+      )}
+      <div
+        className={`${historyOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transform transition-transform duration-200 absolute md:static inset-y-0 left-0 z-20 w-[80vw] max-w-xs md:w-64 bg-port-bg md:bg-transparent border-r border-port-border flex flex-col shrink-0`}
+      >
         <div className="p-3 border-b border-port-border flex items-center gap-2">
           <BookOpen size={14} className="text-port-accent" />
           <span className="text-sm font-medium text-white">Daily Log</span>
           <button
             onClick={() => setShowSettings((s) => !s)}
-            className="ml-auto p-1 rounded text-gray-400 hover:text-white hover:bg-port-card"
+            className="ml-auto min-h-[40px] min-w-[40px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
             title="Daily log settings"
           >
             <Settings size={14} />
+          </button>
+          <button
+            onClick={() => setHistoryOpen(false)}
+            className="md:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
+            title="Close history"
+          >
+            <X size={14} />
           </button>
         </div>
 
@@ -417,8 +435,8 @@ export default function DailyLogTab() {
                 return (
                   <button
                     key={h.date}
-                    onClick={() => setDate(h.date)}
-                    className={`w-full text-left px-3 py-2 hover:bg-port-card/50 ${
+                    onClick={() => { setDate(h.date); setHistoryOpen(false); }}
+                    className={`w-full text-left px-3 py-2 min-h-[44px] hover:bg-port-card/50 ${
                       active ? 'bg-port-accent/10 border-l-2 border-port-accent' : ''
                     }`}
                   >
@@ -437,10 +455,18 @@ export default function DailyLogTab() {
 
       {/* Right: editor */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
+        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 sm:py-3 border-b border-port-border">
+          <button
+            onClick={() => setHistoryOpen(true)}
+            className="md:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
+            title="Show history"
+            aria-label="Show history"
+          >
+            <Menu size={16} />
+          </button>
           <button
             onClick={() => setDate(shiftDate(date, -1))}
-            className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
+            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
             title="Previous day"
           >
             <ChevronLeft size={16} />
@@ -449,12 +475,12 @@ export default function DailyLogTab() {
             type="date"
             value={date}
             onChange={(e) => setDate(e.target.value || serverToday)}
-            className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+            className="bg-port-bg border border-port-border rounded px-2 min-h-[40px] text-sm text-white"
           />
           <button
             onClick={() => setDate(shiftDate(date, 1))}
             disabled={date >= serverToday}
-            className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
+            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
             title="Next day"
           >
             <ChevronRight size={16} />
@@ -462,68 +488,74 @@ export default function DailyLogTab() {
           {!isToday && (
             <button
               onClick={() => setDate(serverToday)}
-              className="px-2 py-1 rounded bg-port-card text-xs text-gray-300 hover:text-white"
+              className="px-3 min-h-[40px] rounded bg-port-card text-xs text-gray-300 hover:text-white"
             >
               Today
             </button>
           )}
-          <div className="flex-1 min-w-0">
-            <div className="text-white font-medium truncate">{dateLabel}</div>
-            <div className="text-xs text-gray-500">
+          <div className="basis-full md:basis-auto md:flex-1 md:min-w-0">
+            <div className="text-white font-medium truncate text-sm md:text-base">{dateLabel}</div>
+            <div className="text-xs text-gray-500 truncate">
               {segmentCount} segment{segmentCount === 1 ? '' : 's'}
               {entry?.obsidianPath ? ` · ${entry.obsidianPath}` : ''}
             </div>
           </div>
           <button
             onClick={readBack}
-            className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-card text-gray-300 text-sm hover:text-white"
+            className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"
             title="Have the voice agent read this log back to you"
+            aria-label="Read back"
           >
-            <Volume2 size={14} /> Read back
+            <Volume2 size={14} /> <span className="hidden sm:inline">Read back</span>
           </button>
           <button
             onClick={toggleDictation}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded text-sm ${
+            className={`flex items-center gap-1 px-3 min-h-[40px] rounded text-sm ${
               dictation
                 ? 'bg-port-accent text-white animate-pulse'
                 : 'bg-port-card text-gray-300 hover:text-white'
             }`}
             title={dictation ? 'Stop voice dictation' : 'Start voice dictation (voice goes straight into this log)'}
+            aria-label={dictation ? 'Stop dictation' : 'Start dictation'}
           >
             {dictation ? <MicOff size={14} /> : <Mic size={14} />}
-            {dictation ? 'Dictating' : 'Dictate'}
+            <span className="hidden sm:inline">{dictation ? 'Dictating' : 'Dictate'}</span>
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !dirty}
-            className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
+            className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
+            aria-label="Save"
           >
             <Save size={14} />
-            {saving ? 'Saving…' : 'Save'}
+            <span className="hidden sm:inline">{saving ? 'Saving…' : 'Save'}</span>
           </button>
           <button
             onClick={() => setConfirmDelete(true)}
             disabled={!entry}
-            className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
+            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
             title="Delete this entry"
+            aria-label="Delete entry"
           >
             <Trash2 size={14} />
           </button>
         </div>
 
         {dictation && (
-          <div className="px-4 py-2 bg-port-accent/10 border-b border-port-accent/30 text-sm text-port-accent flex items-center gap-2">
-            <Mic size={14} className="animate-pulse" />
-            Dictation on — speak your log. Say <span className="font-mono">"stop dictation"</span> to end.
-            The voice assistant is NOT replying — every utterance appends to this entry.
+          <div className="px-3 sm:px-4 py-2 bg-port-accent/10 border-b border-port-accent/30 text-xs sm:text-sm text-port-accent flex items-start gap-2">
+            <Mic size={14} className="animate-pulse shrink-0 mt-0.5" />
+            <span>
+              Dictation on — speak your log. Say <span className="font-mono">"stop dictation"</span> to end.
+              The voice assistant is NOT replying — every utterance appends to this entry.
+            </span>
           </div>
         )}
 
         {confirmDelete && (
-          <div className="px-4 py-2 bg-port-error/10 border-b border-port-error/30 flex items-center gap-3 text-sm">
-            <span className="text-port-error">Delete the entry for {date} permanently?</span>
-            <button onClick={handleDelete} className="px-2 py-1 rounded bg-port-error text-white text-xs">Delete</button>
-            <button onClick={() => setConfirmDelete(false)} className="px-2 py-1 rounded bg-port-card text-gray-300 text-xs">Cancel</button>
+          <div className="px-3 sm:px-4 py-2 bg-port-error/10 border-b border-port-error/30 flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
+            <span className="text-port-error flex-1 min-w-0">Delete the entry for {date} permanently?</span>
+            <button onClick={handleDelete} className="px-3 min-h-[40px] rounded bg-port-error text-white text-xs">Delete</button>
+            <button onClick={() => setConfirmDelete(false)} className="px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-xs">Cancel</button>
           </div>
         )}
 
@@ -540,7 +572,7 @@ export default function DailyLogTab() {
               placeholder={isToday
                 ? "What's on your mind today? Type freely, append voice segments, or toggle dictation above…"
                 : 'This day\'s entry is empty.'}
-              className="flex-1 w-full p-4 bg-port-bg text-gray-200 text-sm resize-none focus:outline-none font-sans"
+              className="flex-1 w-full p-3 sm:p-4 bg-port-bg text-gray-200 text-sm resize-none focus:outline-none font-sans"
               spellCheck
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -551,20 +583,20 @@ export default function DailyLogTab() {
             />
             <form
               onSubmit={(e) => { e.preventDefault(); handleAppend(); }}
-              className="flex items-center gap-2 px-4 py-3 border-t border-port-border bg-port-card/30"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-3 border-t border-port-border bg-port-card/30"
             >
-              <Plus size={14} className="text-gray-500" />
+              <Plus size={14} className="text-gray-500 shrink-0 hidden sm:block" />
               <input
                 type="text"
                 value={quickAppend}
                 onChange={(e) => setQuickAppend(e.target.value)}
-                placeholder="Quick append — adds a new paragraph to this day's log…"
-                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white placeholder-gray-500"
+                placeholder="Quick append — adds a new paragraph…"
+                className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 min-h-[40px] text-sm text-white placeholder-gray-500"
               />
               <button
                 type="submit"
                 disabled={appending || !quickAppend.trim()}
-                className="px-3 py-1.5 rounded bg-port-accent text-white text-sm disabled:opacity-50"
+                className="px-3 min-h-[40px] rounded bg-port-accent text-white text-sm disabled:opacity-50"
               >
                 {appending ? '…' : 'Append'}
               </button>
