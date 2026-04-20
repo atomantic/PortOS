@@ -38,6 +38,8 @@
 
 ## Fixed
 
+- **Server crash on startup when `kokoro-js` not installed** — `tts-kokoro.js` used a top-level `import` of `kokoro-js`, which crashed the entire server module graph if the package was missing. Moved to a dynamic `import()` inside `ensureModel()` so the server starts normally and Kokoro TTS fails gracefully only at synthesis time.
+
 - **Daily Log (and schedulers) could land on tomorrow's date for a UTC-configured server** — `ecosystem.config.cjs` forces `TZ=UTC` on the server process, so `getUserTimezone()`'s fallback (`Intl.DateTimeFormat().resolvedOptions().timeZone`) resolved to `UTC` whenever `settings.timezone` was unset. After 5pm PDT the daily-log "today" key flipped to tomorrow, creating entries like `2026-04-20` on a Sunday evening. `App.jsx` now bootstraps `settings.timezone` from the browser's IANA zone on first load if the setting is empty, so remote/VPN clients self-heal without visiting Settings → General. Skips the write if the browser itself resolves to UTC (avoids persisting a useless value).
 
 - **Voice preload spawned a duplicate model instance on every server restart** — `lms load <model>` is *not* idempotent in practice; calling it on an already-loaded model spawns a SECOND instance in LM Studio (we observed 3 simultaneous copies of `qwen/qwen3-4b-2507` in one user's setup, eating 7+ GB extra). When VRAM was nearly full, the duplicate load failed with "Model loading was stopped due to insufficient system resources" and the preload reported as failed even though the original instance was fine. `preloadModel` now calls `lms ps --json`, parses `modelKey`s from the response, and skips the `lms load` if the chosen model is already loaded. Logs `🎙️ voice: <model> already loaded — skipping preload` when this fires.

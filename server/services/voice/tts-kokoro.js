@@ -1,7 +1,6 @@
 // Kokoro TTS backend — in-process ONNX inference via kokoro-js + transformers.js.
 // Model loads lazily on first synthesis (~2–3s) and stays resident.
 
-import { KokoroTTS } from 'kokoro-js';
 import { KOKORO_VOICES } from './kokoro-voices.js';
 
 let modelPromise = null;
@@ -15,6 +14,7 @@ const ensureModel = async ({ modelId, dtype }) => {
   if (modelPromise && loadedKey === key) return modelPromise;
   loadedKey = key;
   loaded = false;
+  const { KokoroTTS } = await import('kokoro-js');
   console.log(`🗣  kokoro: loading ${modelId} (dtype=${dtype})`);
   const started = Date.now();
   // Capture the in-flight promise so the then/catch handlers only mutate
