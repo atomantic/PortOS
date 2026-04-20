@@ -145,6 +145,38 @@ const enqueuePlay = async (bytes) => {
 const isTtsActive = () => ttsQueueDepth > 0 || currentSource !== null;
 const isInTtsEchoWindow = () => isTtsActive() || performance.now() < ttsCooldownUntil;
 
+// Ring of recently-spoken TTS sentences (lowercased). Web Speech STT has no
+// energy-based echo rejection like continuous-VAD mode, so short fragments
+// from the bot's own speaker ("specific block", "or") get transcribed back
+// as user turns. We compare each final against this buffer and drop
+// substring matches even after the time-based echo window expires — late
+// reverb or a slow STT result can still land outside the tail.
+const TTS_ECHO_MEMORY_MS = 8000;
+const recentTtsSentences = [];
+
+const normalizeForEcho = (s) => (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+
+const rememberTtsSentence = (sentence) => {
+  const text = normalizeForEcho(sentence);
+  if (!text) return;
+  const now = performance.now();
+  while (recentTtsSentences.length && now - recentTtsSentences[0].t > TTS_ECHO_MEMORY_MS) {
+    recentTtsSentences.shift();
+  }
+  recentTtsSentences.push({ text, t: now });
+};
+
+const looksLikeTtsEcho = (text) => {
+  const needle = normalizeForEcho(text);
+  if (!needle) return false;
+  const now = performance.now();
+  for (const entry of recentTtsSentences) {
+    if (now - entry.t > TTS_ECHO_MEMORY_MS) continue;
+    if (entry.text.includes(needle)) return true;
+  }
+  return false;
+};
+
 // socket.io may deliver a plain ArrayBuffer, a sliced TypedArray/DataView,
 // or a serialized Buffer-like { type: 'Buffer', data: [...] }. Using the raw
 // `wav.buffer` for a sliced view would pass extra bytes to decodeAudioData,
@@ -160,8 +192,9 @@ const toExactArrayBuffer = (wav) => {
   return null;
 };
 
-socket.on('voice:tts:audio', ({ wav }) => {
+socket.on('voice:tts:audio', ({ sentence, wav }) => {
   if (rejectingTts) return; // stale chunk from a cancelled turn — drop it
+  rememberTtsSentence(sentence);
   const ab = toExactArrayBuffer(wav);
   if (!ab) return;
   enqueuePlay(ab).catch((err) => console.warn('[voice] playback failed:', err));
@@ -652,9 +685,17 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
     if (interim) callbacks.onInterim?.(interim);
     if (final) {
       callbacks.onInterim?.('');
-      callbacks.onFinal?.(final);
-      // Any successful result resets the restart-failure counter.
       webSpeechRestartFailures = 0;
+      // Drop finals that are the bot's own TTS echoed back through the mic.
+      // Two gates: (1) TTS is currently playing or within the echo tail, or
+      // (2) the text is a substring of a recently-spoken sentence. The
+      // content gate catches late echoes that sneak past the time window.
+      const ttsActive = isInTtsEchoWindow();
+      if (ttsActive || looksLikeTtsEcho(final)) {
+        console.warn(`🔇 [voice] dropping TTS echo "${final.trim()}" (ttsActive=${ttsActive})`);
+        return;
+      }
+      callbacks.onFinal?.(final);
       // source='voice' so the server still treats this as a spoken utterance
       // for dictation-mode routing — the text path otherwise bypasses it.
       sendText(final, 'voice');
