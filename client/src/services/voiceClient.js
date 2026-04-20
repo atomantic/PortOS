@@ -288,12 +288,21 @@ const VAD = {
   minSpeechMs: 250,      // ignore utterances shorter than this (noise blips)
   preRollMs: 250,        // audio kept before detected speech start
   onsetConfirmMs: 80,    // frames required above onRms before firing speech-start
+  bargeInOnsetConfirmMs: 220, // during TTS + echo tail, require longer
+                         // sustained signal before confirming barge-in — a
+                         // brief leak from the bot's own voice shouldn't
+                         // look like the user starting to speak.
   calibrationMs: 600,    // ambient-noise sampling window at startup
-  bargeInMul: 1.15,      // small bump over onRms during TTS to dampen echo
-                         // bleed. Higher blocks real speech with calibrated
-                         // thresholds; lower trusts echoCancellation alone.
-  ttsTailMs: 300,        // echo-tail window: keep bargeInMul active for this
-                         // long after the last TTS chunk ends to ignore reverb.
+  bargeInMul: 2.5,       // multiplier applied to onRms during TTS + echo
+                         // tail. Was 1.15 which let loud TTS re-trigger the
+                         // VAD; 2.5 still allows deliberate barge-in while
+                         // rejecting speaker-to-mic bleed. Lower this only
+                         // if users complain barge-in is unresponsive.
+  ttsTailMs: 700,        // echo-tail window: keep bargeInMul active for this
+                         // long after the last TTS chunk ends to ignore
+                         // room reverb. 300ms was too short for typical
+                         // rooms — the bot's final syllable kept trailing
+                         // back through the mic and getting transcribed.
   maxSpeechMs: 15000,    // runaway-speech watchdog: if silence never registers
                          // (noisy env, stuck state), force submit/discard.
   debug: false,          // window.__portosVadDebug = true to enable logging
@@ -428,11 +437,13 @@ const handleFrame = (frame) => {
   if (vadState === 'idle') {
     // Raise the bar while TTS plays AND during the echo tail so neither the
     // bot's live audio nor reverb through the mic trigger a false barge-in.
-    const effectiveOnRms = isInTtsEchoWindow() ? onRms * VAD.bargeInMul : onRms;
+    const inEcho = isInTtsEchoWindow();
+    const effectiveOnRms = inEcho ? onRms * VAD.bargeInMul : onRms;
+    const effectiveConfirmMs = inEcho ? VAD.bargeInOnsetConfirmMs : VAD.onsetConfirmMs;
     if (rms > effectiveOnRms) {
       onsetFrames += 1;
       const frameMs = (frame.length / (continuousCtx?.sampleRate || 48000)) * 1000;
-      if (onsetFrames * frameMs >= VAD.onsetConfirmMs) {
+      if (onsetFrames * frameMs >= effectiveConfirmMs) {
         // Confirmed speech onset — barge-in + start capturing
         vadState = 'speaking';
         speechStartedAt = now;

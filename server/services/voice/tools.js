@@ -165,6 +165,7 @@ export const UI_KINDS = ['tab', 'button', 'link', 'input', 'textarea', 'select',
 // matches the user's utterance, plus the always-on set. "open the tasks
 // page" sees ~8 tools instead of 25; "I had a beer" sees ~8 instead of 25.
 const TOOL_GROUPS = {
+  brain_capture: 'brain',
   brain_search: 'brain',
   brain_list_recent: 'brain',
   meatspace_log_drink: 'meatspace',
@@ -186,15 +187,29 @@ const TOOL_GROUPS = {
   ui_fill: 'ui',
   ui_select: 'ui',
   ui_check: 'ui',
-  // UNGROUPED = always-on: time_now, brain_capture, daily_log_append,
-  // ui_navigate. These cover the highest-frequency intents.
+  // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
+  // brain_capture used to be always-on, but that caused form-fill turns
+  // ("fill description with X") to be misrouted to brain_capture because
+  // "note/save/remember" in the tool description overlaps with field
+  // content. Gating on the brain regex keeps capture available for every
+  // natural phrasing without tempting the LLM on UI-driving turns.
 };
 
 // Loose on purpose — false positives are cheap (one extra tool), false
 // negatives are expensive (LLM guesses wrong or can't act).
 export const UI_INTENT_RE = /\b(click|press|tap|hit|open|go to|take me|show me|navigate|select|pick|switch|choose|tab|button|dropdown|field|input|fill|enter|type|write|check|uncheck|toggle|link|option|on (?:this|the) page|what(?:'s)? (?:on|here))\b/i;
+// Strong form-fill signal: when the user is clearly directing content INTO
+// a specific field, brain_capture/daily_log_append must be suppressed even
+// if capture verbs appear inside the value (e.g. "fill description with
+// 'remember to buy milk'"). Matches a UI-fill verb within ~60 chars of a
+// form-field word in either order — "fill the description with X", "type X
+// in the body", "set the title to X", "put Y in description".
+export const UI_FILL_INTENT_RE = /\b(?:fill|type|enter|put|write|set)\b[^.!?\n]{0,60}?\b(?:description|name|title|subject|body|content|field|input|textarea|form|label|placeholder|caption)\b/i;
 const GROUP_INTENT = {
-  brain: /\b(search|find|look ?up|recall|what did I (?:say|write|note)|brain|inbox|capture)\b/i,
+  // Expanded to cover natural capture verbs — "remember", "note", "save",
+  // "jot", "file" — without which moving brain_capture out of the always-on
+  // set would break "remember to buy milk" style turns.
+  brain: /\b(search|find|look ?up|recall|what did I (?:say|write|note)|brain|inbox|capture|remember|remind me|jot|note (?:that|to|down)|save (?:this|that)|file (?:this|that|it)|add (?:this|that|it) to (?:my )?(?:brain|inbox|notes?))\b/i,
   meatspace: /\b(drink|drank|beer|wine|whiskey|shot|cocktail|cigarette|vape|pouch|nicotine|weigh|pound|kilo|kg|smoke|smoking|how am I|summary today|log (?:a|my) (?:drink|weight|nicotine))\b/i,
   goals: /\b(goals?|progress|objective)\b/i,
   system: /\b(restart|crash(?:ed)?|pm2|process|service|is.*(?:running|down|up)|status)\b/i,
@@ -1062,9 +1077,16 @@ export const classifyIntent = (userText) => {
 
 export const getToolSpecsForIntent = (userText) => {
   if (!userText) return { specs: getToolSpecs(), activeGroups: new Set() };
-  const activeGroups = classifyIntent(userText);
+  // Form-fill turns ("put Y in the body") may use verbs not in UI_INTENT_RE,
+  // so compose a fresh group set: classifier result ∪ {ui, if form-fill}.
+  // Mutating classifyIntent's returned set would conflate "classified" with
+  // "overridden", which matters when the caller inspects activeGroups.
+  const classified = classifyIntent(userText);
+  const suppressCapture = UI_FILL_INTENT_RE.test(userText);
+  const activeGroups = suppressCapture ? new Set([...classified, 'ui']) : classified;
   const specs = TOOLS
     .filter((t) => {
+      if (suppressCapture && (t.name === 'brain_capture' || t.name === 'daily_log_append')) return false;
       const group = TOOL_GROUPS[t.name];
       return !group || activeGroups.has(group);
     })

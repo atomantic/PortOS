@@ -31,7 +31,7 @@ vi.mock('../feeds.js', () => ({
   getFeeds: vi.fn(async () => []),
 }));
 
-const { dispatchTool, getToolSpecs } = await import('./tools.js');
+const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -135,5 +135,67 @@ describe('pm2_restart type guard', () => {
   });
   it('rejects empty string name', async () => {
     await expect(dispatchTool('pm2_restart', { name: '  ' })).rejects.toThrow(/name is required/);
+  });
+});
+
+// Bug: "Instead of entering what I asked into the description form field,
+// it created a brain entry." Form-fill utterances were seeing brain_capture
+// in the tool list because brain_capture used to be always-on; the LLM
+// picked it over ui_fill because the tool description emphasizes
+// note/save/remember/jot, words that overlap with field content.
+describe('getToolSpecsForIntent — form fill suppresses capture', () => {
+  const names = (specs) => specs.map((s) => s.function.name);
+
+  it('drops brain_capture for "fill description with X"', () => {
+    const { specs } = getToolSpecsForIntent('fill the description with remember to buy milk');
+    expect(names(specs)).toContain('ui_fill');
+    expect(names(specs)).not.toContain('brain_capture');
+    expect(names(specs)).not.toContain('daily_log_append');
+  });
+
+  it('drops brain_capture for "type X into the name field"', () => {
+    const { specs } = getToolSpecsForIntent('type my new idea into the name field');
+    expect(names(specs)).toContain('ui_fill');
+    expect(names(specs)).not.toContain('brain_capture');
+  });
+
+  it('drops brain_capture for "put X in the body"', () => {
+    const { specs } = getToolSpecsForIntent('put save this for later in the body');
+    expect(names(specs)).toContain('ui_fill');
+    expect(names(specs)).not.toContain('brain_capture');
+  });
+
+  it('drops brain_capture for "enter X into title"', () => {
+    const { specs } = getToolSpecsForIntent('enter a note about yesterday into the title');
+    expect(names(specs)).toContain('ui_fill');
+    expect(names(specs)).not.toContain('brain_capture');
+  });
+
+  it('keeps brain_capture for "remember to buy milk"', () => {
+    const { specs } = getToolSpecsForIntent('remember to buy milk on the way home');
+    expect(names(specs)).toContain('brain_capture');
+  });
+
+  it('keeps brain_capture for "add this to my brain inbox"', () => {
+    const { specs } = getToolSpecsForIntent('add this to my brain inbox: finish the review');
+    expect(names(specs)).toContain('brain_capture');
+  });
+
+  it('drops brain_capture for UI-only turns (no capture verbs)', () => {
+    const { specs } = getToolSpecsForIntent('click the new task button');
+    expect(names(specs)).not.toContain('brain_capture');
+    expect(names(specs)).toContain('ui_click');
+  });
+});
+
+describe('classifyIntent — brain regex expansions', () => {
+  it('matches "remember"', () => {
+    expect(classifyIntent('remember to call mom').has('brain')).toBe(true);
+  });
+  it('matches "jot down"', () => {
+    expect(classifyIntent('jot down an idea for dinner').has('brain')).toBe(true);
+  });
+  it('does not match plain UI turns', () => {
+    expect(classifyIntent('click the save button').has('brain')).toBe(false);
   });
 });
