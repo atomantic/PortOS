@@ -119,7 +119,7 @@ const buildSystemPrompt = (cfg) => {
       'Trigger phrases that REQUIRE a tool call: ' +
       '"open"/"go to"/"take me to"/"show me"/"navigate to" X → call ui_navigate with page=X (NOT daily_log_open — that tool is ONLY for the Daily Log / dictation). "Take me to tasks" → ui_navigate page="tasks". "Chief of staff agents" → ui_navigate page="agents". "Open calendar" → ui_navigate page="calendar". Only pick daily_log_open when the user explicitly says "daily log", "log entry", or "journal". ' +
       '"Select X tab"/"switch to the X tab"/"click X"/"press the X button"/"pick Y from the Z dropdown"/"fill X with Y"/"check/uncheck X" — the LLM receives a compact "Current UI state" summary at the start of UI-driving turns listing Tabs, Buttons, Links, Inputs, Selects, Checkboxes. Use ui_click for tabs/buttons/links, ui_fill for text inputs, ui_select for dropdowns, ui_check for checkboxes. Pass the EXACT label shown in the UI summary. Prefer the `kind` argument when you have it (tab vs button). If the label isn\'t in the current UI summary, call ui_list_interactables OR ui_navigate first — do NOT guess. Active tab is marked with * in the summary; don\'t click it again. ' +
-      'CHAINED UI FLOWS: after a ui_click / ui_fill / ui_select / ui_check succeeds, its tool result includes a `ui` field with the FRESH page state (a modal may have opened, a tab may have switched, new fields may be visible). Always re-read this `ui` field before choosing the next action — don\'t rely on the original per-turn UI summary after an action has fired. For multi-step flows like "create a task called Foo with description Bar": ui_click New Task → read result.ui → ui_fill Name=Foo → read result.ui → ui_fill Description=Bar → ui_click Save. Do it all in ONE turn, not one action per turn. ' +
+      'CHAINED UI FLOWS: after a ui_navigate / ui_click / ui_fill / ui_select / ui_check succeeds, its tool result includes a `ui` field with the FRESH page state (a new page has loaded, a modal may have opened, a tab may have switched, new fields may be visible). Always re-read this `ui` field before choosing the next action — don\'t rely on the original per-turn UI summary after an action has fired. For multi-step flows like "create a task called Foo with description Bar": ui_click New Task → read result.ui → ui_fill Name=Foo → read result.ui → ui_fill Description=Bar → ui_click Save. Do it all in ONE turn, not one action per turn. Same for cross-page flows like "go to tasks and add a task called Foo": ui_navigate page="tasks" → read result.ui → ui_click New Task → read result.ui → ui_fill Name=Foo → ui_click Save, all in ONE turn. ' +
       'INTENT TO CREATE / WRITE in the daily log — phrases like "let\'s make a daily log", "let\'s make a new daily log", "start a daily log", "I want to make a log entry", "let me log something today", "new daily log", "let me add to my log" → call daily_log_open with startDictation=true. After this single tool call, STOP TALKING and let the user dictate freely — the dictation system handles every following utterance automatically without you. Do NOT say "I\'ll append it" or "what would you like to add" — the user already knows. Just confirm in one short sentence ("Daily log open, dictating now.") and stay quiet. ' +
       'When the user is asking you to write something specific into the daily log right now — phrases like "add to my daily log: X", "note in today\'s log that X", "write in my log: X", "log this in my daily log: X", "for my daily log: X" — you MUST call daily_log_append with the exact X text (everything AFTER the leading "add … to my log" / "note that" / "for my log" phrasing). NEVER reply with just a paraphrased "add to my daily log: …" line — that\'s narration; CALL daily_log_append. ' +
       'Empty-content intent — phrases that announce the user is about to dictate a note WITHOUT yet providing the note text — "add a note to my daily log" / "add another note to my daily log" / "add this other note to my daily log" / "I want to add to my log" / "let me add a note" — call daily_log_start_dictation (NOT daily_log_append, because there\'s no content to append yet). The user\'s next utterance will be captured by the dictation system. ' +
@@ -445,15 +445,20 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
           emit('voice:ui:check', { target: fx.target, checked: fx.checked });
         }
       }
-      // If the tool mutated the UI, pause for the client's follow-up index
-      // push and attach the fresh summary to the tool result so the next LLM
-      // iteration can chain the next action against the new page state (e.g.
-      // click New Task → see the modal → fill Name → click Save, all in one
-      // turn). Short timeout so a dropped index doesn't stall voice.
+      // If the tool mutated the UI (including client-side navigation), pause
+      // for the client's follow-up index push and attach the fresh summary to
+      // the tool result so the next LLM iteration can chain the next action
+      // against the new page state (e.g. click New Task → see the modal →
+      // fill Name → click Save, all in one turn; or ui_navigate → see the
+      // tasks page → click Add Task). Navigation involves a full React route
+      // change and a 250ms INITIAL_DELAY_MS before the client flushes its
+      // index, so give it a longer timeout than the ~120ms post-click push.
       const hasUiEffect = ctx.sideEffects.some((fx) => typeof fx.type === 'string' && fx.type.startsWith('ui:'));
-      if (hasUiEffect && !signal?.aborted) {
+      const hasNavigate = ctx.sideEffects.some((fx) => fx.type === 'navigate');
+      if ((hasUiEffect || hasNavigate) && !signal?.aborted) {
         const tRefresh = Date.now();
-        const refreshed = await waitForUiRefresh(state, 800, signal);
+        const timeoutMs = hasNavigate ? 1500 : 800;
+        const refreshed = await waitForUiRefresh(state, timeoutMs, signal);
         tlog(`tool.refresh ${tc.function.name} ${refreshed ? 'ok' : 'timeout'} ${Date.now() - tRefresh}ms`);
         if (refreshed) {
           const summary = summarizeUi(refreshed);
