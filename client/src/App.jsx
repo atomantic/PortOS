@@ -66,6 +66,7 @@ const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
+const CoSStagePage = lazyWithReload(() => import('./pages/CoSStagePage'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -118,6 +119,7 @@ export default function App() {
           <Route path="ai" element={<AIProviders />} />
           <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
+          <Route path="cos/stage" element={<CoSStagePage />} />
           <Route path="cos/:tab" element={<ChiefOfStaff />} />
           <Route path="calendar" element={<Navigate to="/calendar/agenda" replace />} />
           <Route path="calendar/:tab" element={<CalendarPage />} />
