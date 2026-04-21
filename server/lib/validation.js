@@ -180,6 +180,10 @@ export const appSchema = z.object({
   uiPort: z.number().int().min(1).max(65535).nullable().optional(),
   devUiPort: z.number().int().min(1).max(65535).nullable().optional(),
   apiPort: z.number().int().min(1).max(65535).nullable().optional(),
+  // Optional HTTPS port — set by the "Upgrade to TLS" action. When present,
+  // the Launch button prefers `https://<host>:<tlsPort>/` over the plain
+  // uiPort. See lib/tailscale-https.js for the helper apps use.
+  tlsPort: z.number().int().min(1).max(65535).nullable().optional(),
   buildCommand: z.string().max(200).optional(),
   uiUrl: z.string().url().optional(),
   startCommands: z.array(z.string()).optional(),

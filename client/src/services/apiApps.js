@@ -18,6 +18,11 @@ export const deleteApp = (id) => request(`/apps/${id}`, { method: 'DELETE' });
 export const startApp = (id) => request(`/apps/${id}/start`, { method: 'POST' });
 export const stopApp = (id) => request(`/apps/${id}/stop`, { method: 'POST' });
 export const restartApp = (id) => request(`/apps/${id}/restart`, { method: 'POST' });
+export const upgradeAppTls = (id, body) => request(`/apps/${id}/upgrade-tls`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  silent: true  // caller shows custom toasts (ALREADY_EXISTS steers to overwrite button)
+});
 
 /**
  * Handle PortOS self-restart: show a loading toast, poll for server recovery, then reload.

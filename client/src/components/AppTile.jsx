@@ -3,27 +3,12 @@ import { Link } from 'react-router-dom';
 import StatusBadge from './StatusBadge';
 import AppIcon from './AppIcon';
 import * as api from '../services/api';
-import { PORTOS_APP_ID } from '../services/apiCore';
-
-// Construct app URL using current hostname (works with Tailscale)
-function getAppUrl(app) {
-  if (app.uiUrl) return app.uiUrl;
-  // Self-app: launch at the current origin so the scheme matches the active
-  // session (HTTPS on 5555 vs HTTP loopback on 5553) instead of hard-coding
-  // uiPort, which only accepts HTTPS.
-  if (app.id === PORTOS_APP_ID) return window.location.origin;
-  if (app.uiPort) {
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    return `${protocol}//${hostname}:${app.uiPort}`;
-  }
-  return null;
-}
+import { getPrimaryLaunchUrl } from '../services/appUrls';
 
 // Memoized component to prevent re-renders when parent polls for updates
 const AppTile = memo(function AppTile({ app, onUpdate }) {
   const [loading, setLoading] = useState(null);
-  const appUrl = getAppUrl(app);
+  const appUrl = getPrimaryLaunchUrl(app);
 
   const handleAction = async (action) => {
     setLoading(action);

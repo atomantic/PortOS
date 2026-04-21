@@ -6,7 +6,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
-import { PORTOS_APP_ID } from '../../services/apiCore';
+import { getLaunchUrls } from '../../services/appUrls';
 import socket from '../../services/socket';
 import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel } from './constants';
 import OverviewTab from './tabs/OverviewTab';
@@ -203,32 +203,48 @@ export default function AppDetailView() {
               )}
             </div>
             )}
-            {/* Launch UI — self-app uses current origin so the scheme matches the
-                active session (HTTPS on 5555 vs HTTP loopback on 5553); uiPort alone
-                hard-codes the HTTPS-only port and breaks from the HTTP mirror. */}
-            {app.uiPort && app.overallStatus === 'online' && (
-              <button
-                onClick={() => window.open(
-                  app.id === PORTOS_APP_ID
-                    ? window.location.origin
-                    : `${window.location.protocol}//${window.location.hostname}:${app.uiPort}`,
-                  '_blank'
-                )}
-                className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-              >
-                <ExternalLink size={14} />
-                <span className="text-xs">Launch</span>
-              </button>
-            )}
-            {app.devUiPort && app.overallStatus === 'online' && (
-              <button
-                onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
-                className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-              >
-                <ExternalLink size={14} />
-                <span className="text-xs">Dev UI</span>
-              </button>
-            )}
+            {/* Launch buttons. When https is present, it's primary and http becomes a
+                muted sibling. Self-app uses current origin to avoid scheme mismatch. */}
+            {(() => {
+              if (app.overallStatus !== 'online') return null;
+              const { https, http, dev } = getLaunchUrls(app);
+              const httpIsSecondary = Boolean(https);
+              return (
+                <>
+                  {https && (
+                    <button
+                      onClick={() => window.open(https, '_blank')}
+                      className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                    >
+                      <ExternalLink size={14} />
+                      <span className="text-xs">Launch (HTTPS)</span>
+                    </button>
+                  )}
+                  {http && (
+                    <button
+                      onClick={() => window.open(http, '_blank')}
+                      className={`px-2 py-1 transition-colors rounded-lg border border-port-border flex items-center gap-1 ${
+                        httpIsSecondary
+                          ? 'bg-port-border/30 text-gray-300 hover:bg-port-border/50'
+                          : 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30'
+                      }`}
+                    >
+                      <ExternalLink size={14} />
+                      <span className="text-xs">{httpIsSecondary ? 'HTTP' : 'Launch'}</span>
+                    </button>
+                  )}
+                  {dev && (
+                    <button
+                      onClick={() => window.open(dev, '_blank')}
+                      className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+                    >
+                      <ExternalLink size={14} />
+                      <span className="text-xs">Dev UI</span>
+                    </button>
+                  )}
+                </>
+              );
+            })()}
             {app.buildCommand && (
               <button
                 onClick={handleBuild}
