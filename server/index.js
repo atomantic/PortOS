@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
+import { PORTS } from './lib/ports.js';
 import { existsSync, readFileSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 
@@ -425,7 +426,7 @@ ensureSelf()
         // Chrome treats http://localhost as a secure context so getUserMedia
         // still works. Same Express app + same Socket.IO instance (via
         // io.attach), so routes and websocket events are identical.
-        const localHttpPort = Number(process.env.PORTOS_HTTP_PORT) || Number(PORT) - 2;
+        const localHttpPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
         const localServer = createHttpServer(app);
         io.attach(localServer);
         localServer.listen(localHttpPort, '127.0.0.1', () => {

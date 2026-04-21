@@ -37,7 +37,9 @@ function buildPortosApp() {
       'portos-browser'
     ],
     processes: [
-      { name: 'portos-server', port: PORTS.API, ports: { api: PORTS.API } },
+      // portos-server binds a loopback HTTP mirror on API_LOCAL when HTTPS is active on API,
+      // so Overview shows both ports for this process.
+      { name: 'portos-server', port: PORTS.API, ports: { api: PORTS.API, 'api-local': PORTS.API_LOCAL } },
       { name: 'portos-cos', port: 5558, ports: { api: 5558 } },
       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },
       { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },

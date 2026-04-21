@@ -6,6 +6,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
+import { PORTOS_APP_ID } from '../../services/apiCore';
 import socket from '../../services/socket';
 import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel } from './constants';
 import OverviewTab from './tabs/OverviewTab';
@@ -202,10 +203,17 @@ export default function AppDetailView() {
               )}
             </div>
             )}
-            {/* Launch UI */}
+            {/* Launch UI — self-app uses current origin so the scheme matches the
+                active session (HTTPS on 5555 vs HTTP loopback on 5553); uiPort alone
+                hard-codes the HTTPS-only port and breaks from the HTTP mirror. */}
             {app.uiPort && app.overallStatus === 'online' && (
               <button
-                onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
+                onClick={() => window.open(
+                  app.id === PORTOS_APP_ID
+                    ? window.location.origin
+                    : `${window.location.protocol}//${window.location.hostname}:${app.uiPort}`,
+                  '_blank'
+                )}
                 className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
               >
                 <ExternalLink size={14} />
