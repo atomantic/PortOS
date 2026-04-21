@@ -16,11 +16,13 @@ import { join } from 'path';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getGenomeSummary } from './genome.js';
 import { getBloodTests } from './meatspaceHealth.js';
-import { MARKER_CATEGORIES } from '../lib/curatedGenomeMarkers.js';
+import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
 import { getTasteProfile } from './taste-questionnaire.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
 import { stripCodeFences, parseLLMJSON } from '../lib/aiProvider.js';
+
+const MARKER_BY_RSID = new Map(CURATED_MARKERS.map(m => [m.rsid, m]));
 
 const INSIGHTS_DIR = join(PATHS.data, 'insights');
 const THEMES_FILE = join(INSIGHTS_DIR, 'themes.json');
@@ -40,15 +42,40 @@ const CATEGORY_BLOOD_MAP = {
 };
 
 // =============================================================================
-// CONFIDENCE LEVELS (correlation strength labels — not causal claims)
+// CONFIDENCE LEVELS (contextual labels — not causal claims)
 // =============================================================================
+// Two marker polarities:
+//   - "protective"  : rare variant is desirable (e.g. FOXO3A longevity)
+//                     `concern` just means "no benefit variant" — not a risk
+//   - "risk"        : rare variant is undesirable (e.g. HFE iron overload)
+//                     `concern` means carrier, `major_concern` means homozygous risk
+//
+// Inference: if a marker's rules contain `major_concern`, it's a risk marker.
+// Otherwise it's treated as protective (only beneficial/typical/concern rules).
 
-const CONFIDENCE_FROM_STATUS = {
-  beneficial: { level: 'strong', color: 'green', label: 'Strong Evidence' },
-  typical: { level: 'moderate', color: 'yellow', label: 'Moderate Evidence' },
-  concern: { level: 'weak', color: 'red', label: 'Elevated Risk Marker' },
-  major_concern: { level: 'significant', color: 'red', label: 'Significant Risk Marker' }
+function inferMarkerPolarity(rules = []) {
+  return rules.some(r => r.status === 'major_concern') ? 'risk' : 'protective';
+}
+
+const CONFIDENCE_PROTECTIVE = {
+  beneficial:    { level: 'strong',   color: 'green',  label: 'Beneficial Variant' },
+  typical:       { level: 'moderate', color: 'yellow', label: 'Partial Variant' },
+  concern:       { level: 'neutral',  color: 'gray',   label: 'No Benefit Variant' },
+  major_concern: { level: 'neutral',  color: 'gray',   label: 'No Benefit Variant' }
 };
+
+const CONFIDENCE_RISK = {
+  beneficial:    { level: 'strong',      color: 'green',  label: 'No Risk Variant' },
+  typical:       { level: 'moderate',    color: 'yellow', label: 'Typical' },
+  concern:       { level: 'weak',        color: 'orange', label: 'Carrier' },
+  major_concern: { level: 'significant', color: 'red',    label: 'Risk Variant' }
+};
+
+function confidenceForStatus(status, polarity) {
+  const table = polarity === 'protective' ? CONFIDENCE_PROTECTIVE : CONFIDENCE_RISK;
+  const entry = table[status];
+  return entry ? { ...entry, polarity } : null;
+}
 
 // =============================================================================
 // HELPERS
@@ -231,7 +258,8 @@ export async function getGenomeHealthCorrelations() {
     const mappedAnalytes = CATEGORY_BLOOD_MAP[catKey] ?? [];
 
     const enrichedMarkers = catData.markers.map(marker => {
-      const confidence = CONFIDENCE_FROM_STATUS[marker.status] ?? null;
+      const polarity = inferMarkerPolarity(MARKER_BY_RSID.get(marker.rsid)?.rules);
+      const confidence = confidenceForStatus(marker.status, polarity);
 
       const matchedBloodValues = mappedAnalytes
         .map(analyte => {
@@ -244,7 +272,9 @@ export async function getGenomeHealthCorrelations() {
         rsid: marker.rsid,
         gene: marker.gene,
         name: marker.name,
+        genotype: marker.genotype ?? null,
         status: marker.status,
+        polarity,
         description: marker.description,
         implications: marker.implications,
         confidence,
