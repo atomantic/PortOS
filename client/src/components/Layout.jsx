@@ -73,7 +73,8 @@ import {
   MessagesSquare,
   BookOpen,
   Search,
-  Mic
+  Mic,
+  Clapperboard
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -141,6 +142,7 @@ const navItems = [
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
       { to: '/cos/scripts', label: 'Scripts', icon: Terminal },
+      { to: '/cos/stage', label: 'Stage', icon: Clapperboard },
       { to: '/cos/productivity', label: 'Streaks', icon: Flame },
       { to: '/cos/jobs', label: 'System Tasks', icon: Bot },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText }

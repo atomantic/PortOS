@@ -214,6 +214,7 @@ export const AVATAR_STYLE_LABELS = {
   sigil: 'Arcane Sigil (3D)',
   esoteric: 'Esoteric (3D)',
   nexus: 'Neural Nexus (3D)',
+  rigged3d: 'Rigged Character (3D)',
   ascii: 'Minimalist (ASCII)'
 };
 
