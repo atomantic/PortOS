@@ -350,6 +350,6 @@ process.on('SIGTERM', () => {
 
 // Start
 main().catch(error => {
-  console.error(`💥 [Autofixer] Fatal error:`, error);
+  console.error('💥 [Autofixer] Fatal error:', error?.message || String(error), error?.stack);
   process.exit(1);
 });
