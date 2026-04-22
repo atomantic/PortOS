@@ -42,9 +42,10 @@ function buildPortosApp() {
       'portos-browser'
     ],
     processes: [
-      // portos-server binds a loopback HTTP mirror on API_LOCAL when HTTPS is active on API,
-      // so Overview shows both ports for this process.
-      { name: 'portos-server', port: PORTS.API, ports: { api: PORTS.API, 'api-local': PORTS.API_LOCAL } },
+      // portos-server binds a loopback HTTP mirror on API_LOCAL only when HTTPS is active
+      // on API. If no cert is present, don't advertise api-local — nothing is listening
+      // there and Overview would otherwise show a dead port.
+      { name: 'portos-server', port: PORTS.API, ports: certPresent ? { api: PORTS.API, 'api-local': PORTS.API_LOCAL } : { api: PORTS.API } },
       { name: 'portos-cos', port: 5558, ports: { api: 5558 } },
       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },
       { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },

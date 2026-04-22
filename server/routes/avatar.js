@@ -6,11 +6,22 @@ import { PATHS } from '../lib/fileUtils.js';
 const router = Router();
 const AVATAR_PATH = join(PATHS.data, 'avatar', 'model.glb');
 
+// Non-throwing stat wrapper used by the HEAD handler — file may be removed between
+// existsSync() and statSync() (TOCTOU), which would otherwise crash the process.
+function safeStat(p) {
+  try {
+    return statSync(p);
+  } catch {
+    return null;
+  }
+}
+
 router.head('/model.glb', (req, res) => {
   if (!existsSync(AVATAR_PATH)) {
     return res.status(404).end();
   }
-  const s = statSync(AVATAR_PATH);
+  const s = safeStat(AVATAR_PATH);
+  if (!s) return res.status(404).end();
   res.set('Content-Type', 'model/gltf-binary');
   res.set('Content-Length', String(s.size));
   res.set('Cache-Control', 'public, max-age=60');

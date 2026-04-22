@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { mkdir, readFile, writeFile, rename } from 'fs/promises';
+import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -107,7 +107,20 @@ export async function atomicWrite(filePath, data) {
   const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, payload);
-  await rename(tmp, filePath);
+  // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
+  // overwrite), but will still fail with EPERM/EACCES if the destination is locked. Fall
+  // back to unlink + rename so writes succeed on Windows in those edge cases too.
+  const replace = async () => {
+    const err = await rename(tmp, filePath).then(() => null, (e) => e);
+    if (!err) return;
+    if (process.platform === 'win32' && ['EPERM', 'EACCES', 'EEXIST'].includes(err.code)) {
+      await unlink(filePath).catch(() => {});
+      await rename(tmp, filePath);
+      return;
+    }
+    throw err;
+  };
+  await replace();
 }
 
 /**
