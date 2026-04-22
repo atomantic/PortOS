@@ -46,19 +46,21 @@ export function MortalLoomTab() {
 
   const handleSave = async () => {
     setSaving(true);
-    await updateSettings({
-      mortalloom: {
-        enabled,
-        path: path.trim(),
-        lastImportAt: lastImport
-      }
-    })
-      .then(() => {
-        toast.success('MortalLoom settings saved');
-        return refreshStatus();
-      })
-      .catch(() => toast.error('Failed to save settings'))
-      .finally(() => setSaving(false));
+    try {
+      await updateSettings({
+        mortalloom: {
+          enabled,
+          path: path.trim(),
+          lastImportAt: lastImport
+        }
+      });
+      toast.success('MortalLoom settings saved');
+      await refreshStatus();
+    } catch (err) {
+      toast.error(err.message || 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleImport = async () => {

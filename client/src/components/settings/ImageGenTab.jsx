@@ -42,12 +42,12 @@ export function ImageGenTab() {
     setSaving(true);
     const url = sdapiUrl.trim().replace(/\/+$/, '') || undefined;
 
-    let settingsSaved = false;
-    await updateSettings({ imageGen: { sdapiUrl: url } })
-      .then(() => { settingsSaved = true; setSavedUrl(url || ''); toast.success('Image gen settings saved'); })
-      .catch(() => toast.error('Failed to save settings'));
-
-    if (!settingsSaved) {
+    try {
+      await updateSettings({ imageGen: { sdapiUrl: url } });
+      setSavedUrl(url || '');
+      toast.success('Image gen settings saved');
+    } catch (err) {
+      toast.error(err.message || 'Failed to save settings');
       setSaving(false);
       return;
     }
@@ -62,15 +62,16 @@ export function ImageGenTab() {
       promptHints: 'Use POST /api/image-gen/generate with { prompt, negativePrompt, width, height, steps, cfgScale }. Use POST /api/image-gen/avatar for character portraits.'
     };
     if (toolRegistered) {
-      await updateTool(SDAPI_TOOL_ID, toolData).catch(() => {
-        toast.error('Failed to update CoS tools registry');
+      await updateTool(SDAPI_TOOL_ID, toolData).catch(err => {
+        toast.error(err.message || 'Failed to update CoS tools registry');
       });
     } else if (url) {
-      await registerTool({ id: SDAPI_TOOL_ID, ...toolData })
-        .then(() => setToolRegistered(true))
-        .catch(() => {
-          toast.error('Failed to register in CoS tools registry');
-        });
+      try {
+        await registerTool({ id: SDAPI_TOOL_ID, ...toolData });
+        setToolRegistered(true);
+      } catch (err) {
+        toast.error(err.message || 'Failed to register in CoS tools registry');
+      }
     }
 
     setSaving(false);

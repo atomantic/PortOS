@@ -35,7 +35,7 @@ import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '
 import { PORTOS_UI_URL } from '../lib/ports.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, ensureDirectories, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, ensureDirectories, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning, STATE_FILE } from './cosState.js';
 
 // Events and logging (canonical source: cosEvents.js)
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -46,6 +46,9 @@ export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
 export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
+
+const AGENT_ARCHIVE_RETENTION_DAYS = 90;
+const RESUME_DEQUEUE_DELAY_MS = 500;
 
 const _execAsync = promisify(exec);
 const _execFileAsync = promisify(execFile);
@@ -163,7 +166,7 @@ export async function start() {
   }
 
   // Prune agent archives older than 90 days
-  await pruneOldAgentArchives(90).catch(() => {});
+  await pruneOldAgentArchives(AGENT_ARCHIVE_RETENTION_DAYS).catch(() => {});
 
   // Health check + orphan cleanup (15 min)
   scheduleEvent({
@@ -354,7 +357,7 @@ export async function resume() {
 
   // Trigger immediate task dequeue on resume (outside lock to avoid holding it)
   if (result.success && isDaemonRunning()) {
-    setTimeout(() => dequeueNextTask(), 500);
+    setTimeout(() => dequeueNextTask(), RESUME_DEQUEUE_DELAY_MS);
   }
 
   return result;
@@ -3029,7 +3032,9 @@ async function init() {
   }
 }
 
-// Initialize asynchronously (skip during tests to avoid circular import issues)
+// Initialize asynchronously — vitest sets NODE_ENV=test by default, so this
+// skips eager init (and its listeners/timers) in unit tests while still
+// running on fresh production installs where STATE_FILE doesn't yet exist.
 if (process.env.NODE_ENV !== 'test') {
   init();
 }

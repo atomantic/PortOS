@@ -150,7 +150,7 @@ async function extractTokenFromLocalStorage(page, resource) {
           bestExp = exp;
           best = val.secret;
         }
-      } catch(e) {}
+      } catch(e) { console.warn('localStorage parse error', e.message); }
     }
     return best;
   })()`;

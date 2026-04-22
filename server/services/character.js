@@ -196,7 +196,7 @@ export async function syncJiraXP() {
     try {
       projects = await jiraService.getProjects(instanceId);
     } catch {
-      console.log(`⚠️ Could not fetch projects for JIRA instance ${instanceId}`);
+      console.warn(`⚠️ Could not fetch projects for JIRA instance ${instanceId}`);
       continue;
     }
 
@@ -207,7 +207,7 @@ export async function syncJiraXP() {
       try {
         tickets = await jiraService.getMyCurrentSprintTickets(instanceId, project.key);
       } catch {
-        console.log(`⚠️ Could not fetch tickets for ${project.key}`);
+        console.warn(`⚠️ Could not fetch tickets for ${project.key}`);
         continue;
       }
 

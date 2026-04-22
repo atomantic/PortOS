@@ -28,10 +28,14 @@ export function BackupTab() {
 
   const handleSave = async () => {
     setSaving(true);
-    await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths } })
-      .then(() => toast.success('Settings saved'))
-      .catch(() => toast.error('Failed to save settings'))
-      .finally(() => setSaving(false));
+    try {
+      await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths } });
+      toast.success('Settings saved');
+    } catch (err) {
+      toast.error(err.message || 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const addExclude = () => {

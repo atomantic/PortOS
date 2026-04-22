@@ -122,7 +122,7 @@ async function getProcessList() {
   const jsonEnd = stripped.lastIndexOf('}]');
 
   if (jsonStart < 0 || jsonEnd < 0) {
-    console.error('[Autofixer] Invalid pm2 jlist output');
+    console.error(`❌ [Autofixer] Invalid pm2 jlist output`);
     return [];
   }
 
@@ -152,7 +152,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   const sessionId = `autofixer_${processName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const startTime = new Date().toISOString();
 
-  console.log(`[Autofixer] Starting fix for ${processName}: ${sessionId}`);
+  console.log(`🔧 [Autofixer] Starting fix for ${processName}: ${sessionId}`);
 
   const prompt = `You are an autonomous autofixer for PortOS. A PM2-managed process has crashed and needs to be fixed.
 
@@ -213,7 +213,7 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
       const output = outputBuffer.join('');
       const success = code === 0;
 
-      console.log(`${success ? '[Autofixer] Fix successful' : '[Autofixer] Fix failed'} for ${processName} (exit code: ${code})`);
+      console.log(`${success ? '✅ [Autofixer] Fix successful' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${code})`);
 
       const metadata = {
         sessionId,
@@ -230,7 +230,7 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
       };
 
       await saveSession(sessionId, prompt, output, metadata);
-      console.log(`[Autofixer] Saved session: ${sessionId}`);
+      console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
 
       if (success) {
         markAsFixed(processName);
@@ -244,7 +244,7 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
       const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
       const output = outputBuffer.join('') + `\n[ERROR] ${error.message}`;
 
-      console.error(`[Autofixer] Error fixing ${processName}:`, error.message);
+      console.error(`❌ [Autofixer] Error fixing ${processName}: ${error.message}`);
 
       const metadata = {
         sessionId,
@@ -269,21 +269,21 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
 
 // Main check function
 async function checkAndFixProcesses() {
-  console.log('[Autofixer] Checking PM2 processes...');
+  console.log(`🔍 [Autofixer] Checking PM2 processes...`);
 
   const monitoredProcesses = await getMonitoredProcesses();
 
   if (monitoredProcesses.length === 0) {
-    console.log('[Autofixer] No apps registered in PortOS');
+    console.log(`⚠️ [Autofixer] No apps registered in PortOS`);
     return;
   }
 
-  console.log(`[Autofixer] Monitoring ${monitoredProcesses.length} process(es): ${monitoredProcesses.join(', ')}`);
+  console.log(`📋 [Autofixer] Monitoring ${monitoredProcesses.length} process(es): ${monitoredProcesses.join(', ')}`);
 
   const pm2List = await getProcessList();
 
   if (pm2List.length === 0) {
-    console.log('[Autofixer] No PM2 processes found');
+    console.log(`⚠️ [Autofixer] No PM2 processes found`);
     return;
   }
 
@@ -293,27 +293,27 @@ async function checkAndFixProcesses() {
   });
 
   if (crashedProcesses.length === 0) {
-    console.log('[Autofixer] All monitored processes healthy');
+    console.log(`✅ [Autofixer] All monitored processes healthy`);
     return;
   }
 
-  console.log(`[Autofixer] Found ${crashedProcesses.length} crashed process(es)`);
+  console.log(`🚨 [Autofixer] Found ${crashedProcesses.length} crashed process(es)`);
 
   for (const proc of crashedProcesses) {
     const processName = proc.name;
 
     if (isOnCooldown(processName)) {
-      console.log(`[Autofixer] ${processName} is on cooldown, skipping`);
+      console.log(`⏳ [Autofixer] ${processName} is on cooldown, skipping`);
       continue;
     }
 
     const app = await findAppByProcess(processName);
     if (!app) {
-      console.log(`[Autofixer] No app found for process ${processName}, skipping`);
+      console.log(`⚠️ [Autofixer] No app found for process ${processName}, skipping`);
       continue;
     }
 
-    console.log(`[Autofixer] Attempting to fix ${processName} (${app.name})...`);
+    console.log(`🔧 [Autofixer] Attempting to fix ${processName} (${app.name})...`);
 
     const { errLogs, outLogs } = await getProcessLogs(processName);
     await fixProcess(processName, app, errLogs, outLogs);
@@ -322,9 +322,9 @@ async function checkAndFixProcesses() {
 
 // Main loop
 async function main() {
-  console.log('[Autofixer] Starting PortOS Autofixer daemon');
-  console.log(`[Autofixer] Check interval: ${CHECK_INTERVAL / 60000} minutes`);
-  console.log(`[Autofixer] Fix cooldown: ${FIX_COOLDOWN / 60000} minutes per process`);
+  console.log(`🚀 [Autofixer] Starting PortOS Autofixer daemon`);
+  console.log(`⏱️ [Autofixer] Check interval: ${CHECK_INTERVAL / 60000} minutes`);
+  console.log(`⏳ [Autofixer] Fix cooldown: ${FIX_COOLDOWN / 60000} minutes per process`);
 
   await ensureHistoryDir();
 
@@ -339,17 +339,17 @@ async function main() {
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n[Autofixer] Shutting down...');
+  console.log(`\n🛑 [Autofixer] Shutting down...`);
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('\n[Autofixer] Shutting down...');
+  console.log(`\n🛑 [Autofixer] Shutting down...`);
   process.exit(0);
 });
 
 // Start
 main().catch(error => {
-  console.error('[Autofixer] Fatal error:', error);
+  console.error(`💥 [Autofixer] Fatal error: ${error.message}`);
   process.exit(1);
 });

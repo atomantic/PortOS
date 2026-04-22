@@ -224,7 +224,7 @@ export function DatabaseTab() {
         if (successMsg) toast.success(typeof successMsg === 'function' ? successMsg(result) : successMsg);
         loadStatus();
       })
-      .catch(() => {})
+      .catch(err => toast.error(err.message || 'Action failed'))
       .finally(() => setActionInProgress(null));
   }, [loadStatus]);
 

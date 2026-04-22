@@ -146,6 +146,7 @@ const navItems = [
       { to: '/cos/tasks', label: 'Tasks', icon: FileText }
     ]
   },
+  { to: '/data', label: 'Data', icon: HardDrive, single: true },
   {
     label: 'Dev Tools',
     icon: Terminal,
@@ -168,7 +169,6 @@ const navItems = [
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
-  { to: '/data', label: 'Data', icon: HardDrive, single: true },
   {
     label: 'Digital Twin',
     icon: Heart,
