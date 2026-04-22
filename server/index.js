@@ -300,7 +300,7 @@ app.use('/api/openclaw', openclawRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
-agentActionExecutor.init();
+agentActionExecutor.init().catch(err => console.error(`❌ agentActionExecutor init failed: ${err.message}`));
 
 // Recover any inbox entries stuck in 'classifying' from a previous crash/restart
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
@@ -444,3 +444,21 @@ ensureSelf()
     console.error(`❌ Instance init failed: ${err.message}`);
     process.exit(1);
   });
+
+let shuttingDown = false;
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🛑 Received ${signal} - shutting down gracefully`);
+  httpServer.close(() => console.log('✅ HTTP server closed'));
+  try {
+    const { close } = await import('./lib/db.js');
+    if (typeof close === 'function') await close();
+    console.log('✅ DB pool closed');
+  } catch (err) {
+    console.error(`⚠️ Error during shutdown: ${err.message}`);
+  }
+  process.exit(0);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
