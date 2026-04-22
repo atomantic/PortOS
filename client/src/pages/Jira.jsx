@@ -43,7 +43,7 @@ export default function Jira() {
       const response = await api.get('/jira/instances');
       setInstances(response.instances || {});
     } catch (error) {
-      console.error(`Failed to load JIRA instances: ${error.message}`);
+      console.error(`❌ Failed to load JIRA instances: ${error.message}`);
       toast.error(`Failed to load JIRA instances: ${error.message}`);
     } finally {
       setLoading(false);
@@ -108,7 +108,7 @@ export default function Jira() {
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
       handleCancel();
     } catch (error) {
-      console.error(`Failed to save JIRA instance: ${error.message}`);
+      console.error(`❌ Failed to save JIRA instance: ${error.message}`);
       setSaveError(error.message);
       toast.error(`Failed to save: ${error.message}`);
     } finally {
@@ -133,7 +133,7 @@ export default function Jira() {
         return next;
       });
     } catch (error) {
-      console.error(`Failed to delete JIRA instance: ${error.message}`);
+      console.error(`❌ Failed to delete JIRA instance: ${error.message}`);
       toast.error(`Failed to delete: ${error.message}`);
     }
   };

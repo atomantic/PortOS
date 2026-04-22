@@ -7,6 +7,7 @@
 
 import { io } from 'socket.io-client';
 import { instanceEvents } from './instanceEvents.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
 
 // Map<peerId, { socket, agents: Map<agentId, agent>, peer }>
 const peerConnections = new Map();
@@ -19,7 +20,7 @@ const CONNECT_TIMEOUT_MS = 5000;
 export function connectToPeer(peer) {
   if (peerConnections.has(peer.id)) return;
 
-  const url = `http://${peer.address}:${peer.port}`;
+  const url = peerBaseUrl(peer);
   const socket = io(url, {
     reconnection: true,
     reconnectionAttempts: 5,
@@ -27,16 +28,17 @@ export function connectToPeer(peer) {
     timeout: CONNECT_TIMEOUT_MS
   });
 
+  // `host` is required so fetchPeerAgents() can rebuild the HTTPS URL via peerBaseUrl()
   const conn = {
     socket,
     agents: new Map(),
-    peer: { id: peer.id, name: peer.name, address: peer.address, port: peer.port }
+    peer: { id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port }
   };
 
   peerConnections.set(peer.id, conn);
 
   socket.on('connect', () => {
-    console.log(`🔗 Peer relay connected: ${peer.name} (${peer.address}:${peer.port})`);
+    console.log(`🔗 Peer relay connected: ${peer.name} (${url})`);
     socket.emit('cos:subscribe');
 
     // Fetch initial agent state via HTTP
@@ -94,7 +96,7 @@ export function connectToPeer(peer) {
  */
 async function fetchPeerAgents(conn) {
   const { peer } = conn;
-  const url = `http://${peer.address}:${peer.port}/api/cos/agents`;
+  const url = `${peerBaseUrl(peer)}/api/cos/agents`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
 

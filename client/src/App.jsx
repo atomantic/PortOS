@@ -1,6 +1,7 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import { getSettings, updateSettings } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import Dashboard from './pages/Dashboard';
 import Ambient from './pages/Ambient';
@@ -79,7 +80,24 @@ if (import.meta.hot) {
   import.meta.hot.decline();
 }
 
+// Self-heal timezone on first load: the server process runs under TZ=UTC, so
+// if settings.timezone was never set the server fallback resolves to UTC and
+// date-scoped features (daily log, schedulers) land on the wrong day. Push
+// the browser's IANA zone once so remote/VPN clients don't need to visit
+// Settings before their first entry is correct.
+function useTimezoneBootstrap() {
+  useEffect(() => {
+    getSettings().then((s) => {
+      if (s?.timezone) return;
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (!tz || tz === 'UTC') return;
+      return updateSettings({ timezone: tz });
+    }).catch(() => null);
+  }, []);
+}
+
 export default function App() {
+  useTimezoneBootstrap();
   return (
     <Suspense fallback={<PageLoader />}>
       <Routes>

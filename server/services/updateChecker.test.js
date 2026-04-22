@@ -1,18 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock dependencies before importing the module
-vi.mock('fs/promises', () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined)
-}));
-
 vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(),
   PATHS: {
     root: '/mock',
     data: '/mock/data'
   },
-  ensureDir: vi.fn().mockResolvedValue(undefined)
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('../lib/asyncMutex.js', () => ({
@@ -23,8 +19,7 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn()
 }));
 
-import { writeFile } from 'fs/promises';
-import { readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { readJSONFile, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { execGh } from './github.js';
 import {
   compareSemver,
@@ -167,7 +162,7 @@ describe('getUpdateStatus', () => {
 describe('ignoreVersion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    writeFile.mockResolvedValue(undefined);
+    atomicWrite.mockResolvedValue(undefined);
     ensureDir.mockResolvedValue(undefined);
   });
 
@@ -182,7 +177,7 @@ describe('ignoreVersion', () => {
 
     const state = await ignoreVersion('1.27.0');
     expect(state.ignoredVersions).toContain('1.27.0');
-    expect(writeFile).toHaveBeenCalled();
+    expect(atomicWrite).toHaveBeenCalled();
   });
 
   it('should not duplicate ignored versions', async () => {
@@ -196,14 +191,14 @@ describe('ignoreVersion', () => {
 
     const state = await ignoreVersion('1.27.0');
     expect(state.ignoredVersions).toHaveLength(1);
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 });
 
 describe('clearIgnored', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    writeFile.mockResolvedValue(undefined);
+    atomicWrite.mockResolvedValue(undefined);
     ensureDir.mockResolvedValue(undefined);
   });
 
@@ -218,14 +213,14 @@ describe('clearIgnored', () => {
 
     const state = await clearIgnored();
     expect(state.ignoredVersions).toHaveLength(0);
-    expect(writeFile).toHaveBeenCalled();
+    expect(atomicWrite).toHaveBeenCalled();
   });
 });
 
 describe('checkForUpdate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    writeFile.mockResolvedValue(undefined);
+    atomicWrite.mockResolvedValue(undefined);
     ensureDir.mockResolvedValue(undefined);
   });
 
@@ -331,7 +326,7 @@ describe('checkForUpdate', () => {
 describe('clearStaleUpdateInProgress', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    writeFile.mockResolvedValue(undefined);
+    atomicWrite.mockResolvedValue(undefined);
     ensureDir.mockResolvedValue(undefined);
   });
 
@@ -347,7 +342,7 @@ describe('clearStaleUpdateInProgress', () => {
 
     const cleared = await clearStaleUpdateInProgress();
     expect(cleared).toBe(false);
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 
   it('should clear stale updateInProgress when updateStartedAt is older than 30 minutes', async () => {
@@ -363,8 +358,8 @@ describe('clearStaleUpdateInProgress', () => {
 
     const cleared = await clearStaleUpdateInProgress();
     expect(cleared).toBe(true);
-    expect(writeFile).toHaveBeenCalled();
-    const saved = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(atomicWrite).toHaveBeenCalled();
+    const saved = JSON.parse(atomicWrite.mock.calls[0][1]);
     expect(saved.updateInProgress).toBe(false);
     expect(saved.updateStartedAt).toBeNull();
     expect(saved.lastUpdateResult.success).toBe(false);
@@ -383,8 +378,8 @@ describe('clearStaleUpdateInProgress', () => {
 
     const cleared = await clearStaleUpdateInProgress();
     expect(cleared).toBe(true);
-    expect(writeFile).toHaveBeenCalled();
-    const saved = JSON.parse(writeFile.mock.calls[0][1]);
+    expect(atomicWrite).toHaveBeenCalled();
+    const saved = JSON.parse(atomicWrite.mock.calls[0][1]);
     expect(saved.updateInProgress).toBe(false);
     expect(saved.lastUpdateResult.version).toBe('unknown');
   });
@@ -402,6 +397,6 @@ describe('clearStaleUpdateInProgress', () => {
 
     const cleared = await clearStaleUpdateInProgress();
     expect(cleared).toBe(false);
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 });

@@ -3,9 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock fs/promises and fs before importing the module
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
-  writeFile: vi.fn(),
-  mkdir: vi.fn(),
-  rename: vi.fn()
+  mkdir: vi.fn()
 }));
 
 vi.mock('fs', () => ({
@@ -24,6 +22,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const fs = await import('fs');
   return {
     ensureDir: vi.fn(),
+    atomicWrite: vi.fn().mockResolvedValue(undefined),
     readJSONFile: vi.fn(async (filePath, defaultValue) => {
       if (!fs.existsSync(filePath)) return defaultValue;
       const content = await fsPromises.readFile(filePath, 'utf-8');
@@ -34,7 +33,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../lib/fileUtils.js';
 import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier, recalculateModelTierMetrics, clearLearningCache, getTaskTypeConfidence, getConfidenceLevels } from './taskLearning.js';
 
 const makeLearningData = (overrides = {}) => ({
@@ -98,8 +98,8 @@ describe('TaskLearning - resetTaskTypeLearning', () => {
     vi.clearAllMocks();
     clearLearningCache();
     savedData = null;
-    writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
     });
   });
 
@@ -233,8 +233,8 @@ describe('TaskLearning - getSkippedTaskTypes', () => {
     // Track what was written so subsequent reads return updated data
     let currentData = JSON.stringify(data);
     readFile.mockImplementation(async () => currentData);
-    writeFile.mockImplementation(async (_path, content) => {
-      currentData = content;
+    atomicWrite.mockImplementation(async (_path, data) => {
+      currentData = JSON.stringify(data);
     });
 
     await resetTaskTypeLearning('self-improve:ui');
@@ -245,8 +245,8 @@ describe('TaskLearning - getSkippedTaskTypes', () => {
 
   it('should clean up routingAccuracy data when resetting a task type', async () => {
     let savedData;
-    writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
     });
 
     const data = makeLearningData({
@@ -270,8 +270,8 @@ describe('TaskLearning - getSkippedTaskTypes', () => {
 
   it('should subtract from byModelTier when resetting a task type with routing data', async () => {
     let savedData;
-    writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
     });
 
     const data = makeLearningData({
@@ -319,8 +319,8 @@ describe('TaskLearning - getSkippedTaskTypes', () => {
 
   it('should delete byModelTier entry when count reaches zero', async () => {
     let savedData;
-    writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
     });
 
     const data = makeLearningData({
@@ -364,8 +364,8 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
     vi.clearAllMocks();
     clearLearningCache();
     savedData = null;
-    writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
     });
   });
 
@@ -406,9 +406,9 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
   it('should accumulate routing accuracy across multiple completions', async () => {
     let currentData = JSON.stringify(makeLearningData());
     readFile.mockImplementation(async () => currentData);
-    writeFile.mockImplementation(async (_path, content) => {
-      currentData = content;
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      currentData = JSON.stringify(data);
+      savedData = data;
     });
 
     const makeAgent = (tier, success) => ({
@@ -565,8 +565,8 @@ describe('TaskLearning - recalculateModelTierMetrics', () => {
     vi.clearAllMocks();
     clearLearningCache();
     savedData = null;
-    writeFile.mockImplementation(async (_path, content) => {
-      savedData = JSON.parse(content);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
     });
   });
 
@@ -641,7 +641,7 @@ describe('TaskLearning - recalculateModelTierMetrics', () => {
     const result = await recalculateModelTierMetrics();
 
     expect(result.recalculated).toBe(false);
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 
   it('should handle empty routingAccuracy', async () => {

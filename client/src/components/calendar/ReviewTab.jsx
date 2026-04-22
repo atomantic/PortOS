@@ -2,22 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-
-function formatDuration(minutes) {
-  if (!minutes) return '';
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
-    return m ? `${h}h ${m}m` : `${h}h`;
-  }
-  return `${minutes}m`;
-}
-
-function formatTime(isoString) {
-  if (!isoString) return '';
-  const d = new Date(isoString);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
+import { formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
 
 export default function ReviewTab() {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -227,7 +212,7 @@ export default function ReviewTab() {
                           {event.isAllDay ? (
                             <span>All day</span>
                           ) : (
-                            <span>{formatTime(event.startTime)} - {formatTime(event.endTime)}</span>
+                            <span>{formatTimeOfDay(event.startTime)} - {formatTimeOfDay(event.endTime)}</span>
                           )}
                           {event.subcalendarName && (
                             <span>· {event.subcalendarName}</span>
@@ -354,7 +339,7 @@ export default function ReviewTab() {
                 {entry.durationMinutes && (
                   <span className="text-gray-500 flex items-center gap-0.5">
                     <Clock size={10} />
-                    {formatDuration(entry.durationMinutes)}
+                    {formatDurationMin(entry.durationMinutes)}
                   </span>
                 )}
               </div>

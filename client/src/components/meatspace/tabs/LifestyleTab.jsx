@@ -10,6 +10,12 @@ const SMOKING_OPTIONS = [
   { value: 'current', label: 'Current' }
 ];
 
+const SEX_OPTIONS = [
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
+  { value: null, label: 'Unknown' }
+];
+
 const DIET_OPTIONS = [
   { value: 'excellent', label: 'Excellent' },
   { value: 'good', label: 'Good' },
@@ -26,12 +32,14 @@ const STRESS_OPTIONS = [
 export default function LifestyleTab() {
   const [config, setConfig] = useState(null);
   const [lifestyle, setLifestyle] = useState(null);
+  const [sex, setSex] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     const data = await api.getMeatspaceConfig().catch(() => null);
     setConfig(data);
+    setSex(data?.sex ?? null);
     setLifestyle(data?.lifestyle || {
       smokingStatus: 'never',
       exerciseMinutesPerWeek: 150,
@@ -50,7 +58,14 @@ export default function LifestyleTab() {
 
   const handleSave = async () => {
     setSaving(true);
-    const result = await api.updateMeatspaceLifestyle(lifestyle).catch(() => null);
+    // `sexSource = 'questionnaire'` whenever the user sets sex manually, so the
+    // auto-detect-from-genome code path in getConfig() doesn't clobber it next load.
+    const payload = {
+      sex,
+      sexSource: sex ? 'questionnaire' : null,
+      lifestyle
+    };
+    const result = await api.updateMeatspaceConfig(payload).catch(() => null);
     setSaving(false);
     if (result) {
       setConfig(result);
@@ -78,16 +93,33 @@ export default function LifestyleTab() {
           <ClipboardList size={18} className="text-port-accent" />
           <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Profile</h3>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs text-gray-500 uppercase mb-1">Biological Sex</label>
-            <p className="text-lg font-mono text-gray-300 capitalize">
-              {config?.sex || 'Unknown'}
-              {config?.sexSource && (
-                <span className="text-xs text-gray-600 ml-2">({config.sexSource})</span>
-              )}
-            </p>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-xs text-gray-500 uppercase">Biological Sex</label>
+            {config?.sexSource && (
+              <span className="text-[10px] text-gray-600 italic">
+                {config.sexSource === 'genome' ? 'auto-detected from genome' : `source: ${config.sexSource}`}
+              </span>
+            )}
           </div>
+          <div className="flex gap-2">
+            {SEX_OPTIONS.map(opt => (
+              <button
+                key={opt.label}
+                onClick={() => setSex(opt.value)}
+                className={`px-3 py-1.5 text-sm rounded-lg border ${
+                  sex === opt.value
+                    ? 'border-port-accent bg-port-accent/20 text-port-accent'
+                    : 'border-port-border text-gray-400 hover:border-gray-500'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-600 mt-2">
+            Used for SSA-baseline life expectancy, alcohol-risk thresholds, and sex-specific genome markers.
+          </p>
         </div>
       </div>
 

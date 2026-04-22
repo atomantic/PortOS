@@ -50,8 +50,8 @@ export const lifestyleSchema = z.object({
 });
 
 export const configSchema = z.object({
-  sex: z.enum(['male', 'female']).optional(),
-  sexSource: z.enum(['genome', 'questionnaire']).optional(),
+  sex: z.enum(['male', 'female']).nullable().optional(),
+  sexSource: z.enum(['genome', 'questionnaire', 'mortalloom']).nullable().optional(),
   lifestyle: lifestyleSchema.optional()
 });
 
@@ -137,6 +137,16 @@ export const bodyEntrySchema = z.object({
   fatPct: z.number().min(0).max(100).nullable().optional(),
   boneMass: z.number().nullable().optional(),
   temperature: z.number().nullable().optional()
+});
+
+// =============================================================================
+// BLOOD PRESSURE
+// =============================================================================
+
+export const bloodPressureSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  systolic: z.number().min(40).max(300),
+  diastolic: z.number().min(20).max(200)
 });
 
 // =============================================================================

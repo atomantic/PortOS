@@ -300,6 +300,7 @@ export async function getClaudeSettingsEnv() {
       _claudeSettingsEnvCache = {};
     }
   } catch (err) {
+    console.warn(`⚠️ Failed to read claude settings: ${err.message}`);
     _claudeSettingsEnvCache = {};
   }
   _claudeSettingsEnvCacheTime = Date.now();

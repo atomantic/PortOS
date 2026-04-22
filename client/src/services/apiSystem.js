@@ -110,6 +110,7 @@ export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'D
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
+export const getTailnetInfo = () => request('/instances/tailnet-suffix');
 
 // Image Generation
 export const getImageGenStatus = () => request('/image-gen/status');

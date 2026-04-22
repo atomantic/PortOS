@@ -10,6 +10,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   dataPath: (name) => `/mock/data/${name}`,
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: { data: '/mock/data' }
 }));
 
@@ -292,6 +293,45 @@ describe('instances.js', () => {
 
       await updatePeer('peer-1', { enabled: true });
 
+      expect(disconnectFromPeer).not.toHaveBeenCalled();
+    });
+
+    it('should set a valid DNS host and disconnect the relay so it reconnects via HTTPS', async () => {
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, host: null }];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+
+      const result = await updatePeer('peer-1', { host: 'void.taile8179.ts.net' });
+
+      expect(result.host).toBe('void.taile8179.ts.net');
+      expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
+    });
+
+    it('should clear host when empty string is passed', async () => {
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, host: 'old.example.com' }];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+
+      const result = await updatePeer('peer-1', { host: '' });
+
+      expect(result.host).toBeNull();
+    });
+
+    it('should ignore invalid host (leave unchanged)', async () => {
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, host: 'good.example.com' }];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+
+      const result = await updatePeer('peer-1', { host: 'bad!!host' });
+
+      expect(result.host).toBe('good.example.com');
+    });
+
+    it('should not disconnect the relay when host is invalid or unchanged', async () => {
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, host: 'same.example.com' }];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+
+      await updatePeer('peer-1', { host: 'same.example.com' });
+      expect(disconnectFromPeer).not.toHaveBeenCalled();
+
+      await updatePeer('peer-1', { host: 'bad!!host' });
       expect(disconnectFromPeer).not.toHaveBeenCalled();
     });
   });

@@ -25,14 +25,41 @@ const COLOR_CLASS_MAP = {
   slate: 'text-slate-400', zinc: 'text-zinc-400', gray: 'text-gray-400'
 };
 
-// Map marker status to confidence level key
+// Fallback status→level mapping (used when server omits confidence.level).
+// The server's polarity-aware `confidence` object is preferred.
 const STATUS_TO_LEVEL = {
-  elevated_risk: 'significant',
-  moderate_risk: 'moderate',
-  typical: 'strong',
-  protective: 'strong',
+  beneficial: 'strong',
+  typical: 'moderate',
+  concern: 'weak',
+  major_concern: 'significant',
+  not_found: 'unknown',
   unknown: 'unknown'
 };
+
+// Short, neutral label fallback. Server sends polarity-aware labels in confidence.label.
+const STATUS_LABEL_FALLBACK = {
+  beneficial: 'Beneficial',
+  typical: 'Typical',
+  concern: 'Concern',
+  major_concern: 'Major Concern',
+  not_found: 'Not Found'
+};
+
+const NEUTRAL_GENOTYPE_STYLE = 'border-gray-600 bg-gray-800/60 text-gray-400';
+const GENOTYPE_COLOR_BY_STATUS = {
+  beneficial:    'border-green-500/30 bg-green-500/10 text-green-300',
+  typical:       'border-yellow-500/30 bg-yellow-500/10 text-yellow-300',
+  concern:       'border-orange-500/30 bg-orange-500/10 text-orange-300',
+  major_concern: 'border-red-500/40 bg-red-500/10 text-red-300'
+};
+
+function genotypeStyleFor(status, polarity) {
+  // Protective-marker "concern" means "lacks beneficial variant" — render neutral, not orange.
+  if (polarity === 'protective' && (status === 'concern' || status === 'major_concern')) {
+    return NEUTRAL_GENOTYPE_STYLE;
+  }
+  return GENOTYPE_COLOR_BY_STATUS[status] ?? NEUTRAL_GENOTYPE_STYLE;
+}
 
 function CategorySection({ category }) {
   const [expanded, setExpanded] = useState(true);
@@ -72,7 +99,14 @@ function CategorySection({ category }) {
 
 function MarkerCard({ marker }) {
   const level = STATUS_TO_LEVEL[marker.status] ?? 'unknown';
-  const implications = marker.implications?.[marker.status] ?? marker.description;
+  // `implications` can arrive as either a per-status map (legacy) or a pre-resolved string.
+  const implications = typeof marker.implications === 'string'
+    ? marker.implications
+    : (marker.implications?.[marker.status] ?? null);
+
+  const badgeLabel = marker.confidence?.label ?? STATUS_LABEL_FALLBACK[marker.status] ?? marker.status;
+  const isProtective = marker.polarity === 'protective';
+  const genotypeStyle = genotypeStyleFor(marker.status, marker.polarity);
 
   return (
     <InsightCard
@@ -81,16 +115,41 @@ function MarkerCard({ marker }) {
       badge={
         <ConfidenceBadge
           level={marker.confidence?.level ?? level}
-          label={marker.confidence?.label ?? marker.status}
+          label={badgeLabel}
         />
       }
     >
+      {/* Your result: genotype pill + one-line status */}
+      <div className="flex items-center gap-2 mt-2">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wide font-medium">
+          Your result
+        </span>
+        {marker.genotype ? (
+          <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${genotypeStyle}`}>
+            {marker.genotype}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-500 italic">not in dataset</span>
+        )}
+        {isProtective && (
+          <span
+            className="text-[10px] text-gray-500 italic"
+            title="This marker flags a rare beneficial variant. Not carrying it means standard (typical) — no elevated risk."
+          >
+            protective variant
+          </span>
+        )}
+      </div>
+
       {marker.description && (
         <p className="text-xs text-gray-400 mt-2 leading-relaxed">{marker.description}</p>
       )}
 
       {implications && implications !== marker.description && (
-        <p className="text-xs text-gray-500 mt-1 italic leading-relaxed">{implications}</p>
+        <p className="text-xs text-gray-300 mt-2 leading-relaxed">
+          <span className="text-gray-500">What this means: </span>
+          {implications}
+        </p>
       )}
 
       {/* Matched blood values */}

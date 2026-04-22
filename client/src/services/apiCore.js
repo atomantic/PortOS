@@ -34,7 +34,10 @@ export async function request(endpoint, options = {}) {
         toast.error(errorMessage);
       }
     }
-    throw new Error(errorMessage);
+    const err = new Error(errorMessage);
+    err.code = error?.code;
+    err.status = response.status;
+    throw err;
   }
 
   // Handle 204 No Content

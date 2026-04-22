@@ -10,6 +10,7 @@ export { default as CyberCoSAvatar } from './CyberCoSAvatar';
 export { default as SigilCoSAvatar } from './SigilCoSAvatar';
 export { default as EsotericCoSAvatar } from './EsotericCoSAvatar';
 export { default as NexusCoSAvatar } from './NexusCoSAvatar';
+export { default as MuseCoSAvatar } from './MuseCoSAvatar';
 export { default as StateLabel } from './StateLabel';
 export { default as TerminalCoSPanel } from './TerminalCoSPanel';
 

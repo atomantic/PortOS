@@ -10,6 +10,11 @@ function insecureFetch(agent) {
   return async (url, { method = 'GET', headers = {}, body, signal } = {}) => {
     const u = new URL(url);
     return new Promise((resolve, reject) => {
+      // Declare cleanup before req so it can be called from res.on('end'),
+      // res.on('error'), and req.on('error') — keep-alive sockets may not
+      // fire req 'close' promptly, so we cannot rely on that alone.
+      let cleanup = () => {};
+
       const req = https.request({
         hostname: u.hostname,
         port: u.port || 443,
@@ -21,6 +26,7 @@ function insecureFetch(agent) {
         const chunks = [];
         res.on('data', c => chunks.push(c));
         res.on('end', () => {
+          cleanup();
           const text = Buffer.concat(chunks).toString('utf-8');
           resolve({
             ok: res.statusCode >= 200 && res.statusCode < 300,
@@ -30,15 +36,19 @@ function insecureFetch(agent) {
             json: () => Promise.resolve(JSON.parse(text))
           });
         });
-        res.on('error', reject);
+        res.on('error', (err) => { cleanup(); reject(err); });
       });
-      req.on('error', reject);
-      if (signal) {
-        if (signal.aborted) { req.destroy(); reject(new Error('Request aborted')); return; }
-        signal.addEventListener('abort', () => req.destroy(new Error('Request aborted')), { once: true });
-      }
+      req.on('error', (err) => { cleanup(); reject(err); });
       if (body) req.write(body);
       req.end();
+
+      // Register abort handler after req exists to avoid TDZ; also handle already-aborted case
+      if (signal) {
+        if (signal.aborted) { req.destroy(new Error('Request aborted')); return; }
+        const onAbort = () => req.destroy(new Error('Request aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        cleanup = () => signal.removeEventListener('abort', onAbort);
+      }
     });
   };
 }

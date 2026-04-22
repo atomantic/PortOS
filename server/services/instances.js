@@ -5,15 +5,15 @@
  * Data persists to data/instances.json.
  */
 
-import { writeFile } from 'fs/promises';
 import os from 'os';
 import net from 'net';
 import crypto from 'crypto';
-import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
@@ -48,10 +48,7 @@ async function loadData() {
 
 async function saveData(data) {
   await ensureDir(PATHS.data);
-  const tmp = `${INSTANCES_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 2));
-  const { rename } = await import('fs/promises');
-  await rename(tmp, INSTANCES_FILE);
+  await atomicWrite(INSTANCES_FILE, data);
 }
 
 async function withData(fn) {
@@ -119,6 +116,20 @@ function isIPAddress(str) {
   return net.isIP(str) !== 0;
 }
 
+function validHost(str) {
+  if (str === '' || str === null) return null; // explicit clear
+  if (typeof str !== 'string') return undefined; // ignore
+  const trimmed = str.trim();
+  if (!trimmed) return null;
+  // Accept DNS names: letters, digits, hyphens, dots. No scheme, no port, no path.
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed.toLowerCase();
+}
+
+export { validHost };
+
 // Default sync categories — all disabled until explicitly enabled per-peer
 const DEFAULT_SYNC_CATEGORIES = {
   brain: false,
@@ -131,13 +142,15 @@ const DEFAULT_SYNC_CATEGORIES = {
 
 export { DEFAULT_SYNC_CATEGORIES };
 
-export async function addPeer({ address, port = DEFAULT_PEER_PORT, name }) {
+export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host }) {
   const peer = await withData(async (data) => {
+    const normalizedHost = validHost(host);
     const entry = {
       id: crypto.randomUUID(),
       address,
+      host: normalizedHost || null,
       port,
-      name: validName(name, address),
+      name: validName(name, normalizedHost || address),
       instanceId: null,
       addedAt: new Date().toISOString(),
       lastSeen: null,
@@ -151,12 +164,11 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name }) {
       directions: ['outbound']
     };
     data.peers.push(entry);
-    console.log(`🌐 Peer added: ${entry.name} (${entry.address}:${entry.port})`);
+    console.log(`🌐 Peer added: ${entry.name} (${peerBaseUrl(entry)})`);
     instanceEvents.emit('peers:updated', data.peers);
     return entry;
   });
-  // Announce ourselves to the remote peer (fire-and-forget)
-  announceSelf(peer.address, peer.port);
+  announceSelf(peer);
   return peer;
 }
 
@@ -173,8 +185,8 @@ export async function removePeer(id) {
 }
 
 export async function updatePeer(id, updates) {
-  if (updates.enabled === false) disconnectFromPeer(id);
-  return withData(async (data) => {
+  let hostChanged = false;
+  const result = await withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
     if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
@@ -183,15 +195,28 @@ export async function updatePeer(id, updates) {
     if (updates.syncCategories !== undefined) {
       peer.syncCategories = { ...(peer.syncCategories || DEFAULT_SYNC_CATEGORIES), ...updates.syncCategories };
     }
+    if (updates.host !== undefined) {
+      const normalized = validHost(updates.host);
+      if (normalized !== undefined && normalized !== peer.host) {
+        peer.host = normalized; // null clears, string sets
+        hostChanged = true;
+        console.log(`🌐 Peer host ${peer.host ? `set to ${peer.host}` : 'cleared'}: ${peer.name}`);
+      }
+    }
     instanceEvents.emit('peers:updated', data.peers);
     return peer;
   });
+  // Tear down the socket relay only after a real state transition so it can
+  // reconnect using the new URL on the next probe cycle. Invalid/no-op host
+  // writes no longer disrupt an already-healthy connection.
+  if (updates.enabled === false || hostChanged) disconnectFromPeer(id);
+  return result;
 }
 
 // --- Probing ---
 
 export async function probePeer(peer) {
-  const baseUrl = `http://${peer.address}:${peer.port}`;
+  const baseUrl = peerBaseUrl(peer);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
@@ -224,7 +249,7 @@ export async function probePeer(peer) {
       remoteSyncSeqs = await syncRes.json().catch(() => null);
     }
   } catch (err) {
-    console.log(`⚠️ Probe failed for ${peer.address}:${peer.port}: ${err.message}`);
+    console.log(`⚠️ Probe failed for ${baseUrl}: ${err.message}`);
     status = 'offline';
     lastHealth = peer.lastHealth; // preserve last known
     lastSeen = peer.lastSeen;
@@ -276,7 +301,7 @@ export async function probePeer(peer) {
   // Announce ourselves only when peer transitions to online (not every poll cycle)
   if (status === 'online' && previousStatus !== 'online') {
     if (stored) {
-      announceSelf(peer.address, peer.port);
+      announceSelf(stored);
       instanceEvents.emit('peer:online', stored);
     }
   }
@@ -309,7 +334,7 @@ export async function queryPeer(id, apiPath) {
   const peer = data.peers.find(p => p.id === id);
   if (!peer) return { error: 'Peer not found' };
 
-  const url = `http://${peer.address}:${peer.port}${apiPath}`;
+  const url = `${peerBaseUrl(peer)}${apiPath}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
@@ -387,12 +412,12 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
   return result;
 }
 
-async function announceSelf(address, port) {
+async function announceSelf(peer) {
   const data = await loadData();
   if (!data.self) return;
 
   const selfPort = parseInt(process.env.PORT, 10) || DEFAULT_PEER_PORT;
-  const url = `http://${address}:${port}/api/instances/peers/announce`;
+  const url = `${peerBaseUrl(peer)}/api/instances/peers/announce`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -408,14 +433,13 @@ async function announceSelf(address, port) {
       signal: controller.signal
     });
     if (res.ok) {
-      console.log(`🌐 Announced self to ${address}:${port}`);
-      // Mark outbound direction on the local peer record
-      await markDirection(address, port, 'outbound');
+      console.log(`🌐 Announced self to ${url}`);
+      await markDirection(peer.id, 'outbound');
     } else {
-      console.log(`🌐 Announce to ${address}:${port} failed: HTTP ${res.status}`);
+      console.log(`🌐 Announce to ${url} failed: HTTP ${res.status}`);
     }
   } catch (err) {
-    console.log(`🌐 Announce to ${address}:${port} unreachable: ${err.message}`);
+    console.log(`🌐 Announce to ${url} unreachable: ${err.message}`);
   } finally {
     clearTimeout(timeout);
   }
@@ -425,14 +449,14 @@ export async function connectPeer(id) {
   const data = await loadData();
   const peer = data.peers.find(p => p.id === id);
   if (!peer) return null;
-  await announceSelf(peer.address, peer.port);
+  await announceSelf(peer);
   const probed = await probePeer(peer);
   return probed;
 }
 
-async function markDirection(address, port, direction) {
+async function markDirection(peerId, direction) {
   await withData(async (data) => {
-    const peer = data.peers.find(p => p.address === address && p.port === port);
+    const peer = data.peers.find(p => p.id === peerId);
     if (!peer) return;
     peer.directions = peer.directions || [];
     if (!peer.directions.includes(direction)) {

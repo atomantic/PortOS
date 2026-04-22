@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
   Wifi, WifiOff, CircleDot,
@@ -12,7 +12,7 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
-  removePeer, connectPeer, probePeer
+  removePeer, connectPeer, probePeer, getTailnetInfo
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -488,7 +488,92 @@ function SyncStatusSection({ peer, syncStatus }) {
   );
 }
 
-function PeerCard({ peer, onRefresh, syncStatus }) {
+function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Auto-detected DNS suggestion from the local tailscale status map:
+  // match the peer by IP first (authoritative), fall back to composing
+  // <hostname>.<tailnet-suffix> when the peer's hostname is a valid DNS label.
+  const hostname = peer.lastHealth?.hostname;
+  const suggestion = useMemo(() => {
+    if (!tailnetInfo?.suffix) return null;
+    const byIp = tailnetInfo.peers?.find(p => p.ips?.includes(peer.address));
+    if (byIp?.dnsName) return byIp.dnsName;
+    if (hostname && /^[a-z0-9][a-z0-9-]*$/i.test(hostname)) {
+      return `${hostname}.${tailnetInfo.suffix}`.toLowerCase();
+    }
+    return null;
+  }, [tailnetInfo, peer.address, hostname]);
+
+  const startEdit = () => {
+    setValue(peer.host || suggestion || '');
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    const payload = { host: value.trim() === '' ? null : value.trim() };
+    const result = await updatePeer(peer.id, payload).catch(() => null);
+    setSaving(false);
+    if (!result) return;
+    onRefresh();
+    setEditing(false);
+    toast.success(payload.host ? `Host set to ${payload.host}` : 'Host cleared — reverting to IP');
+  };
+
+  const applySuggestion = () => setValue(suggestion);
+
+  if (editing) {
+    return (
+      <div className="mt-1 flex items-center gap-1 flex-wrap">
+        <input
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && save()}
+          placeholder="host.tailnet.ts.net (empty to clear)"
+          className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white font-mono focus:outline-hidden focus:border-port-accent flex-1 min-w-[180px]"
+          autoFocus
+        />
+        <button onClick={save} disabled={saving} className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-white"><X size={14} /></button>
+        {suggestion && suggestion !== value && (
+          <button
+            onClick={applySuggestion}
+            className="text-[10px] text-port-accent hover:text-port-accent/80 underline"
+            title={`Use detected DNS: ${suggestion}`}
+          >
+            use {suggestion}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
+      {peer.host ? (
+        <span className="inline-flex items-center gap-1 text-[10px] text-port-success bg-port-success/10 rounded px-1.5 py-0.5 font-mono" title="Requests to this peer use https://<host>">
+          <Wifi size={10} /> https://{peer.host}
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-port-bg rounded px-1.5 py-0.5 font-mono" title="Requests use http://<ip> (no DNS set)">
+          http only
+        </span>
+      )}
+      <button
+        onClick={startEdit}
+        className="text-[10px] text-gray-500 hover:text-white underline"
+        title={suggestion ? `Auto-detected: ${suggestion}` : 'Set a Tailscale DNS name for HTTPS'}
+      >
+        {peer.host ? 'edit' : (suggestion ? `use ${suggestion}` : 'set DNS')}
+      </button>
+    </div>
+  );
+}
+
+function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
@@ -593,20 +678,23 @@ function PeerCard({ peer, onRefresh, syncStatus }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-3">
-        <p className="text-xs text-gray-500 font-mono">{peer.address}:{peer.port}</p>
-        <DirectionBadge directions={peer.directions} />
-        {isInboundOnly && (
-          <button
-            onClick={handleConnect}
-            disabled={connecting}
-            className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
-            title="Connect back to make this mutual"
-          >
-            <ArrowLeftRight size={10} />
-            {connecting ? 'Connecting...' : 'Connect'}
-          </button>
-        )}
+      <div className="mb-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-xs text-gray-500 font-mono">{peer.address}:{peer.port}</p>
+          <DirectionBadge directions={peer.directions} />
+          {isInboundOnly && (
+            <button
+              onClick={handleConnect}
+              disabled={connecting}
+              className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+              title="Connect back to make this mutual"
+            >
+              <ArrowLeftRight size={10} />
+              {connecting ? 'Connecting...' : 'Connect'}
+            </button>
+          )}
+        </div>
+        <PeerHostEditor peer={peer} onRefresh={onRefresh} tailnetInfo={tailnetInfo} />
       </div>
 
       <HealthSummary health={peer.lastHealth} version={peer.version} />
@@ -629,7 +717,7 @@ function PeerCard({ peer, onRefresh, syncStatus }) {
 
       <SyncStatusSection peer={peer} syncStatus={syncStatus} />
 
-      <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} />
+      <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (
         <PeerAgentsSection peerId={peer.id} peerName={peer.name} />
       )}
@@ -641,6 +729,7 @@ export default function Instances() {
   const [self, setSelf] = useState(null);
   const [peers, setPeers] = useState([]);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [tailnetInfo, setTailnetInfo] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
@@ -654,7 +743,13 @@ export default function Instances() {
   }, []);
 
   useEffect(() => {
-    fetchData();
+    // Kick off both reads in parallel — the tailnet map is independent of
+    // peer state, and fetching it sequentially added ~100-500ms to first paint
+    // on machines where `tailscale status --json` is slow to respond.
+    Promise.all([
+      fetchData(),
+      getTailnetInfo().then(setTailnetInfo).catch(() => setTailnetInfo(null))
+    ]);
 
     socket.emit('instances:subscribe');
     const handlePeersUpdated = (updatedPeers) => {
@@ -696,7 +791,7 @@ export default function Instances() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {peers.map(peer => (
-              <PeerCard key={peer.id} peer={peer} onRefresh={fetchData} syncStatus={syncStatus} />
+              <PeerCard key={peer.id} peer={peer} onRefresh={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo} />
             ))}
           </div>
         </div>

@@ -22,7 +22,9 @@ try {
 } catch { /* no .env file — default to docker */ }
 
 const PORTS = {
-  API: 5555,           // Express API server
+  API: 5555,           // Express API server (HTTPS when Tailscale cert is active)
+  API_LOCAL: 5553,     // Loopback-only HTTP mirror of API — only binds when HTTPS is active on :API.
+                       // Lets http://localhost work without cert warnings. Override w/ PORTOS_HTTP_PORT.
   UI: 5554,            // Vite dev server (client)
   CDP: 5556,           // Chrome DevTools Protocol (browser automation)
   CDP_HEALTH: 5557,    // Browser health check endpoint
@@ -47,6 +49,7 @@ module.exports = {
       env: {
         ...BASE_ENV,
         PORT: PORTS.API,
+        PORTOS_HTTP_PORT: PORTS.API_LOCAL, // Loopback HTTP mirror when HTTPS is active
         HOST: '0.0.0.0',
         PGPORT: PORTS.POSTGRES,
         PGPASSWORD: process.env.PGPASSWORD || 'portos',

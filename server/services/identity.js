@@ -8,6 +8,25 @@ import { getTasteProfile } from './taste-questionnaire.js';
 import { getActivities } from './meatspaceCalendar.js';
 import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
 import { goalTypeEnum } from '../lib/identityValidation.js';
+import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from './mortalLoomStore.js';
+
+const PORTOS_GOAL_DEFAULTS = {
+  parentId: null,
+  tags: [],
+  linkedActivities: [],
+  linkedCalendars: [],
+  progress: 0,
+  progressHistory: [],
+  todos: [],
+  targetDate: null,
+  timeBlockConfig: null,
+  scheduledEvents: [],
+  checkIns: [],
+  milestones: [],
+  goalType: 'standard'
+};
+
+const normalizeGoal = g => ({ ...PORTOS_GOAL_DEFAULTS, ...g });
 
 const IDENTITY_DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(IDENTITY_DIR, 'identity.json');
@@ -157,13 +176,23 @@ async function ensureIdentityDir() {
 
 async function loadJSON(filePath, defaultVal) {
   const raw = await readFile(filePath, 'utf-8').catch(() => null);
-  if (!raw) return structuredClone(defaultVal);
-  return safeJSONParse(raw, structuredClone(defaultVal));
+  const data = raw ? safeJSONParse(raw, structuredClone(defaultVal)) : structuredClone(defaultVal);
+  // When MortalLoom iCloud sync is enabled, the goals array is sourced from
+  // MortalLoom.json; birthDate and lifeExpectancy metadata stay in local PortOS.
+  if (filePath === GOALS_FILE) {
+    const mlGoals = await mlArrayIfEnabled('goals');
+    if (mlGoals) data.goals = mlGoals.map(normalizeGoal);
+  }
+  return data;
 }
 
 async function saveJSON(filePath, data) {
   await ensureIdentityDir();
   await writeFile(filePath, JSON.stringify(data, null, 2));
+  // Mirror goals array into MortalLoom.json so iOS/macOS app sees the change.
+  if (filePath === GOALS_FILE && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
+    await mlReplace('goals', data.goals);
+  }
 }
 
 // === Pure Functions (exported for testing) ===

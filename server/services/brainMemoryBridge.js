@@ -17,6 +17,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { listJournals } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
 
@@ -28,7 +29,8 @@ const TYPE_MAP = {
   admin:    { type: 'fact',        category: 'admin' },
   memories: { type: 'observation', category: 'personal' },
   digests:  { type: 'context',     category: 'digest' },
-  reviews:  { type: 'context',     category: 'review' }
+  reviews:  { type: 'context',     category: 'review' },
+  journals: { type: 'observation', category: 'daily-log' }
 };
 
 // ─── Bridge Map ─────────────────────────────────────────────────────────────
@@ -121,6 +123,12 @@ function composeReviewContent(r) {
   return parts.join('\n');
 }
 
+function composeDailyLogContent(r) {
+  const parts = [`Daily Log — ${r.date}`];
+  if (r.content) parts.push(r.content);
+  return parts.join('\n');
+}
+
 export const CONTENT_COMPOSERS = {
   people: composePeopleContent,
   projects: composeProjectContent,
@@ -128,7 +136,8 @@ export const CONTENT_COMPOSERS = {
   admin: composeAdminContent,
   memories: composeJournalContent,
   digests: composeDigestContent,
-  reviews: composeReviewContent
+  reviews: composeReviewContent,
+  journals: composeDailyLogContent
 };
 
 // ─── Core Mapping ───────────────────────────────────────────────────────────
@@ -234,6 +243,35 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     }
   }
 
+  // Daily log entries — one memory per day, initial/backfill import only;
+  // already-mapped records are skipped by this bulk sync. Content updates
+  // and deletions flow through the 'journals:upserted' / 'journals:deleted'
+  // event handlers instead (see initBridge).
+  {
+    const { records: journals } = await listJournals({ limit: 10000, includeContent: true });
+    for (const record of journals) {
+      const key = bridgeKey('journals', record.id);
+      // Already-mapped days are skipped in both real and dry-run modes so
+      // dry-run stats match actual-run stats (rather than claiming to
+      // re-sync every day every time).
+      if (map[key]) {
+        stats.skipped += 1;
+        continue;
+      }
+      if (dryRun) {
+        console.log(`🧠🔗 [dry-run] Would sync journals/${record.date}`);
+        stats.synced += 1;
+        continue;
+      }
+      const memoryId = await syncBrainRecord('journals', record).catch((err) => {
+        console.error(`❌ Failed to sync journals/${record.date}: ${err.message}`);
+        stats.errors += 1;
+        return null;
+      });
+      if (memoryId) stats.synced += 1;
+    }
+  }
+
   // JSONL stores (digests, reviews)
   const jsonlTypes = ['digests', 'reviews'];
   for (const type of jsonlTypes) {
@@ -311,5 +349,39 @@ export function initBridge() {
   brainEvents.on('digests:added', (record) => handleJsonlAdded('digests', record));
   brainEvents.on('reviews:added', (record) => handleJsonlAdded('reviews', record));
 
+  // Daily log — per-entry events so a single append doesn't re-embed every
+  // day of the user's history. (An earlier version listened for the
+  // store-wide 'journals:changed' event, which would trigger O(totalDays)
+  // embedding calls per dictation segment and saturate the embedding
+  // backend.) appendJournal/setJournalContent fire 'journals:upserted' with
+  // the single affected entry; deleteJournal fires 'journals:deleted'.
+  brainEvents.on('journals:upserted', ({ entry }) => handleJournalUpserted(entry));
+  // handleJournalDeleted is async and awaits loadBridgeMap(); wrap the call
+  // in a .catch so a rejection becomes a logged error instead of an
+  // unhandled-rejection warning (or a process crash under strict modes).
+  brainEvents.on('journals:deleted', ({ entry }) => {
+    handleJournalDeleted(entry).catch((err) => {
+      console.error(`❌ Brain bridge delete sync failed for journals/${entry?.id}: ${err.message}`);
+    });
+  });
+
   console.log('🧠🔗 Brain→Memory bridge initialized');
+}
+
+function handleJournalUpserted(entry) {
+  if (!entry?.id) return;
+  syncBrainRecord('journals', entry).catch((err) => {
+    console.error(`❌ Brain bridge sync failed for journals/${entry.id}: ${err.message}`);
+  });
+}
+
+async function handleJournalDeleted(entry) {
+  if (!entry?.id) return;
+  const map = await loadBridgeMap();
+  const key = bridgeKey('journals', entry.id);
+  const memoryId = map[key];
+  if (!memoryId) return;
+  memory.updateMemory(memoryId, { status: 'archived' }).catch((err) => {
+    console.error(`❌ Brain bridge archive failed for journals/${entry.id}: ${err.message}`);
+  });
 }

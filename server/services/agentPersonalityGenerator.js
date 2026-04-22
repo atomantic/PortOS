@@ -212,8 +212,7 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
   try {
     generated = JSON.parse(jsonStr);
   } catch (parseError) {
-    console.error(`❌ Failed to parse generated personality: ${parseError.message}`);
-    console.error(`Response was: ${responseText.substring(0, 500)}`);
+    console.error(`❌ Failed to parse generated personality: ${parseError.message} | response: ${responseText.substring(0, 500)}`);
     throw new Error('Failed to parse AI response as JSON. Please try again.');
   }
 

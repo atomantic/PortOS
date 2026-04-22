@@ -6,12 +6,13 @@
  * Maintains per-peer cursors and triggers sync on peer connect + interval.
  */
 
-import { writeFile, rename, access } from 'fs/promises';
+import { writeFile, access } from 'fs/promises';
 import { join } from 'path';
-import { readJSONFile, ensureDir, PATHS, dataPath } from '../lib/fileUtils.js';
+import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getPeers, DEFAULT_SYNC_CATEGORIES } from './instances.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
 import * as brainSync from './brainSync.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import * as memorySync from './memorySync.js';
@@ -35,9 +36,7 @@ async function loadCursors() {
 
 async function saveCursors(cursors) {
   await ensureDir(PATHS.data);
-  const tmp = `${CURSORS_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(cursors, null, 2));
-  await rename(tmp, CURSORS_FILE);
+  await atomicWrite(CURSORS_FILE, cursors);
 }
 
 async function readCursors(fn) {
@@ -59,7 +58,7 @@ async function withCursors(fn) {
 // --- Peer fetch helper ---
 
 async function fetchPeer(peer, path) {
-  const url = `http://${peer.address}:${peer.port}${path}`;
+  const url = `${peerBaseUrl(peer)}${path}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -88,7 +87,7 @@ async function syncImageFromPeer(peer, avatarPath) {
   const exists = await access(localPath).then(() => true).catch(() => false);
   if (exists) return;
 
-  const url = `http://${peer.address}:${peer.port}${avatarPath}`;
+  const url = `${peerBaseUrl(peer)}${avatarPath}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {

@@ -389,6 +389,37 @@ describe('scoreLlmDrill', () => {
     expect(result.score).toBeGreaterThan(0);
     expect(result.evaluation.overallScore).toBe(67);
   });
+
+  it('compound-chain accepts both full compounds and the other half', async () => {
+    // User-typed shorthand: "hose" instead of "firehose", "pit" instead of "firepit".
+    // Both should count as valid compound contributions.
+    const result = await scoreLlmDrill(
+      'compound-chain',
+      { challenges: [{ rootWord: 'fire', position: 'either', minExpected: 4, examples: ['firehose', 'firepit', 'firework', 'campfire'] }] },
+      [{ items: ['hose', 'pit', 'work', 'campfire'], responseMs: 30000 }],
+      60000
+    );
+
+    expect(result.evaluation.scores[0].validCount).toBe(4);
+    expect(result.evaluation.scores[0].invalidItems).toEqual([]);
+    // Examples already covered (either as full compound or half) shouldn't be re-suggested.
+    expect(result.evaluation.scores[0].missedExamples).not.toContain('firehose');
+    expect(result.evaluation.scores[0].missedExamples).not.toContain('firepit');
+    expect(result.evaluation.scores[0].missedExamples).not.toContain('firework');
+    expect(result.evaluation.scores[0].missedExamples).not.toContain('campfire');
+  });
+
+  it('compound-chain rejects bare root word', () => {
+    return scoreLlmDrill(
+      'compound-chain',
+      { challenges: [{ rootWord: 'fire', position: 'either', minExpected: 2, examples: [] }] },
+      [{ items: ['fire', 'firework'], responseMs: 10000 }],
+      60000
+    ).then(result => {
+      expect(result.evaluation.scores[0].validCount).toBe(1);
+      expect(result.evaluation.scores[0].invalidItems).toContain('fire');
+    });
+  });
 });
 
 // =============================================================================

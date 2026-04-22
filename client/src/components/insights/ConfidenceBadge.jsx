@@ -1,8 +1,9 @@
 const BADGE_STYLES = {
   strong: 'bg-port-success/20 text-port-success border-port-success/30',
   moderate: 'bg-port-warning/20 text-port-warning border-port-warning/30',
-  weak: 'bg-port-error/20 text-port-error border-port-error/30',
+  weak: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
   significant: 'bg-port-error/30 text-port-error border-port-error/50',
+  neutral: 'bg-gray-800/70 text-gray-300 border-gray-600',
   unknown: 'bg-gray-800 text-gray-400 border-gray-700'
 };
 

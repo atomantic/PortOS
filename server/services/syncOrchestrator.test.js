@@ -33,6 +33,7 @@ vi.mock('./instanceEvents.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn().mockResolvedValue({}),
   ensureDir: vi.fn().mockResolvedValue(),
+  atomicWrite: vi.fn().mockResolvedValue(),
   PATHS: { data: '/mock/data' },
   dataPath: (name) => `/mock/data/${name}`
 }));

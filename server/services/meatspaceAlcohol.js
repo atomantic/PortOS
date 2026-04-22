@@ -8,6 +8,14 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
+import {
+  isMortalLoomEnabled,
+  readDailyLogIfEnabled,
+  mlPush,
+  mlPatchById,
+  mlRemoveById,
+  mlIdAtDateIndex
+} from './mortalLoomStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const DAILY_LOG_FILE = join(MEATSPACE_DIR, 'daily-log.json');
@@ -132,6 +140,8 @@ export function computeRollingAverages(entries, sex = 'male') {
 // === File I/O ===
 
 async function loadDailyLog() {
+  const ml = await readDailyLogIfEnabled();
+  if (ml) return ml;
   const raw = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null }, { allowArray: false });
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { entries: [], lastEntryDate: null };
   if (!Array.isArray(raw.entries)) raw.entries = [];
@@ -186,41 +196,33 @@ export async function getDailyAlcohol(from, to) {
 }
 
 export async function logDrink({ name, oz, abv, count = 1, date }) {
-  const log = await loadDailyLog();
   const targetDate = date || getDateString();
-
   const standardDrinks = computeStandardDrinks(oz * count, abv);
   const drink = { name: name || '', abv, oz, count };
 
-  // Find or create daily entry
+  if (await isMortalLoomEnabled()) {
+    await mlPush('alcoholDrinks', { ...drink, date: targetDate });
+    averageCache = null;
+    const log = await loadDailyLog();
+    const entry = log.entries.find(e => e.date === targetDate);
+    console.log(`🍺 Logged drink (MortalLoom): ${name || 'unnamed'} ${oz}oz @ ${abv}% (${standardDrinks} std) on ${targetDate}`);
+    return { drink, standardDrinks, date: targetDate, dayTotal: entry?.alcohol?.standardDrinks || standardDrinks };
+  }
+
+  const log = await loadDailyLog();
   let entry = log.entries.find(e => e.date === targetDate);
-  if (!entry) {
-    entry = { date: targetDate };
-    log.entries.push(entry);
-  }
+  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+  if (!entry.alcohol) entry.alcohol = { drinks: [], standardDrinks: 0 };
 
-  // Initialize alcohol section
-  if (!entry.alcohol) {
-    entry.alcohol = { drinks: [], standardDrinks: 0 };
-  }
-
-  // Combine with existing matching drink on same date
   const existing = entry.alcohol.drinks.find(d => d.name === drink.name && d.oz === drink.oz && d.abv === drink.abv);
-  if (existing) {
-    existing.count = (existing.count || 1) + count;
-  } else {
-    entry.alcohol.drinks.push(drink);
-  }
+  if (existing) existing.count = (existing.count || 1) + count;
+  else entry.alcohol.drinks.push(drink);
 
   recalcAlcoholTotal(entry);
-
-  // Re-sort and update lastEntryDate
   log.entries.sort((a, b) => a.date.localeCompare(b.date));
-  log.lastEntryDate = log.entries[log.entries.length - 1].date;
-
+  log.lastEntryDate = log.entries.at(-1).date;
   await saveDailyLog(log);
-  console.log(`🍺 Logged drink: ${name || 'unnamed'} ${oz}oz @ ${abv}% (${standardDrinks} std drinks) on ${targetDate}`);
-
+  console.log(`🍺 Logged drink: ${name || 'unnamed'} ${oz}oz @ ${abv}% (${standardDrinks} std) on ${targetDate}`);
   return { drink, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
 }
 
@@ -232,6 +234,24 @@ function recalcAlcoholTotal(entry) {
 }
 
 export async function updateDrink(date, index, updates) {
+  if (await isMortalLoomEnabled()) {
+    const id = await mlIdAtDateIndex('alcoholDrinks', date, index);
+    if (!id) return null;
+    const patch = {};
+    for (const k of ['name', 'oz', 'abv', 'count', 'date']) {
+      if (updates[k] !== undefined) patch[k] = updates[k];
+    }
+    const updated = await mlPatchById('alcoholDrinks', id, patch);
+    averageCache = null;
+    const effectiveDate = updated?.date || date;
+    const log = await loadDailyLog();
+    const entry = log.entries.find(e => e.date === effectiveDate);
+    console.log(`📝 Updated drink (MortalLoom) ${date}[${index}] → ${effectiveDate}: ${updated?.name}`);
+    return { drink: { name: updated.name, oz: updated.oz, abv: updated.abv, count: updated.count },
+             dayTotal: entry?.alcohol?.standardDrinks || 0,
+             date: effectiveDate };
+  }
+
   const log = await loadDailyLog();
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.alcohol?.drinks?.[index]) return null;
@@ -281,19 +301,21 @@ export async function updateDrink(date, index, updates) {
 }
 
 export async function removeDrink(date, index) {
+  if (await isMortalLoomEnabled()) {
+    const id = await mlIdAtDateIndex('alcoholDrinks', date, index);
+    if (!id) return null;
+    const removed = await mlRemoveById('alcoholDrinks', id);
+    averageCache = null;
+    return removed;
+  }
+
   const log = await loadDailyLog();
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.alcohol?.drinks?.[index]) return null;
 
   const removed = entry.alcohol.drinks.splice(index, 1)[0];
-
-  // Remove alcohol section if empty, else recalculate total
-  if (entry.alcohol.drinks.length === 0) {
-    delete entry.alcohol;
-  } else {
-    recalcAlcoholTotal(entry);
-  }
-
+  if (entry.alcohol.drinks.length === 0) delete entry.alcohol;
+  else recalcAlcoholTotal(entry);
   await saveDailyLog(log);
   return removed;
 }

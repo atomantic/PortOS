@@ -1,14 +1,16 @@
 import express from 'express';
-import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
+import { PORTS } from './lib/ports.js';
 import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
+import { createTailscaleServers } from '../lib/tailscale-https.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
+import avatarRoutes from './routes/avatar.js';
 import systemHealthRoutes from './routes/systemHealth.js';
 import appsRoutes from './routes/apps.js';
 import portsRoutes from './routes/ports.js';
@@ -44,6 +46,9 @@ import genomeRoutes from './routes/genome.js';
 import digitalTwinRoutes from './routes/digital-twin.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
+import voiceRoutes from './routes/voice.js';
+import { getVoiceConfig } from './services/voice/config.js';
+import { reconcile as reconcileVoice } from './services/voice/bootstrap.js';
 import browserRoutes from './routes/browser.js';
 import moltworldToolsRoutes from './routes/moltworldTools.js';
 import moltworldWsRoutes from './routes/moltworldWs.js';
@@ -59,6 +64,7 @@ import dataSyncRoutes from './routes/dataSync.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
 import meatspaceRoutes from './routes/meatspace.js';
+import mortallomRoutes from './routes/mortalloom.js';
 import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
@@ -76,6 +82,7 @@ import { initSyncOrchestrator } from './services/syncOrchestrator.js';
 import { initSocket } from './services/socket.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
 import { initAutoFixer } from './services/autoFixer.js';
+import { initCertRenewer } from './services/certRenewer.js';
 import { initTaskLearning } from './services/taskLearning.js';
 import { recordSession, recordMessages } from './services/usage.js';
 import { errorEvents } from './lib/errorHandler.js';
@@ -104,9 +111,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const httpServer = createServer(app);
 const PORT = process.env.PORT || 5555;
 const HOST = process.env.HOST || '0.0.0.0';
+
+// Delegates HTTPS / HTTP-mirror wiring to lib/tailscale-https.js — see there.
+const CERT_DIR = join(PATHS.data, 'certs');
+const { server: httpServer, mirror: localHttpServer, httpsEnabled } =
+  createTailscaleServers(app, { certDir: CERT_DIR });
+const scheme = httpsEnabled ? 'https' : 'http';
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {
@@ -213,6 +225,7 @@ app.set('io', io);
 
 // API Routes
 app.use('/api/alerts', alertsRoutes);
+app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemHealthRoutes);
 app.use('/api/apps', appsRoutes);
 app.use('/api/ports', portsRoutes);
@@ -263,6 +276,7 @@ app.use('/api/digital-twin/identity', identityRoutes);
 app.use('/api/digital-twin/autobiography', autobiographyRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
+app.use('/api/voice', voiceRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/data', dataManagerRoutes);
 app.use('/api/datadog', datadogRoutes);
@@ -272,6 +286,7 @@ app.use('/api/insights', insightsRoutes);
 app.use('/api/instances', instancesRoutes);
 app.use('/api/sync', dataSyncRoutes);
 app.use('/api/meatspace', meatspaceRoutes);
+app.use('/api/mortalloom', mortallomRoutes);
 app.use('/api/review', reviewRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/settings', settingsRoutes);
@@ -285,7 +300,7 @@ app.use('/api/openclaw', openclawRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
-agentActionExecutor.init();
+agentActionExecutor.init().catch(err => console.error(`❌ agentActionExecutor init failed: ${err.message}`));
 
 // Recover any inbox entries stuck in 'classifying' from a previous crash/restart
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
@@ -305,6 +320,8 @@ getInitSettings().then(s => {
     telegram.init().catch(err => console.error(`❌ Telegram init failed: ${err.message}`));
   }
 }).catch(err => console.error(`❌ Telegram settings read failed: ${err.message}`));
+// Reconcile voice stack (start portos-whisper if voice.enabled)
+getVoiceConfig().then(reconcileVoice).catch(err => console.error(`❌ Voice reconcile failed: ${err.message}`));
 // Check for update completion marker from a previous update cycle
 const updateMarkerPath = join(PATHS.data, 'update-complete.json');
 const removeMarker = () => unlink(updateMarkerPath).catch(e => {
@@ -392,7 +409,24 @@ ensureSelf()
   .then(() => {
     // Start server only after sync log is initialized
     httpServer.listen(PORT, HOST, () => {
-      console.log(`🚀 PortOS server running at http://${HOST}:${PORT}`);
+      console.log(`🚀 PortOS server running at ${scheme}://${HOST}:${PORT}`);
+      if (!httpsEnabled) {
+        console.log(`⚠️  HTTP only — getUserMedia (mic) will not work over Tailscale IP. Run "npm run setup:cert" to enable HTTPS.`);
+      } else {
+        initCertRenewer(httpServer);
+        // Loopback-HTTP mirror (created by createTailscaleServers) — attach
+        // Socket.IO to the same instance so websocket events are identical.
+        const localHttpPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
+        if (localHttpServer) {
+          io.attach(localHttpServer);
+          localHttpServer.listen(localHttpPort, '127.0.0.1', () => {
+            console.log(`🔓 Local HTTP also at http://localhost:${localHttpPort} (loopback only, no cert warnings)`);
+          });
+          localHttpServer.on('error', (err) => {
+            console.warn(`⚠️  Local HTTP fallback on :${localHttpPort} failed: ${err.message} — Tailscale HTTPS still active`);
+          });
+        }
+      }
 
       // Set up process error handlers with io instance
       setupProcessErrorHandlers(io);
@@ -410,3 +444,47 @@ ensureSelf()
     console.error(`❌ Instance init failed: ${err.message}`);
     process.exit(1);
   });
+
+const closeServer = (server, label) => new Promise((resolve) => {
+  if (!server) return resolve();
+  server.close((err) => {
+    if (err) console.error(`⚠️ Error closing ${label}: ${err.message}`);
+    else console.log(`✅ ${label} closed`);
+    resolve();
+  });
+});
+
+let shuttingDown = false;
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🛑 Received ${signal} - shutting down gracefully`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.error('⚠️ Graceful shutdown timed out, forcing exit');
+    process.exit(1);
+  }, 10000);
+
+  await new Promise((resolve) => {
+    io.close((err) => {
+      if (err) console.error(`⚠️ Error closing Socket.IO: ${err.message}`);
+      else console.log('✅ Socket.IO server closed');
+      resolve();
+    });
+  });
+  await closeServer(httpServer, 'HTTP server');
+  await closeServer(localHttpServer, 'Local HTTP server');
+
+  const { close } = await import('./lib/db.js');
+  if (typeof close === 'function') {
+    await close();
+    console.log('✅ DB pool closed');
+  } else {
+    console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
+  }
+
+  clearTimeout(forceExitTimer);
+  process.exit(0);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

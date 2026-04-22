@@ -30,6 +30,7 @@ export * from './apiBrain.js';
 export * from './apiNotes.js';
 export * from './apiDigitalTwin.js';
 export * from './apiMeatspace.js';
+export * from './apiMortalLoom.js';
 export * from './apiOpenClaw.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)

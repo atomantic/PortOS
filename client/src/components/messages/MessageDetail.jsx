@@ -47,7 +47,7 @@ function SafeHtmlBody({ html }) {
     };
     resize();
     // Resize again after images load
-    doc.querySelectorAll('img').forEach(img => img.addEventListener('load', resize));
+    doc.querySelectorAll('img').forEach(img => img.addEventListener('load', resize, { once: true }));
   }, [html]);
 
   useEffect(() => {

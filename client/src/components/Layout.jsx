@@ -72,7 +72,9 @@ import {
   HardDrive,
   MessagesSquare,
   BookOpen,
-  Search
+  NotebookPen,
+  Search,
+  Mic
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -84,6 +86,7 @@ import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
+import VoiceWidget from './voice/VoiceWidget';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -98,6 +101,7 @@ const navItems = [
     icon: Brain,
     children: [
       { to: '/brain/config', label: 'Config', icon: Settings },
+      { to: '/brain/daily-log', label: 'Daily Log', icon: NotebookPen },
       { to: '/brain/digest', label: 'Digest', icon: Calendar },
       { to: '/brain/graph', label: 'Graph', icon: Network },
       { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
@@ -143,6 +147,7 @@ const navItems = [
       { to: '/cos/tasks', label: 'Tasks', icon: FileText }
     ]
   },
+  { to: '/data', label: 'Data', icon: HardDrive, single: true },
   {
     label: 'Dev Tools',
     icon: Terminal,
@@ -165,7 +170,6 @@ const navItems = [
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 }
     ]
   },
-  { to: '/data', label: 'Data', icon: HardDrive, single: true },
   {
     label: 'Digital Twin',
     icon: Heart,
@@ -235,7 +239,8 @@ const navItems = [
       { to: '/ai', label: 'Providers', icon: Bot },
       { to: '/security', label: 'Security', icon: Camera },
       { to: '/settings/telegram', label: 'Telegram', icon: MessageSquare },
-      { to: '/uploads', label: 'Uploads', icon: Upload }
+      { to: '/uploads', label: 'Uploads', icon: Upload },
+      { to: '/settings/voice', label: 'Voice', icon: Mic }
     ]
   },
   { to: '/agents', label: 'Social Agents', icon: Users, single: true },
@@ -724,6 +729,8 @@ export default function Layout() {
       <CmdKSearch />
       {/* Keyboard shortcuts help — press ? to toggle */}
       <KeyboardHelp />
+      {/* Push-to-talk voice widget — self-hides when voice.enabled is false */}
+      <VoiceWidget />
     </div>
   );
 }

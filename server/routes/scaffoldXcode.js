@@ -422,10 +422,11 @@ xcodebuild test -project ${targetName}.xcodeproj -scheme ${targetName} \\
 Local deploy via \`./deploy.sh\`:
 
 \`\`\`bash
-./deploy.sh              # iOS only (default)
+./deploy.sh              # every platform the project has a scheme for (default)
+./deploy.sh --ios        # iOS only
 ./deploy.sh --macos      # macOS only
-./deploy.sh --watch      # watchOS only
-./deploy.sh --all        # all platforms
+./deploy.sh --watch      # watchOS only (standalone watch apps)
+./deploy.sh --all        # explicit "all available" (same as default)
 ./deploy.sh --skip-tests # skip tests for faster iteration
 \`\`\`
 

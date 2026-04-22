@@ -6,13 +6,12 @@
  */
 
 import { createTelegramBot } from '../lib/telegramClient.js';
-import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getSettings } from './settings.js';
 import { notificationEvents, NOTIFICATION_TYPES, getNotifications } from './notifications.js';
 import { approveMemory, rejectMemory, peekMemory } from './memoryBackend.js';
-import { ensureDir, PATHS, readJSONFile, formatDuration } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, formatDuration, atomicWrite } from '../lib/fileUtils.js';
 import { getActiveAgents } from './subAgentSpawner.js';
 import { getGoals } from './identity.js';
 
@@ -587,9 +586,7 @@ async function loadCheckins() {
 }
 
 async function saveCheckins(data) {
-  const tmp = `${CHECKINS_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 2));
-  await rename(tmp, CHECKINS_FILE);
+  await atomicWrite(CHECKINS_FILE, data);
 }
 
 // Process signal handlers to prevent orphan polling

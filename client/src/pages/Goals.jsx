@@ -4,6 +4,7 @@ import { Loader2, Target, TreePine, List } from 'lucide-react';
 import * as api from '../services/api';
 import GoalsTreeView from '../components/goals/GoalsTreeView';
 import GoalsListView from '../components/goals/GoalsListView';
+import MortalLoomBanner from '../components/MortalLoomBanner';
 
 const TABS = [
   { id: 'list', label: 'List', icon: List },
@@ -39,6 +40,8 @@ export default function Goals() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      <MortalLoomBanner section="Goals" />
+
       {/* Header */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">

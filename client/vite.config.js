@@ -1,14 +1,21 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 
 const rootPkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'));
 
+// Dev proxy target: probe for the self-signed/LE cert under data/certs/. If the
+// server is running HTTPS, the dev proxy must target HTTPS too (or requests
+// through Vite return "socket hang up"). `secure: false` accepts the cert
+// whether it's the trusted LE one or the self-signed fallback.
+const CERT_PATH = resolve(__dirname, '..', 'data', 'certs', 'cert.pem');
+const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   const API_HOST = env.VITE_API_HOST || 'localhost';
-  const API_TARGET = `http://${API_HOST}:5555`;
+  const API_TARGET = `${API_SCHEME}://${API_HOST}:5555`;
 
   return {
     define: {
@@ -22,16 +29,19 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: API_TARGET,
-          changeOrigin: true
+          changeOrigin: true,
+          secure: false
         },
         '/data': {
           target: API_TARGET,
-          changeOrigin: true
+          changeOrigin: true,
+          secure: false
         },
         '/socket.io': {
           target: API_TARGET,
           changeOrigin: true,
-          ws: true
+          ws: true,
+          secure: false
         }
       }
     },

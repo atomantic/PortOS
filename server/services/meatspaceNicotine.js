@@ -8,6 +8,14 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
+import {
+  isMortalLoomEnabled,
+  readDailyLogIfEnabled,
+  mlPush,
+  mlPatchById,
+  mlRemoveById,
+  mlIdAtDateIndex
+} from './mortalLoomStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const DAILY_LOG_FILE = join(MEATSPACE_DIR, 'daily-log.json');
@@ -92,6 +100,8 @@ function recalcDayTotal(entry) {
 // === File I/O ===
 
 async function loadDailyLog() {
+  const ml = await readDailyLogIfEnabled();
+  if (ml) return ml;
   const raw = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null }, { allowArray: false });
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { entries: [], lastEntryDate: null };
   if (!Array.isArray(raw.entries)) raw.entries = [];
@@ -142,44 +152,55 @@ export async function getDailyNicotine(from, to) {
 }
 
 export async function logNicotine({ product, mgPerUnit, count = 1, date }) {
-  const log = await loadDailyLog();
   const targetDate = date || getDateString();
-
   const totalMg = Math.round(mgPerUnit * count * 100) / 100;
   const item = { product: product || '', mgPerUnit, count };
 
-  // Find or create daily entry
+  if (await isMortalLoomEnabled()) {
+    await mlPush('nicotineEntries', { ...item, date: targetDate });
+    averageCache = null;
+    const log = await loadDailyLog();
+    const entry = log.entries.find(e => e.date === targetDate);
+    console.log(`🚬 Logged nicotine (MortalLoom): ${product || 'unnamed'} ${mgPerUnit}mg x${count} on ${targetDate}`);
+    return { item, totalMg, date: targetDate, dayTotal: entry?.nicotine?.totalMg || totalMg };
+  }
+
+  const log = await loadDailyLog();
   let entry = log.entries.find(e => e.date === targetDate);
-  if (!entry) {
-    entry = { date: targetDate };
-    log.entries.push(entry);
-  }
+  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+  if (!entry.nicotine) entry.nicotine = { items: [], totalMg: 0 };
 
-  // Initialize nicotine section
-  if (!entry.nicotine) {
-    entry.nicotine = { items: [], totalMg: 0 };
-  }
-
-  // Combine with existing matching product on same date
   const existing = entry.nicotine.items.find(i => i.product === item.product && i.mgPerUnit === item.mgPerUnit);
-  if (existing) {
-    existing.count = (existing.count || 1) + count;
-  } else {
-    entry.nicotine.items.push(item);
-  }
+  if (existing) existing.count = (existing.count || 1) + count;
+  else entry.nicotine.items.push(item);
   recalcDayTotal(entry);
 
-  // Re-sort and update lastEntryDate
   log.entries.sort((a, b) => a.date.localeCompare(b.date));
-  log.lastEntryDate = log.entries[log.entries.length - 1].date;
-
+  log.lastEntryDate = log.entries.at(-1).date;
   await saveDailyLog(log);
   console.log(`🚬 Logged nicotine: ${product || 'unnamed'} ${mgPerUnit}mg x${count} (${totalMg}mg) on ${targetDate}`);
-
   return { item, totalMg, date: targetDate, dayTotal: entry.nicotine.totalMg };
 }
 
 export async function updateNicotine(date, index, updates) {
+  if (await isMortalLoomEnabled()) {
+    const id = await mlIdAtDateIndex('nicotineEntries', date, index);
+    if (!id) return null;
+    const patch = {};
+    for (const k of ['product', 'mgPerUnit', 'count', 'date']) {
+      if (updates[k] !== undefined) patch[k] = updates[k];
+    }
+    const updated = await mlPatchById('nicotineEntries', id, patch);
+    averageCache = null;
+    const effectiveDate = updated?.date || date;
+    const log = await loadDailyLog();
+    const entry = log.entries.find(e => e.date === effectiveDate);
+    console.log(`📝 Updated nicotine (MortalLoom) ${date}[${index}] → ${effectiveDate}: ${updated?.product}`);
+    return { item: { product: updated.product, mgPerUnit: updated.mgPerUnit, count: updated.count },
+             dayTotal: entry?.nicotine?.totalMg || 0,
+             date: effectiveDate };
+  }
+
   const log = await loadDailyLog();
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.nicotine?.items?.[index]) return null;
@@ -228,19 +249,21 @@ export async function updateNicotine(date, index, updates) {
 }
 
 export async function removeNicotine(date, index) {
+  if (await isMortalLoomEnabled()) {
+    const id = await mlIdAtDateIndex('nicotineEntries', date, index);
+    if (!id) return null;
+    const removed = await mlRemoveById('nicotineEntries', id);
+    averageCache = null;
+    return removed;
+  }
+
   const log = await loadDailyLog();
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.nicotine?.items?.[index]) return null;
 
   const removed = entry.nicotine.items.splice(index, 1)[0];
-
-  // Remove nicotine section if empty, else recalculate total
-  if (entry.nicotine.items.length === 0) {
-    delete entry.nicotine;
-  } else {
-    recalcDayTotal(entry);
-  }
-
+  if (entry.nicotine.items.length === 0) delete entry.nicotine;
+  else recalcDayTotal(entry);
   await saveDailyLog(log);
   return removed;
 }

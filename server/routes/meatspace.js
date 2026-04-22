@@ -17,6 +17,7 @@ import {
   customNicotineProductUpdateSchema,
   bloodTestSchema,
   bodyEntrySchema,
+  bloodPressureSchema,
   epigeneticTestSchema,
   eyeExamSchema,
   eyeExamUpdateSchema,
@@ -430,6 +431,25 @@ router.post('/body', asyncHandler(async (req, res) => {
   const data = validateRequest(bodyEntrySchema, req.body);
   const entry = await healthService.addBodyEntry(data);
   res.status(201).json(entry);
+}));
+
+/**
+ * GET /api/meatspace/blood-pressure
+ * Blood pressure history (merged from MortalLoom healthMetrics or local fallback)
+ */
+router.get('/blood-pressure', asyncHandler(async (req, res) => {
+  const readings = await healthService.getBloodPressureHistory();
+  res.json({ readings });
+}));
+
+/**
+ * POST /api/meatspace/blood-pressure
+ * Log a blood pressure reading (upserted by date)
+ */
+router.post('/blood-pressure', asyncHandler(async (req, res) => {
+  const data = validateRequest(bloodPressureSchema, req.body);
+  const reading = await healthService.addBloodPressureReading(data);
+  res.status(201).json(reading);
 }));
 
 /**

@@ -6,12 +6,12 @@
  * git worktree/branch and runs on a schedule.
  */
 
-import { writeFile, readFile, rename, readdir, rm } from 'fs/promises';
+import { writeFile, readFile, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { cosEvents } from './cosEvents.js';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getAppById } from './apps.js';
 const DATA_DIR = PATHS.cos;
@@ -40,9 +40,7 @@ async function readData() {
 async function writeData(data) {
   await ensureDir(DATA_DIR);
   data.lastUpdated = new Date().toISOString();
-  const tmpFile = FA_FILE + '.tmp';
-  await writeFile(tmpFile, JSON.stringify(data, null, 2));
-  await rename(tmpFile, FA_FILE);
+  await atomicWrite(FA_FILE, data);
 }
 
 /**

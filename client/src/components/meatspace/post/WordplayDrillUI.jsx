@@ -110,7 +110,7 @@ export function CompoundChainUI({ challenge, items, inputValue, setInputValue, o
           type="text"
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
-          placeholder="Type a compound word and press Enter..."
+          placeholder="Type the full compound or just the other half..."
           autoFocus
           className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
         />

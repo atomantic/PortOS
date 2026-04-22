@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronUp, GitBranch, GitPullRequest } from 'lucide-react';
+import { ChevronDown, ChevronUp, GitBranch, GitPullRequest, Lock, Copy } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
+import { PORTOS_APP_ID } from '../../services/apiCore';
+import toast from '../ui/Toast';
 
 export default function EditAppModal({ app, onClose, onSave }) {
   const [formData, setFormData] = useState({
@@ -12,6 +14,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
     uiPort: app.uiPort || '',
     devUiPort: app.devUiPort || '',
     apiPort: app.apiPort || '',
+    tlsPort: app.tlsPort || '',
     buildCommand: app.buildCommand || '',
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
@@ -34,6 +37,38 @@ export default function EditAppModal({ app, onClose, onSave }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [tlsUpgrading, setTlsUpgrading] = useState(false);
+  const [tlsResult, setTlsResult] = useState(null);
+  const [tlsError, setTlsError] = useState(null);
+  const tlsNeedsForce = tlsError?.code === 'ALREADY_EXISTS';
+
+  const handleUpgradeTls = async (force = false) => {
+    const port = formData.tlsPort ? parseInt(formData.tlsPort, 10)
+      : (formData.uiPort ? parseInt(formData.uiPort, 10) + 1000 : null);
+    if (!port) {
+      toast.error('Set a TLS Port first (or a UI Port to derive one)');
+      return;
+    }
+    setTlsUpgrading(true);
+    setTlsError(null);
+    try {
+      const result = await api.upgradeAppTls(app.id, { tlsPort: port, force });
+      setTlsResult(result);
+      setFormData(prev => ({ ...prev, tlsPort: String(port) }));
+      toast.success(result.overwrote
+        ? `Overwrote lib/tailscale-https.js in ${app.name}`
+        : `Copied lib/tailscale-https.js into ${app.name}`);
+    } catch (err) {
+      setTlsError(err);
+      if (err?.code === 'ALREADY_EXISTS') {
+        toast.error('lib/tailscale-https.js already exists — use "Overwrite existing" to replace');
+      } else {
+        toast.error(err?.message || 'Upgrade failed');
+      }
+    } finally {
+      setTlsUpgrading(false);
+    }
+  };
   const [jiraExpanded, setJiraExpanded] = useState(app.jira?.enabled || false);
   const [jiraInstances, setJiraInstances] = useState([]);
   const [datadogExpanded, setDatadogExpanded] = useState(app.datadog?.enabled || false);
@@ -85,6 +120,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
       uiPort: formData.uiPort ? parseInt(formData.uiPort, 10) : null,
       devUiPort: formData.devUiPort ? parseInt(formData.devUiPort, 10) : null,
       apiPort: formData.apiPort ? parseInt(formData.apiPort, 10) : null,
+      tlsPort: formData.tlsPort ? parseInt(formData.tlsPort, 10) : null,
       buildCommand: formData.buildCommand || undefined,
       startCommands: formData.startCommands.split('\n').filter(Boolean),
       pm2ProcessNames: formData.pm2ProcessNames
@@ -198,6 +234,70 @@ export default function EditAppModal({ app, onClose, onSave }) {
               />
             </div>
           </div>
+
+          {app.id !== PORTOS_APP_ID && (
+            <div className="bg-port-bg/50 border border-port-border rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Lock size={14} className="text-port-accent" />
+                <label className="text-sm text-gray-300">TLS Port (HTTPS)</label>
+                <button
+                  type="button"
+                  onClick={() => handleUpgradeTls(false)}
+                  disabled={tlsUpgrading}
+                  className="ml-auto text-xs px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded disabled:opacity-50"
+                >
+                  {tlsUpgrading ? 'Copying helper…' : 'Upgrade to TLS'}
+                </button>
+                {tlsNeedsForce && (
+                  <button
+                    type="button"
+                    onClick={() => handleUpgradeTls(true)}
+                    disabled={tlsUpgrading}
+                    className="text-xs px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded disabled:opacity-50"
+                  >
+                    Overwrite existing
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="number"
+                  value={formData.tlsPort}
+                  onChange={e => {
+                    setFormData({ ...formData, tlsPort: e.target.value });
+                    setTlsResult(null);  // snippet bakes port at upgrade time; stale once user edits
+                  }}
+                  className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  placeholder={formData.uiPort ? String(parseInt(formData.uiPort, 10) + 1000) : '4001'}
+                />
+                <span className="text-xs text-gray-500">
+                  Defaults to uiPort + 1000. Leave blank to disable HTTPS launch.
+                </span>
+              </div>
+              {tlsResult && (
+                <div className="bg-port-bg border border-port-border rounded p-2 text-xs">
+                  <div className="text-gray-400 mb-1">
+                    Copied helper to <code className="text-port-accent">{tlsResult.helperPath}</code>.
+                    Wire it up in your server entry:
+                  </div>
+                  <div className="relative">
+                    <pre className="bg-black/40 text-gray-200 p-2 rounded overflow-x-auto font-mono text-[11px] leading-tight">{tlsResult.snippet}</pre>
+                    <button
+                      type="button"
+                      onClick={() => { navigator.clipboard.writeText(tlsResult.snippet); toast.success('Snippet copied'); }}
+                      className="absolute top-1 right-1 p-1 bg-port-border/60 hover:bg-port-border rounded"
+                      aria-label="Copy snippet"
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                  <div className="text-gray-500 mt-2">
+                    Point <code>CERT_DIR</code> at <code>{tlsResult.certDirHint}</code> (or symlink it) to share the Tailscale cert across apps.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-sm text-gray-400 mb-1">Start Commands (one per line)</label>

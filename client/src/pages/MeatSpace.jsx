@@ -2,6 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Skull } from 'lucide-react';
 
 import { TABS } from '../components/meatspace/constants';
+import MortalLoomBanner from '../components/MortalLoomBanner';
 
 import OverviewTab from '../components/meatspace/tabs/OverviewTab';
 import AgeTab from '../components/meatspace/tabs/AgeTab';
@@ -52,6 +53,8 @@ export default function MeatSpace() {
 
   return (
     <div className="flex flex-col h-full">
+      <MortalLoomBanner section="Meatspace health data" />
+
       {/* Header */}
       <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border">
         <div className="flex items-center gap-3 mb-4">

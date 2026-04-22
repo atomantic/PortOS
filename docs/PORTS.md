@@ -23,6 +23,7 @@ Common port labels:
 
 | Port | Process | Label | Description |
 |------|---------|-------|-------------|
+| 5553 | portos-server | api-local | Loopback-only HTTP mirror of the API (only listens when HTTPS is active on 5555). Lets `http://localhost:5553` work without cert warnings. Override with `PORTOS_HTTP_PORT`. |
 | 5554 | portos-client | ui | Vite dev server (React UI) |
 | 5555 | portos-server | api | Main API server |
 | 5556 | portos-browser | cdp | Chrome DevTools Protocol |

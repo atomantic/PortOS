@@ -83,6 +83,7 @@ vi.mock('child_process', () => ({
   spawn: vi.fn()
 }));
 
+import { spawn } from 'child_process';
 import * as storage from './brainStorage.js';
 import { getProviderById } from './providers.js';
 import {
@@ -1003,6 +1004,188 @@ describe('brain service', () => {
     it('should re-export getSummary from storage', async () => {
       const { getSummary } = await import('./brain.js');
       expect(getSummary).toBe(storage.getSummary);
+    });
+  });
+
+  // ===========================================================================
+  // callAI CLI path — gemini-cli argv construction
+  // Guards against regressions like reintroducing interactive-mode detection,
+  // dropping --prompt, or losing the thinking-model fallback.
+  // ===========================================================================
+
+  describe('callAI CLI path (gemini-cli argv)', () => {
+    function createMockChild(stdoutPayload) {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      // Emit payload and close on next tick so listeners attach first
+      setImmediate(() => {
+        child.stdout.emit('data', Buffer.from(stdoutPayload));
+        child.emit('close', 0);
+      });
+      return child;
+    }
+
+    const validDigestJson = JSON.stringify({
+      digestText: 'tiny digest',
+      topActions: ['a'],
+      stuckThing: 's',
+      smallWin: 'w'
+    });
+
+    beforeEach(() => {
+      // Override outer beforeEach's defaultModel so the callAI fallback path is reachable
+      storage.loadMeta.mockResolvedValue({
+        confidenceThreshold: 0.6,
+        defaultProvider: 'gemini-cli',
+        defaultModel: null
+      });
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([]);
+      storage.createDigest.mockResolvedValue({ id: 'd1' });
+      storage.updateMeta.mockResolvedValue();
+    });
+
+    it('passes prompt via --prompt, forces --output-format text, and falls back to flash-lite when model unset', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: [],
+        timeout: 50
+        // defaultModel deliberately unset — exercises the flash-lite fallback
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('gemini-cli');
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const [command, args, opts] = spawn.mock.calls[0];
+      expect(command).toBe('gemini');
+      expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
+
+      // Non-interactive output format pinned
+      const outputFmtIdx = args.indexOf('--output-format');
+      expect(outputFmtIdx).toBeGreaterThanOrEqual(0);
+      expect(args[outputFmtIdx + 1]).toBe('text');
+
+      // Thinking-model fallback
+      const modelIdx = args.indexOf('--model');
+      expect(modelIdx).toBeGreaterThanOrEqual(0);
+      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash-lite');
+
+      // Prompt delivered via flag (not positional) so gemini-cli stays non-interactive
+      const promptIdx = args.indexOf('--prompt');
+      expect(promptIdx).toBeGreaterThanOrEqual(0);
+      expect(args[promptIdx + 1]).toBe('test prompt');
+    });
+
+    it('honors an explicit model override instead of the flash-lite fallback', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: [],
+        defaultModel: 'gemini-2.5-pro',
+        timeout: 50
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('gemini-cli');
+
+      const args = spawn.mock.calls[0][1];
+      const modelIdx = args.indexOf('--model');
+      expect(args[modelIdx + 1]).toBe('gemini-2.5-pro');
+    });
+
+    it('prefers provider.lightModel over the hard-coded flash-lite fallback when defaultModel is unset', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: [],
+        lightModel: 'gemini-2.5-flash',
+        timeout: 50
+        // defaultModel deliberately unset — lightModel should win over the hard-coded default
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('gemini-cli');
+
+      const args = spawn.mock.calls[0][1];
+      const modelIdx = args.indexOf('--model');
+      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash');
+    });
+
+    it('does not duplicate --output-format when provider args already specify it', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: ['--output-format', 'json'],
+        defaultModel: 'gemini-2.5-flash-lite',
+        timeout: 50
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('gemini-cli');
+
+      const args = spawn.mock.calls[0][1];
+      const occurrences = args.filter(a => a === '--output-format').length;
+      expect(occurrences).toBe(1);
+      expect(args[args.indexOf('--output-format') + 1]).toBe('json');
+    });
+
+    it('persists the resolved model in digest ai.modelId so attribution survives the fallback', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'gemini-cli',
+        enabled: true,
+        type: 'cli',
+        command: 'gemini',
+        args: [],
+        timeout: 50
+        // defaultModel and lightModel unset — forces the hard-coded fallback
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+      // Capture the digest record so we can assert its ai metadata
+      let storedDigest = null;
+      storage.createDigest.mockImplementation(async (data) => {
+        storedDigest = data;
+        return { id: 'd-attr', ...data };
+      });
+
+      await runDailyDigest('gemini-cli');
+
+      expect(storedDigest).toBeTruthy();
+      expect(storedDigest.ai.providerId).toBe('gemini-cli');
+      expect(storedDigest.ai.modelId).toBe('gemini-2.5-flash-lite');
+    });
+
+    it('uses positional prompt (not --prompt) for non-gemini CLI providers', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'claude-code',
+        enabled: true,
+        type: 'cli',
+        command: 'claude',
+        args: ['-p'],
+        defaultModel: 'sonnet',
+        timeout: 50
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('claude-code');
+
+      const args = spawn.mock.calls[0][1];
+      expect(args).not.toContain('--prompt');
+      expect(args).not.toContain('--output-format');
+      expect(args[args.length - 1]).toBe('test prompt');
     });
   });
 });

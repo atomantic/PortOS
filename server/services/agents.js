@@ -63,6 +63,7 @@ export async function getRunningAgents() {
           model: spawnedData.model,
           workspacePath: spawnedData.workspacePath,
           prompt: spawnedData.prompt,
+          registeredAt: spawnedData.registeredAt,
           source: 'cos'
         })
       });

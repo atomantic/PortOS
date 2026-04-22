@@ -47,6 +47,9 @@ export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents
 // Reports and activity (re-export for backward compat with `import * as cos`)
 export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
 
+const AGENT_ARCHIVE_RETENTION_DAYS = 90;
+const RESUME_DEQUEUE_DELAY_MS = 500;
+
 const _execAsync = promisify(exec);
 const _execFileAsync = promisify(execFile);
 const execAsync = (cmd, opts) => _execAsync(cmd, { ...opts, windowsHide: true });
@@ -163,7 +166,9 @@ export async function start() {
   }
 
   // Prune agent archives older than 90 days
-  await pruneOldAgentArchives(90).catch(() => {});
+  await pruneOldAgentArchives(AGENT_ARCHIVE_RETENTION_DAYS).catch(err =>
+    console.warn(`⚠️ pruneOldAgentArchives failed: ${err?.message || err}`)
+  );
 
   // Health check + orphan cleanup (15 min)
   scheduleEvent({
@@ -354,7 +359,7 @@ export async function resume() {
 
   // Trigger immediate task dequeue on resume (outside lock to avoid holding it)
   if (result.success && isDaemonRunning()) {
-    setTimeout(() => dequeueNextTask(), 500);
+    setTimeout(() => dequeueNextTask(), RESUME_DEQUEUE_DELAY_MS);
   }
 
   return result;
@@ -3029,7 +3034,9 @@ async function init() {
   }
 }
 
-// Initialize asynchronously (skip during tests to avoid circular import issues)
+// Initialize asynchronously — vitest sets NODE_ENV=test by default, so this
+// skips eager init (and its listeners/timers) in unit tests and avoids
+// circular-import side effects.
 if (process.env.NODE_ENV !== 'test') {
   init();
 }

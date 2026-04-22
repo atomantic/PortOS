@@ -211,7 +211,10 @@ export async function createLoop({ prompt, interval, name, cwd, providerId, time
 }
 
 function startLoopTimer(loop, runImmediately = false) {
-  const timer = setInterval(() => executeIteration(loop), loop.intervalMs);
+  const runWithLogging = () => executeIteration(loop).catch(err => {
+    console.error(`❌ [loops] iteration error for loop ${loop.id}: ${err?.stack || err?.message || String(err)}`);
+  });
+  const timer = setInterval(runWithLogging, loop.intervalMs);
   activeLoops.set(loop.id, {
     timer,
     runId: null,
@@ -222,7 +225,7 @@ function startLoopTimer(loop, runImmediately = false) {
   });
 
   if (runImmediately) {
-    setTimeout(() => executeIteration(loop), 100);
+    setTimeout(runWithLogging, 100);
   }
 }
 
@@ -305,7 +308,9 @@ export async function triggerLoop(id) {
   if (!loop) throw new Error(`Loop ${id} not found`);
   if (!activeLoops.has(id)) throw new Error(`Loop ${id} is not running`);
 
-  executeIteration(loop);
+  executeIteration(loop).catch(err => {
+    console.error(`❌ [loops] iteration error for loop ${loop.id}: ${err?.stack || err?.message || String(err)}`);
+  });
   return { triggered: true };
 }
 
@@ -332,7 +337,10 @@ export async function updateLoop(id, updates) {
   if (activeLoops.has(id) && updates.interval) {
     const active = activeLoops.get(id);
     clearInterval(active.timer);
-    active.timer = setInterval(() => executeIteration(loops[idx]), loops[idx].intervalMs);
+    const updatedLoop = loops[idx];
+    active.timer = setInterval(() => executeIteration(updatedLoop).catch(err => {
+      console.error(`❌ [loops] iteration error for loop ${updatedLoop.id}: ${err?.stack || err?.message || String(err)}`);
+    }), updatedLoop.intervalMs);
   }
 
   loopEvents.emit('updated', { loop: loops[idx] });

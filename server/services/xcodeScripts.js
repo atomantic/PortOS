@@ -43,16 +43,34 @@ APPSTORE_API_PRIVATE_KEY_PATH="~/Library/Mobile Documents/com~apple~CloudDocs/Ap
 
 /**
  * Generate the generic deploy.sh script content.
- * Supports --ios, --macos, --watch, --all, --skip-tests flags.
- * Works with both XcodeGen (project.yml) and raw .xcodeproj projects.
+ *
+ * Produces a self-contained, universal TestFlight deployment script that:
+ *   - Supports --ios, --macos, --watch, --all, --skip-tests flags
+ *   - Defaults to every platform the project has a scheme for ("all available")
+ *   - Auto-detects scheme naming conventions (TargetName vs TargetName_iOS,
+ *     "TargetName macOS" vs TargetName_macOS, etc.)
+ *   - Works with both XcodeGen (project.yml) and raw .xcodeproj projects
+ *   - Rolls back the build-number bump if deploy fails, so a failed upload
+ *     doesn't permanently consume a build number
+ *   - Runs uploads serially with a 60s gap between each to avoid Apple's CDN
+ *     rejecting concurrent uploads from the same API key
+ *   - Greps altool output for DEFINITIVE failure banners only (never plain
+ *     "ERROR: " — altool emits normal multipart-retry events as ERROR lines)
  */
 export function generateDeployScript(targetName, _bundleId) {
   return `#!/bin/bash
 set -euo pipefail
 
 # ${targetName} - Local TestFlight Deploy
+#
 # Usage: ./deploy.sh [--skip-tests] [--ios] [--macos] [--watch] [--all]
-# Default (no platform flag): iOS only
+#
+#   Default (no platform flag): every platform the project has a scheme for.
+#   --ios / --macos / --watch : single platform
+#   --all                     : explicit "all available" (same as default)
+#
+# Uploads are serial with a 60s gap between each to avoid Apple's CDN
+# rejecting concurrent uploads from the same API key.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -76,7 +94,7 @@ if [ ! -f "$KEY_PATH" ]; then
     exit 1
 fi
 
-# Ensure altool can find the key (it only checks specific directories)
+# altool only looks in ~/.private_keys/ for the API key — symlink it in.
 mkdir -p ~/.private_keys
 KEY_FILENAME="AuthKey_\${APPSTORE_API_KEY_ID}.p8"
 if [ ! -f ~/.private_keys/"$KEY_FILENAME" ]; then
@@ -93,35 +111,99 @@ fi
 
 PROJECT="${targetName}.xcodeproj"
 BUILD_DIR="$SCRIPT_DIR/build"
+APP_NAME="${targetName}"
 
-# Parse flags
+# Scheme name candidates. Auto-detected against \`xcodebuild -list\` so the
+# same template works regardless of whether the project uses "TargetName" /
+# "TargetName macOS" / "TargetName_Watch" (PortOS scaffold convention) or
+# "TargetName_iOS" / "TargetName_macOS" / "TargetName_watchOS" (common
+# hand-rolled convention).
+SCHEME_IOS_CANDIDATES=("${targetName}" "${targetName}_iOS")
+SCHEME_MACOS_CANDIDATES=("${targetName} macOS" "${targetName}_macOS")
+SCHEME_WATCH_CANDIDATES=("${targetName}_Watch" "${targetName}_watchOS" "${targetName} watchOS")
+TEST_BUNDLE_CANDIDATES=("${targetName}Tests" "${targetName}Tests_iOS")
+
+AVAILABLE_SCHEMES=$(xcodebuild -project "$PROJECT" -list 2>/dev/null || true)
+resolve_scheme() {
+    local name
+    for name in "$@"; do
+        if echo "$AVAILABLE_SCHEMES" | grep -qxE "[[:space:]]*$name"; then
+            echo "$name"
+            return 0
+        fi
+    done
+    return 1
+}
+SCHEME_IOS=$(resolve_scheme "\${SCHEME_IOS_CANDIDATES[@]}" || true)
+SCHEME_MACOS=$(resolve_scheme "\${SCHEME_MACOS_CANDIDATES[@]}" || true)
+SCHEME_WATCH=$(resolve_scheme "\${SCHEME_WATCH_CANDIDATES[@]}" || true)
+SCHEME_TEST="$SCHEME_IOS"                           # tests always use iOS sim
+
+HAS_IOS=false;   [ -n "$SCHEME_IOS" ]   && HAS_IOS=true
+HAS_MACOS=false; [ -n "$SCHEME_MACOS" ] && HAS_MACOS=true
+HAS_WATCH=false; [ -n "$SCHEME_WATCH" ] && HAS_WATCH=true
+
+# Parse flags. Explicit per-platform flags are separate from the --all / default
+# fan-out so we can hard-error on an explicit flag naming a missing scheme but
+# silently skip missing schemes under --all.
 SKIP_TESTS=false
 BUILD_IOS=false
 BUILD_MACOS=false
 BUILD_WATCH=false
+EXPLICIT_IOS=false
+EXPLICIT_MACOS=false
+EXPLICIT_WATCH=false
+FAN_OUT=false
 for arg in "$@"; do
     case "$arg" in
         --skip-tests) SKIP_TESTS=true ;;
-        --ios) BUILD_IOS=true ;;
-        --macos) BUILD_MACOS=true ;;
-        --watch) BUILD_WATCH=true ;;
-        --all) BUILD_IOS=true; BUILD_MACOS=true; BUILD_WATCH=true ;;
+        --ios)   EXPLICIT_IOS=true ;;
+        --macos) EXPLICIT_MACOS=true ;;
+        --watch) EXPLICIT_WATCH=true ;;
+        --all)   FAN_OUT=true ;;
     esac
 done
-# Default to iOS if no platform specified
+
+if ! $EXPLICIT_IOS && ! $EXPLICIT_MACOS && ! $EXPLICIT_WATCH && ! $FAN_OUT; then
+    FAN_OUT=true
+fi
+if $FAN_OUT; then
+    $HAS_IOS   && BUILD_IOS=true
+    $HAS_MACOS && BUILD_MACOS=true
+    $HAS_WATCH && BUILD_WATCH=true
+fi
+if $EXPLICIT_IOS;   then $HAS_IOS   || { echo "❌ No iOS scheme found (tried: \${SCHEME_IOS_CANDIDATES[*]})"; exit 1; }; BUILD_IOS=true;   fi
+if $EXPLICIT_MACOS; then $HAS_MACOS || { echo "❌ No macOS scheme found (tried: \${SCHEME_MACOS_CANDIDATES[*]})"; exit 1; }; BUILD_MACOS=true; fi
+if $EXPLICIT_WATCH; then $HAS_WATCH || { echo "❌ No watchOS scheme found (tried: \${SCHEME_WATCH_CANDIDATES[*]})"; exit 1; }; BUILD_WATCH=true; fi
+
 if ! $BUILD_IOS && ! $BUILD_MACOS && ! $BUILD_WATCH; then
-    BUILD_IOS=true
+    echo "❌ No platforms to build — project has no recognized schemes."
+    exit 1
 fi
 
-# Auto-increment build number
+MSG="🎯 Deploying to:"
+if $BUILD_IOS;   then MSG="$MSG iOS";     fi
+if $BUILD_MACOS; then MSG="$MSG macOS";   fi
+if $BUILD_WATCH; then MSG="$MSG watchOS"; fi
+echo "$MSG"
+
+# Auto-increment build number. Snapshot the file(s) first so we can roll back
+# on any failure and not permanently consume a build number that never shipped
+# to TestFlight. Snapshot via cp rather than \`git checkout --\` so any
+# pre-existing uncommitted edits in the operator's working tree are preserved.
+ORIG_PBXPROJ=$(mktemp)
+cp "$PROJECT/project.pbxproj" "$ORIG_PBXPROJ"
+ORIG_PROJECT_YML=""
+if [ "$PROJECT_MODE" = "xcodegen" ]; then
+    ORIG_PROJECT_YML=$(mktemp)
+    cp project.yml "$ORIG_PROJECT_YML"
+fi
+
 if [ "$PROJECT_MODE" = "xcodegen" ]; then
     CURRENT_BUILD=$(grep CURRENT_PROJECT_VERSION project.yml | head -1 | awk '{print $2}')
     NEW_BUILD=$((CURRENT_BUILD + 1))
     echo "📦 Build number: $CURRENT_BUILD → $NEW_BUILD"
     /usr/bin/sed -i '' "s/CURRENT_PROJECT_VERSION: \${CURRENT_BUILD}/CURRENT_PROJECT_VERSION: \${NEW_BUILD}/" project.yml
-
-    echo "⚙️  Regenerating Xcode project..."
-    xcodegen generate
 else
     CURRENT_BUILD=$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PROJECT/project.pbxproj" | awk '{print $3}' | tr -d ';')
     NEW_BUILD=$((CURRENT_BUILD + 1))
@@ -129,76 +211,69 @@ else
     /usr/bin/sed -i '' "s/CURRENT_PROJECT_VERSION = \${CURRENT_BUILD};/CURRENT_PROJECT_VERSION = \${NEW_BUILD};/g" "$PROJECT/project.pbxproj"
 fi
 
-# Run tests (unless skipped; only when building iOS since tests use iOS simulator)
+DEPLOY_SUCCESS=false
+rollback_build_bump() {
+    if [ "$DEPLOY_SUCCESS" = "false" ]; then
+        echo "↩️  Rolling back build number bump (deploy did not complete)..."
+        cp "$ORIG_PBXPROJ" "$PROJECT/project.pbxproj" 2>/dev/null || true
+        [ -n "$ORIG_PROJECT_YML" ] && cp "$ORIG_PROJECT_YML" project.yml 2>/dev/null || true
+    fi
+    rm -f "$ORIG_PBXPROJ"
+    [ -n "$ORIG_PROJECT_YML" ] && rm -f "$ORIG_PROJECT_YML"
+}
+trap rollback_build_bump EXIT
+
+if [ "$PROJECT_MODE" = "xcodegen" ]; then
+    echo "⚙️  Regenerating Xcode project..."
+    xcodegen generate
+fi
+
+# Tests run on iOS simulator, so only run them when we're actually building
+# iOS. If the project is macOS-only or watch-only, skip tests.
 if ! $SKIP_TESTS && $BUILD_IOS; then
     echo "🧪 Running tests..."
-    DESTINATION=$(
-        SIMINFO=$(xcrun simctl list devices available -j | python3 -c "
+    DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
+preferred = ['iPhone 17 Pro', 'iPhone 17', 'iPhone 16 Pro', 'iPhone 16', 'iPhone 15']
+for name in preferred:
+    for runtime, devices in data.get('devices', {}).items():
+        for d in devices:
+            if d['name'] == name and d.get('isAvailable', False):
+                print(d['udid']); sys.exit(0)
 for runtime, devices in data.get('devices', {}).items():
-    if 'iOS' not in runtime:
-        continue
-    parts = runtime.replace('com.apple.CoreSimulator.SimRuntime.iOS-', '').split('-')
-    os_ver = '.'.join(parts)
     for d in devices:
-        name = d.get('name', '')
-        if d.get('isAvailable') and 'iPhone 16' in name and 'Plus' not in name and 'Pro' not in name and 'e' != name[-1:]:
-            print(f'{name},{os_ver}')
-            sys.exit(0)
-for runtime, devices in data.get('devices', {}).items():
-    if 'iOS' not in runtime:
-        continue
-    parts = runtime.replace('com.apple.CoreSimulator.SimRuntime.iOS-', '').split('-')
-    os_ver = '.'.join(parts)
-    for d in devices:
-        if d.get('isAvailable') and 'iPhone' in d.get('name', ''):
-            print(f\\"{d['name']},{os_ver}\\")
-            sys.exit(0)
+        if 'iPhone' in d['name'] and d.get('isAvailable', False):
+            print(d['udid']); sys.exit(0)
 " 2>/dev/null)
-        SIM_NAME="\${SIMINFO%%,*}"
-        SIM_OS="\${SIMINFO##*,}"
-        if [ -n "$SIM_NAME" ] && [ -n "$SIM_OS" ]; then
-            echo "platform=iOS Simulator,name=$SIM_NAME,OS=$SIM_OS"
-        else
-            echo "platform=iOS Simulator,name=iPhone 16"
+    if [ -z "$DEVICE_ID" ]; then
+        echo "❌ No available iPhone simulator found for tests"
+        exit 1
+    fi
+    DESTINATION="platform=iOS Simulator,id=$DEVICE_ID"
+    echo "📱 Test destination: $DESTINATION"
+    # Resolve test bundle name via xcodebuild -list targets, with candidate fallback
+    TEST_BUNDLE=""
+    AVAILABLE_TARGETS=$(xcodebuild -project "$PROJECT" -list 2>/dev/null || true)
+    for candidate in "\${TEST_BUNDLE_CANDIDATES[@]}"; do
+        if echo "$AVAILABLE_TARGETS" | grep -qxE "[[:space:]]*$candidate"; then
+            TEST_BUNDLE="$candidate"; break
         fi
-    )
-    xcodebuild test \\
-        -project "$PROJECT" \\
-        -scheme "${targetName}" \\
-        -only-testing:${targetName}Tests \\
-        -destination "$DESTINATION" \\
-        -configuration Debug \\
-        CODE_SIGNING_ALLOWED=NO \\
-        -quiet
+    done
+    TEST_ARGS=(-project "$PROJECT" -scheme "$SCHEME_TEST")
+    [ -n "$TEST_BUNDLE" ] && TEST_ARGS+=(-only-testing:"$TEST_BUNDLE")
+    TEST_ARGS+=(-destination "$DESTINATION" -configuration Debug CODE_SIGNING_ALLOWED=NO -quiet)
+    xcodebuild test "\${TEST_ARGS[@]}"
     echo "✅ Tests passed"
 fi
 
-# Clean build directory
 rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
 
-PLATFORMS_BUILT=0
-
-# --- iOS Build & Upload ---
-if $BUILD_IOS; then
-    ARCHIVE_IOS="$BUILD_DIR/${targetName}_iOS.xcarchive"
-    EXPORT_IOS="$BUILD_DIR/export_ios"
-
-    echo "📦 Archiving iOS..."
-    xcodebuild archive \\
-        -project "$PROJECT" \\
-        -scheme "${targetName}" \\
-        -configuration Release \\
-        -destination 'generic/platform=iOS' \\
-        -archivePath "$ARCHIVE_IOS" \\
-        CODE_SIGNING_ALLOWED=NO \\
-        CODE_SIGN_IDENTITY="" \\
-        CODE_SIGNING_REQUIRED=NO \\
-        -quiet
-    echo "✅ iOS archive complete"
-
-    cat > "$BUILD_DIR/exportOptions_ios.plist" <<EOF
+# Shared export options plist (identical for all three platforms: automatic
+# signing, app-store-connect method).
+EXPORT_PLIST="$BUILD_DIR/exportOptions.plist"
+cat > "$EXPORT_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -211,25 +286,65 @@ if $BUILD_IOS; then
 </plist>
 EOF
 
+# altool exits 0 even when uploads fail — the failure is buried in its
+# stdout XML-ish log. Grep the log for DEFINITIVE failure banners only.
+#
+# Do NOT grep plain "ERROR: " — altool emits normal multipart upload retry
+# events as "ERROR: [ContentDelivery.Uploader...] WILL RETRY PART N" and
+# "ERROR: The network connection was lost.", which Apple's uploader recovers
+# from internally. Grepping those killed the script mid-recovery on good
+# uploads. Use only Apple's terminal-failure banners:
+#   - "UPLOAD FAILED"       : Apple's summary banner when retries exhausted
+#   - "Validation failed (" : server-side 4xx from App Store Connect
+#   - "ERROR ITMS-"         : legacy Apple error code format
+#   - "product-errors"      : Apple's structured error output
+FAIL_MARKERS="UPLOAD FAILED|Validation failed \\(|ERROR ITMS-|product-errors"
+
+UPLOADED_ONE=false
+inter_upload_delay() {
+    if $UPLOADED_ONE; then
+        echo "⏳ Waiting 60s before next upload to avoid Apple CDN contention..."
+        sleep 60
+    fi
+}
+
+# --- iOS Build & Upload ---
+if $BUILD_IOS; then
+    ARCHIVE_IOS="$BUILD_DIR/\${APP_NAME}_iOS.xcarchive"
+    EXPORT_IOS="$BUILD_DIR/export_ios"
+
+    echo "📦 Archiving iOS..."
+    xcodebuild archive \\
+        -project "$PROJECT" \\
+        -scheme "$SCHEME_IOS" \\
+        -configuration Release \\
+        -destination 'generic/platform=iOS' \\
+        -archivePath "$ARCHIVE_IOS" \\
+        CODE_SIGNING_ALLOWED=NO \\
+        CODE_SIGN_IDENTITY="" \\
+        CODE_SIGNING_REQUIRED=NO \\
+        -quiet
+    echo "✅ iOS archive complete"
+
     echo "📤 Exporting iOS IPA..."
     xcodebuild -exportArchive \\
         -archivePath "$ARCHIVE_IOS" \\
-        -exportOptionsPlist "$BUILD_DIR/exportOptions_ios.plist" \\
+        -exportOptionsPlist "$EXPORT_PLIST" \\
         -exportPath "$EXPORT_IOS" \\
         -allowProvisioningUpdates \\
         -authenticationKeyPath "$KEY_PATH" \\
         -authenticationKeyID "$APPSTORE_API_KEY_ID" \\
         -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \\
         -quiet
-    echo "✅ iOS IPA exported"
 
-    IPA_PATH="$EXPORT_IOS/${targetName}.ipa"
-    if [ ! -f "$IPA_PATH" ]; then
-        echo "❌ iOS IPA not found at $IPA_PATH"
+    IPA_PATH=$(find "$EXPORT_IOS" -name "*.ipa" | head -1)
+    if [ -z "$IPA_PATH" ]; then
+        echo "❌ iOS IPA not found in $EXPORT_IOS"
         ls -la "$EXPORT_IOS/"
         exit 1
     fi
 
+    inter_upload_delay
     echo "🚀 Uploading iOS to TestFlight..."
     IOS_UPLOAD_LOG="$BUILD_DIR/ios_upload.log"
     set +e
@@ -241,31 +356,23 @@ EOF
         --transport DAV 2>&1 | tee "$IOS_UPLOAD_LOG"
     IOS_UPLOAD_STATUS=\${PIPESTATUS[0]}
     set -e
-    # Definitive failure markers only — plain "ERROR: " false-positives on
-    # altool's normal multipart retry events ("WILL RETRY PART N. Checksums
-    # do not match." / "The network connection was lost.").
-    if [ "$IOS_UPLOAD_STATUS" -ne 0 ] || grep -qE "UPLOAD FAILED|Validation failed \\(|ERROR ITMS-|product-errors" "$IOS_UPLOAD_LOG"; then
+    if [ "$IOS_UPLOAD_STATUS" -ne 0 ] || grep -qE "$FAIL_MARKERS" "$IOS_UPLOAD_LOG"; then
         echo "❌ iOS upload failed — see errors above"
         exit 1
     fi
     echo "✅ iOS upload complete!"
-    PLATFORMS_BUILT=$((PLATFORMS_BUILT + 1))
-
-    if $BUILD_MACOS || $BUILD_WATCH; then
-        echo "⏳ Waiting 60s before next upload to avoid Apple CDN contention..."
-        sleep 60
-    fi
+    UPLOADED_ONE=true
 fi
 
 # --- macOS Build & Upload ---
 if $BUILD_MACOS; then
-    ARCHIVE_MACOS="$BUILD_DIR/${targetName}_macOS.xcarchive"
+    ARCHIVE_MACOS="$BUILD_DIR/\${APP_NAME}_macOS.xcarchive"
     EXPORT_MACOS="$BUILD_DIR/export_macos"
 
     echo "📦 Archiving macOS..."
     xcodebuild archive \\
         -project "$PROJECT" \\
-        -scheme "${targetName} macOS" \\
+        -scheme "$SCHEME_MACOS" \\
         -configuration Release \\
         -destination 'generic/platform=macOS' \\
         -archivePath "$ARCHIVE_MACOS" \\
@@ -276,30 +383,16 @@ if $BUILD_MACOS; then
         -quiet
     echo "✅ macOS archive complete"
 
-    cat > "$BUILD_DIR/exportOptions_macos.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key><string>app-store-connect</string>
-  <key>teamID</key><string>$TEAM_ID</string>
-  <key>signingStyle</key><string>automatic</string>
-</dict>
-</plist>
-EOF
-
     echo "📤 Exporting macOS pkg..."
     xcodebuild -exportArchive \\
         -archivePath "$ARCHIVE_MACOS" \\
-        -exportOptionsPlist "$BUILD_DIR/exportOptions_macos.plist" \\
+        -exportOptionsPlist "$EXPORT_PLIST" \\
         -exportPath "$EXPORT_MACOS" \\
         -allowProvisioningUpdates \\
         -authenticationKeyPath "$KEY_PATH" \\
         -authenticationKeyID "$APPSTORE_API_KEY_ID" \\
         -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \\
         -quiet
-    echo "✅ macOS pkg exported"
 
     PKG_PATH=$(find "$EXPORT_MACOS" -name "*.pkg" | head -1)
     if [ -z "$PKG_PATH" ]; then
@@ -308,6 +401,7 @@ EOF
         exit 1
     fi
 
+    inter_upload_delay
     echo "🚀 Uploading macOS to TestFlight..."
     MACOS_UPLOAD_LOG="$BUILD_DIR/macos_upload.log"
     set +e
@@ -318,29 +412,25 @@ EOF
         --apiIssuer "$APPSTORE_ISSUER_ID" 2>&1 | tee "$MACOS_UPLOAD_LOG"
     MACOS_UPLOAD_STATUS=\${PIPESTATUS[0]}
     set -e
-    # See iOS section above for why we don't grep plain "ERROR: ".
-    if [ "$MACOS_UPLOAD_STATUS" -ne 0 ] || grep -qE "UPLOAD FAILED|Validation failed \\(|ERROR ITMS-|product-errors" "$MACOS_UPLOAD_LOG"; then
+    if [ "$MACOS_UPLOAD_STATUS" -ne 0 ] || grep -qE "$FAIL_MARKERS" "$MACOS_UPLOAD_LOG"; then
         echo "❌ macOS upload failed — see errors above"
         exit 1
     fi
     echo "✅ macOS upload complete!"
-    PLATFORMS_BUILT=$((PLATFORMS_BUILT + 1))
-
-    if $BUILD_WATCH; then
-        echo "⏳ Waiting 60s before next upload to avoid Apple CDN contention..."
-        sleep 60
-    fi
+    UPLOADED_ONE=true
 fi
 
 # --- watchOS Build & Upload ---
+# Only applies to STANDALONE watch apps (no iOS companion). Watch extensions
+# bundled with an iOS app ship inside the iOS IPA.
 if $BUILD_WATCH; then
-    ARCHIVE_WATCH="$BUILD_DIR/${targetName}_watchOS.xcarchive"
+    ARCHIVE_WATCH="$BUILD_DIR/\${APP_NAME}_watchOS.xcarchive"
     EXPORT_WATCH="$BUILD_DIR/export_watchos"
 
     echo "📦 Archiving watchOS..."
     xcodebuild archive \\
         -project "$PROJECT" \\
-        -scheme "${targetName}_Watch" \\
+        -scheme "$SCHEME_WATCH" \\
         -configuration Release \\
         -destination 'generic/platform=watchOS' \\
         -archivePath "$ARCHIVE_WATCH" \\
@@ -351,71 +441,60 @@ if $BUILD_WATCH; then
         -quiet
     echo "✅ watchOS archive complete"
 
-    cat > "$BUILD_DIR/exportOptions_watchos.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key><string>app-store-connect</string>
-  <key>teamID</key><string>$TEAM_ID</string>
-  <key>signingStyle</key><string>automatic</string>
-</dict>
-</plist>
-EOF
-
     echo "📤 Exporting watchOS..."
     xcodebuild -exportArchive \\
         -archivePath "$ARCHIVE_WATCH" \\
-        -exportOptionsPlist "$BUILD_DIR/exportOptions_watchos.plist" \\
+        -exportOptionsPlist "$EXPORT_PLIST" \\
         -exportPath "$EXPORT_WATCH" \\
         -allowProvisioningUpdates \\
         -authenticationKeyPath "$KEY_PATH" \\
         -authenticationKeyID "$APPSTORE_API_KEY_ID" \\
         -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \\
         -quiet
-    echo "✅ watchOS exported"
 
-    # watchOS is typically bundled with iOS, but standalone apps need separate upload
-    WCK_PATH=$(find "$EXPORT_WATCH" -name "*.ipa" | head -1)
-    if [ -n "$WCK_PATH" ]; then
+    WATCH_IPA=$(find "$EXPORT_WATCH" -name "*.ipa" | head -1)
+    if [ -z "$WATCH_IPA" ]; then
+        echo "ℹ️  No standalone watchOS IPA (bundled with iOS app) — skipping upload"
+    else
+        inter_upload_delay
         echo "🚀 Uploading watchOS to TestFlight..."
         WATCH_UPLOAD_LOG="$BUILD_DIR/watchos_upload.log"
         set +e
+        # altool --type for standalone watchOS is still "ios" (Apple types: ios, macos, appletvos, visionos)
         xcrun altool --upload-app \\
-            --file "$WCK_PATH" \\
+            --file "$WATCH_IPA" \\
             --type ios \\
             --apiKey "$APPSTORE_API_KEY_ID" \\
             --apiIssuer "$APPSTORE_ISSUER_ID" \\
             --transport DAV 2>&1 | tee "$WATCH_UPLOAD_LOG"
         WATCH_UPLOAD_STATUS=\${PIPESTATUS[0]}
         set -e
-        # See iOS section above for why we don't grep plain "ERROR: ".
-        if [ "$WATCH_UPLOAD_STATUS" -ne 0 ] || grep -qE "UPLOAD FAILED|Validation failed \\(|ERROR ITMS-|product-errors" "$WATCH_UPLOAD_LOG"; then
+        if [ "$WATCH_UPLOAD_STATUS" -ne 0 ] || grep -qE "$FAIL_MARKERS" "$WATCH_UPLOAD_LOG"; then
             echo "❌ watchOS upload failed — see errors above"
             exit 1
         fi
         echo "✅ watchOS upload complete!"
-    else
-        echo "ℹ️  No standalone watchOS IPA (bundled with iOS app)"
+        UPLOADED_ONE=true
     fi
-    PLATFORMS_BUILT=$((PLATFORMS_BUILT + 1))
 fi
 
-echo "✅ Build $NEW_BUILD submitted to TestFlight ($PLATFORMS_BUILT platform(s))."
+echo "✅ Build $NEW_BUILD submitted to TestFlight."
 
-# Commit the build number bump (if in a git repo with changes)
+# Commit the build-number bump only after every upload succeeds, so a failed
+# deploy doesn't leave a consumed build number committed to main.
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if [ "$PROJECT_MODE" = "xcodegen" ]; then
         git add project.yml "$PROJECT/project.pbxproj" 2>/dev/null || true
     else
         git add "$PROJECT/project.pbxproj" 2>/dev/null || true
     fi
-    git diff --cached --quiet || git commit -m "build: bump to build $NEW_BUILD"
-    echo "📝 Committed build number bump"
+    if ! git diff --cached --quiet; then
+        git commit -m "build: bump to build $NEW_BUILD"
+        echo "📝 Committed build number bump"
+    fi
 fi
+DEPLOY_SUCCESS=true
 
-# Clean up
 rm -rf "$BUILD_DIR"
 echo "🧹 Cleaned build artifacts"
 `;

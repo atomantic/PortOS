@@ -9,6 +9,23 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getSnpIndex } from './genome.js';
+import { mlGetProfileIfEnabled, mlPatchProfileIfEnabled } from './mortalLoomStore.js';
+
+// MortalLoom `LifestyleData` uses a subset of PortOS lifestyle fields.
+// Only mirror these when writing back to avoid introducing PortOS-only keys.
+const MORTALLOOM_LIFESTYLE_KEYS = [
+  'smokingStatus', 'exerciseMinutesPerWeek', 'sleepHoursPerNight',
+  'dietQuality', 'stressLevel', 'bmi'
+];
+
+function pickMortalLoomLifestyle(lifestyle) {
+  if (!lifestyle || typeof lifestyle !== 'object') return null;
+  const out = {};
+  for (const k of MORTALLOOM_LIFESTYLE_KEYS) {
+    if (lifestyle[k] !== undefined) out[k] = lifestyle[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const CONFIG_FILE = join(MEATSPACE_DIR, 'config.json');
@@ -196,6 +213,20 @@ export async function getConfig() {
     }
   }
 
+  // MortalLoom iCloud: treat `store.profile` as authoritative when sync is enabled
+  // so edits made in the iOS/macOS app show up here without a manual import.
+  const mlProfile = await mlGetProfileIfEnabled();
+  if (mlProfile) {
+    if ('biologicalSex' in mlProfile) {
+      config.sex = mlProfile.biologicalSex ?? null;
+      config.sexSource = 'mortalloom';
+    }
+    if ('birthDate' in mlProfile) config.birthDate = mlProfile.birthDate ?? null;
+    if (mlProfile.lifestyle && typeof mlProfile.lifestyle === 'object') {
+      config.lifestyle = { ...config.lifestyle, ...mlProfile.lifestyle };
+    }
+  }
+
   return config;
 }
 
@@ -208,6 +239,13 @@ export async function updateConfig(updates) {
   }
   config.updatedAt = new Date().toISOString();
   await saveConfig(config);
+
+  const mlPatch = {};
+  if (updates.sex !== undefined) mlPatch.biologicalSex = updates.sex || null;
+  const mlLifestyle = pickMortalLoomLifestyle(updates.lifestyle);
+  if (mlLifestyle) mlPatch.lifestyle = mlLifestyle;
+  if (Object.keys(mlPatch).length) await mlPatchProfileIfEnabled(mlPatch);
+
   return config;
 }
 
@@ -216,6 +254,10 @@ export async function updateLifestyle(updates) {
   config.lifestyle = { ...config.lifestyle, ...updates };
   config.updatedAt = new Date().toISOString();
   await saveConfig(config);
+
+  const mlLifestyle = pickMortalLoomLifestyle(updates);
+  if (mlLifestyle) await mlPatchProfileIfEnabled({ lifestyle: mlLifestyle });
+
   return config;
 }
 
@@ -253,6 +295,8 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
       await writeFile(join(PATHS.digitalTwin, 'goals.json'), JSON.stringify(goals, null, 2));
     }
   }
+
+  await mlPatchProfileIfEnabled({ birthDate });
 
   return { birthDate };
 }

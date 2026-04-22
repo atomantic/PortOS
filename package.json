@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "1.43.0",
+  "version": "1.44.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -10,7 +10,7 @@
     "dev": "node scripts/dev-start.js",
     "dev:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "build": "npm run build --prefix client",
-    "start": "node scripts/ensure-deps.js && npm run build && node scripts/setup-db.js && (node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || echo pm2 delete skipped) && node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs && node ./node_modules/pm2/bin/pm2 save",
+    "start": "node scripts/ensure-deps.js && npm run build && node scripts/setup-db.js && node scripts/setup-cert.js && (node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || echo pm2 delete skipped) && node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs && node ./node_modules/pm2/bin/pm2 save",
     "pm2:start": "node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs",
     "pm2:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "pm2:restart": "node ./node_modules/pm2/bin/pm2 restart ecosystem.config.cjs",
@@ -24,6 +24,7 @@
     "setup:data": "node scripts/setup-data.js",
     "setup:db": "node scripts/setup-db.js",
     "setup:browser": "node scripts/setup-browser.js",
+    "setup:cert": "node scripts/setup-cert.js",
     "setup:ghostty": "node scripts/setup-ghostty.js",
     "setup:hooks": "bash scripts/setup-git-hooks.sh",
     "update": "node -e \"const{spawnSync:s}=require('child_process');const w=process.platform==='win32';const r=s(w?'powershell':'bash',w?['-NoProfile','-ExecutionPolicy','Bypass','-File','update.ps1']:['update.sh'],{stdio:'inherit'});process.exit(r.status??1)\"",
@@ -31,5 +32,13 @@
   },
   "devDependencies": {
     "pm2": "6.0.14"
+  },
+  "overrides": {
+    "path-to-regexp": "^8.4.2",
+    "lodash": "^4.18.1",
+    "basic-ftp": "^5.3.0",
+    "follow-redirects": "^1.16.0",
+    "brace-expansion": "^5.0.5",
+    "socket.io-parser": "^4.2.6"
   }
 }

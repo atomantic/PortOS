@@ -55,8 +55,11 @@
       "type": "cli",
       "command": "gemini",
       "args": [],
-      "models": [],
-      "defaultModel": null,
+      "models": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
+      "defaultModel": "gemini-2.5-flash-lite",
+      "lightModel": "gemini-2.5-flash-lite",
+      "mediumModel": "gemini-2.5-flash",
+      "heavyModel": "gemini-2.5-pro",
       "timeout": 300000,
       "enabled": true,
       "envVars": {}

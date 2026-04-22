@@ -95,7 +95,8 @@ async function callAI(prompt, providerId, model) {
         model: selectedModel,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7
-      })
+      }),
+      signal: AbortSignal.timeout(provider.timeout || 120000)
     });
 
     if (!response.ok) {
@@ -526,17 +527,34 @@ function scoreLocalCompoundChain(drillData, userResponses) {
     const challenge = drillData.challenges?.[r.questionIndex ?? i];
     if (!challenge?.rootWord) return { score: 0, feedback: 'No root word', validCount: 0, invalidItems: [], missedExamples: [] };
     const root = challenge.rootWord.toLowerCase();
+    const norm = s => s.toLowerCase().replace(/[\s-]/g, '');
     const seen = new Set();
     const valid = [];
     const invalid = [];
+    // The "covered" set is the canonical full-compound form for each accepted
+    // item: typing "firehouse" or just "house" both contribute "firehouse" so
+    // missedExamples can suppress duplicates regardless of how the user typed it.
+    const coveredFull = new Set();
     for (const item of (r.items || [])) {
-      const lower = item.toLowerCase().replace(/[\s-]/g, '');
-      if (seen.has(lower)) continue;
+      const lower = norm(item);
+      if (!lower || seen.has(lower)) continue;
       seen.add(lower);
-      if (lower.includes(root) && lower !== root) {
-        valid.push(item);
-      } else {
+      if (lower === root) {
+        // Bare root word is not itself a compound — reject.
         invalid.push(item);
+        continue;
+      }
+      if (lower.includes(root)) {
+        // Full compound already containing the root (e.g., "firehouse", "campfire").
+        valid.push(item);
+        coveredFull.add(lower);
+      } else {
+        // Half-compound shorthand: assume the user means root+item or item+root
+        // (e.g., "hose" → firehose). We can't validate against a dictionary
+        // without an LLM call, so accept it and let the user keep momentum.
+        valid.push(item);
+        coveredFull.add(root + lower);
+        coveredFull.add(lower + root);
       }
     }
     const target = challenge.minExpected || 8;
@@ -544,11 +562,10 @@ function scoreLocalCompoundChain(drillData, userResponses) {
     const fb = valid.length >= target
       ? `${valid.length} valid compounds — great job!`
       : `${valid.length} valid compound${valid.length !== 1 ? 's' : ''} (target: ${target})`;
-    // Show examples the user didn't find
-    const validLower = new Set(valid.map(v => v.toLowerCase().replace(/[\s-]/g, '')));
-    const missedExamples = (challenge.examples || []).filter(ex =>
-      !validLower.has(ex.toLowerCase().replace(/[\s-]/g, ''))
-    );
+    // Show examples the user didn't find. `coveredFull` already contains the
+    // user's valid compounds plus `root+half`/`half+root` pairings, so a single
+    // membership check covers both full-compound and half-word inputs.
+    const missedExamples = (challenge.examples || []).filter(ex => !coveredFull.has(norm(ex)));
     return { score, feedback: fb, validCount: valid.length, invalidItems: invalid, missedExamples };
   });
   const overallScore = averageScore(scores);

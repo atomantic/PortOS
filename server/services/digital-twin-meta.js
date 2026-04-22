@@ -10,7 +10,6 @@ export const META_FILE = join(DIGITAL_TWIN_DIR, 'meta.json');
 
 // Event emitter for digital twin data changes
 export const digitalTwinEvents = new EventEmitter();
-export const soulEvents = digitalTwinEvents; // Alias for backwards compatibility
 
 // In-memory cache
 const cache = {
@@ -149,7 +148,7 @@ export async function saveMeta(meta) {
   await writeFile(META_FILE, JSON.stringify(meta, null, 2));
   cache.meta.data = meta;
   cache.meta.timestamp = Date.now();
-  soulEvents.emit('meta:changed', meta);
+  digitalTwinEvents.emit('meta:changed', meta);
 }
 
 export async function updateMeta(updates) {

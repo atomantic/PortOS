@@ -18,29 +18,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
-
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(iso) {
-  return new Date(iso).toLocaleDateString('en-US', {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
-}
-
-function timeAgo(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const days = Math.floor(diff / 86400000);
-  if (days === 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 30) return `${days}d ago`;
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
-  return `${Math.floor(days / 365)}y ago`;
-}
+import { formatBytes, formatDateTime, timeAgo } from '../../../utils/formatters';
 
 export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
   const [snapshots, setSnapshots] = useState([]);
@@ -253,7 +231,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
             </button>
           </div>
           <div className="text-xs text-gray-500 mb-3">
-            {formatDate(compareResult.snapshot1.createdAt)} &rarr; {formatDate(compareResult.snapshot2.createdAt)}
+            {formatDateTime(compareResult.snapshot1.createdAt)} &rarr; {formatDateTime(compareResult.snapshot2.createdAt)}
           </div>
           {compareResult.changes.length === 0 ? (
             <p className="text-sm text-gray-500">No differences found between these snapshots.</p>
@@ -412,7 +390,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                       <div>
                         <h4 className="text-xs text-gray-500 uppercase tracking-wider mb-2">Metadata</h4>
                         <div className="space-y-1 text-sm">
-                          <div><span className="text-gray-500">Created:</span> <span className="text-gray-300">{formatDate(viewingSnapshot.createdAt)}</span></div>
+                          <div><span className="text-gray-500">Created:</span> <span className="text-gray-300">{formatDateTime(viewingSnapshot.createdAt)}</span></div>
                           <div><span className="text-gray-500">Hash:</span> <span className="text-gray-300 font-mono text-xs">{viewingSnapshot.dataHash}</span></div>
                           <div><span className="text-gray-500">Size:</span> <span className="text-gray-300">{formatBytes(viewingSnapshot.sizeBytes)}</span></div>
                         </div>

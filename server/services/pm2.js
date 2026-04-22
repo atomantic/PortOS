@@ -253,7 +253,9 @@ export async function getAppStatus(name, pm2Home = null) {
 }
 
 /**
- * Fetch raw PM2 jlist output with TTL caching to reduce CLI churn.
+ * Fetch PM2 process list with TTL caching.
+ * Uses the PM2 Node.js API for the default PM2_HOME (no subprocess spawning — avoids
+ * visible cmd windows on Windows). Falls back to CLI only for custom PM2_HOME paths.
  * @param {string} pm2Home Optional custom PM2_HOME path
  * @returns {Promise<Array|null>} Raw process list from PM2, or null on error
  */
@@ -265,39 +267,65 @@ function fetchJlist(pm2Home = null) {
   const inflight = jlistInflight.get(key);
   if (inflight) return inflight;
 
-  const promise = new Promise((resolve) => {
-    const child = spawnPm2(['jlist'], {
-      env: buildEnv(pm2Home)
-    });
-    let stdout = '';
+  let promise;
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
+  if (!pm2Home) {
+    // Default PM2_HOME: use PM2 Node.js API directly — no subprocess spawn, no cmd windows
+    promise = new Promise((resolve) => {
+      pm2.connect((err) => {
+        if (err) {
+          jlistInflight.delete(key);
+          resolve(null);
+          return;
+        }
+        pm2.list((err, list) => {
+          pm2.disconnect();
+          jlistInflight.delete(key);
+          if (err || !Array.isArray(list)) {
+            resolve(null);
+            return;
+          }
+          jlistCache.set(key, { data: list, ts: Date.now() });
+          resolve(list);
+        });
+      });
     });
+  } else {
+    // Custom PM2_HOME: must use CLI since the Node.js API only supports the default home
+    promise = new Promise((resolve) => {
+      const child = spawnPm2(['jlist'], {
+        env: buildEnv(pm2Home)
+      });
+      let stdout = '';
 
-    child.on('close', (code) => {
-      jlistInflight.delete(key);
-      if (code !== 0) {
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      child.on('close', (code) => {
+        jlistInflight.delete(key);
+        if (code !== 0) {
+          resolve(null);
+          return;
+        }
+        const list = safeJSONParse(extractJSONArray(stdout), []);
+        jlistCache.set(key, { data: list, ts: Date.now() });
+        resolve(list);
+      });
+
+      child.on('error', () => {
+        jlistInflight.delete(key);
         resolve(null);
-        return;
-      }
-      const list = safeJSONParse(extractJSONArray(stdout), []);
-      jlistCache.set(key, { data: list, ts: Date.now() });
-      resolve(list);
+      });
     });
-
-    child.on('error', () => {
-      jlistInflight.delete(key);
-      resolve(null);
-    });
-  });
+  }
 
   jlistInflight.set(key, promise);
   return promise;
 }
 
 /**
- * List all PM2 processes using CLI (avoids connection deadlocks)
+ * List all PM2 processes
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function listProcesses(pm2Home = null) {

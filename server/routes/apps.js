@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
-import { readFile, writeFile, stat, access } from 'fs/promises';
+import { readFile, writeFile, stat, access, mkdir } from 'fs/promises';
 import { join, resolve } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
@@ -206,6 +207,70 @@ router.post('/:id/xcode-scripts/install', loadApp, asyncHandler(async (req, res)
     throw new ServerError(result.errors.join(', '), { status: 400, code: 'INSTALL_FAILED' });
   }
   res.json(result);
+}));
+
+// POST /api/apps/:id/upgrade-tls - Copy the tailscale-https helper into the target app's
+// repo and record tlsPort in apps.json so the Launch button prefers HTTPS. The app still
+// needs to be edited manually to call createTailscaleServers() — we return an example
+// snippet in the response so the frontend can surface it. Refuse to overwrite an existing
+// helper unless `force: true` is set; this way a user who has customized their copy keeps it.
+const upgradeTlsSchema = z.object({
+  tlsPort: z.number().int().min(1).max(65535),
+  force: z.boolean().optional()
+});
+router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
+  const { tlsPort, force } = validateRequest(upgradeTlsSchema, req.body);
+  const app = req.loadedApp;
+  if (app.id === PORTOS_APP_ID) {
+    throw new ServerError('PortOS itself already uses the helper — nothing to upgrade', {
+      status: 400, code: 'ALREADY_UPGRADED'
+    });
+  }
+  if (!app.repoPath || !await pathExists(app.repoPath)) {
+    throw new ServerError('App repository path not found', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+  const sourcePath = join(PATHS.root, 'lib', 'tailscale-https.js');
+  const targetDir = join(app.repoPath, 'lib');
+  const targetPath = join(targetDir, 'tailscale-https.js');
+
+  const alreadyExists = await pathExists(targetPath);
+  if (alreadyExists && !force) {
+    throw new ServerError(
+      'A tailscale-https.js already exists in the target app. Pass force:true to overwrite.',
+      { status: 409, code: 'ALREADY_EXISTS' }
+    );
+  }
+
+  const [helperSource] = await Promise.all([
+    readFile(sourcePath, 'utf-8'),
+    mkdir(targetDir, { recursive: true })
+  ]);
+  await writeFile(targetPath, helperSource);
+
+  await appsService.updateApp(app.id, { tlsPort });
+
+  const snippet = [
+    `// In your server entry, replace the direct http.createServer(app).listen(...) with:`,
+    `import { createTailscaleServers, watchCertReload } from './lib/tailscale-https.js';`,
+    ``,
+    `const CERT_DIR = process.env.CERT_DIR || '/path/to/data/certs'; // shared with PortOS`,
+    `const { server, mirror, httpsEnabled } = createTailscaleServers(app, { certDir: CERT_DIR });`,
+    `// io.attach(server); if (mirror) io.attach(mirror); // when using Socket.IO`,
+    `server.listen(${tlsPort}, '0.0.0.0');`,
+    `// Optional: bind the HTTP mirror on a port of your choosing (127.0.0.1 only).`,
+    `// if (mirror) mirror.listen(<your-mirror-port>, '127.0.0.1');`,
+    `if (httpsEnabled) watchCertReload(server, CERT_DIR);`
+  ].join('\n');
+
+  res.json({
+    ok: true,
+    helperPath: targetPath,
+    overwrote: alreadyExists,
+    tlsPort,
+    snippet,
+    certDirHint: join(PATHS.data, 'certs'),
+    note: 'Point your app at the PortOS cert dir (or symlink it) so apps share the single Tailscale cert.'
+  });
 }));
 
 // GET /api/apps/:id/icon - Serve the app's detected icon image

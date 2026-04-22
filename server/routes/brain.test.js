@@ -76,12 +76,37 @@ vi.mock('../services/brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
+// Mock the brain journal service
+vi.mock('../services/brainJournal.js', () => ({
+  listJournals: vi.fn(),
+  getJournal: vi.fn(),
+  appendJournal: vi.fn(),
+  setJournalContent: vi.fn(),
+  deleteJournal: vi.fn(),
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+  resyncAllToObsidian: vi.fn(),
+  getToday: vi.fn(() => Promise.resolve('2026-04-17')),
+  resolveDate: vi.fn((d) => Promise.resolve(d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '2026-04-17')),
+  isIsoDate: vi.fn((date) => {
+    if (typeof date !== 'string') return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+    if (!match) return false;
+    const [, y, m, d] = match.map((v, i) => (i === 0 ? v : Number(v)));
+    const parsed = new Date(Date.UTC(y, m - 1, d));
+    return parsed.getUTCFullYear() === y
+      && parsed.getUTCMonth() === m - 1
+      && parsed.getUTCDate() === d;
+  })
+}));
+
 // Import mocked modules
 import * as brainService from '../services/brain.js';
 import { getBrainGraphData } from '../services/brainGraph.js';
 import { syncAllBrainData } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
 import { applyRemoteChanges } from '../services/brainSync.js';
+import * as journal from '../services/brainJournal.js';
 
 describe('Brain Routes', () => {
   let app;
@@ -1014,6 +1039,142 @@ describe('Brain Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  // ===========================================================================
+  // DAILY LOG
+  // ===========================================================================
+
+  describe('GET /api/brain/daily-log', () => {
+    it('lists entries', async () => {
+      journal.listJournals.mockResolvedValue({
+        records: [{ id: 'j1', date: '2026-04-17', content: 'hi', segments: [] }],
+        total: 1,
+      });
+      const res = await request(app).get('/api/brain/daily-log');
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(1);
+      expect(res.body.records[0].date).toBe('2026-04-17');
+    });
+  });
+
+  describe('GET /api/brain/daily-log/:date', () => {
+    it('resolves "today" to current local date', async () => {
+      journal.getJournal.mockResolvedValue({ id: 'j1', date: '2026-04-17', content: 'x', segments: [] });
+      const res = await request(app).get('/api/brain/daily-log/today');
+      expect(res.status).toBe(200);
+      expect(res.body.date).toBe('2026-04-17');
+      expect(journal.getJournal).toHaveBeenCalledWith('2026-04-17');
+    });
+
+    it('returns null entry for unknown date', async () => {
+      journal.getJournal.mockResolvedValue(null);
+      const res = await request(app).get('/api/brain/daily-log/2020-01-01');
+      expect(res.status).toBe(200);
+      expect(res.body.entry).toBeNull();
+    });
+  });
+
+  describe('POST /api/brain/daily-log/:date/append', () => {
+    it('appends text', async () => {
+      journal.appendJournal.mockResolvedValue({
+        id: 'j1', date: '2026-04-17', content: 'hello', segments: [{ text: 'hello' }]
+      });
+      const res = await request(app)
+        .post('/api/brain/daily-log/today/append')
+        .send({ text: 'hello', source: 'voice' });
+      expect(res.status).toBe(200);
+      expect(journal.appendJournal).toHaveBeenCalledWith('2026-04-17', 'hello', { source: 'voice' });
+    });
+
+    it('rejects empty text', async () => {
+      const res = await request(app)
+        .post('/api/brain/daily-log/today/append')
+        .send({});
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('PUT /api/brain/daily-log/:date', () => {
+    it('replaces content', async () => {
+      journal.setJournalContent.mockResolvedValue({ id: 'j1', date: '2026-04-17', content: 'replaced', segments: [] });
+      const res = await request(app)
+        .put('/api/brain/daily-log/today')
+        .send({ content: 'replaced' });
+      expect(res.status).toBe(200);
+      expect(res.body.entry.content).toBe('replaced');
+    });
+  });
+
+  describe('daily-log settings', () => {
+    it('reads settings', async () => {
+      journal.getSettings.mockResolvedValue({ obsidianVaultId: null, obsidianFolder: 'Daily Log', autoSync: true });
+      const res = await request(app).get('/api/brain/daily-log/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.obsidianFolder).toBe('Daily Log');
+    });
+
+    it('updates settings', async () => {
+      journal.updateSettings.mockResolvedValue({ obsidianVaultId: 'v1', obsidianFolder: 'Diary', autoSync: true });
+      const res = await request(app)
+        .put('/api/brain/daily-log/settings')
+        .send({ obsidianVaultId: 'v1', obsidianFolder: 'Diary' });
+      expect(res.status).toBe(200);
+      expect(res.body.obsidianVaultId).toBe('v1');
+    });
+  });
+
+  describe('DELETE /api/brain/daily-log/:date', () => {
+    it('deletes the entry for a valid date', async () => {
+      journal.deleteJournal.mockResolvedValue(true);
+      const res = await request(app).delete('/api/brain/daily-log/2026-04-17');
+      expect(res.status).toBe(204);
+      expect(journal.deleteJournal).toHaveBeenCalledWith('2026-04-17');
+    });
+
+    it('returns 404 when the entry is not found', async () => {
+      journal.deleteJournal.mockResolvedValue(false);
+      const res = await request(app).delete('/api/brain/daily-log/2026-04-17');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/brain/daily-log/sync-obsidian', () => {
+    it('returns bulk sync stats', async () => {
+      journal.resyncAllToObsidian.mockResolvedValue({ synced: 3, skipped: 1 });
+      const res = await request(app).post('/api/brain/daily-log/sync-obsidian');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ synced: 3, skipped: 1 });
+    });
+  });
+
+  describe('invalid date handling', () => {
+    // Previously any non-'today' string fell back to journal.resolveDate()
+    // which defaulted invalid input to today, so PUT /daily-log/not-a-date
+    // silently overwrote today's entry. Reject malformed dates with 400.
+    it('rejects malformed dates with 400 on GET', async () => {
+      const res = await request(app).get('/api/brain/daily-log/not-a-date');
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects malformed dates with 400 on PUT', async () => {
+      const res = await request(app)
+        .put('/api/brain/daily-log/2026-13-40')
+        .send({ content: 'x' });
+      expect(res.status).toBe(400);
+      expect(journal.setJournalContent).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed dates with 400 on DELETE', async () => {
+      const res = await request(app).delete('/api/brain/daily-log/bogus');
+      expect(res.status).toBe(400);
+      expect(journal.deleteJournal).not.toHaveBeenCalled();
+    });
+
+    it('rejects impossible calendar days (2026-02-30)', async () => {
+      const res = await request(app).get('/api/brain/daily-log/2026-02-30');
+      expect(res.status).toBe(400);
     });
   });
 });

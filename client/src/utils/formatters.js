@@ -124,6 +124,36 @@ export function formatDateTime(value) {
 }
 
 /**
+ * Format a duration in milliseconds as a human-readable string
+ * @param {number} ms - Duration in milliseconds
+ * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m")
+ */
+export function formatDurationMs(ms) {
+  if (ms == null) return '-';
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/**
+ * Format a duration in minutes as a human-readable string
+ * @param {number} minutes - Duration in minutes
+ * @returns {string} Formatted duration (e.g., "30m", "1h 30m", "2h")
+ */
+export function formatDurationMin(minutes) {
+  if (minutes == null) return '';
+  if (minutes >= 60) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+  return `${minutes}m`;
+}
+
+/**
  * Get app name from app ID by looking up in apps array
  * @param {string|null} appId - The app ID to look up
  * @param {Array<{id: string, name: string}>} apps - Array of app objects

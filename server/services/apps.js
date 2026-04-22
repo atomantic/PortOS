@@ -7,6 +7,7 @@ import { NON_PM2_TYPES } from './streamingDetect.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { PORTS } from '../lib/ports.js';
+import { hasTailscaleCert } from '../../lib/tailscale-https.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
@@ -18,6 +19,9 @@ export const PORTOS_APP_ID = 'portos-default';
  * Build the baseline PortOS app entry with repoPath resolved to the actual project root.
  */
 function buildPortosApp() {
+  // tlsPort reflects whether the Tailscale cert is actually on disk; if not,
+  // don't advertise HTTPS so the Launch button doesn't target a broken scheme.
+  const certPresent = hasTailscaleCert(join(PATHS.data, 'certs'));
   return {
     name: 'PortOS',
     description: 'Local App OS portal for dev machines',
@@ -26,6 +30,7 @@ function buildPortosApp() {
     uiPort: PORTS.API,
     devUiPort: PORTS.UI,
     apiPort: PORTS.API,
+    tlsPort: certPresent ? PORTS.API : null,
     buildCommand: 'npm run build',
     startCommands: ['npm start'],
     pm2ProcessNames: [
@@ -37,7 +42,10 @@ function buildPortosApp() {
       'portos-browser'
     ],
     processes: [
-      { name: 'portos-server', port: PORTS.API, ports: { api: PORTS.API } },
+      // portos-server binds a loopback HTTP mirror on API_LOCAL only when HTTPS is active
+      // on API. If no cert is present, don't advertise api-local — nothing is listening
+      // there and Overview would otherwise show a dead port.
+      { name: 'portos-server', port: PORTS.API, ports: certPresent ? { api: PORTS.API, 'api-local': PORTS.API_LOCAL } : { api: PORTS.API } },
       { name: 'portos-cos', port: 5558, ports: { api: 5558 } },
       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },
       { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
@@ -98,7 +106,7 @@ async function loadApps() {
       }
     }
     // Force-sync specific fields that should always match the code definition
-    const forceSync = ['uiPort', 'devUiPort', 'apiPort', 'buildCommand', 'startCommands', 'processes', 'pm2ProcessNames'];
+    const forceSync = ['uiPort', 'devUiPort', 'apiPort', 'tlsPort', 'buildCommand', 'startCommands', 'processes', 'pm2ProcessNames'];
     for (const key of forceSync) {
       if (JSON.stringify(data.apps[PORTOS_APP_ID][key]) !== JSON.stringify(baseline[key])) {
         data.apps[PORTOS_APP_ID][key] = baseline[key];
