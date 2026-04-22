@@ -116,7 +116,9 @@ function handleMessage(raw) {
         status: 'completed',
         result: { type: eventType, content: data.message || data.thought || '' },
         timestamp: new Date().toISOString()
-      }).catch(() => {});
+      }).catch(err => {
+        console.warn(`⚠️ Activity log failed eventType=${eventType}:`, err?.message || String(err));
+      });
     }
   } else if (eventType === 'nearby') {
     moltworldWsEvents.emit('nearby', data);

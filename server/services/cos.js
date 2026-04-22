@@ -3029,7 +3029,7 @@ async function init() {
   }
 }
 
-// Initialize asynchronously (skip during tests to avoid circular import issues)
+// Initialize asynchronously (skip during tests to avoid circular import issues and side effects)
 if (process.env.NODE_ENV !== 'test') {
   init();
 }
