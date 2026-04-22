@@ -7,7 +7,7 @@
 
 import { cosEvents } from './cosEvents.js'
 
-const AVAILABILITY_CACHE_TTL_MS = 30_000;
+const AVAILABILITY_CACHE_TTL_MS = 30_000
 
 // Default LM Studio configuration
 const DEFAULT_CONFIG = {
