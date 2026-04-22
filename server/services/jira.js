@@ -10,6 +10,8 @@ import { ensureDir, PATHS } from '../lib/fileUtils.js';
 
 const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
 
+const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
 /**
  * Get JIRA instances configuration
  */
@@ -345,7 +347,7 @@ export async function getMyCurrentSprintTickets(instanceId, projectKey) {
   const client = createJiraClient(instance);
 
   // JQL to find tickets assigned to current user in active sprint for the project
-  const jql = `project = "${projectKey}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY priority DESC, updated DESC`;
+  const jql = `project = "${escapeJql(projectKey)}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY priority DESC, updated DESC`;
 
   try {
     const response = await client.get('/rest/api/2/search', {
@@ -411,7 +413,6 @@ export async function searchEpics(instanceId, projectKey, query) {
   }
 
   const client = createJiraClient(instance);
-  const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const safeProject = escapeJql(projectKey);
   const safeQuery = escapeJql(query);
   const jql = `project = "${safeProject}" AND issuetype = Epic AND summary ~ "${safeQuery}" ORDER BY updated DESC`;
