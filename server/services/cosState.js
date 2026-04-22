@@ -4,11 +4,11 @@
  * Shared state management for Chief of Staff services.
  */
 
-import { readFile, writeFile, rename, readdir, rm } from 'fs/promises';
+import { readFile, writeFile, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { createMutex } from '../lib/asyncMutex.js';
-import { ensureDirs, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
 export const AGENTS_DIR = join(PATHS.cos, 'agents');
@@ -157,9 +157,7 @@ export async function loadState() {
 export async function saveState(state) {
   await ensureDirectories();
   stateCache = state;
-  const tmpFile = `${STATE_FILE}.tmp`;
-  await writeFile(tmpFile, JSON.stringify(state, null, 2));
-  await rename(tmpFile, STATE_FILE);
+  await atomicWrite(STATE_FILE, state);
 }
 
 // Daemon state accessors — used by modules that need to check daemon status

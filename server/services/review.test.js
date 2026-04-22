@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFile, writeFile, rename, readdir } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
-  writeFile: vi.fn(),
-  rename: vi.fn(),
   readdir: vi.fn()
 }));
 
@@ -16,6 +15,7 @@ vi.mock('./cosEvents.js', () => ({ cosEvents }));
 
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: {
     data: '/test/data',
     cos: '/test/data/cos',
@@ -61,7 +61,7 @@ describe('review service', () => {
       expect(item.type).toBe('todo');
       expect(item.title).toBe('Test todo');
       expect(item.status).toBe('pending');
-      expect(writeFile).toHaveBeenCalled();
+      expect(atomicWrite).toHaveBeenCalled();
     });
 
     it('throws on invalid item type', async () => {
@@ -87,7 +87,7 @@ describe('review service', () => {
       });
 
       expect(item.id).toBe('1');
-      expect(writeFile).not.toHaveBeenCalled();
+      expect(atomicWrite).not.toHaveBeenCalled();
     });
   });
 
@@ -126,7 +126,7 @@ describe('review service', () => {
 
       const updated = await completeItem('1');
       expect(updated.status).toBe('completed');
-      expect(writeFile).toHaveBeenCalled();
+      expect(atomicWrite).toHaveBeenCalled();
     });
 
     it('dismisses an item', async () => {
@@ -146,7 +146,7 @@ describe('review service', () => {
       const updated = await updateItem('1', { title: 'New', description: 'Desc' });
       expect(updated.title).toBe('New');
       expect(updated.description).toBe('Desc');
-      expect(writeFile).toHaveBeenCalled();
+      expect(atomicWrite).toHaveBeenCalled();
     });
   });
 
@@ -154,7 +154,7 @@ describe('review service', () => {
     it('removes an item', async () => {
       readFile.mockResolvedValue(JSON.stringify([{ id: '1', type: 'todo', title: 'Delete me' }]));
       await deleteItem('1');
-      const written = JSON.parse(writeFile.mock.calls[0][1]);
+      const written = atomicWrite.mock.calls[0][1];
       expect(written).toHaveLength(0);
     });
 

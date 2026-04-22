@@ -10,6 +10,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   dataPath: (name) => `/mock/data/${name}`,
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: { data: '/mock/data' }
 }));
 

@@ -5,11 +5,11 @@
  * Used for peer-to-peer brain sync protocol.
  */
 
-import { readFile, writeFile, appendFile, rename } from 'fs/promises';
+import { readFile, appendFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createMutex } from '../lib/asyncMutex.js';
-import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.brain;
 const SYNC_LOG_FILE = join(DATA_DIR, 'sync_log.jsonl');
@@ -152,9 +152,7 @@ export async function compactLog(minSeq) {
     }
 
     const newContent = kept.length > 0 ? kept.join('\n') + '\n' : '';
-    const tmp = `${SYNC_LOG_FILE}.tmp`;
-    await writeFile(tmp, newContent);
-    await rename(tmp, SYNC_LOG_FILE);
+    await atomicWrite(SYNC_LOG_FILE, newContent);
     console.log(`🔄 Compacted sync log: dropped ${dropped}, kept ${kept.length}`);
     return dropped;
   });

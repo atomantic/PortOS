@@ -1,7 +1,6 @@
-import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { EventEmitter } from 'events';
-import { readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js';
+import { readJSONFile, PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { execGh } from './github.js';
 
@@ -102,9 +101,7 @@ async function loadState() {
 
 async function saveState(state) {
   await ensureDir(PATHS.data);
-  const tmpFile = `${UPDATE_FILE}.tmp`;
-  await writeFile(tmpFile, JSON.stringify(state, null, 2) + '\n');
-  await rename(tmpFile, UPDATE_FILE);
+  await atomicWrite(UPDATE_FILE, JSON.stringify(state, null, 2) + '\n');
 }
 
 /**

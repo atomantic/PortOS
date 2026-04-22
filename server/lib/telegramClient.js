@@ -89,9 +89,17 @@ export function createTelegramBot(token, opts = {}) {
     }
   }
 
+  function startPolling() {
+    if (!polling) return;
+    pollLoop().catch(err => {
+      console.error(`❌ Telegram poll loop fatal: ${err?.message || String(err)}`);
+      if (polling) setTimeout(startPolling, 5000);
+    });
+  }
+
   if (opts.polling) {
     polling = true;
-    pollLoop().catch(() => {});
+    startPolling();
   }
 
   return {

@@ -84,7 +84,6 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 
 import {
   digitalTwinEvents,
-  soulEvents,
   ENRICHMENT_CATEGORIES,
   SCALE_QUESTIONS,
   loadMeta,
@@ -195,10 +194,6 @@ describe('digital-twin.js', () => {
   // ==========================================================================
 
   describe('backward-compatibility aliases', () => {
-    it('soulEvents should be the same object as digitalTwinEvents', () => {
-      expect(soulEvents).toBe(digitalTwinEvents);
-    });
-
     it('exportSoul should be the same function as exportDigitalTwin', () => {
       expect(exportSoul).toBe(exportDigitalTwin);
     });
@@ -276,7 +271,7 @@ describe('digital-twin.js', () => {
 
   describe('saveMeta', () => {
     it('should write meta JSON and emit event', async () => {
-      const emitSpy = vi.spyOn(soulEvents, 'emit');
+      const emitSpy = vi.spyOn(digitalTwinEvents, 'emit');
       const meta = makeMeta();
 
       await saveMeta(meta);

@@ -102,7 +102,8 @@ async function apiCall(method, params) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
+    body: JSON.stringify(params),
+    signal: AbortSignal.timeout(10000)
   });
   const data = await res.json();
   if (!data.ok) {

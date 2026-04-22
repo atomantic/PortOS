@@ -255,6 +255,12 @@ const pgUser = process.env.PGUSER || 'portos';
 const pgDb = process.env.PGDATABASE || 'portos';
 const pgPassword = process.env.PGPASSWORD || 'portos';
 
+// Safely quote a PostgreSQL identifier (table name, role name, db name) by
+// doubling any embedded double-quotes and wrapping in double-quotes.
+const pgQuoteIdentifier = (name) => `"${String(name).replace(/"/g, '""')}"`;
+// Safely escape a PostgreSQL string literal value by doubling single-quotes.
+const pgEscapeString = (val) => String(val).replace(/'/g, "''");
+
 // Native (5432) and Docker (5561) use different ports, so both can run simultaneously.
 const NATIVE_PORT = '5432';
 const DOCKER_PORT = '5561';
@@ -323,15 +329,15 @@ router.post('/sync', asyncHandler(async (req, res) => {
     const sysEnv = pgEnv(targetPort);
     // Create role if missing (connect as system superuser)
     await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
-      '-c', `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${pgUser}') THEN CREATE ROLE ${pgUser} WITH LOGIN PASSWORD '${pgPassword}' CREATEDB SUPERUSER; END IF; END $$;`
+      '-c', `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${pgEscapeString(pgUser)}') THEN CREATE ROLE ${pgQuoteIdentifier(pgUser)} WITH LOGIN PASSWORD '${pgEscapeString(pgPassword)}' CREATEDB SUPERUSER; END IF; END $$;`
     ], 10_000, sysEnv);
     // Create database if missing
     const dbCheck = await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
-      '-tAc', `SELECT 1 FROM pg_database WHERE datname='${pgDb}'`
+      '-tAc', `SELECT 1 FROM pg_database WHERE datname='${pgEscapeString(pgDb)}'`
     ], 5_000, sysEnv);
     if (!dbCheck.stdout.trim().includes('1')) {
       await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
-        '-c', `CREATE DATABASE ${pgDb} OWNER ${pgUser};`
+        '-c', `CREATE DATABASE ${pgQuoteIdentifier(pgDb)} OWNER ${pgQuoteIdentifier(pgUser)};`
       ], 10_000, sysEnv);
     }
     // Best-effort extensions (non-fatal — dump may handle schema, and pgvector may not be installed)
@@ -419,7 +425,7 @@ router.post('/destroy', asyncHandler(async (req, res) => {
   const nativePort = process.env.PGPORT || '5432';
   const result = await runCmd('psql', [
     '-h', 'localhost', '-p', nativePort, '-U', sysUser, '-d', 'postgres',
-    '-c', `DROP DATABASE IF EXISTS ${pgDb}`
+    '-c', `DROP DATABASE IF EXISTS ${pgQuoteIdentifier(pgDb)}`
   ], 15_000);
   res.json({ success: result.exitCode === 0, output: result.stdout });
 }));

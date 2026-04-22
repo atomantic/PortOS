@@ -11,20 +11,9 @@ import {
   getBrowserLogs, navigateBrowser
 } from '../services/api';
 import toast from '../components/ui/Toast';
+import { formatBytes } from '../utils/formatters';
 
 const POLL_INTERVAL = 5000;
-
-function formatBytes(bytes) {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  let val = bytes;
-  while (val >= 1024 && i < units.length - 1) {
-    val /= 1024;
-    i++;
-  }
-  return `${val.toFixed(1)} ${units[i]}`;
-}
 
 function formatUptime(timestamp) {
   if (!timestamp) return '-';

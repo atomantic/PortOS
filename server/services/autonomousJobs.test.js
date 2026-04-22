@@ -8,6 +8,7 @@ vi.mock('./cosEvents.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(),
+  atomicWrite: vi.fn().mockResolvedValue(),
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw) } catch { return fallback } },
   PATHS: { cos: '/mock/data/cos', digitalTwin: '/mock/data/digital-twin', data: '/mock/data' },
   HOUR: 60 * 60 * 1000,

@@ -19,7 +19,6 @@ export { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS } from './digital-twin-constants
 
 export {
   digitalTwinEvents,
-  soulEvents,
   loadMeta,
   saveMeta,
   updateMeta,

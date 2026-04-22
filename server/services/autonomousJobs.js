@@ -21,7 +21,7 @@ import { existsSync } from 'fs'
 import { v4 as uuidv4 } from '../lib/uuid.js'
 import { spawn } from 'child_process'
 import { cosEvents } from './cosEvents.js'
-import { DAY, ensureDir, HOUR, PATHS, readJSONFile } from '../lib/fileUtils.js'
+import { DAY, ensureDir, HOUR, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js'
 import { createMutex } from '../lib/asyncMutex.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
 import { runGoalCheckIn } from './goalCheckIn.js'
@@ -611,9 +611,7 @@ function mergeWithDefaults(loaded) {
 async function saveJobs(data) {
   await ensureDir(DATA_DIR)
   data.lastUpdated = new Date().toISOString()
-  const tmp = JOBS_FILE + '.tmp'
-  await writeFile(tmp, JSON.stringify(data, null, 2))
-  await rename(tmp, JOBS_FILE)
+  await atomicWrite(JOBS_FILE, data)
 }
 
 /**

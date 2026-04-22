@@ -21,7 +21,7 @@
     "lucide-react": "0.562.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-router-dom": "7.1.1",
+    "react-router-dom": "7.5.2",
     "recharts": "3.7.0",
     "socket.io-client": "4.8.3",
     "three": "0.182.0"
@@ -35,5 +35,9 @@
     "eslint-plugin-react-hooks": "5.2.0",
     "tailwindcss": "4.2.1",
     "vite": "7.3.2"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.5",
+    "socket.io-parser": "^4.2.6"
   }
 }

@@ -43,9 +43,11 @@ router.get('/items', asyncHandler(async (req, res) => {
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });
   const items = await feedsService.getItems({
     feedId: feedId || undefined,
-    unreadOnly: unreadOnly === 'true'
+    unreadOnly: unreadOnly === 'true',
+    limit,
+    offset
   });
-  res.json(items.slice(offset, offset + limit));
+  res.json(items);
 }));
 
 // POST /api/feeds — add a new feed subscription

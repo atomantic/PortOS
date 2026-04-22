@@ -300,7 +300,7 @@ app.use('/api/openclaw', openclawRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
-agentActionExecutor.init();
+agentActionExecutor.init().catch(err => console.error(`❌ agentActionExecutor init failed: ${err.message}`));
 
 // Recover any inbox entries stuck in 'classifying' from a previous crash/restart
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
@@ -444,3 +444,47 @@ ensureSelf()
     console.error(`❌ Instance init failed: ${err.message}`);
     process.exit(1);
   });
+
+const closeServer = (server, label) => new Promise((resolve) => {
+  if (!server) return resolve();
+  server.close((err) => {
+    if (err) console.error(`⚠️ Error closing ${label}: ${err.message}`);
+    else console.log(`✅ ${label} closed`);
+    resolve();
+  });
+});
+
+let shuttingDown = false;
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🛑 Received ${signal} - shutting down gracefully`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.error('⚠️ Graceful shutdown timed out, forcing exit');
+    process.exit(1);
+  }, 10000);
+
+  await new Promise((resolve) => {
+    io.close((err) => {
+      if (err) console.error(`⚠️ Error closing Socket.IO: ${err.message}`);
+      else console.log('✅ Socket.IO server closed');
+      resolve();
+    });
+  });
+  await closeServer(httpServer, 'HTTP server');
+  await closeServer(localHttpServer, 'Local HTTP server');
+
+  const { close } = await import('./lib/db.js');
+  if (typeof close === 'function') {
+    await close();
+    console.log('✅ DB pool closed');
+  } else {
+    console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
+  }
+
+  clearTimeout(forceExitTimer);
+  process.exit(0);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

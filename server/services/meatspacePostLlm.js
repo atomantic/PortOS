@@ -95,7 +95,8 @@ async function callAI(prompt, providerId, model) {
         model: selectedModel,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7
-      })
+      }),
+      signal: AbortSignal.timeout(provider.timeout || 120000)
     });
 
     if (!response.ok) {

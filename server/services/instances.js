@@ -5,11 +5,10 @@
  * Data persists to data/instances.json.
  */
 
-import { writeFile } from 'fs/promises';
 import os from 'os';
 import net from 'net';
 import crypto from 'crypto';
-import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
@@ -49,10 +48,7 @@ async function loadData() {
 
 async function saveData(data) {
   await ensureDir(PATHS.data);
-  const tmp = `${INSTANCES_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 2));
-  const { rename } = await import('fs/promises');
-  await rename(tmp, INSTANCES_FILE);
+  await atomicWrite(INSTANCES_FILE, data);
 }
 
 async function withData(fn) {

@@ -8,11 +8,10 @@
  * - Health issues
  */
 
-import { writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 
 const withLock = createMutex();
@@ -71,9 +70,7 @@ async function loadNotifications() {
 async function saveNotifications(data) {
   await ensureDirectory();
   notificationsCache = data;
-  const tmp = `${NOTIFICATIONS_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 2));
-  await rename(tmp, NOTIFICATIONS_FILE);
+  await atomicWrite(NOTIFICATIONS_FILE, data);
 }
 
 /**

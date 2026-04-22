@@ -3,9 +3,10 @@ import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { PATHS } from '../lib/fileUtils.js';
 
 const execFileAsync = promisify(execFile);
-const DATA_DIR = join(process.cwd(), 'data');
+const DATA_DIR = PATHS.data;
 
 const CATEGORIES = {
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true },

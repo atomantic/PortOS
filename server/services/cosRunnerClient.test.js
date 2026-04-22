@@ -1,12 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 
-// Mock dependencies before importing
+// Capture the mock socket at creation time so clearAllMocks() doesn't lose it.
+// The socket's `on()` stores listener references so we can invoke them later.
+let capturedSocket = null;
+const capturedSocketListeners = {}; // event → handler fn (survives clearAllMocks)
+
 vi.mock('socket.io-client', () => ({
-  io: vi.fn(() => ({
-    on: vi.fn(),
-    emit: vi.fn(),
-    disconnect: vi.fn()
-  }))
+  io: vi.fn(() => {
+    const socketOn = (event, fn) => { capturedSocketListeners[event] = fn; };
+    capturedSocket = {
+      on: vi.fn(socketOn),
+      emit: vi.fn(),
+      disconnect: vi.fn()
+    };
+    return capturedSocket;
+  })
 }));
 
 vi.mock('../lib/fetchWithTimeout.js', () => ({
@@ -66,11 +74,40 @@ describe('cosRunnerClient', () => {
   // onCosRunnerEvent
   // ===========================================================================
   describe('onCosRunnerEvent', () => {
-    it('should register event handlers', () => {
+    // Ensure initCosRunnerConnection has been called so capturedSocketListeners is populated,
+    // even when this describe block runs in isolation without the initCosRunnerConnection tests.
+    beforeAll(() => {
+      initCosRunnerConnection();
+    });
+
+    it('handler is invoked with payload when the socket emits agent:output', () => {
+      // capturedSocketListeners stores dispatch fns registered during initCosRunnerConnection.
+      // These are plain function references that survive vi.clearAllMocks().
       const handler = vi.fn();
       onCosRunnerEvent('agent:output', handler);
-      // No assertion on internal map, just verify no throw
-      expect(handler).not.toHaveBeenCalled();
+
+      const payload = { agentId: 'agent-1', line: 'hello from agent' };
+      const dispatch = capturedSocketListeners['agent:output'];
+      expect(dispatch).toBeDefined();
+      dispatch(payload);
+
+      expect(handler).toHaveBeenCalledWith(payload);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('multiple handlers for same event all receive the payload', () => {
+      const h1 = vi.fn();
+      const h2 = vi.fn();
+      onCosRunnerEvent('agent:completed', h1);
+      onCosRunnerEvent('agent:completed', h2);
+
+      const payload = { agentId: 'agent-2', exitCode: 0 };
+      const dispatch = capturedSocketListeners['agent:completed'];
+      expect(dispatch).toBeDefined();
+      dispatch(payload);
+
+      expect(h1).toHaveBeenCalledWith(payload);
+      expect(h2).toHaveBeenCalledWith(payload);
     });
   });
 

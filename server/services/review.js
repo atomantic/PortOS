@@ -5,11 +5,11 @@
  * Aggregates items requiring user attention into a single hub.
  */
 
-import { writeFile, rename, readFile, readdir } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
 
 const DATA_DIR = join(PATHS.data, 'review');
@@ -33,9 +33,7 @@ async function loadItems() {
  */
 async function saveItems(items) {
   await ensureDir(DATA_DIR);
-  const tmpFile = `${ITEMS_FILE}.tmp`;
-  await writeFile(tmpFile, JSON.stringify(items, null, 2));
-  await rename(tmpFile, ITEMS_FILE);
+  await atomicWrite(ITEMS_FILE, items);
 }
 
 /**

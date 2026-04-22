@@ -3035,7 +3035,8 @@ async function init() {
 }
 
 // Initialize asynchronously — vitest sets NODE_ENV=test by default, so this
-// skips eager init (and its listeners/timers) in unit tests.
+// skips eager init (and its listeners/timers) in unit tests and avoids
+// circular-import side effects.
 if (process.env.NODE_ENV !== 'test') {
   init();
 }
