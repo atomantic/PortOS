@@ -18,7 +18,10 @@ const parseMs = (v, fallback) => {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 const SMOKE_WINDOW_MS = parseMs(process.env.SMOKE_WINDOW_MS, 4000);
-const SHUTDOWN_GRACE_MS = parseMs(process.env.SMOKE_SHUTDOWN_GRACE_MS, 3000);
+// Match server/index.js's 10s graceful-shutdown budget so we don't SIGKILL a
+// healthy server that's still closing Socket.IO + HTTP + DB.
+const SHUTDOWN_GRACE_MS = parseMs(process.env.SMOKE_SHUTDOWN_GRACE_MS, 10000);
+const POST_SIGKILL_MS = parseMs(process.env.SMOKE_POST_SIGKILL_MS, 2000);
 const SERVER_ENTRY = join(__dirname, '..', 'server', 'index.js');
 
 // Use dedicated ports so a running PortOS instance doesn't collide.
@@ -63,15 +66,21 @@ setTimeout(() => {
   console.log(`✅ Server survived ${SMOKE_WINDOW_MS}ms boot window.`);
 
   let shutdownTimer = null;
+  let forceKillTimer = null;
   child.once('exit', () => {
     if (shutdownTimer) clearTimeout(shutdownTimer);
+    if (forceKillTimer) clearTimeout(forceKillTimer);
     process.exit(0);
   });
   child.kill('SIGTERM');
   shutdownTimer = setTimeout(() => {
     console.warn(`⚠️  Child ignored SIGTERM after ${SHUTDOWN_GRACE_MS}ms — sending SIGKILL.`);
     child.kill('SIGKILL');
-    // Final safety net — exit even if 'exit' event somehow doesn't fire.
-    setTimeout(() => process.exit(0), 1000);
+    // If the child still doesn't exit after SIGKILL, it's an orphan risk in CI.
+    // Fail the smoke instead of silently exiting 0.
+    forceKillTimer = setTimeout(() => {
+      console.error(`❌ Child did not terminate after SIGKILL (${POST_SIGKILL_MS}ms).`);
+      process.exit(1);
+    }, POST_SIGKILL_MS);
   }, SHUTDOWN_GRACE_MS);
 }, SMOKE_WINDOW_MS);
