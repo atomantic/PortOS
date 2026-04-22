@@ -368,7 +368,7 @@ export async function getMyCurrentSprintTickets(instanceId, projectKey) {
       url: `${instance.baseUrl}/browse/${issue.key}`
     }));
   } catch (error) {
-    console.warn(`⚠️ Jira sprint fetch failed for project ${projectKey}: ${error.message}`);
+    console.warn(`⚠️ JIRA sprint fetch failed for project ${projectKey}: ${error.message}`);
     // Return empty array on error to avoid breaking the UI
     return [];
   }
@@ -411,8 +411,9 @@ export async function searchEpics(instanceId, projectKey, query) {
   }
 
   const client = createJiraClient(instance);
-  const safeProject = projectKey.replace(/"/g, '\\"');
-  const safeQuery = query.replace(/"/g, '\\"');
+  const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const safeProject = escapeJql(projectKey);
+  const safeQuery = escapeJql(query);
   const jql = `project = "${safeProject}" AND issuetype = Epic AND summary ~ "${safeQuery}" ORDER BY updated DESC`;
 
   const response = await client.get('/rest/api/2/search', {
