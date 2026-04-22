@@ -92,7 +92,7 @@ router.get('/sync-status', asyncHandler(async (req, res) => {
 router.get('/tailnet-suffix', asyncHandler(async (req, res) => {
   const bin = findTailscale();
   if (!bin) return res.json({ suffix: null, reason: 'tailscale-not-installed' });
-  const { stdout } = await execFileAsync(bin, ['status', '--json']).catch(() => ({ stdout: null }));
+  const { stdout } = await execFileAsync(bin, ['status', '--json'], { timeout: 5000 }).catch(() => ({ stdout: null }));
   if (!stdout) return res.json({ suffix: null, reason: 'tailscale-not-running' });
   // Guard against non-JSON output (warnings, partial reads, etc.) so we never 500 the endpoint.
   const status = safeJsonParse(stdout);

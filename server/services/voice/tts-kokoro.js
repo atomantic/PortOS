@@ -14,7 +14,13 @@ const ensureModel = async ({ modelId, dtype }) => {
   if (modelPromise && loadedKey === key) return modelPromise;
   loadedKey = key;
   loaded = false;
-  const { KokoroTTS } = await import('kokoro-js');
+  let KokoroTTS;
+  try {
+    ({ KokoroTTS } = await import('kokoro-js'));
+  } catch (err) {
+    loadedKey = null;
+    throw err;
+  }
   console.log(`🗣  kokoro: loading ${modelId} (dtype=${dtype})`);
   const started = Date.now();
   // Capture the in-flight promise so the then/catch handlers only mutate

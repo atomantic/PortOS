@@ -562,16 +562,10 @@ function scoreLocalCompoundChain(drillData, userResponses) {
     const fb = valid.length >= target
       ? `${valid.length} valid compounds — great job!`
       : `${valid.length} valid compound${valid.length !== 1 ? 's' : ''} (target: ${target})`;
-    // Show examples the user didn't find — match against either full compound or
-    // the half (with root stripped from front or back).
-    const missedExamples = (challenge.examples || []).filter(ex => {
-      const exNorm = norm(ex);
-      if (coveredFull.has(exNorm)) return false;
-      // Also match if user typed just the half that pairs with the example.
-      if (exNorm.startsWith(root) && coveredFull.has(exNorm)) return false;
-      if (exNorm.endsWith(root) && coveredFull.has(exNorm)) return false;
-      return true;
-    });
+    // Show examples the user didn't find. `coveredFull` already contains the
+    // user's valid compounds plus `root+half`/`half+root` pairings, so a single
+    // membership check covers both full-compound and half-word inputs.
+    const missedExamples = (challenge.examples || []).filter(ex => !coveredFull.has(norm(ex)));
     return { score, feedback: fb, validCount: valid.length, invalidItems: invalid, missedExamples };
   });
   const overallScore = averageScore(scores);
