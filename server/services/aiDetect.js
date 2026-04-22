@@ -170,7 +170,8 @@ async function executeApiDetection(provider, prompt) {
       model: provider.defaultModel,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1
-    })
+    }),
+    signal: AbortSignal.timeout(provider.timeout || 60000)
   });
 
   if (!response.ok) {

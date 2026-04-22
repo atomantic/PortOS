@@ -100,7 +100,14 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
         output += data.toString();
       });
 
+      const timeoutMs = provider.timeout || 300000;
+      const killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`CLI AI call timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
       child.on('close', (code) => {
+        clearTimeout(killTimer);
         if (code === 0) {
           resolve({ content: output, model, providerId: provider.id });
         } else {
@@ -108,12 +115,10 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
         }
       });
 
-      child.on('error', reject);
-
-      setTimeout(() => {
-        child.kill();
-        reject(new Error('AI request timed out'));
-      }, provider.timeout || 300000);
+      child.on('error', (err) => {
+        clearTimeout(killTimer);
+        reject(err);
+      });
     });
   }
 
@@ -130,7 +135,8 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
         model,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.1
-      })
+      }),
+      signal: AbortSignal.timeout(provider.timeout || 300000)
     });
 
     if (!response.ok) {

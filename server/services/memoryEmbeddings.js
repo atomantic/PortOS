@@ -205,7 +205,8 @@ export async function generateEmbedding(text) {
     body: JSON.stringify({
       model: config.embeddingModel,
       input: truncatedText
-    })
+    }),
+    signal: AbortSignal.timeout(30000)
   });
 
   if (!response.ok) {
@@ -246,7 +247,8 @@ export async function generateBatchEmbeddings(texts) {
     body: JSON.stringify({
       model: config.embeddingModel,
       input: truncatedTexts
-    })
+    }),
+    signal: AbortSignal.timeout(30000)
   });
 
   if (!response.ok) {

@@ -91,7 +91,10 @@ export function createTelegramBot(token, opts = {}) {
 
   if (opts.polling) {
     polling = true;
-    pollLoop().catch(() => {});
+    pollLoop().catch(err => {
+      console.error(`❌ Telegram poll loop fatal: ${err.message}`);
+      setTimeout(() => { pollLoop().catch(() => {}); }, 5000);
+    });
   }
 
   return {

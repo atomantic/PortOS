@@ -305,7 +305,9 @@ export async function triggerLoop(id) {
   if (!loop) throw new Error(`Loop ${id} not found`);
   if (!activeLoops.has(id)) throw new Error(`Loop ${id} is not running`);
 
-  executeIteration(loop);
+  executeIteration(loop).catch(err => {
+    console.error(`❌ [loops] iteration error for loop ${loop.id}: ${err.message}`);
+  });
   return { triggered: true };
 }
 

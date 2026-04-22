@@ -222,16 +222,20 @@ export async function refreshFeed(id) {
 
 export async function refreshAllFeeds() {
   const data = await store.load();
+  const CONCURRENCY = 5;
   let totalNew = 0;
-  for (const feed of data.feeds) {
-    const result = await refreshFeed(feed.id);
-    if (result.newCount) totalNew += result.newCount;
+  for (let i = 0; i < data.feeds.length; i += CONCURRENCY) {
+    const batch = data.feeds.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(batch.map(f => refreshFeed(f.id)));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.newCount) totalNew += r.value.newCount;
+    }
   }
   console.log(`📡 All feeds refreshed: +${totalNew} new items`);
   return { refreshed: data.feeds.length, newItems: totalNew };
 }
 
-export async function getItems({ feedId, unreadOnly } = {}) {
+export async function getItems({ feedId, unreadOnly, limit, offset = 0 } = {}) {
   const data = await store.load();
   let items = data.items;
 
@@ -245,6 +249,7 @@ export async function getItems({ feedId, unreadOnly } = {}) {
     return db - da;
   });
 
+  if (limit != null) return items.slice(offset, offset + limit);
   return items;
 }
 

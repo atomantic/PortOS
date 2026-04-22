@@ -35,7 +35,11 @@ function insecureFetch(agent) {
       req.on('error', reject);
       if (signal) {
         if (signal.aborted) { req.destroy(); reject(new Error('Request aborted')); return; }
-        signal.addEventListener('abort', () => req.destroy(new Error('Request aborted')), { once: true });
+        const onAbort = () => req.destroy(new Error('Request aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        const cleanup = () => signal.removeEventListener('abort', onAbort);
+        req.on('close', cleanup);
+        req.on('error', cleanup);
       }
       if (body) req.write(body);
       req.end();

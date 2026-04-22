@@ -59,7 +59,7 @@ async function downloadClinvar(onProgress) {
   console.log('🧬 ClinVar: downloading variant_summary.txt.gz from NCBI...');
   onProgress?.('Downloading ClinVar database from NCBI...');
 
-  const response = await fetch(CLINVAR_URL);
+  const response = await fetch(CLINVAR_URL, { signal: AbortSignal.timeout(5 * 60 * 1000) });
   if (!response.ok) {
     return { error: `Download failed: HTTP ${response.status}` };
   }
