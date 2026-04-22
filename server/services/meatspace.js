@@ -217,11 +217,11 @@ export async function getConfig() {
   // so edits made in the iOS/macOS app show up here without a manual import.
   const mlProfile = await mlGetProfileIfEnabled();
   if (mlProfile) {
-    if (mlProfile.biologicalSex) {
-      config.sex = mlProfile.biologicalSex;
-      config.sexSource = config.sexSource || 'questionnaire';
+    if ('biologicalSex' in mlProfile) {
+      config.sex = mlProfile.biologicalSex ?? null;
+      config.sexSource = 'mortalloom';
     }
-    if (mlProfile.birthDate) config.birthDate = mlProfile.birthDate;
+    if ('birthDate' in mlProfile) config.birthDate = mlProfile.birthDate ?? null;
     if (mlProfile.lifestyle && typeof mlProfile.lifestyle === 'object') {
       config.lifestyle = { ...config.lifestyle, ...mlProfile.lifestyle };
     }

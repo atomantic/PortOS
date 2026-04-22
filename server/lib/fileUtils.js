@@ -6,6 +6,7 @@
 
 import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -105,7 +106,7 @@ export async function ensureDirs(dirs) {
  */
 export async function atomicWrite(filePath, data) {
   const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
   // overwrite), but still fails with EPERM/EACCES if the destination is locked (AV scan,
@@ -114,7 +115,7 @@ export async function atomicWrite(filePath, data) {
     const err = await rename(tmp, filePath).then(() => null, (e) => e);
     if (!err) return;
     if (process.platform === 'win32' && ['EPERM', 'EACCES', 'EEXIST'].includes(err.code)) {
-      const bak = `${filePath}.${process.pid}.${Date.now()}.bak`;
+      const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
       const hadExisting = await rename(filePath, bak).then(() => true, (e) => {
         if (e.code === 'ENOENT') return false;
         throw e;

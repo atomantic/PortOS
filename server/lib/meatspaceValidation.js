@@ -51,7 +51,7 @@ export const lifestyleSchema = z.object({
 
 export const configSchema = z.object({
   sex: z.enum(['male', 'female']).nullable().optional(),
-  sexSource: z.enum(['genome', 'questionnaire']).nullable().optional(),
+  sexSource: z.enum(['genome', 'questionnaire', 'mortalloom']).nullable().optional(),
   lifestyle: lifestyleSchema.optional()
 });
 
