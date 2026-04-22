@@ -7,6 +7,8 @@
 
 import { cosEvents } from './cosEvents.js'
 
+const AVAILABILITY_CACHE_TTL_MS = 30_000
+
 // Default LM Studio configuration
 const DEFAULT_CONFIG = {
   baseUrl: (process.env.LM_STUDIO_URL || 'http://localhost:1234').replace(/\/+$/, '').replace(/\/v1$/, ''),
@@ -63,7 +65,7 @@ async function checkLMStudioAvailable() {
   const now = Date.now()
 
   // Use cached result if recent (within 30 seconds)
-  if (lastCheckAt && now - lastCheckAt < 30000 && isAvailable !== null) {
+  if (lastCheckAt && now - lastCheckAt < AVAILABILITY_CACHE_TTL_MS && isAvailable !== null) {
     return isAvailable
   }
 
