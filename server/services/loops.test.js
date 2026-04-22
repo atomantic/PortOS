@@ -67,22 +67,35 @@ function setupProviderMocks() {
 }
 
 describe('loops.js', () => {
+  // Track IDs of loops created in each test so afterEach can stop them reliably.
+  // getLoops() reads from the mocked readFile (which stays '[]'), so we cannot
+  // rely on it to discover active loops; instead we intercept writeFile.
+  let createdLoopIds = [];
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    createdLoopIds = [];
     // Default: file has no saved loops
     readFile.mockResolvedValue('[]');
-    writeFile.mockResolvedValue(undefined);
+    writeFile.mockImplementation((path, json) => {
+      try {
+        const loops = JSON.parse(json);
+        if (Array.isArray(loops)) {
+          for (const l of loops) {
+            if (l.id && !createdLoopIds.includes(l.id)) createdLoopIds.push(l.id);
+          }
+        }
+      } catch { /* ignore non-loop writes */ }
+      return Promise.resolve(undefined);
+    });
     setupProviderMocks();
   });
 
   afterEach(async () => {
-    // Stop all running loops to clear timers and prevent cross-test interference
-    const loops = await getLoops();
-    for (const loop of loops) {
-      if (loop.status === 'running') {
-        await stopLoop(loop.id).catch(() => {});
-      }
+    // Stop all loops created in this test to clear timers and prevent cross-test interference
+    for (const id of createdLoopIds) {
+      await stopLoop(id).catch(() => {});
     }
     vi.clearAllTimers();
     vi.useRealTimers();

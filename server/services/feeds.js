@@ -220,31 +220,81 @@ export async function refreshFeed(id) {
   return { feed: { ...feed, unreadCount: data.items.filter(i => i.feedId === id && !i.read).length }, newCount: newItems.length };
 }
 
+// Fetch and parse XML for a feed without touching the store (safe to run in parallel)
+async function fetchAndParseFeed(feed) {
+  const xml = await fetchFeedXml(feed.url);
+  if (!xml) return { feed, parsed: null, error: 'Could not fetch feed' };
+  return { feed, parsed: parseFeed(xml), error: null };
+}
+
+// Apply a parsed feed result to a loaded data object (no I/O — safe to call serially)
+function applyParsedFeed(data, feed, parsed) {
+  const feedRecord = data.feeds.find(f => f.id === feed.id);
+  if (!feedRecord) return 0;
+
+  const existingLinks = new Set(data.items.filter(i => i.feedId === feed.id).map(i => i.link));
+  const newItems = parsed.items
+    .filter(item => item.link && !existingLinks.has(item.link))
+    .slice(0, MAX_ITEMS_PER_FEED)
+    .map(item => ({
+      id: randomUUID(),
+      feedId: feed.id,
+      title: item.title,
+      link: item.link,
+      description: item.description,
+      pubDate: item.pubDate,
+      author: item.author,
+      read: false,
+      fetchedAt: new Date().toISOString()
+    }));
+
+  data.items.push(...newItems);
+
+  // Trim to MAX_ITEMS_PER_FEED per feed (keep newest)
+  const feedItems = data.items
+    .filter(i => i.feedId === feed.id)
+    .sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt));
+  if (feedItems.length > MAX_ITEMS_PER_FEED) {
+    const keepIds = new Set(feedItems.slice(0, MAX_ITEMS_PER_FEED).map(i => i.id));
+    data.items = data.items.filter(i => i.feedId !== feed.id || keepIds.has(i.id));
+  }
+
+  feedRecord.lastFetched = new Date().toISOString();
+  feedRecord.itemCount = data.items.filter(i => i.feedId === feed.id).length;
+  if (parsed.title) feedRecord.title = parsed.title;
+
+  return newItems.length;
+}
+
 export async function refreshAllFeeds() {
   const data = await store.load();
   const CONCURRENCY = 5;
   let totalNew = 0;
   let totalFailed = 0;
+
+  // Fetch in parallel batches; mutations are applied serially to avoid concurrent store.save() races
   for (let i = 0; i < data.feeds.length; i += CONCURRENCY) {
     const batch = data.feeds.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(batch.map(f => refreshFeed(f.id)));
-    for (let j = 0; j < results.length; j++) {
-      const feed = batch[j];
-      const r = results[j];
-      if (r.status === 'fulfilled') {
-        if (r.value?.error) {
-          totalFailed++;
-          console.warn(`⚠️ Feed refresh failed: ${feed.id} (${feed.url}) - ${r.value.error}`);
-        } else if (r.value?.newCount) {
-          totalNew += r.value.newCount;
-        }
-      } else {
+    const fetched = await Promise.allSettled(batch.map(f => fetchAndParseFeed(f)));
+    for (const r of fetched) {
+      if (r.status === 'rejected') {
         totalFailed++;
-        const errMsg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        console.warn(`⚠️ Feed refresh rejected: ${feed.id} (${feed.url}) - ${errMsg}`);
+        console.warn(`⚠️ feeds: fetch error: ${r.reason?.message || r.reason}`);
+        continue;
       }
+      const { feed, parsed, error } = r.value;
+      if (error || !parsed) {
+        totalFailed++;
+        console.warn(`⚠️ feeds: refresh failed for ${feed.id} (${feed.url}): ${error}`);
+        continue;
+      }
+      const newCount = applyParsedFeed(data, feed, parsed);
+      console.log(`🔄 Feed refreshed: ${feed.title || feed.id} (+${newCount} new)`);
+      totalNew += newCount;
     }
   }
+
+  await store.save(data);
   console.log(`📡 All feeds refreshed: +${totalNew} new items, ${totalFailed} failures`);
   return { refreshed: data.feeds.length, newItems: totalNew, failures: totalFailed };
 }

@@ -14,12 +14,6 @@ function insecureFetch(agent) {
       // res.on('error'), and req.on('error') — keep-alive sockets may not
       // fire req 'close' promptly, so we cannot rely on that alone.
       let cleanup = () => {};
-      if (signal) {
-        if (signal.aborted) { reject(new Error('Request aborted')); return; }
-        const onAbort = () => req.destroy(new Error('Request aborted')); // eslint-disable-line no-use-before-define
-        signal.addEventListener('abort', onAbort, { once: true });
-        cleanup = () => signal.removeEventListener('abort', onAbort);
-      }
 
       const req = https.request({
         hostname: u.hostname,
@@ -47,6 +41,14 @@ function insecureFetch(agent) {
       req.on('error', (err) => { cleanup(); reject(err); });
       if (body) req.write(body);
       req.end();
+
+      // Register abort handler after req exists to avoid TDZ; also handle already-aborted case
+      if (signal) {
+        if (signal.aborted) { req.destroy(new Error('Request aborted')); return; }
+        const onAbort = () => req.destroy(new Error('Request aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        cleanup = () => signal.removeEventListener('abort', onAbort);
+      }
     });
   };
 }
