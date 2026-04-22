@@ -7,10 +7,11 @@ import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instances.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 
 const router = Router();
 
-router.get('/health', async (req, res) => {
+router.get('/health', asyncHandler(async (req, res) => {
   const [self, version] = await Promise.all([
     getSelf().catch(() => null),
     getCurrentVersion()
@@ -23,13 +24,13 @@ router.get('/health', async (req, res) => {
     hostname: os.hostname(),
     instanceId: self?.instanceId ?? null
   });
-});
+}));
 
 /**
  * GET /api/system/health/details - Comprehensive system health summary
  * Returns system metrics, app status, and CoS status for dashboard display
  */
-router.get('/health/details', async (req, res) => {
+router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
@@ -207,6 +208,6 @@ router.get('/health/details', async (req, res) => {
     cos: cosInfo,
     database: dbHealth
   });
-});
+}));
 
 export default router;
