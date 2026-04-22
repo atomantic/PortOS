@@ -23,7 +23,18 @@ router.get('/model.glb', (req, res) => {
   }
   res.set('Content-Type', 'model/gltf-binary');
   res.set('Cache-Control', 'public, max-age=60');
-  createReadStream(AVATAR_PATH).pipe(res);
+  // Guard against TOCTOU: if the file is removed between existsSync() and
+  // createReadStream(), the stream emits 'error' — handle it instead of crashing.
+  const stream = createReadStream(AVATAR_PATH);
+  stream.on('error', (err) => {
+    console.warn(`⚠️ Avatar stream error: ${err.code || err.message}`);
+    if (!res.headersSent) {
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Avatar model unavailable' });
+    } else {
+      res.destroy(err);
+    }
+  });
+  stream.pipe(res);
 });
 
 export default router;

@@ -16,6 +16,16 @@ import { findTailscale } from '../lib/tailscale.js';
 
 const execFileAsync = promisify(execFile);
 
+// Safely parse JSON, returning null on malformed input. Used when consuming CLI output
+// that may interleave warnings with the JSON payload or be partial.
+function safeJsonParse(str) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
+
 const router = Router();
 
 // Validation schemas
@@ -84,7 +94,9 @@ router.get('/tailnet-suffix', asyncHandler(async (req, res) => {
   if (!bin) return res.json({ suffix: null, reason: 'tailscale-not-installed' });
   const { stdout } = await execFileAsync(bin, ['status', '--json']).catch(() => ({ stdout: null }));
   if (!stdout) return res.json({ suffix: null, reason: 'tailscale-not-running' });
-  const status = JSON.parse(stdout);
+  // Guard against non-JSON output (warnings, partial reads, etc.) so we never 500 the endpoint.
+  const status = safeJsonParse(stdout);
+  if (!status) return res.json({ suffix: null, reason: 'tailscale-parse-error' });
   const suffix = status?.CurrentTailnet?.MagicDNSSuffix ?? status?.MagicDNSSuffix ?? null;
   // Also include the peer map so the UI can auto-match a peer's instanceId/hostname
   // to its tailnet DNS name without asking the peer.
@@ -139,6 +151,13 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
 // POST /api/instances/peers — add a peer
 router.post('/peers', asyncHandler(async (req, res) => {
   const data = addPeerSchema.parse(req.body);
+  // Reject invalid DNS names up front so the UI gets a clear error instead of
+  // addPeer() silently dropping the field (validHost returns undefined for invalid input).
+  if (data.host !== undefined && data.host !== null && data.host !== '') {
+    if (instances.validHost(data.host) === undefined) {
+      throw new ServerError('Invalid DNS host — use a hostname like "machine.tailnet.ts.net"', { status: 400 });
+    }
+  }
   const peer = await instances.addPeer(data);
   res.status(201).json(peer);
 }));

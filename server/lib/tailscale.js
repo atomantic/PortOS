@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { join, delimiter } from 'path';
 
 // Paths where the Tailscale CLI binary is commonly found. On macOS the GUI app
 // doesn't put the CLI in PATH by default; Homebrew installs to /usr/local/bin
@@ -15,7 +15,9 @@ export function findTailscale() {
   for (const p of TAILSCALE_CANDIDATES) {
     if (existsSync(p)) return p;
   }
-  for (const dir of (process.env.PATH || '').split(':')) {
+  // Use path.delimiter (';' on Windows, ':' elsewhere) so PATH scanning works cross-platform.
+  for (const dir of (process.env.PATH || '').split(delimiter)) {
+    if (!dir) continue;
     const p = join(dir, 'tailscale');
     if (existsSync(p)) return p;
   }
