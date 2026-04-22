@@ -1,5 +1,30 @@
-import { describe, it, expect } from 'vitest';
-import { isTruthyMeta, isFalsyMeta } from './subAgentSpawner.js';
+// vi.mock() calls are hoisted by Vitest before import evaluation, but are placed
+// at the top for clarity and to match the convention in other test files.
+
+// Mock taskLearning so suggestModelTier returns null → pattern-matching path runs.
+// This matches the behavior of the old inline selectModelForTask copy.
+vi.mock('./taskLearning.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    suggestModelTier: vi.fn().mockResolvedValue(null)
+  };
+});
+
+// Mock thinkingLevels so resolveThinkingLevel returns resolvedFrom:'default'
+// (no override), which skips the thinking-level model-selection path.
+vi.mock('./thinkingLevels.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    resolveThinkingLevel: vi.fn().mockReturnValue({ level: 'off', resolvedFrom: 'default' }),
+    getModelForLevel: vi.fn().mockReturnValue(null),
+    isLocalPreferred: vi.fn().mockReturnValue(false)
+  };
+});
+
+import { describe, it, expect, vi } from 'vitest';
+import { isTruthyMeta, isFalsyMeta, selectModelForTask } from './subAgentSpawner.js';
 import { applyAppWorktreeDefault } from './cos.js';
 
 /**
@@ -10,60 +35,8 @@ import { applyAppWorktreeDefault } from './cos.js';
  * we focus on the decision-making logic that can be unit tested.
  */
 
-// Test model selection logic
+// Test model selection logic using the real exported selectModelForTask
 describe('Model Selection Logic', () => {
-  // Simulate selectModelForTask function logic
-  function selectModelForTask(task, provider) {
-    const desc = (task.description || '').toLowerCase();
-    const context = task.metadata?.context || '';
-    const contextLen = context.length;
-    const priority = task.priority || 'MEDIUM';
-
-    // Check for user-specified model preference
-    const userModel = task.metadata?.model;
-    const userProvider = task.metadata?.provider;
-
-    if (userModel) {
-      return {
-        model: userModel,
-        tier: 'user-specified',
-        reason: 'user-preference',
-        userProvider: userProvider || null
-      };
-    }
-
-    // Image/visual analysis
-    if (/image|screenshot|visual|photo|picture/.test(desc)) {
-      return { model: provider.heavyModel || provider.defaultModel, tier: 'heavy', reason: 'visual-analysis' };
-    }
-
-    // Critical priority
-    if (priority === 'CRITICAL') {
-      return { model: provider.heavyModel || provider.defaultModel, tier: 'heavy', reason: 'critical-priority' };
-    }
-
-    // Complex reasoning tasks
-    if (/architect|refactor|design|complex|optimize|security|audit|review.*code|performance/.test(desc)) {
-      return { model: provider.heavyModel || provider.defaultModel, tier: 'heavy', reason: 'complex-task' };
-    }
-
-    // Long context
-    if (contextLen > 500) {
-      return { model: provider.heavyModel || provider.mediumModel || provider.defaultModel, tier: 'heavy', reason: 'long-context' };
-    }
-
-    // Detect coding/development tasks
-    const isCodingTask = /\b(fix|bug|implement|develop|code|refactor|test|feature|function|class|module|api|endpoint|component|service|route|schema|migration|script|build|deploy|debug|error|exception|crash|issue|patch)\b/.test(desc);
-
-    // Simple/quick tasks (non-coding)
-    if (!isCodingTask && /fix typo|update text|update docs|edit readme|update readme|write docs|documentation only|format text/.test(desc)) {
-      return { model: provider.lightModel || provider.defaultModel, tier: 'light', reason: 'documentation-task' };
-    }
-
-    // Standard tasks
-    return { model: provider.mediumModel || provider.defaultModel, tier: 'medium', reason: 'standard-task' };
-  }
-
   const mockProvider = {
     id: 'anthropic',
     name: 'Anthropic',
@@ -74,61 +47,61 @@ describe('Model Selection Logic', () => {
   };
 
   describe('User-specified model', () => {
-    it('should use user-specified model when provided', () => {
+    it('should use user-specified model when provided', async () => {
       const task = {
         description: 'Simple task',
         metadata: { model: 'custom-model' }
       };
 
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.model).toBe('custom-model');
       expect(result.tier).toBe('user-specified');
       expect(result.reason).toBe('user-preference');
     });
 
-    it('should include user provider if specified', () => {
+    it('should include user provider if specified', async () => {
       const task = {
         description: 'Simple task',
         metadata: { model: 'gpt-4', provider: 'openai' }
       };
 
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.userProvider).toBe('openai');
     });
   });
 
   describe('Visual analysis tasks', () => {
-    it('should select heavy model for image analysis', () => {
+    it('should select heavy model for image analysis', async () => {
       const task = { description: 'Analyze this image for errors' };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.model).toBe('claude-3-opus');
       expect(result.tier).toBe('heavy');
       expect(result.reason).toBe('visual-analysis');
     });
 
-    it('should select heavy model for screenshot review', () => {
+    it('should select heavy model for screenshot review', async () => {
       const task = { description: 'Review the screenshot' };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.reason).toBe('visual-analysis');
     });
   });
 
   describe('Priority-based selection', () => {
-    it('should select heavy model for CRITICAL priority', () => {
+    it('should select heavy model for CRITICAL priority', async () => {
       const task = { description: 'Fix something', priority: 'CRITICAL' };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.model).toBe('claude-3-opus');
       expect(result.reason).toBe('critical-priority');
     });
 
-    it('should not use heavy for HIGH priority alone', () => {
+    it('should not use heavy for HIGH priority alone', async () => {
       const task = { description: 'Update a setting', priority: 'HIGH' };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.reason).not.toBe('critical-priority');
     });
@@ -142,9 +115,9 @@ describe('Model Selection Logic', () => {
       ['optimize performance', 'complex-task'],
       ['security audit', 'complex-task'],
       ['review code for issues', 'complex-task']
-    ])('should select heavy model for: %s', (description, expectedReason) => {
+    ])('should select heavy model for: %s', async (description, expectedReason) => {
       const task = { description };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.tier).toBe('heavy');
       expect(result.reason).toBe(expectedReason);
@@ -152,25 +125,25 @@ describe('Model Selection Logic', () => {
   });
 
   describe('Context length handling', () => {
-    it('should select heavy model for long context', () => {
+    it('should select heavy model for long context', async () => {
       const task = {
         description: 'Simple task',
         metadata: { context: 'x'.repeat(501) }
       };
 
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.tier).toBe('heavy');
       expect(result.reason).toBe('long-context');
     });
 
-    it('should not use heavy model for short context', () => {
+    it('should not use heavy model for short context', async () => {
       const task = {
         description: 'Simple update',
         metadata: { context: 'Short context' }
       };
 
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.reason).not.toBe('long-context');
     });
@@ -184,25 +157,25 @@ describe('Model Selection Logic', () => {
       'update text in guide',
       'edit readme with new info',
       'format text only'
-    ])('should select light model for: %s', (description) => {
+    ])('should select light model for: %s', async (description) => {
       const task = { description };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.model).toBe('claude-3-haiku');
       expect(result.tier).toBe('light');
       expect(result.reason).toBe('documentation-task');
     });
 
-    // These phrases contain coding keywords so they get medium model
-    // Note: 'fix' is a coding keyword so 'fix typo' routes to medium tier
+    // These phrases contain coding keywords so they get default model
+    // Note: 'fix' is a coding keyword so 'fix typo' routes to default tier
     it.each([
       'fix typo in manual',
       'fix typo in README',
       'update docs for feature',
       'write docs for API'
-    ])('should NOT select light model when coding keyword present: %s', (description) => {
+    ])('should NOT select light model when coding keyword present: %s', async (description) => {
       const task = { description };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       // These contain words like 'fix', 'docs', 'API' which are coding keywords
       expect(result.tier).not.toBe('light');
@@ -218,38 +191,39 @@ describe('Model Selection Logic', () => {
       'test the function',
       'debug the error',
       'patch the issue'
-    ])('should NOT select light model for coding task: %s', (description) => {
+    ])('should NOT select light model for coding task: %s', async (description) => {
       const task = { description };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
       expect(result.tier).not.toBe('light');
     });
 
-    it('should use medium model for standard coding tasks', () => {
+    it('should use default model for standard coding tasks (real agentModelSelection behavior)', async () => {
       const task = { description: 'Add a new helper function' };
-      const result = selectModelForTask(task, mockProvider);
+      const result = await selectModelForTask(task, mockProvider);
 
+      // Real agentModelSelection.js returns tier:'default', not 'medium'
       expect(result.model).toBe('claude-3-sonnet');
-      expect(result.tier).toBe('medium');
+      expect(result.tier).toBe('default');
       expect(result.reason).toBe('standard-task');
     });
   });
 
   describe('Default fallbacks', () => {
-    it('should fall back to defaultModel if lightModel not available', () => {
+    it('should fall back to defaultModel if lightModel not available', async () => {
       const providerNoLight = { ...mockProvider, lightModel: null };
       const task = { description: 'update readme' };
 
-      const result = selectModelForTask(task, providerNoLight);
+      const result = await selectModelForTask(task, providerNoLight);
 
       expect(result.model).toBe('claude-3-sonnet');
     });
 
-    it('should fall back to defaultModel if heavyModel not available', () => {
+    it('should fall back to defaultModel if heavyModel not available', async () => {
       const providerNoHeavy = { ...mockProvider, heavyModel: null };
       const task = { description: 'analyze this image' };
 
-      const result = selectModelForTask(task, providerNoHeavy);
+      const result = await selectModelForTask(task, providerNoHeavy);
 
       expect(result.model).toBe('claude-3-sonnet');
     });
