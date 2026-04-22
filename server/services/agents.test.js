@@ -101,11 +101,11 @@ describe('agents.js', () => {
 
       const agents = await getRunningAgents();
       const found = agents.find(a => a.pid === 12345);
-      // The process itself may still appear but without cos metadata
-      if (found) {
-        expect(found.agentId).toBeUndefined();
-        expect(found.source).toBeUndefined();
-      }
+      // The mocked ps output always includes PID 12345 so found must be defined.
+      // After unregistering, the process appears without CoS metadata.
+      expect(found).toBeDefined();
+      expect(found.agentId).toBeUndefined();
+      expect(found.source).toBeUndefined();
     });
 
     it('killProcess delegates to CoS killAgent for a registered PID', async () => {
@@ -162,9 +162,10 @@ describe('agents.js', () => {
 
       const agents = await getRunningAgents();
       const claudeAgents = agents.filter(a => a.agentType === 'claude');
-      if (claudeAgents.length >= 2) {
-        expect(claudeAgents[0].startTime).toBeGreaterThan(claudeAgents[1].startTime);
-      }
+      // Both mock lines must parse; assert the count so this fails on parsing regressions.
+      expect(claudeAgents).toHaveLength(2);
+      // Newest-first: PID 1002 (1m elapsed) started more recently than PID 1001 (10m elapsed)
+      expect(claudeAgents[0].startTime).toBeGreaterThan(claudeAgents[1].startTime);
     });
 
     it('skips lines containing "grep" or "ps -eo"', async () => {
