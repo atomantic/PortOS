@@ -59,6 +59,8 @@ vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(
 vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { initSocket } from './socket.js';
+import { detachSocketSessions } from './shell.js';
+import * as shellService from './shell.js';
 
 // Build a minimal fake socket with per-event handler capture
 function makeSocket(id = 'sock-1') {
@@ -96,6 +98,7 @@ describe('socket.js — initSocket', () => {
   let io;
 
   beforeEach(() => {
+    vi.mocked(detachSocketSessions).mockClear();
     io = makeIo();
     initSocket(io);
   });
@@ -159,6 +162,9 @@ describe('socket.js — initSocket', () => {
 
     // Disconnect s1
     s1.handlers['disconnect']();
+
+    // Shell cleanup was called for s1 (prevents sessionListSubscribers Set leak)
+    expect(shellService.detachSocketSessions).toHaveBeenCalledWith(s1);
 
     // Count cos:subscribed emits (registration acks) for s1
     const s1CosSubscribedCount = s1.emitted.filter(([ev]) => ev === 'cos:subscribed').length;

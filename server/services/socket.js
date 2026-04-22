@@ -487,7 +487,6 @@ export function initSocket(io) {
       console.log(`🔌 Client disconnected: ${socket.id}`);
       cleanupStream(socket.id);
       for (const set of ALL_SUBSCRIBER_SETS) set.delete(socket);
-      shellService.unsubscribeSessionList(socket);
       const detached = shellService.detachSocketSessions(socket);
       if (detached > 0) {
         console.log(`🐚 Detached ${detached} shell session(s) (still running)`);

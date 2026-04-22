@@ -3,10 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock fs/promises and fs
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
-  writeFile: vi.fn(),
   appendFile: vi.fn(),
-  mkdir: vi.fn(),
-  rename: vi.fn()
+  mkdir: vi.fn()
 }));
 vi.mock('fs', () => ({
   existsSync: vi.fn()
