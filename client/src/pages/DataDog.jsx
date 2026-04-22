@@ -40,7 +40,7 @@ export default function DataDog() {
       const response = await api.get('/datadog/instances');
       setInstances(response.instances || {});
     } catch (error) {
-      console.error(`Failed to load DataDog instances: ${error.message}`);
+      console.error(`❌ Failed to load DataDog instances: ${error.message}`);
       toast.error(`Failed to load DataDog instances: ${error.message}`);
     } finally {
       setLoading(false);
@@ -106,7 +106,7 @@ export default function DataDog() {
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
       handleCancel();
     } catch (error) {
-      console.error(`Failed to save DataDog instance: ${error.message}`);
+      console.error(`❌ Failed to save DataDog instance: ${error.message}`);
       setSaveError(error.message);
       toast.error(`Failed to save: ${error.message}`);
     } finally {
@@ -131,7 +131,7 @@ export default function DataDog() {
         return next;
       });
     } catch (error) {
-      console.error(`Failed to delete DataDog instance: ${error.message}`);
+      console.error(`❌ Failed to delete DataDog instance: ${error.message}`);
       toast.error(`Failed to delete: ${error.message}`);
     }
   };

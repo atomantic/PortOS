@@ -45,57 +45,67 @@ export function TelegramTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleMethodChange = (newMethod) => {
+  const handleMethodChange = async (newMethod) => {
     setSwitching(true);
-    updateTelegramMethod(newMethod)
-      .then(status => {
-        setMethod(newMethod);
-        setTgStatus(status);
-        toast.success(newMethod === 'mcp-bridge'
-          ? 'Switched to Claude MCP Bridge'
-          : 'Switched to Manual Bot');
-      })
-      .catch(() => toast.error('Failed to switch method'))
-      .finally(() => setSwitching(false));
+    try {
+      const status = await updateTelegramMethod(newMethod);
+      setMethod(newMethod);
+      setTgStatus(status);
+      toast.success(newMethod === 'mcp-bridge'
+        ? 'Switched to Claude MCP Bridge'
+        : 'Switched to Manual Bot');
+    } catch (err) {
+      toast.error(err.message || 'Failed to switch method');
+    } finally {
+      setSwitching(false);
+    }
   };
 
-  const handleTelegramSave = () => {
+  const handleTelegramSave = async () => {
     if (!tgToken && !tgStatus?.hasToken) {
       toast.error('Bot token is required');
       return;
     }
     setTgSaving(true);
-    updateTelegramConfig({ token: tgToken, chatId: tgChatId })
-      .then(status => {
-        setTgStatus(status);
-        toast.success(tgChatId
-          ? 'Telegram connected — check your chat for a test message'
-          : 'Bot connected — now message your bot /start to get your Chat ID');
-      })
-      .catch(() => toast.error('Failed to configure Telegram'))
-      .finally(() => setTgSaving(false));
+    try {
+      const status = await updateTelegramConfig({ token: tgToken, chatId: tgChatId });
+      setTgStatus(status);
+      toast.success(tgChatId
+        ? 'Telegram connected — check your chat for a test message'
+        : 'Bot connected — now message your bot /start to get your Chat ID');
+    } catch (err) {
+      toast.error(err.message || 'Failed to configure Telegram');
+    } finally {
+      setTgSaving(false);
+    }
   };
 
-  const handleTelegramTest = () => {
+  const handleTelegramTest = async () => {
     setTgTesting(true);
-    testTelegram()
-      .then(() => toast.success('Test message sent'))
-      .catch(() => toast.error('Failed to send test message'))
-      .finally(() => setTgTesting(false));
+    try {
+      await testTelegram();
+      toast.success('Test message sent');
+    } catch (err) {
+      toast.error(err.message || 'Failed to send test message');
+    } finally {
+      setTgTesting(false);
+    }
   };
 
-  const handleTelegramDisconnect = () => {
+  const handleTelegramDisconnect = async () => {
     setTgDisconnecting(true);
-    deleteTelegramConfig()
-      .then(() => {
-        setTgStatus(null);
-        setTgToken('');
-        setTgChatId('');
-        setTgForwardTypes([]);
-        toast.success('Telegram disconnected');
-      })
-      .catch(() => toast.error('Failed to disconnect'))
-      .finally(() => setTgDisconnecting(false));
+    try {
+      await deleteTelegramConfig();
+      setTgStatus(null);
+      setTgToken('');
+      setTgChatId('');
+      setTgForwardTypes([]);
+      toast.success('Telegram disconnected');
+    } catch (err) {
+      toast.error(err.message || 'Failed to disconnect');
+    } finally {
+      setTgDisconnecting(false);
+    }
   };
 
   const toggleForwardType = (type) => {

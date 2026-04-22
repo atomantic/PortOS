@@ -41,13 +41,15 @@ export function GeneralTab() {
     }
 
     setSaving(true);
-    await updateSettings({ timezone: tzToSave })
-      .then(() => {
-        setTimezone(tzToSave);
-        toast.success(`Timezone set to ${tzToSave}`);
-      })
-      .catch(() => toast.error('Failed to save timezone'))
-      .finally(() => setSaving(false));
+    try {
+      await updateSettings({ timezone: tzToSave });
+      setTimezone(tzToSave);
+      toast.success(`Timezone set to ${tzToSave}`);
+    } catch (err) {
+      toast.error(err.message || 'Failed to save timezone');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (loading) return <BrailleSpinner />;

@@ -64,7 +64,7 @@ async function lmStudioRequest(endpoint, options = {}) {
 async function checkLMStudioAvailable() {
   const now = Date.now()
 
-  // Use cached result if recent (within 30 seconds)
+  // Use cached result if recent (within AVAILABILITY_CACHE_TTL_MS)
   if (lastCheckAt && now - lastCheckAt < AVAILABILITY_CACHE_TTL_MS && isAvailable !== null) {
     return isAvailable
   }

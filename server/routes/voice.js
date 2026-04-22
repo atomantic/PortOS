@@ -157,7 +157,8 @@ router.post('/test', asyncHandler(async (req, res) => {
   try {
     ({ wav, latencyMs } = await synthesize(text, { voice, engine }));
   } catch (err) {
-    if (err?.message?.startsWith('unknown piper voice:')) {
+    // String check couples to synthesize() internals; also accept err.code for future typed errors
+    if (err?.code === 'UNKNOWN_VOICE' || err?.message?.startsWith('unknown piper voice:')) {
       return res.status(400).json({ error: err.message });
     }
     throw err;

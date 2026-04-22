@@ -153,45 +153,55 @@ export function VoiceTab() {
 
   const handleSave = async () => {
     setSaving(true);
-    await updateVoiceConfig(cfg)
-      .then((r) => {
-        setCfg(r.config);
-        const rec = r.reconciliation || {};
-        if (rec.error) {
-          toast.error(`Saved, but reconcile failed: ${rec.error}`, { duration: 12000 });
-        } else if (rec.skipped === 'web-speech') {
-          toast.success('Voice settings saved — using Web Speech API for STT');
-        } else if (rec.skipped === true) {
-          toast.success('Voice settings saved (disabled)');
-        } else if (rec.stopped) {
-          toast.success('Voice settings saved — whisper stopped');
-        } else if (rec.host) {
-          toast.success(`Voice settings saved — whisper up on ${rec.host}:${rec.port}`);
-        } else {
-          toast.success('Voice settings saved');
-        }
-      })
-      .catch((err) => toast.error(`Failed to save voice settings: ${err.message}`))
-      .finally(() => setSaving(false));
+    try {
+      const r = await updateVoiceConfig(cfg);
+      setCfg(r.config);
+      const rec = r.reconciliation || {};
+      if (rec.error) {
+        toast.error(`Saved, but reconcile failed: ${rec.error}`, { duration: 12000 });
+      } else if (rec.skipped === 'web-speech') {
+        toast.success('Voice settings saved — using Web Speech API for STT');
+      } else if (rec.skipped === true) {
+        toast.success('Voice settings saved (disabled)');
+      } else if (rec.stopped) {
+        toast.success('Voice settings saved — whisper stopped');
+      } else if (rec.host) {
+        toast.success(`Voice settings saved — whisper up on ${rec.host}:${rec.port}`);
+      } else {
+        toast.success('Voice settings saved');
+      }
+    } catch (err) {
+      toast.error(`Failed to save voice settings: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
     await refreshStatus();
   };
 
   const handleTest = async () => {
     setTesting(true);
-    await testTts('Voice mode is online. I am ready to help.', undefined, currentEngine)
-      .then((buf) => playWav(buf))
-      .catch((err) => toast.error(`TTS test failed: ${err.message}`))
-      .finally(() => setTesting(false));
+    try {
+      const buf = await testTts('Voice mode is online. I am ready to help.', undefined, currentEngine);
+      playWav(buf);
+    } catch (err) {
+      toast.error(`TTS test failed: ${err.message}`);
+    } finally {
+      setTesting(false);
+    }
     await refreshStatus();
   };
 
   const handlePreviewVoice = async (voiceName) => {
     if (!voiceName || previewingVoice) return;
     setPreviewingVoice(voiceName);
-    await testTts("Hi, I'm your voice. This is how I sound.", voiceName, currentEngine)
-      .then((buf) => playWav(buf))
-      .catch((err) => toast.error(`Preview failed: ${err.message}`))
-      .finally(() => setPreviewingVoice(null));
+    try {
+      const buf = await testTts("Hi, I'm your voice. This is how I sound.", voiceName, currentEngine);
+      playWav(buf);
+    } catch (err) {
+      toast.error(`Preview failed: ${err.message}`);
+    } finally {
+      setPreviewingVoice(null);
+    }
   };
 
   const handleWhisperModel = (value) => {

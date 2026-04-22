@@ -155,8 +155,7 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
     throw new Error(`Failed to load image: ${err.message}`);
   });
 
-  console.log(`🔍 Testing vision with model: ${testModel}`);
-  console.log(`📸 Image: ${imagePath}`);
+  console.log(`🔍 Testing vision with model: ${testModel} | image: ${imagePath}`);
 
   // Call vision API
   const apiResponse = await callVisionAPI({

@@ -958,15 +958,15 @@ app.get('/logs', async (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Autofixer UI] Running on http://localhost:${PORT}`);
+  console.log(`🚀 [Autofixer UI] Running on http://localhost:${PORT}`);
 });
 
 process.on('SIGINT', () => {
-  console.log('\n[Autofixer UI] Shutting down...');
+  console.log(`\n🛑 [Autofixer UI] Shutting down...`);
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('\n[Autofixer UI] Shutting down...');
+  console.log(`\n🛑 [Autofixer UI] Shutting down...`);
   process.exit(0);
 });

@@ -189,5 +189,24 @@ describe('Voice Routes', () => {
       expect(res.headers['content-type']).toMatch(/audio\/wav/);
       expect(res.headers['x-tts-latency-ms']).toBe('123');
     });
+
+    it('maps err.code === "UNKNOWN_VOICE" from synthesize() to a 400 response', async () => {
+      const err = Object.assign(new Error('voice id not in catalog'), { code: 'UNKNOWN_VOICE' });
+      tts.synthesize.mockRejectedValue(err);
+      const res = await request(buildApp())
+        .post('/api/voice/test')
+        .send({ text: 'hello', voice: 'nonexistent', engine: 'piper' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('voice id not in catalog');
+    });
+
+    it('still maps the legacy "unknown piper voice:" message to 400 (back-compat)', async () => {
+      tts.synthesize.mockRejectedValue(new Error('unknown piper voice: nonexistent'));
+      const res = await request(buildApp())
+        .post('/api/voice/test')
+        .send({ text: 'hello', voice: 'nonexistent', engine: 'piper' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/unknown piper voice/);
+    });
   });
 });

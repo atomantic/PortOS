@@ -117,7 +117,7 @@ function handleMessage(raw) {
         result: { type: eventType, content: data.message || data.thought || '' },
         timestamp: new Date().toISOString()
       }).catch(err => {
-        console.warn(`⚠️ Activity log failed eventType=${eventType}:`, err?.message || String(err));
+        console.warn(`⚠️ Activity log failed eventType=${eventType}: ${err?.message || String(err)}`);
       });
     }
   } else if (eventType === 'nearby') {
@@ -279,7 +279,7 @@ export function sendMove(x, y, thought) {
       status: 'completed',
       result: { type: 'move' },
       timestamp: new Date().toISOString()
-    }).catch(() => {});
+    }).catch(err => console.warn(`⚠️ Activity log failed: ${err.message}`));
   }
 }
 
@@ -301,7 +301,7 @@ export function sendThink(thought) {
       status: 'completed',
       result: { type: 'think' },
       timestamp: new Date().toISOString()
-    }).catch(() => {});
+    }).catch(err => console.warn(`⚠️ Activity log failed: ${err.message}`));
   }
 }
 
@@ -324,7 +324,7 @@ export function sendInteract(toAgentId, payload) {
       status: 'completed',
       result: { type: 'interact' },
       timestamp: new Date().toISOString()
-    }).catch(() => {});
+    }).catch(err => console.warn(`⚠️ Activity log failed: ${err.message}`));
   }
 }
 

@@ -37,11 +37,15 @@ import {
   getProcessInfo
 } from './agents.js';
 
-// Helper to simulate exec callback
-function mockExecWith(stdout) {
+// Helper to simulate exec callback.
+// By default, returns stdout unconditionally. Tests that care about which pattern
+// triggered the exec call should pass a conditional function:
+//   mockExecWith((cmd) => cmd.includes('claude') ? '<claude line>' : '')
+function mockExecWith(stdoutOrFn) {
   exec.mockImplementation((_cmd, _opts, cb) => {
     // handle both (cmd, cb) and (cmd, opts, cb) forms
     const callback = typeof _opts === 'function' ? _opts : cb;
+    const stdout = typeof stdoutOrFn === 'function' ? stdoutOrFn(_cmd) : stdoutOrFn;
     callback(null, { stdout });
   });
 }
@@ -134,7 +138,11 @@ describe('agents.js', () => {
   // ===========================================================================
   describe('getRunningAgents', () => {
     it('parses pid, cpu, memory, and command from ps output for claude pattern', async () => {
-      mockExecWith('42000  1  2.5  0.8  05:30  /usr/local/bin/claude --model opus\n');
+      // Use a command-conditional mock: only return output when the exec command
+      // actually searches for the 'claude' pattern — verifying command construction.
+      mockExecWith((cmd) =>
+        cmd.includes('claude') ? '42000  1  2.5  0.8  05:30  /usr/local/bin/claude --model opus\n' : ''
+      );
 
       const agents = await getRunningAgents();
       const a = agents.find(a => a.pid === 42000);
