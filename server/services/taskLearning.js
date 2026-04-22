@@ -6,11 +6,11 @@
  * to provide smarter task prioritization and model selection.
  */
 
-import { writeFile, readFile, rename } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 
 const withLock = createMutex();
@@ -110,9 +110,7 @@ async function saveLearningData(data) {
     }
   }
 
-  const tmp = `${LEARNING_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 2));
-  await rename(tmp, LEARNING_FILE);
+  await atomicWrite(LEARNING_FILE, data);
   _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
 }

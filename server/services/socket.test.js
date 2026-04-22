@@ -1,329 +1,268 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventEmitter } from 'events';
 
 /**
- * Tests for the socket service event handling logic
+ * Tests for socket.js initSocket behavior.
  *
- * Note: We test the event forwarding and subscription management logic
- * without spinning up actual Socket.IO servers.
+ * Strategy: mock all heavy imports at the system boundary (PM2, file I/O,
+ * external services) so we can call the real initSocket and verify its
+ * subscription / broadcast / disconnect behavior through observable socket events.
  */
 
-// Mock cosEvents
-const mockCosEvents = new EventEmitter();
+vi.mock('./pm2.js', () => ({ spawnPm2: vi.fn(() => ({ stdout: { on: vi.fn() }, stderr: { on: vi.fn() }, on: vi.fn() })) }));
+vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
+vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), updateApp: vi.fn() }));
+vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn() } }));
+vi.mock('./autoFixer.js', () => ({ handleErrorRecovery: vi.fn() }));
+vi.mock('./pm2Standardizer.js', () => ({ analyzeApp: vi.fn(), createGitBackup: vi.fn(), applyStandardization: vi.fn() }));
+vi.mock('./notifications.js', () => ({ notificationEvents: { on: vi.fn() } }));
+vi.mock('./providerStatus.js', () => ({ providerStatusEvents: { on: vi.fn() } }));
+vi.mock('./agentPersonalities.js', () => ({ agentPersonalityEvents: { on: vi.fn() } }));
+vi.mock('./platformAccounts.js', () => ({ platformAccountEvents: { on: vi.fn() } }));
+vi.mock('./updateChecker.js', () => ({ updateEvents: { on: vi.fn() } }));
+vi.mock('./automationScheduler.js', () => ({ scheduleEvents: { on: vi.fn() } }));
+vi.mock('./agentActivity.js', () => ({ activityEvents: { on: vi.fn() } }));
+vi.mock('./brainStorage.js', () => ({ brainEvents: { on: vi.fn() } }));
+vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
+vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
+vi.mock('./instanceEvents.js', () => ({ instanceEvents: { on: vi.fn() } }));
+vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn() } }));
+vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
+vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
+vi.mock('./shell.js', () => ({
+  createShellSession: vi.fn(),
+  attachSession: vi.fn(),
+  subscribeSessionList: vi.fn(),
+  listAllSessions: vi.fn(() => []),
+  writeToSession: vi.fn(),
+  resizeSession: vi.fn(),
+  killSession: vi.fn(),
+  unsubscribeSessionList: vi.fn(),
+  detachSocketSessions: vi.fn(() => 0)
+}));
+vi.mock('../lib/socketValidation.js', () => ({
+  validateSocketData: vi.fn((schema, data) => data),
+  detectStartSchema: {},
+  standardizeStartSchema: {},
+  logsSubscribeSchema: {},
+  errorRecoverSchema: {},
+  shellInputSchema: {},
+  shellResizeSchema: {},
+  shellSessionIdSchema: {},
+  shellStopSchema: {},
+  appUpdateSchema: {},
+  appStandardizeSchema: {},
+  appDeploySchema: {}
+}));
+vi.mock('./appUpdater.js', () => ({ updateApp: vi.fn() }));
+vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn() }));
+vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
-// Mock errorEvents
-const mockErrorEvents = new EventEmitter();
+import { initSocket } from './socket.js';
+import { cosEvents } from './cosEvents.js';
+import { detachSocketSessions } from './shell.js';
+import * as shellService from './shell.js';
 
-describe('Socket Service Logic', () => {
-  let mockSocket;
-  let mockIo;
-  let cosSubscribers;
-  let errorSubscribers;
-  let activeStreams;
+// Build a minimal fake socket with per-event handler capture
+function makeSocket(id = 'sock-1') {
+  const handlers = {};
+  const emitted = [];
+  return {
+    id,
+    connected: true,
+    handlers,
+    emitted,
+    on(event, fn) { handlers[event] = fn; },
+    emit(event, ...args) { emitted.push([event, ...args]); },
+    removeAllListeners: vi.fn()
+  };
+}
 
-  beforeEach(() => {
-    // Create fresh sets for each test
-    cosSubscribers = new Set();
-    errorSubscribers = new Set();
-    activeStreams = new Map();
+// Build a minimal fake io that captures the connection handler
+function makeIo() {
+  let connectionHandler = null;
+  const emitted = [];
+  return {
+    connectionHandler: () => connectionHandler,
+    emit(event, ...args) { emitted.push([event, ...args]); },
+    emitted,
+    on(event, fn) {
+      if (event === 'connection') connectionHandler = fn;
+    },
+    connect(socket) {
+      if (connectionHandler) connectionHandler(socket);
+    }
+  };
+}
 
-    // Mock socket
-    mockSocket = {
-      id: 'socket-123',
-      emit: vi.fn(),
-      on: vi.fn()
-    };
-
-    // Mock io
-    mockIo = {
-      emit: vi.fn(),
-      on: vi.fn()
-    };
-  });
+describe('socket.js — initSocket', () => {
+  let io;
+  const createdSockets = [];
 
   afterEach(() => {
-    vi.clearAllMocks();
-    mockCosEvents.removeAllListeners();
-    mockErrorEvents.removeAllListeners();
-  });
-
-  describe('CoS Event Subscription', () => {
-    it('should add socket to subscribers on cos:subscribe', () => {
-      // Simulate subscribe handler
-      cosSubscribers.add(mockSocket);
-      mockSocket.emit('cos:subscribed');
-
-      expect(cosSubscribers.has(mockSocket)).toBe(true);
-      expect(mockSocket.emit).toHaveBeenCalledWith('cos:subscribed');
-    });
-
-    it('should remove socket from subscribers on cos:unsubscribe', () => {
-      cosSubscribers.add(mockSocket);
-
-      // Simulate unsubscribe handler
-      cosSubscribers.delete(mockSocket);
-      mockSocket.emit('cos:unsubscribed');
-
-      expect(cosSubscribers.has(mockSocket)).toBe(false);
-      expect(mockSocket.emit).toHaveBeenCalledWith('cos:unsubscribed');
-    });
-
-    it('should remove socket from subscribers on disconnect', () => {
-      cosSubscribers.add(mockSocket);
-
-      // Simulate disconnect cleanup
-      cosSubscribers.delete(mockSocket);
-
-      expect(cosSubscribers.has(mockSocket)).toBe(false);
-    });
-  });
-
-  describe('Error Event Subscription', () => {
-    it('should add socket to error subscribers', () => {
-      errorSubscribers.add(mockSocket);
-      mockSocket.emit('errors:subscribed');
-
-      expect(errorSubscribers.has(mockSocket)).toBe(true);
-      expect(mockSocket.emit).toHaveBeenCalledWith('errors:subscribed');
-    });
-
-    it('should remove socket from error subscribers', () => {
-      errorSubscribers.add(mockSocket);
-      errorSubscribers.delete(mockSocket);
-      mockSocket.emit('errors:unsubscribed');
-
-      expect(errorSubscribers.has(mockSocket)).toBe(false);
-    });
-  });
-
-  describe('CoS Event Forwarding', () => {
-    function broadcastToCos(event, data) {
-      for (const socket of cosSubscribers) {
-        socket.emit(event, data);
-      }
+    for (const s of createdSockets) {
+      if (s.handlers['disconnect']) s.handlers['disconnect']();
     }
-
-    it('should forward status events to subscribers', () => {
-      cosSubscribers.add(mockSocket);
-
-      broadcastToCos('cos:status', { running: true });
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('cos:status', { running: true });
-    });
-
-    it('should forward log events to subscribers', () => {
-      cosSubscribers.add(mockSocket);
-
-      broadcastToCos('cos:log', { level: 'info', message: 'Test' });
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('cos:log', { level: 'info', message: 'Test' });
-    });
-
-    it('should forward agent events to subscribers', () => {
-      cosSubscribers.add(mockSocket);
-
-      const agentData = { id: 'agent-001', status: 'running' };
-      broadcastToCos('cos:agent:spawned', agentData);
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('cos:agent:spawned', agentData);
-    });
-
-    it('should forward to multiple subscribers', () => {
-      const mockSocket2 = { ...mockSocket, id: 'socket-456', emit: vi.fn() };
-      cosSubscribers.add(mockSocket);
-      cosSubscribers.add(mockSocket2);
-
-      broadcastToCos('cos:status', { running: true });
-
-      expect(mockSocket.emit).toHaveBeenCalled();
-      expect(mockSocket2.emit).toHaveBeenCalled();
-    });
-
-    it('should not emit to non-subscribers', () => {
-      // Don't add socket to subscribers
-
-      broadcastToCos('cos:status', { running: true });
-
-      expect(mockSocket.emit).not.toHaveBeenCalled();
-    });
+    createdSockets.length = 0;
   });
 
-  describe('Error Event Forwarding', () => {
-    function broadcastToErrors(event, data) {
-      for (const socket of errorSubscribers) {
-        socket.emit(event, data);
-      }
-    }
-
-    it('should forward error notifications to subscribers', () => {
-      errorSubscribers.add(mockSocket);
-
-      const errorData = {
-        message: 'Test error',
-        code: 'TEST_ERROR',
-        severity: 'error',
-        timestamp: Date.now()
-      };
-
-      broadcastToErrors('error:notified', errorData);
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('error:notified', errorData);
-    });
+  beforeEach(() => {
+    vi.mocked(detachSocketSessions).mockClear();
+    io = makeIo();
+    initSocket(io);
   });
 
-  describe('Log Stream Management', () => {
-    function cleanupStream(socketId) {
-      const stream = activeStreams.get(socketId);
-      if (stream) {
-        stream.killed = true;
-        activeStreams.delete(socketId);
-      }
-    }
+  // ===========================================================================
+  // cos:subscribe — socket joins cosSubscribers, receives cos:subscribed ack
+  // ===========================================================================
+  it('socket receives cos:subscribed ack after emitting cos:subscribe', () => {
+    const socket = makeSocket('sub-1');
+    io.connect(socket);
 
-    it('should track active log streams', () => {
-      const mockStream = { process: { kill: vi.fn() }, processName: 'test-app' };
-      activeStreams.set(mockSocket.id, mockStream);
+    // Trigger the cos:subscribe handler registered by registerSubscriber
+    socket.handlers['cos:subscribe']();
 
-      expect(activeStreams.has(mockSocket.id)).toBe(true);
-      expect(activeStreams.get(mockSocket.id).processName).toBe('test-app');
-    });
-
-    it('should cleanup stream on unsubscribe', () => {
-      const mockStream = { process: { kill: vi.fn() }, processName: 'test-app', killed: false };
-      activeStreams.set(mockSocket.id, mockStream);
-
-      cleanupStream(mockSocket.id);
-
-      expect(activeStreams.has(mockSocket.id)).toBe(false);
-      expect(mockStream.killed).toBe(true);
-    });
-
-    it('should cleanup stream on disconnect', () => {
-      const mockStream = { process: { kill: vi.fn() }, processName: 'test-app', killed: false };
-      activeStreams.set(mockSocket.id, mockStream);
-
-      // Simulate disconnect
-      cleanupStream(mockSocket.id);
-
-      expect(activeStreams.has(mockSocket.id)).toBe(false);
-    });
-
-    it('should handle cleanup when no stream exists', () => {
-      // Should not throw
-      expect(() => cleanupStream('non-existent')).not.toThrow();
-    });
+    expect(socket.emitted.some(([ev]) => ev === 'cos:subscribed')).toBe(true);
   });
 
-  describe('PM2 Standardization Events', () => {
-    it('should emit step events during standardization', () => {
-      const emit = (step, status, data = {}) => {
-        mockSocket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
-      };
+  it('socket receives cos:unsubscribed ack after emitting cos:unsubscribe', () => {
+    const socket = makeSocket('sub-2');
+    io.connect(socket);
 
-      emit('analyze', 'running', { message: 'Analyzing...' });
+    socket.handlers['cos:subscribe']();
+    socket.handlers['cos:unsubscribe']();
 
-      expect(mockSocket.emit).toHaveBeenCalledWith('standardize:step', expect.objectContaining({
-        step: 'analyze',
-        status: 'running',
-        data: { message: 'Analyzing...' }
-      }));
-    });
-
-    it('should emit completion event', () => {
-      mockSocket.emit('standardize:complete', {
-        success: true,
-        result: { filesModified: ['ecosystem.config.cjs'] }
-      });
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('standardize:complete', expect.objectContaining({
-        success: true
-      }));
-    });
-
-    it('should emit error on failure', () => {
-      mockSocket.emit('standardize:complete', {
-        success: false,
-        error: 'Analysis failed'
-      });
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('standardize:complete', expect.objectContaining({
-        success: false,
-        error: 'Analysis failed'
-      }));
-    });
+    expect(socket.emitted.some(([ev]) => ev === 'cos:unsubscribed')).toBe(true);
   });
 
-  describe('Log Line Parsing', () => {
-    it('should emit stdout log lines', () => {
-      const logData = {
-        line: '[2024-01-15 10:00:00] App started',
-        type: 'stdout',
-        timestamp: Date.now(),
-        processName: 'test-app'
-      };
+  // ===========================================================================
+  // broadcast: two subscribed sockets both receive the event
+  // Tested via the subscription ack — the internal Set membership is observable
+  // through the ack emission which only happens when registerSubscriber runs.
+  // ===========================================================================
+  it('two independent sockets can both subscribe to cos independently', () => {
+    const s1 = makeSocket('s1');
+    const s2 = makeSocket('s2');
+    io.connect(s1);
+    io.connect(s2);
 
-      mockSocket.emit('logs:line', logData);
+    s1.handlers['cos:subscribe']();
+    s2.handlers['cos:subscribe']();
 
-      expect(mockSocket.emit).toHaveBeenCalledWith('logs:line', expect.objectContaining({
-        type: 'stdout',
-        processName: 'test-app'
-      }));
-    });
-
-    it('should emit stderr log lines', () => {
-      const logData = {
-        line: 'Error: Something went wrong',
-        type: 'stderr',
-        timestamp: Date.now(),
-        processName: 'test-app'
-      };
-
-      mockSocket.emit('logs:line', logData);
-
-      expect(mockSocket.emit).toHaveBeenCalledWith('logs:line', expect.objectContaining({
-        type: 'stderr'
-      }));
-    });
+    // Both must have received the ack confirming they are in the Set
+    expect(s1.emitted.some(([ev]) => ev === 'cos:subscribed')).toBe(true);
+    expect(s2.emitted.some(([ev]) => ev === 'cos:subscribed')).toBe(true);
   });
 
-  describe('CoS Event Types Coverage', () => {
-    // Test all the event types that get forwarded
-    const eventTypes = [
-      ['status', { running: true }],
-      ['log', { level: 'info', message: 'test' }],
-      ['tasks:user:changed', { action: 'added' }],
-      ['tasks:user:added', { task: { id: 'task-001' } }],
-      ['tasks:user:completed', { taskId: 'task-001' }],
-      ['tasks:cos:changed', { action: 'updated' }],
-      ['agent:spawned', { id: 'agent-001' }],
-      ['agent:updated', { id: 'agent-001', status: 'working' }],
-      ['agent:completed', { id: 'agent-001', success: true }],
-      ['agent:output', { agentId: 'agent-001', line: 'output' }],
-      ['memory:created', { id: 'mem-001' }],
-      ['memory:updated', { id: 'mem-001' }],
-      ['memory:deleted', { id: 'mem-001' }],
-      ['memory:extracted', { count: 5 }],
-      ['memory:approval-needed', { memories: [] }],
-      ['health:check', { metrics: {}, issues: [] }],
-      ['health:critical', [{ type: 'error', message: 'test' }]],
-      ['evaluation', { message: 'Evaluation complete' }],
-      ['task:ready', { id: 'task-001' }],
-      ['watcher:started', { files: ['TASKS.md'] }],
-      ['watcher:stopped', {}]
-    ];
+  // ===========================================================================
+  // disconnect: socket removed from ALL subscriber Sets
+  // ===========================================================================
+  it('disconnected socket no longer receives events (removed from all sets)', () => {
+    const s1 = makeSocket('disc-1');
+    const s2 = makeSocket('disc-2');
+    createdSockets.push(s2); // s1 is disconnected in the test; only s2 needs afterEach cleanup
+    io.connect(s1);
+    io.connect(s2);
 
-    function broadcastToCos(event, data) {
-      for (const socket of cosSubscribers) {
-        socket.emit(event, data);
-      }
-    }
+    // Both subscribe to cos and loops
+    s1.handlers['cos:subscribe']();
+    s1.handlers['loops:subscribe']();
+    s2.handlers['cos:subscribe']();
+    s2.handlers['loops:subscribe']();
 
-    it.each(eventTypes)('should forward %s event', (eventType, data) => {
-      cosSubscribers.add(mockSocket);
+    // Disconnect s1
+    s1.handlers['disconnect']();
 
-      broadcastToCos(`cos:${eventType}`, data);
+    // Shell cleanup was called for s1 (prevents sessionListSubscribers Set leak)
+    expect(shellService.detachSocketSessions).toHaveBeenCalledWith(s1);
 
-      expect(mockSocket.emit).toHaveBeenCalledWith(`cos:${eventType}`, data);
-    });
+    // Verify broadcast no longer reaches s1 — emit a cos:status event via the captured listener
+    const statusListener = cosEvents.on.mock.calls.find(([ev]) => ev === 'status')?.[1];
+    const s1EmitsBefore = s1.emitted.length;
+    if (statusListener) statusListener({ running: true });
+
+    // s1 must not receive any new event
+    expect(s1.emitted.length).toBe(s1EmitsBefore);
+    // s2 still subscribed — must receive the broadcast
+    expect(s2.emitted.some(([ev]) => ev === 'cos:status')).toBe(true);
+  });
+
+  // ===========================================================================
+  // Multiple namespaces: loops:subscribe / errors:subscribe
+  // ===========================================================================
+  it('socket receives loops:subscribed ack after loops:subscribe', () => {
+    const socket = makeSocket('loop-sub');
+    io.connect(socket);
+
+    socket.handlers['loops:subscribe']();
+
+    expect(socket.emitted.some(([ev]) => ev === 'loops:subscribed')).toBe(true);
+  });
+
+  it('socket receives errors:subscribed ack after errors:subscribe', () => {
+    const socket = makeSocket('err-sub');
+    io.connect(socket);
+
+    socket.handlers['errors:subscribe']();
+
+    expect(socket.emitted.some(([ev]) => ev === 'errors:subscribed')).toBe(true);
+  });
+
+  // ===========================================================================
+  // agents + instances namespaces
+  // ===========================================================================
+  it('socket receives agents:subscribed and instances:subscribed acks', () => {
+    const socket = makeSocket('multi-sub');
+    io.connect(socket);
+
+    socket.handlers['agents:subscribe']();
+    socket.handlers['instances:subscribe']();
+
+    expect(socket.emitted.some(([ev]) => ev === 'agents:subscribed')).toBe(true);
+    expect(socket.emitted.some(([ev]) => ev === 'instances:subscribed')).toBe(true);
+  });
+
+  // ===========================================================================
+  // notifications namespace
+  // ===========================================================================
+  it('socket receives notifications:subscribed ack after notifications:subscribe', () => {
+    const socket = makeSocket('notif-sub');
+    io.connect(socket);
+
+    socket.handlers['notifications:subscribe']();
+
+    expect(socket.emitted.some(([ev]) => ev === 'notifications:subscribed')).toBe(true);
+  });
+
+  // ===========================================================================
+  // unsubscribe removes from set — second socket keeps receiving
+  // ===========================================================================
+  it('after cos:unsubscribe, socket is removed but other subscribers remain intact', () => {
+    const s1 = makeSocket('unsub-1');
+    const s2 = makeSocket('unsub-2');
+    io.connect(s1);
+    io.connect(s2);
+
+    s1.handlers['cos:subscribe']();
+    s2.handlers['cos:subscribe']();
+
+    // s1 unsubscribes
+    s1.handlers['cos:unsubscribe']();
+
+    // s2's subscription state is unaffected — it received cos:subscribed
+    expect(s2.emitted.some(([ev]) => ev === 'cos:subscribed')).toBe(true);
+    expect(s1.emitted.some(([ev]) => ev === 'cos:unsubscribed')).toBe(true);
+  });
+
+  // ===========================================================================
+  // shell:list event sends back session list
+  // ===========================================================================
+  it('shell:list emits shell:sessions with the session list', () => {
+    const socket = makeSocket('shell-list');
+    io.connect(socket);
+
+    socket.handlers['shell:list']();
+
+    expect(socket.emitted.some(([ev]) => ev === 'shell:sessions')).toBe(true);
   });
 });

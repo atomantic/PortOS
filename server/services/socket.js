@@ -56,6 +56,26 @@ const loopSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers];
+
+function broadcastToSet(set, event, data) {
+  for (const s of set) {
+    if (!s.connected) { set.delete(s); continue; }
+    s.emit(event, data);
+  }
+}
+
+function registerSubscriber(socket, namespace, set) {
+  socket.on(`${namespace}:subscribe`, () => {
+    set.add(socket);
+    socket.emit(`${namespace}:subscribed`);
+  });
+  socket.on(`${namespace}:unsubscribe`, () => {
+    set.delete(socket);
+    socket.emit(`${namespace}:unsubscribed`);
+  });
+}
+
 export function initSocket(io) {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
@@ -229,70 +249,22 @@ export function initSocket(io) {
     });
 
     // CoS subscriptions
-    socket.on('cos:subscribe', () => {
-      cosSubscribers.add(socket);
-      socket.emit('cos:subscribed');
-    });
-
-    socket.on('cos:unsubscribe', () => {
-      cosSubscribers.delete(socket);
-      socket.emit('cos:unsubscribed');
-    });
+    registerSubscriber(socket, 'cos', cosSubscribers);
 
     // Error event subscriptions
-    socket.on('errors:subscribe', () => {
-      errorSubscribers.add(socket);
-      socket.emit('errors:subscribed');
-    });
-
-    socket.on('errors:unsubscribe', () => {
-      errorSubscribers.delete(socket);
-      socket.emit('errors:unsubscribed');
-    });
+    registerSubscriber(socket, 'errors', errorSubscribers);
 
     // Notification subscriptions
-    socket.on('notifications:subscribe', () => {
-      notificationSubscribers.add(socket);
-      socket.emit('notifications:subscribed');
-    });
-
-    socket.on('notifications:unsubscribe', () => {
-      notificationSubscribers.delete(socket);
-      socket.emit('notifications:unsubscribed');
-    });
+    registerSubscriber(socket, 'notifications', notificationSubscribers);
 
     // Agent subscriptions
-    socket.on('agents:subscribe', () => {
-      agentSubscribers.add(socket);
-      socket.emit('agents:subscribed');
-    });
-
-    socket.on('agents:unsubscribe', () => {
-      agentSubscribers.delete(socket);
-      socket.emit('agents:unsubscribed');
-    });
+    registerSubscriber(socket, 'agents', agentSubscribers);
 
     // Instance subscriptions
-    socket.on('instances:subscribe', () => {
-      instanceSubscribers.add(socket);
-      socket.emit('instances:subscribed');
-    });
-
-    socket.on('instances:unsubscribe', () => {
-      instanceSubscribers.delete(socket);
-      socket.emit('instances:unsubscribed');
-    });
+    registerSubscriber(socket, 'instances', instanceSubscribers);
 
     // Loop subscriptions
-    socket.on('loops:subscribe', () => {
-      loopSubscribers.add(socket);
-      socket.emit('loops:subscribed');
-    });
-
-    socket.on('loops:unsubscribe', () => {
-      loopSubscribers.delete(socket);
-      socket.emit('loops:unsubscribed');
-    });
+    registerSubscriber(socket, 'loops', loopSubscribers);
 
     // Handle error recovery requests (can trigger auto-fix agents)
     socket.on('error:recover', async (rawData) => {
@@ -514,12 +486,7 @@ export function initSocket(io) {
     socket.on('disconnect', () => {
       console.log(`🔌 Client disconnected: ${socket.id}`);
       cleanupStream(socket.id);
-      cosSubscribers.delete(socket);
-      errorSubscribers.delete(socket);
-      notificationSubscribers.delete(socket);
-      agentSubscribers.delete(socket);
-      instanceSubscribers.delete(socket);
-      loopSubscribers.delete(socket);
+      for (const set of ALL_SUBSCRIBER_SETS) set.delete(socket);
       const detached = shellService.detachSocketSessions(socket);
       if (detached > 0) {
         console.log(`🐚 Detached ${detached} shell session(s) (still running)`);
@@ -592,20 +559,10 @@ export function broadcast(io, event, data) {
 }
 
 // Broadcast to CoS subscribers only
-function broadcastToCos(event, data) {
-  for (const socket of cosSubscribers) {
-    if (!socket.connected) { cosSubscribers.delete(socket); continue; }
-    socket.emit(event, data);
-  }
-}
+function broadcastToCos(event, data) { broadcastToSet(cosSubscribers, event, data); }
 
 // Broadcast to error subscribers only
-function broadcastToErrors(event, data) {
-  for (const socket of errorSubscribers) {
-    if (!socket.connected) { errorSubscribers.delete(socket); continue; }
-    socket.emit(event, data);
-  }
-}
+function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event, data); }
 
 // Set up CoS event forwarding
 function setupCosEventForwarding() {
@@ -678,12 +635,7 @@ function setupAppsEventForwarding() {
 }
 
 // Broadcast to notification subscribers only
-function broadcastToNotifications(event, data) {
-  for (const socket of notificationSubscribers) {
-    if (!socket.connected) { notificationSubscribers.delete(socket); continue; }
-    socket.emit(event, data);
-  }
-}
+function broadcastToNotifications(event, data) { broadcastToSet(notificationSubscribers, event, data); }
 
 // Set up notification event forwarding
 function setupNotificationEventForwarding() {
@@ -704,12 +656,7 @@ function setupProviderStatusEventForwarding() {
 }
 
 // Broadcast to agent subscribers only
-function broadcastToAgents(event, data) {
-  for (const socket of agentSubscribers) {
-    if (!socket.connected) { agentSubscribers.delete(socket); continue; }
-    socket.emit(event, data);
-  }
-}
+function broadcastToAgents(event, data) { broadcastToSet(agentSubscribers, event, data); }
 
 // Set up agent event forwarding
 function setupAgentEventForwarding() {
@@ -756,12 +703,7 @@ function setupMoltworldQueueEventForwarding() {
 }
 
 // Broadcast to instance subscribers only
-function broadcastToInstances(event, data) {
-  for (const socket of instanceSubscribers) {
-    if (!socket.connected) { instanceSubscribers.delete(socket); continue; }
-    socket.emit(event, data);
-  }
-}
+function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers, event, data); }
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
@@ -811,12 +753,7 @@ function setupUpdateEventForwarding() {
 }
 
 // Broadcast to loop subscribers only
-function broadcastToLoops(event, data) {
-  for (const socket of loopSubscribers) {
-    if (!socket.connected) { loopSubscribers.delete(socket); continue; }
-    socket.emit(event, data);
-  }
-}
+function broadcastToLoops(event, data) { broadcastToSet(loopSubscribers, event, data); }
 
 // Set up loop event forwarding (idempotent)
 let loopForwardingSetup = false;

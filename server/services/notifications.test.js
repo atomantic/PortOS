@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(),
+  atomicWrite: vi.fn().mockResolvedValue(),
   readJSONFile: vi.fn(),
   PATHS: { data: '/mock/data' }
 }))

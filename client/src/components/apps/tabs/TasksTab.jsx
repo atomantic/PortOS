@@ -4,6 +4,7 @@ import { RefreshCw, Clock, Activity } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import TaskAddForm from '../../cos/TaskAddForm';
 import * as api from '../../../services/api';
+import { formatDurationMs, formatTime } from '../../../utils/formatters';
 
 const STATUS_CONFIG = {
   running: { color: 'bg-port-accent', text: 'Running' },
@@ -14,25 +15,6 @@ const STATUS_CONFIG = {
   cancelled: { color: 'bg-gray-500', text: 'Cancelled' }
 };
 
-function formatDuration(ms) {
-  if (!ms) return '-';
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function formatTime(dateStr) {
-  if (!dateStr) return '-';
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diff = now - d;
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 export default function TasksTab({ appId }) {
   const [data, setData] = useState(null);
@@ -155,7 +137,7 @@ export default function TasksTab({ appId }) {
                       <td className="px-4 py-3 text-right">
                         <span className="text-xs text-gray-400 flex items-center justify-end gap-1">
                           <Clock size={12} />
-                          {formatDuration(duration)}
+                          {formatDurationMs(duration)}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">

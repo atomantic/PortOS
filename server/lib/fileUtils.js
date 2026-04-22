@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -88,6 +88,26 @@ export async function ensureDirs(dirs) {
   for (const dir of dirs) {
     await ensureDir(dir);
   }
+}
+
+/**
+ * Atomically write data to a file via temp-file + rename.
+ * Guarantees readers never see a partial write. Accepts a string or any JSON-
+ * serializable value (objects are stringified with 2-space indentation).
+ *
+ * @param {string} filePath - Destination file path
+ * @param {string|object} data - String or JSON-serializable value
+ * @returns {Promise<void>}
+ *
+ * @example
+ * await atomicWrite(FILE, { version: 1, items: [] });
+ * await atomicWrite(LOG_FILE, 'raw string content');
+ */
+export async function atomicWrite(filePath, data) {
+  const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, payload);
+  await rename(tmp, filePath);
 }
 
 /**
