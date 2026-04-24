@@ -5,9 +5,9 @@
  * list of widget ids; the client's widget registry decides how to render
  * each id. Persisted to data/dashboard-layouts.json.
  *
- * Seeded on first read with a "Default" layout (mirrors the current hardcoded
- * layout) plus "Focus", "Morning Review", and "Ops" starter layouts so the
- * feature has value out of the box.
+ * Seeded on first read with the "Everything" layout (id `default`, mirrors
+ * the current hardcoded dashboard) plus "Focus", "Morning Review", and "Ops"
+ * starter layouts so the feature has value out of the box.
  */
 
 import { join } from 'path';

@@ -1,8 +1,8 @@
 /**
  *   GET    /api/dashboard/layouts           → { activeLayoutId, layouts }
- *   PUT    /api/dashboard/layouts/active    → { activeLayoutId }  (body: { id })
- *   PUT    /api/dashboard/layouts/:id       → saves/updates a single layout
- *   DELETE /api/dashboard/layouts/:id       → deletes a user-created layout
+ *   PUT    /api/dashboard/layouts/active    → { activeLayoutId, layouts }  (body: { id })
+ *   PUT    /api/dashboard/layouts/:id       → { activeLayoutId, layouts }
+ *   DELETE /api/dashboard/layouts/:id       → { activeLayoutId, layouts }
  */
 
 import { Router } from 'express';
@@ -55,7 +55,7 @@ router.put('/active', asyncHandler(async (req, res) => {
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
-  const body = validateRequest(layoutSchema, { ...req.body, id: req.params.id });
+  const body = validateRequest(layoutSchema, { ...(req.body ?? {}), id: req.params.id });
   res.json(await svc.saveLayout(body));
 }));
 

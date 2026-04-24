@@ -81,14 +81,21 @@ export default function LayoutEditor({ layouts, activeLayoutId, onClose, onSave,
   const commitDuplicate = async () => {
     const trimmed = dupName.trim();
     if (!trimmed) { toast.error('Name required'); return; }
-    // Server-side idSchema caps ids at 60 chars; reserve 4 for a `-NN` suffix
-    // so collision-dedup can't push the final id past the limit.
-    const baseId = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56);
-    if (!baseId) { toast.error('Use letters/numbers in the name'); return; }
+    // Server idSchema caps ids at 60 chars. Compute the final id in a way
+    // that always fits regardless of how many collisions we walk through —
+    // the suffix grows (-2, -10, -100) so we trim the base per-iteration.
+    const ID_MAX = 60;
+    const baseSlug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!baseSlug) { toast.error('Use letters/numbers in the name'); return; }
+    const fitId = (n) => {
+      if (n <= 1) return baseSlug.slice(0, ID_MAX);
+      const suffix = `-${n}`;
+      return `${baseSlug.slice(0, ID_MAX - suffix.length)}${suffix}`;
+    };
     const existingIds = new Set(layouts.map((l) => l.id));
-    let id = baseId;
-    let n = 2;
-    while (existingIds.has(id)) id = `${baseId}-${n++}`;
+    let n = 1;
+    let id = fitId(n);
+    while (existingIds.has(id)) { n += 1; id = fitId(n); }
     const ok = await onDuplicate({ id, name: trimmed, widgets }).then(() => true, () => false);
     if (!ok) return;
     setEditingId(id);
