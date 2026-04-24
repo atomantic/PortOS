@@ -32,6 +32,7 @@ export * from './apiDigitalTwin.js';
 export * from './apiMeatspace.js';
 export * from './apiMortalLoom.js';
 export * from './apiOpenClaw.js';
+export * from './apiPalette.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

@@ -69,6 +69,32 @@ PortOS depends on `portos-ai-toolkit` as an npm module for AI provider managemen
 - The toolkit uses spread in `updateProvider()` so existing providers preserve custom fields, but `createProvider()` has an explicit field list
 - After updating the toolkit, run `npm update portos-ai-toolkit` in PortOS to pull changes
 
+### Command Palette & Voice Nav — shared backbone (`server/lib/navManifest.js`)
+
+PortOS has a single source of truth for navigation: `server/lib/navManifest.js` exports `NAV_COMMANDS` (every navigable page: `{ id, path, label, section, aliases, keywords }`) and `resolveNavCommand()` (the fuzzy resolver). It is consumed by:
+
+- The **`⌘K` Command Palette** (`client/src/components/CmdKSearch.jsx`) via `GET /api/palette/manifest`.
+- The **voice agent's `ui_navigate` tool** (`server/services/voice/tools.js`) — so "take me to tasks" resolves through the same map the palette uses.
+
+**When adding a new page, you MUST also add an entry to `NAV_COMMANDS`.** Adding only a `<Route>` in `App.jsx` and a sidebar link in `Layout.jsx` will leave the page unreachable from `⌘K` and un-navigable by voice. Entry shape:
+
+```js
+{ id: 'nav.<section>.<slug>', path: '/foo/bar', label: 'Bar', section: 'Foo',
+  aliases: ['foo-bar', 'bar'], keywords: ['synonyms', 'context'] }
+```
+
+- `id` — stable, dotted (`nav.brain.inbox`). Must be unique.
+- `path` — exact route the client router matches; must start with `/`.
+- `section` — matches the sidebar group label so the palette and sidebar stay visually aligned.
+- `aliases` — short spoken/typed tokens the user is likely to say. The voice agent's fuzzy resolver tries each alias with tiered matching; more aliases = more forgiving voice navigation.
+- `keywords` — extra terms used only by the palette's in-UI scorer (synonyms, feature names).
+
+Fail-fast guards at module load catch missing fields, non-slash paths, and duplicate ids — so a bad entry blocks server boot instead of silently breaking palette/voice.
+
+**For NEW voice-tool-style actions that should appear in `⌘K`:** add the tool to `server/services/voice/tools.js` (it's the single source of action schemas), then whitelist its `id` in the `PALETTE_ACTIONS` array in `server/routes/palette.js` with a `section` + `label`. Do not duplicate the tool's description or parameters — the palette route hydrates them from `getToolSpecs()` at request time. DOM-driving tools (`ui_click`, `ui_fill`, etc.) stay off the palette whitelist because the palette has no live DOM context.
+
+**Tests:** `server/lib/navManifest.test.js` asserts shape invariants + alias resolution; `server/routes/palette.test.js` asserts the manifest endpoint + action dispatch + whitelist enforcement. Any new entry is automatically covered by the shape-invariant tests.
+
 ### Slashdo Commands (`lib/slashdo`)
 
 PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodule at `lib/slashdo`. This provides slash commands (`/do:review`, `/do:pr`, `/do:push`, `/do:release`, etc.) and shared libraries without requiring a separate global install.
@@ -96,6 +122,7 @@ When CoS agents or AI tools work on managed apps outside PortOS, all research, p
 - **Above the fold** - keep actionable content and info above the fold and design pages for maximum information and access without scrolling
 - **No hardcoded localhost** - use `window.location.hostname` for URLs; app accessed via Tailscale remotely
 - **Alphabetical navigation** - sidebar nav items in `Layout.jsx` are alphabetically ordered after the Dashboard+CyberCity top section and separator; children within collapsible sections are also alphabetical
+- **Every new page registers in the nav manifest** - when adding a `<Route>` + sidebar link, also add a `NAV_COMMANDS` entry in `server/lib/navManifest.js`. This makes the page reachable via `⌘K` and voice (`ui_navigate`) automatically. See the "Command Palette & Voice Nav" section above for the entry shape.
 - **Reactive UI updates** - after mutations (delete, create, update), update local state directly instead of refetching the entire list from the server. Use `setState(prev => prev.filter(...))` or similar patterns for immediate feedback
 - **Single-line logging** - use emoji prefixes and string interpolation, never log full JSON blobs or arrays
   ```js
