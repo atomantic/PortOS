@@ -59,8 +59,12 @@ describe('getNavAliasMap — voice-agent compatibility', () => {
     expect(map.twin).toBe('/digital-twin/overview');
   });
 
-  it('preserves first-declared alias on collision', () => {
-    // "inbox" appears under Brain first and Messages second; Brain wins.
-    expect(getNavAliasMap().inbox).toBe('/brain/inbox');
+  it('has no alias collisions (first-declared-wins guarantees deterministic resolution if any are introduced)', () => {
+    const counts = {};
+    for (const cmd of NAV_COMMANDS) {
+      for (const a of (cmd.aliases || [])) counts[a] = (counts[a] || 0) + 1;
+    }
+    const collisions = Object.entries(counts).filter(([, n]) => n > 1);
+    expect(collisions).toEqual([]);
   });
 });

@@ -11,7 +11,7 @@ import { listProcesses, restartApp } from '../pm2.js';
 import { getItems, getFeeds } from '../feeds.js';
 import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
-import { resolveNavCommand } from '../../lib/navManifest.js';
+import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
 
@@ -104,11 +104,6 @@ for (const [name, group] of Object.entries(TOOL_GROUPS)) {
   }
 }
 
-const normalizeLabel = (s) => (s || '')
-  .toLowerCase()
-  .replace(/\s+/g, ' ')
-  .trim()
-  .replace(/[.!?:;,"']+$/, '');
 
 // Accepts one kind OR an array of kinds for multi-kind tools like ui_fill
 // (input|textarea) and ui_check (checkbox|radio). The error pool and label
@@ -920,6 +915,15 @@ const toSpec = (t) => ({
 });
 
 export const getToolSpecs = () => TOOLS.map(toSpec);
+
+// Plain-format metadata for non-LLM consumers (the command palette) so routes
+// don't need to reach through OpenAI-shaped function specs to get to the same
+// fields. Shape-independent from getToolSpecs.
+export const getToolMetadata = (id) => {
+  const tool = TOOLS.find((t) => t.name === id);
+  if (!tool) return null;
+  return { id: tool.name, description: tool.description, parameters: tool.parameters };
+};
 
 // Intent-filtered spec list. Pass the user's current utterance; returns the
 // filtered spec array PLUS the set of active groups so downstream consumers

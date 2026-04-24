@@ -10,31 +10,32 @@ import { modKey } from '../utils/platform';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
 
-// Cheap subsequence-based fuzzy scorer. No new deps. Ranks:
-//   1. exact label match (highest)
-//   2. label starts-with
-//   3. alias exact match
-//   4. keyword contains
-//   5. subsequence over label
-const scoreCommand = (cmd, q) => {
+// Subsequence-based fuzzy scorer. Tiered: exact label > label-prefix > alias
+// exact > label-contains > alias-contains > keyword-contains > section-contains
+// > subsequence. Reads precomputed lowercased fields to keep each comparison
+// allocation-free on the per-keystroke hot path.
+const scoreCommand = (c, q) => {
   if (!q) return 0;
-  const label = (cmd.label || '').toLowerCase();
-  const aliases = (cmd.aliases || []).map((a) => a.toLowerCase());
-  const keywords = (cmd.keywords || []).map((k) => k.toLowerCase());
-  const section = (cmd.section || '').toLowerCase();
-
-  if (label === q) return 1000;
-  if (label.startsWith(q)) return 800 - (label.length - q.length);
-  if (aliases.includes(q)) return 750;
-  if (label.includes(q)) return 500;
-  if (aliases.some((a) => a.includes(q))) return 400;
-  if (keywords.some((k) => k.includes(q))) return 300;
-  if (section.includes(q)) return 150;
-  // Subsequence fallback: every character in q appears in order inside label.
+  const { _label, _aliases, _keywords, _section } = c;
+  if (_label === q) return 1000;
+  if (_label.startsWith(q)) return 800 - (_label.length - q.length);
+  if (_aliases.includes(q)) return 750;
+  if (_label.includes(q)) return 500;
+  for (const a of _aliases) if (a.includes(q)) return 400;
+  for (const k of _keywords) if (k.includes(q)) return 300;
+  if (_section.includes(q)) return 150;
   let i = 0;
-  for (const ch of label) if (ch === q[i]) i += 1;
+  for (const ch of _label) if (ch === q[i]) i += 1;
   return i === q.length ? 100 + i : 0;
 };
+
+const precompute = (cmd) => ({
+  ...cmd,
+  _label: (cmd.label || '').toLowerCase(),
+  _aliases: (cmd.aliases || []).map((a) => a.toLowerCase()),
+  _keywords: (cmd.keywords || []).map((k) => k.toLowerCase()),
+  _section: (cmd.section || '').toLowerCase(),
+});
 
 function Highlight({ text, query }) {
   if (!query || !text) return <span>{text}</span>;
@@ -51,6 +52,11 @@ function Highlight({ text, query }) {
   );
 }
 
+// Curated default shortlist — shown when the palette opens with no query so
+// Enter always does something useful.
+const DEFAULT_NAV_IDS = new Set(['nav.dashboard', 'nav.brain.inbox', 'nav.cos.tasks', 'nav.goals', 'nav.review-hub']);
+const DEFAULT_ACTION_IDS = new Set(['brain_capture', 'time_now', 'goal_list', 'meatspace_summary_today']);
+
 export default function CmdKSearch() {
   const { open, setOpen } = useCmdKSearch();
   const navigate = useNavigate();
@@ -62,7 +68,6 @@ export default function CmdKSearch() {
   const [loading, setLoading] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [expandedSources, setExpandedSources] = useState(new Set());
-  const [running, setRunning] = useState(false);
   const resultRefs = useRef([]);
 
   useEffect(() => {
@@ -77,16 +82,18 @@ export default function CmdKSearch() {
       setSearchResults([]);
       setFocusedIndex(0);
       setExpandedSources(new Set());
+      resultRefs.current = [];
     }
   }, [open]);
 
-  // Lazy-load the palette manifest on first open and cache for the session.
-  // The manifest rarely changes; re-fetching on every open wastes a roundtrip.
   useEffect(() => {
     if (!open || manifest) return;
-    getPaletteManifest()
-      .then((data) => setManifest(data))
-      .catch(() => setManifest({ nav: [], actions: [] }));
+    getPaletteManifest().then((data) => {
+      setManifest({
+        nav: (data?.nav || []).map(precompute),
+        actions: (data?.actions || []).map(precompute),
+      });
+    });
   }, [open, manifest]);
 
   useEffect(() => {
@@ -108,52 +115,37 @@ export default function CmdKSearch() {
     setFocusedIndex(0);
   }, [searchResults, query]);
 
-  const { navHits, actionHits } = useMemo(() => {
-    if (!manifest) return { navHits: [], actionHits: [] };
+  const combined = useMemo(() => {
+    if (!manifest) return [];
     const q = query.trim().toLowerCase();
     if (!q) {
-      // Default view: a curated set of "most useful" nav + actions so Enter
-      // on empty query has meaning instead of doing nothing.
-      const curatedNav = manifest.nav
-            .filter((c) => ['nav.dashboard', 'nav.brain.inbox', 'nav.cos.tasks', 'nav.goals', 'nav.review-hub'].includes(c.id));
-      const curatedActions = manifest.actions
-            .filter((a) => ['brain_capture', 'time_now', 'goal_list', 'meatspace_summary_today'].includes(a.id));
-      return { navHits: curatedNav, actionHits: curatedActions };
+      const nav = manifest.nav.filter((c) => DEFAULT_NAV_IDS.has(c.id)).map((c) => ({ ...c, kind: 'nav' }));
+      const actions = manifest.actions.filter((a) => DEFAULT_ACTION_IDS.has(a.id)).map((a) => ({ ...a, kind: 'action' }));
+      return { nav, actions, commandCount: nav.length + actions.length };
     }
-    const scoredNav = manifest.nav
+    const rank = (items, max) => items
       .map((c) => ({ cmd: c, score: scoreCommand(c, q) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
+      .slice(0, max)
       .map((x) => x.cmd);
-    const scoredActions = manifest.actions
-      .map((a) => ({ cmd: a, score: scoreCommand(a, q) }))
-      .filter((x) => x.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5)
-      .map((x) => x.cmd);
-    return { navHits: scoredNav, actionHits: scoredActions };
+    const nav = rank(manifest.nav, 8).map((c) => ({ ...c, kind: 'nav' }));
+    const actions = rank(manifest.actions, 5).map((a) => ({ ...a, kind: 'action' }));
+    return { nav, actions, commandCount: nav.length + actions.length };
   }, [manifest, query]);
 
-  const flatCommands = useMemo(
-    () => [
-      ...navHits.map((c) => ({ kind: 'nav', ...c })),
-      ...actionHits.map((a) => ({ kind: 'action', ...a })),
-    ],
-    [navHits, actionHits]
-  );
-
   const flatSearchResults = useMemo(
-    () =>
-      searchResults.flatMap((source) => {
-        const isExpanded = expandedSources.has(source.id);
-        const visible = isExpanded ? source.results : source.results.slice(0, 3);
-        return visible.map((r) => ({ ...r, kind: 'search', sourceId: source.id }));
-      }),
+    () => searchResults.flatMap((source) => {
+      const visible = expandedSources.has(source.id) ? source.results : source.results.slice(0, 3);
+      return visible.map((r) => ({ ...r, kind: 'search', sourceId: source.id }));
+    }),
     [searchResults, expandedSources]
   );
 
-  const combined = useMemo(() => [...flatCommands, ...flatSearchResults], [flatCommands, flatSearchResults]);
+  const focusable = useMemo(
+    () => [...combined.nav, ...combined.actions, ...flatSearchResults],
+    [combined, flatSearchResults]
+  );
 
   useEffect(() => {
     const el = resultRefs.current[focusedIndex];
@@ -162,47 +154,35 @@ export default function CmdKSearch() {
 
   const close = useCallback(() => setOpen(false), [setOpen]);
 
-  const dispatchCommand = useCallback(async (item) => {
-    if (item.kind === 'nav') {
-      navigate(item.path);
-      close();
-      return;
-    }
-    if (item.kind === 'action') {
-      // Actions with required args can't be run blind from the palette — the
-      // parameters schema is served with the manifest for future inline arg
-      // UIs. For v1, only dispatch tools whose required list is empty. For
-      // others, offer a hint toast telling the user to use voice or the
-      // relevant page.
+  const DISPATCH = useMemo(() => ({
+    nav: (item) => { navigate(item.path); close(); },
+    search: (item) => { navigate(item.url); close(); },
+    action: async (item) => {
       const required = item.parameters?.required || [];
       if (required.length > 0) {
+        // Keep palette open so the user can pick another command.
         toast(`${item.label} needs arguments — use voice or open the related page.`);
         return;
       }
-      setRunning(true);
-      const res = await runPaletteAction(item.id).catch((e) => ({ error: e.message }));
-      setRunning(false);
-      const summary = res?.result?.summary || res?.error || `${item.label} ran.`;
-      if (res?.ok === false || res?.error) toast.error(summary);
+      const res = await runPaletteAction(item.id);
+      const summary = res?.result?.summary || `${item.label} ran.`;
+      if (res?.ok === false) toast.error(summary);
       else toast.success(summary);
       close();
-      return;
-    }
-    if (item.kind === 'search') {
-      navigate(item.url);
-      close();
-    }
-  }, [navigate, close]);
+    },
+  }), [navigate, close]);
+
+  const dispatchCommand = useCallback((item) => DISPATCH[item.kind]?.(item), [DISPATCH]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (combined.length > 0) setFocusedIndex((i) => Math.min(i + 1, combined.length - 1));
+      if (focusable.length > 0) setFocusedIndex((i) => Math.min(i + 1, focusable.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (combined.length > 0) setFocusedIndex((i) => Math.max(i - 1, 0));
+      if (focusable.length > 0) setFocusedIndex((i) => Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
-      const item = combined[focusedIndex];
+      const item = focusable[focusedIndex];
       if (item) dispatchCommand(item);
     } else if (e.key === 'Escape') {
       close();
@@ -213,16 +193,12 @@ export default function CmdKSearch() {
 
   let flatIdx = 0;
 
-  const renderCommandRow = (item, kindLabel) => {
+  const renderRow = (item, { icon: Icon, title, subtitle, badge }) => {
     const currentIdx = flatIdx++;
     const isFocused = focusedIndex === currentIdx;
-    const Icon = item.kind === 'nav' ? Navigation : Play;
-    const subtitle = item.kind === 'nav'
-      ? `${item.section} · ${item.path}`
-      : (item.description ? item.description.slice(0, 80) : item.section || '');
     return (
       <div
-        key={`${item.kind}:${item.id}`}
+        key={`${item.kind}:${item.id ?? item.sourceId + ':' + title}`}
         ref={(el) => { resultRefs.current[currentIdx] = el; }}
         onClick={() => dispatchCommand(item)}
         className={`flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
@@ -231,19 +207,31 @@ export default function CmdKSearch() {
         role="option"
         aria-selected={isFocused}
       >
-        <Icon size={14} className="shrink-0 mt-0.5 text-gray-400" />
+        {Icon && <Icon size={14} className="shrink-0 mt-0.5 text-gray-400" />}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-white truncate">
-            <Highlight text={item.label} query={query} />
+            <Highlight text={title} query={query} />
           </p>
           {subtitle && (
-            <p className="text-xs text-gray-500 truncate mt-0.5">{subtitle}</p>
+            <p className="text-xs text-gray-500 truncate mt-0.5">
+              <Highlight text={subtitle} query={query} />
+            </p>
           )}
         </div>
-        <span className="text-[10px] uppercase tracking-wide text-gray-500 shrink-0 mt-1">{kindLabel}</span>
+        {badge && <span className="text-[10px] uppercase tracking-wide text-gray-500 shrink-0 mt-1">{badge}</span>}
       </div>
     );
   };
+
+  const renderGroup = (headerIcon, headerLabel, rows) => rows.length > 0 && (
+    <div className="mb-2">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 uppercase tracking-wide">
+        {headerIcon}
+        <span>{headerLabel}</span>
+      </div>
+      {rows}
+    </div>
+  );
 
   const overlay = (
     <div
@@ -268,49 +256,41 @@ export default function CmdKSearch() {
             className="flex-1 bg-transparent text-white placeholder-gray-500 outline-hidden text-sm"
             aria-label="Command palette"
           />
-          {running && <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />}
           <span className="text-xs text-gray-500 border border-port-border rounded px-1.5 py-0.5 shrink-0">
             {`${modKey}+K`}
           </span>
         </div>
 
         <div className="max-h-96 overflow-y-auto p-2">
-          {/* Commands: Navigate */}
-          {navHits.length > 0 && (
-            <div className="mb-2">
-              <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 uppercase tracking-wide">
-                <Navigation size={14} />
-                <span>Go to</span>
-              </div>
-              {navHits.map((c) => renderCommandRow({ kind: 'nav', ...c }, 'GO'))}
-            </div>
+          {renderGroup(
+            <Navigation size={14} />,
+            'Go to',
+            combined.nav.map((c) =>
+              renderRow(c, { icon: Navigation, title: c.label, subtitle: `${c.section} · ${c.path}`, badge: 'GO' })
+            )
           )}
 
-          {/* Commands: Run */}
-          {actionHits.length > 0 && (
-            <div className="mb-2">
-              <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 uppercase tracking-wide">
-                <Play size={14} />
-                <span>Run</span>
-              </div>
-              {actionHits.map((a) => renderCommandRow({ kind: 'action', ...a }, 'RUN'))}
-            </div>
+          {renderGroup(
+            <Play size={14} />,
+            'Run',
+            combined.actions.map((a) =>
+              renderRow(a, { icon: Play, title: a.label, subtitle: (a.description || a.section || '').slice(0, 80), badge: 'RUN' })
+            )
           )}
 
-          {/* Content search (lazy — only when query ≥ 2 chars) */}
           {loading && (
             <div className="flex items-center justify-center py-4">
               <Loader2 size={18} className="animate-spin text-gray-400" />
             </div>
           )}
 
-          {!loading && query.length >= 2 && searchResults.length === 0 && flatCommands.length === 0 && (
+          {!loading && query.length >= 2 && searchResults.length === 0 && combined.commandCount === 0 && (
             <div className="text-center text-sm text-gray-500 py-8">
               No results for &ldquo;{query}&rdquo;
             </div>
           )}
 
-          {!loading && !query && flatCommands.length === 0 && (
+          {!loading && !query && combined.commandCount === 0 && (
             <div className="text-center text-sm text-gray-600 py-8">
               Start typing to go to a page, run an action, or search.
             </div>
@@ -329,35 +309,16 @@ export default function CmdKSearch() {
                   <span>{source.label}</span>
                 </div>
 
-                {visible.map((result) => {
-                  const currentIdx = flatIdx++;
-                  const isFocused = focusedIndex === currentIdx;
-                  return (
-                    <div
-                      key={result.id}
-                      ref={(el) => { resultRefs.current[currentIdx] = el; }}
-                      onClick={() => dispatchCommand({ kind: 'search', ...result })}
-                      className={`flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-                        isFocused ? 'bg-port-accent/10' : 'hover:bg-white/5'
-                      }`}
-                      role="option"
-                      aria-selected={isFocused}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white truncate">{result.title}</p>
-                        {result.snippet && (
-                          <p className="text-xs text-gray-400 truncate mt-0.5">
-                            <Highlight text={result.snippet} query={query} />
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                {visible.map((result) =>
+                  renderRow(
+                    { ...result, kind: 'search' },
+                    { title: result.title, subtitle: result.snippet }
+                  )
+                )}
 
                 {hasMore && (
                   <button
-                    onClick={() => setExpandedSources((prev) => new Set([...prev, source.id]))}
+                    onClick={() => setExpandedSources((prev) => new Set(prev).add(source.id))}
                     className="text-xs text-port-accent px-3 py-1 hover:underline"
                   >
                     Show {source.results.length - 3} more
