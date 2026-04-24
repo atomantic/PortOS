@@ -63,10 +63,15 @@ const DEFAULT_STATE = {
 };
 
 const BUILTIN_IDS = new Set(DEFAULT_LAYOUTS.map((l) => l.id));
-// Kept in lockstep with routes/dashboardLayouts.js#idSchema — both layers
-// must reject ids the other can't round-trip, or the client ends up with
-// layouts it can display but not activate/delete.
-const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+// Shape constraints shared with routes/dashboardLayouts.js#layoutSchema.
+// Exported so routes build their Zod schema from the same source; edits
+// here automatically flow to the API boundary.
+export const ID_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const ID_MAX_LENGTH = 60;
+export const NAME_MAX_LENGTH = 80;
+export const WIDGETS_MAX = 50;
+export const WIDGET_ID_MAX_LENGTH = 80;
 
 // Sanitize a single layout entry — protect against hand-edits that produce
 // non-object elements, missing fields, non-array widget lists, or duplicate
@@ -75,19 +80,22 @@ const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 // flag can't downgrade a built-in into a deletable user layout.
 const sanitizeLayout = (l) => {
   if (!l || typeof l !== 'object') return null;
-  if (typeof l.id !== 'string' || !ID_RE.test(l.id) || l.id.length > 60) return null;
+  if (typeof l.id !== 'string' || !ID_PATTERN.test(l.id) || l.id.length > ID_MAX_LENGTH) return null;
   if (typeof l.name !== 'string' || !l.name) return null;
+  const name = l.name.slice(0, NAME_MAX_LENGTH);
   const widgets = [];
   const seen = new Set();
   if (Array.isArray(l.widgets)) {
     for (const w of l.widgets) {
-      if (typeof w === 'string' && !seen.has(w)) {
-        seen.add(w);
-        widgets.push(w);
-      }
+      if (typeof w !== 'string') continue;
+      if (!w || w.length > WIDGET_ID_MAX_LENGTH) continue;
+      if (seen.has(w)) continue;
+      seen.add(w);
+      widgets.push(w);
+      if (widgets.length >= WIDGETS_MAX) break;
     }
   }
-  return { id: l.id, name: l.name, builtIn: BUILTIN_IDS.has(l.id), widgets };
+  return { id: l.id, name, builtIn: BUILTIN_IDS.has(l.id), widgets };
 };
 
 export async function getState() {

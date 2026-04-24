@@ -6,6 +6,11 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../services/dashboardLayouts.js', () => ({
   ERR_NOT_FOUND: 'NOT_FOUND',
   ERR_BUILTIN_PROTECTED: 'BUILTIN_PROTECTED',
+  ID_PATTERN: /^[a-z0-9]+(-[a-z0-9]+)*$/,
+  ID_MAX_LENGTH: 60,
+  NAME_MAX_LENGTH: 80,
+  WIDGETS_MAX: 50,
+  WIDGET_ID_MAX_LENGTH: 80,
   getState: vi.fn(),
   setActiveLayout: vi.fn(),
   saveLayout: vi.fn(),

@@ -4,6 +4,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import LayoutPicker from '../components/dashboard/LayoutPicker';
 import LayoutEditor from '../components/dashboard/LayoutEditor';
 import { WIDGETS_BY_ID, WIDTH_CLASS } from '../components/dashboard/widgetRegistry.jsx';
+import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import { Monitor } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -56,8 +57,8 @@ export default function Dashboard() {
     // to the server so the Dashboard re-syncs even when already on `/`
     // (where navigate('/') would be a no-op and no remount happens).
     const handleLayoutChanged = () => fetchLayouts();
-    window.addEventListener('portos:dashboard-layout-changed', handleLayoutChanged);
-    return () => window.removeEventListener('portos:dashboard-layout-changed', handleLayoutChanged);
+    window.addEventListener(DASHBOARD_LAYOUT_CHANGED, handleLayoutChanged);
+    return () => window.removeEventListener(DASHBOARD_LAYOUT_CHANGED, handleLayoutChanged);
   }, []);
 
   const sortedApps = useMemo(() =>

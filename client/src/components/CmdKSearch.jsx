@@ -7,6 +7,7 @@ import { useScrollLock } from '../hooks/useScrollLock';
 import { search, getPaletteManifest, runPaletteAction, getDashboardLayouts, setActiveDashboardLayout } from '../services/api';
 import toast from './ui/Toast';
 import { modKey } from '../utils/platform';
+import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
 
@@ -210,7 +211,7 @@ export default function CmdKSearch() {
       // navigate('/') is a no-op if the user is already there.
       const ok = await setActiveDashboardLayout(item.layoutId).then(() => true, () => false);
       if (!ok) { close(); return; }
-      window.dispatchEvent(new CustomEvent('portos:dashboard-layout-changed'));
+      window.dispatchEvent(new CustomEvent(DASHBOARD_LAYOUT_CHANGED));
       navigate('/');
       toast.success(`Switched to "${item.layoutName}"`);
       close();

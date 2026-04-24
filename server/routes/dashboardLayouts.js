@@ -13,16 +13,16 @@ import * as svc from '../services/dashboardLayouts.js';
 
 const router = Router();
 
-// Strict kebab: alphanumeric segments joined by single dashes, no leading
-// or trailing dashes, no runs of dashes. Matches `default`, `morning-review`.
-const idSchema = z.string().min(1).max(60).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'id must be lowercase kebab');
+// Bounds are sourced from the service so sanitization on read and validation
+// at the API boundary agree by construction.
+const idSchema = z.string().min(1).max(svc.ID_MAX_LENGTH).regex(svc.ID_PATTERN, 'id must be lowercase kebab');
 
 const layoutSchema = z.object({
   id: idSchema,
-  name: z.string().min(1).max(80),
+  name: z.string().min(1).max(svc.NAME_MAX_LENGTH),
   widgets: z
-    .array(z.string().min(1).max(80))
-    .max(50)
+    .array(z.string().min(1).max(svc.WIDGET_ID_MAX_LENGTH))
+    .max(svc.WIDGETS_MAX)
     .refine((w) => new Set(w).size === w.length, { message: 'widgets must be unique' }),
 });
 
