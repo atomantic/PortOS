@@ -21,8 +21,11 @@ const layoutSchema = z.object({
   id: idSchema,
   // Trim before min-length check so whitespace-only names are rejected.
   name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH),
+  // Trim each widget id before length + uniqueness checks so "apps " can't
+  // slip past dedup and land as a no-op entry that the client registry
+  // skips. Matches the service-layer sanitize() on read.
   widgets: z
-    .array(z.string().min(1).max(svc.WIDGET_ID_MAX_LENGTH))
+    .array(z.string().trim().min(1).max(svc.WIDGET_ID_MAX_LENGTH))
     .max(svc.WIDGETS_MAX)
     .refine((w) => new Set(w).size === w.length, { message: 'widgets must be unique' }),
 });
