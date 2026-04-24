@@ -9,8 +9,13 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   return (
@@ -21,7 +26,7 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
         title="Switch dashboard layout"
         aria-label={`Dashboard layout: ${active?.name || 'none'}`}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="true"
       >
         <LayoutGrid size={14} aria-hidden="true" />
         <span className="hidden sm:inline">{active?.name || 'Layout'}</span>
@@ -29,7 +34,6 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
 
       {open && (
         <div
-          role="menu"
           aria-label="Dashboard layout menu"
           className="absolute right-0 mt-1 w-56 bg-port-card border border-port-border rounded-lg shadow-2xl overflow-hidden z-50"
         >
@@ -37,8 +41,7 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
             {layouts.map((l) => (
               <button
                 key={l.id}
-                role="menuitemradio"
-                aria-checked={l.id === activeLayoutId}
+                aria-current={l.id === activeLayoutId ? 'true' : undefined}
                 onClick={() => {
                   setOpen(false);
                   // onSelect performs an API write; request() toasts any
@@ -57,7 +60,6 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
           </div>
           <div className="border-t border-port-border">
             <button
-              role="menuitem"
               onClick={() => { setOpen(false); onEdit(); }}
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-white/5 hover:text-white"
             >

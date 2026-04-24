@@ -20,8 +20,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
   const [widgets, setWidgets] = useState(editing?.widgets ?? []);
   const [name, setName] = useState(editing?.name ?? '');
   const [dirty, setDirty] = useState(false);
-  const [mode, setMode] = useState('idle'); // 'idle' | 'duplicate' | 'delete'
+  const [mode, setMode] = useState('idle'); // 'idle' | 'duplicate' | 'delete' | 'switch'
   const [dupName, setDupName] = useState('');
+  const [pendingSwitchId, setPendingSwitchId] = useState(null);
   const closeRef = useRef(null);
 
   useScrollLock(true);
@@ -41,8 +42,31 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     setDirty(false);
     setMode('idle');
     setDupName('');
+    setPendingSwitchId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingId]);
+
+  // Guard layout switches when there are unsaved edits: instead of silently
+  // discarding the draft, surface an inline confirm in the footer.
+  const requestSwitch = (id) => {
+    if (id === editingId) return;
+    if (dirty) {
+      setPendingSwitchId(id);
+      setMode('switch');
+      return;
+    }
+    setEditingId(id);
+  };
+
+  const confirmSwitch = () => {
+    if (!pendingSwitchId) { setMode('idle'); return; }
+    setEditingId(pendingSwitchId); // rehydrate effect clears dirty/mode
+  };
+
+  const cancelSwitch = () => {
+    setPendingSwitchId(null);
+    setMode('idle');
+  };
 
   const close = useCallback(() => { onClose(); }, [onClose]);
 
@@ -135,7 +159,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
             {layouts.map((l) => (
               <button
                 key={l.id}
-                onClick={() => setEditingId(l.id)}
+                onClick={() => requestSwitch(l.id)}
                 className={`w-full text-left px-4 py-2 text-sm border-l-2 ${
                   l.id === editingId ? 'border-port-accent bg-white/5 text-white' : 'border-transparent text-gray-400 hover:bg-white/5 hover:text-white'
                 }`}
@@ -224,6 +248,13 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
               <span className="flex-1 text-sm text-port-error">Delete &ldquo;{editing?.name}&rdquo;? This can&apos;t be undone.</span>
               <button onClick={commitDelete} className="px-3 py-1.5 text-sm rounded-lg bg-port-error text-white hover:bg-port-error/80">Delete</button>
               <button onClick={() => setMode('idle')} className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
+            </div>
+          )}
+          {mode === 'switch' && (
+            <div className="flex items-center gap-2">
+              <span className="flex-1 text-sm text-port-warning">Discard unsaved changes to &ldquo;{editing?.name}&rdquo;?</span>
+              <button onClick={confirmSwitch} className="px-3 py-1.5 text-sm rounded-lg bg-port-warning text-black hover:bg-port-warning/80">Discard</button>
+              <button onClick={cancelSwitch} className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
             </div>
           )}
           {mode === 'idle' && (
