@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play } from 'lucide-react';
+import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
 import { useScrollLock } from '../hooks/useScrollLock';
-import { search, getPaletteManifest, runPaletteAction } from '../services/api';
+import { search, getPaletteManifest, runPaletteAction, getDashboardLayouts, setActiveDashboardLayout } from '../services/api';
 import toast from './ui/Toast';
 import { modKey } from '../utils/platform';
+import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
 
@@ -86,15 +87,67 @@ export default function CmdKSearch() {
     }
   }, [open]);
 
+  // Two effects so setManifest never retriggers a fetch loop:
+  //   1. nav + actions are static server-side; fetched once per mount (guarded
+  //      by a ref so remounting `open` doesn't re-hit the network).
+  //   2. layouts change when the user creates/renames/deletes; re-fetched on
+  //      every open-transition so the palette picks up changes immediately.
+  // Each updates `manifest` functionally without depending on its value.
+  const navActionsFetchedRef = useRef(false);
   useEffect(() => {
-    if (!open || manifest) return;
-    getPaletteManifest().then((data) => {
-      setManifest({
-        nav: (data?.nav || []).map(precompute),
-        actions: (data?.actions || []).map(precompute),
+    if (!open || navActionsFetchedRef.current) return;
+    let cancelled = false;
+    let fetchOk = true;
+    // request() toasts the failure centrally; on rejection we fall back to
+    // an empty shape so the palette still renders (layouts + search work).
+    // The ref only flips to true after a SUCCESSFUL apply — if the fetch
+    // fails or the user closes the palette before it resolves, the next
+    // open will re-fetch instead of being stuck with empty nav/actions.
+    getPaletteManifest()
+      .catch(() => { fetchOk = false; return { nav: [], actions: [] }; })
+      .then((data) => {
+        if (cancelled) return;
+        if (fetchOk) navActionsFetchedRef.current = true;
+        const nav = (data?.nav || []).map(precompute);
+        const actions = (data?.actions || []).map(precompute);
+        setManifest((prev) => ({
+          nav,
+          actions,
+          layouts: prev?.layouts || [],
+        }));
       });
-    });
-  }, [open, manifest]);
+    return () => { cancelled = true; };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let fetchOk = true;
+    getDashboardLayouts()
+      .catch(() => { fetchOk = false; return { layouts: [] }; })
+      .then((dashboards) => {
+        if (cancelled) return;
+        // Transient failure: preserve the previously-loaded layouts rather
+        // than wiping "Dashboard: …" commands out of the palette until the
+        // next successful open.
+        if (!fetchOk) return;
+        const layouts = (dashboards?.layouts || []).map((l) => precompute({
+          id: `layout.${l.id}`,
+          layoutId: l.id,
+          layoutName: l.name,
+          label: `Dashboard: ${l.name}`,
+          section: 'Layouts',
+          aliases: ['layout', l.id, ...l.name.toLowerCase().split(/\s+/)],
+          keywords: ['dashboard', 'layout', 'view'],
+        }));
+        setManifest((prev) => ({
+          nav: prev?.nav || [],
+          actions: prev?.actions || [],
+          layouts,
+        }));
+      });
+    return () => { cancelled = true; };
+  }, [open]);
 
   useEffect(() => {
     if (query.length < 2) {
@@ -116,12 +169,12 @@ export default function CmdKSearch() {
   }, [searchResults, query]);
 
   const combined = useMemo(() => {
-    if (!manifest) return [];
+    if (!manifest) return { nav: [], actions: [], layouts: [], commandCount: 0 };
     const q = query.trim().toLowerCase();
     if (!q) {
       const nav = manifest.nav.filter((c) => DEFAULT_NAV_IDS.has(c.id)).map((c) => ({ ...c, kind: 'nav' }));
       const actions = manifest.actions.filter((a) => DEFAULT_ACTION_IDS.has(a.id)).map((a) => ({ ...a, kind: 'action' }));
-      return { nav, actions, commandCount: nav.length + actions.length };
+      return { nav, actions, layouts: [], commandCount: nav.length + actions.length };
     }
     const rank = (items, max) => items
       .map((c) => ({ cmd: c, score: scoreCommand(c, q) }))
@@ -131,7 +184,8 @@ export default function CmdKSearch() {
       .map((x) => x.cmd);
     const nav = rank(manifest.nav, 8).map((c) => ({ ...c, kind: 'nav' }));
     const actions = rank(manifest.actions, 5).map((a) => ({ ...a, kind: 'action' }));
-    return { nav, actions, commandCount: nav.length + actions.length };
+    const layouts = rank(manifest.layouts || [], 5).map((l) => ({ ...l, kind: 'layout' }));
+    return { nav, actions, layouts, commandCount: nav.length + actions.length + layouts.length };
   }, [manifest, query]);
 
   const flatSearchResults = useMemo(
@@ -143,7 +197,7 @@ export default function CmdKSearch() {
   );
 
   const focusable = useMemo(
-    () => [...combined.nav, ...combined.actions, ...flatSearchResults],
+    () => [...combined.nav, ...combined.actions, ...combined.layouts, ...flatSearchResults],
     [combined, flatSearchResults]
   );
 
@@ -157,6 +211,18 @@ export default function CmdKSearch() {
   const DISPATCH = useMemo(() => ({
     nav: (item) => { navigate(item.path); close(); },
     search: (item) => { navigate(item.url); close(); },
+    layout: async (item) => {
+      // request() toasts errors centrally; swallow the rejection here so
+      // clicks from sync event handlers don't bubble as unhandled. On
+      // success, tell any mounted Dashboard to re-fetch because
+      // navigate('/') is a no-op if the user is already there.
+      const ok = await setActiveDashboardLayout(item.layoutId).then(() => true, () => false);
+      if (!ok) { close(); return; }
+      window.dispatchEvent(new CustomEvent(DASHBOARD_LAYOUT_CHANGED));
+      navigate('/');
+      toast.success(`Switched to "${item.layoutName}"`);
+      close();
+    },
     action: async (item) => {
       const required = item.parameters?.required || [];
       if (required.length > 0) {
@@ -275,6 +341,14 @@ export default function CmdKSearch() {
             'Run',
             combined.actions.map((a) =>
               renderRow(a, { icon: Play, title: a.label, subtitle: (a.description || a.section || '').slice(0, 80), badge: 'RUN' })
+            )
+          )}
+
+          {renderGroup(
+            <LayoutGrid size={14} />,
+            'Dashboard layout',
+            combined.layouts.map((l) =>
+              renderRow(l, { icon: LayoutGrid, title: l.label, subtitle: 'Switch dashboard layout', badge: 'LAYOUT' })
             )
           )}
 

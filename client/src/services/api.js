@@ -33,6 +33,7 @@ export * from './apiMeatspace.js';
 export * from './apiMortalLoom.js';
 export * from './apiOpenClaw.js';
 export * from './apiPalette.js';
+export * from './apiDashboard.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

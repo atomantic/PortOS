@@ -95,6 +95,19 @@ Fail-fast guards at module load catch missing fields, non-slash paths, and dupli
 
 **Tests:** `server/lib/navManifest.test.js` asserts shape invariants + alias resolution; `server/routes/palette.test.js` asserts the manifest endpoint + action dispatch + whitelist enforcement. Any new entry is automatically covered by the shape-invariant tests.
 
+### Dashboard Widgets & Layouts
+
+Dashboard widgets are registered in `client/src/components/dashboard/widgetRegistry.jsx` — each entry has `{ id, label, Component, width, gate? }`. The Dashboard page renders the active layout's widget list from this registry; named layouts persist in `data/dashboard-layouts.json` and are managed via `GET/PUT/DELETE /api/dashboard/layouts`. Built-in layouts (`default`, `focus`, `morning-review`, `ops`) are seeded on first read and cannot be deleted.
+
+**When adding a new dashboard widget:**
+1. Add a `{ id, label, Component, width, gate? }` entry to `WIDGETS` in `widgetRegistry.jsx`. Use a stable `id` (kebab-case) — it's the contract stored in layouts.
+2. If the widget needs dashboard data (apps/usage/health), read it from the `dashboardState` prop — do NOT issue a duplicate fetch from inside the widget.
+3. If the widget only makes sense in some cases (e.g. only when apps exist), add a `gate: (state) => boolean` predicate.
+4. Add the widget id to the built-in `default` layout in `server/services/dashboardLayouts.js` if it should appear out of the box.
+5. Users can toggle widgets on/off per layout via the Dashboard's layout picker → Edit.
+
+Switching layouts is also wired into the `⌘K` palette — it synthesizes a `Dashboard: <name>` command per layout at palette-open time, so any layout the user creates is instantly keyboard-reachable without further registration.
+
 ### Slashdo Commands (`lib/slashdo`)
 
 PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodule at `lib/slashdo`. This provides slash commands (`/do:review`, `/do:pr`, `/do:push`, `/do:release`, etc.) and shared libraries without requiring a separate global install.
