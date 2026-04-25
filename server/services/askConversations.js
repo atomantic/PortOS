@@ -165,6 +165,7 @@ export async function deleteConversation(id) {
 }
 
 export async function setPromoted(id, promoted) {
+  if (!isValidId(id)) return null;
   const conv = await readConversation(id);
   if (!conv) return null;
   conv.promoted = !!promoted;

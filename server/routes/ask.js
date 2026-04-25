@@ -103,7 +103,20 @@ router.post('/', asyncHandler(async (req, res) => {
   });
   res.flushHeaders?.();
 
+  // Propagate client disconnects (browser nav, tab close, abort) into
+  // retrieval + provider streaming so we don't keep burning tokens/CPU on
+  // a stream nobody's reading. `aborted` short-circuits the post-loop
+  // persistence too.
+  const abortController = new AbortController();
+  let aborted = false;
+  const onClose = () => {
+    aborted = true;
+    abortController.abort();
+  };
+  req.on('close', onClose);
+
   const send = (event, data) => {
+    if (aborted) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
@@ -129,7 +142,9 @@ router.post('/', asyncHandler(async (req, res) => {
     maxSources: body.maxSources,
     providerId: body.providerId,
     model: body.model,
+    signal: abortController.signal,
   })) {
+    if (aborted) break;
     if (evt.type === 'sources') {
       assistantSources = evt.sources;
       send('sources', { sources: evt.sources });
@@ -147,6 +162,11 @@ router.post('/', asyncHandler(async (req, res) => {
     }
   }
 
+  req.off('close', onClose);
+
+  // If the client bailed mid-stream we still persist whatever assistant text
+  // we accumulated so the conversation isn't silently lossy on reconnect,
+  // but we don't try to write any more SSE frames to a dead socket.
   let persistedAssistantTurn = null;
   if (!streamErrored && assistantText) {
     const result = await convs.appendTurn(conversation.id, {
@@ -159,10 +179,12 @@ router.post('/', asyncHandler(async (req, res) => {
     persistedAssistantTurn = result.turn;
   }
 
-  // Hand back the persisted turn so the client can append to local state
-  // instead of round-tripping a full conversation refetch.
-  send('done', { conversationId: conversation.id, turn: persistedAssistantTurn });
-  res.end();
+  if (!aborted) {
+    // Hand back the persisted turn so the client can append to local state
+    // instead of round-tripping a full conversation refetch.
+    send('done', { conversationId: conversation.id, turn: persistedAssistantTurn });
+    res.end();
+  }
 }));
 
 export default router;

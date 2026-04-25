@@ -87,7 +87,7 @@ Three high-value work items drawn from an inventory of the current app surface (
 
 > **Slice (a) — text chat + sources — shipped.** `/ask` and `/ask/:conversationId` are live. `server/services/askService.js` orchestrates parallel retrieval across memory (hybrid), brain notes, autobiography, goals, and calendar with kind-weighted reranking. Persona preamble is sourced from `character.json`. Three modes (`ask` / `advise` / `draft`) swap directives. API providers stream SSE; CLI providers single-shot. Conversations persist to `data/ask-conversations/<id>.json` with 30-day auto-expiry unless pinned. Source chips deep-link back to origin. Registered in the nav manifest so `⌘K` and voice (`ui_navigate`) resolve "ask" automatically. **Slice (b) (voice + promotion actions) still pending** — see backlog item below.
 >
-> 39 new tests (askService 11, askConversations 16, ask routes 12); full server suite stays green at 2548/2548.
+> 40 new tests (askService 11, askConversations 17, ask routes 12); full server suite stays green at 2548/2548.
 
 **Problem.** PortOS has spent many milestones building a rich model of the user: Brain (thoughts, daily log, notes, links), Memory (pgvector + BM25 hybrid retrieval), Digital Twin (identity, autobiography, personality, behavioral feedback), Goals, Calendar, MeatSpace biomarkers. These live on separate pages with separate inputs. There is still no single conversational surface where the user can ask their own system a question like *"What did I decide about my exercise routine in March?"*, *"What's on my plate this afternoon given how I slept?"*, or *"Draft a status update to my team as me."* Without this, the twin is a library nobody borrows from.
 

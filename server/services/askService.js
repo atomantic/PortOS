@@ -198,11 +198,15 @@ async function retrieveCalendar(question, queryTokens, timeWindow) {
   const events = result?.events || [];
   const ranked = events.map((e) => {
     const text = `${e.title || ''} ${e.description || ''} ${e.location || ''}`.trim();
+    // Emit raw ISO startTime (or whatever the calendar gave us) — formatting
+    // via toLocaleString() would silently apply the *server* TZ/locale,
+    // baking inconsistent timestamps into prompts when the server and user
+    // disagree on timezone.
     return {
       kind: 'calendar',
       id: `calendar:${e.id || `${e.startTime}-${e.title}`}`,
       title: e.title || '(event)',
-      snippet: [e.startTime ? new Date(e.startTime).toLocaleString() : '', e.location || '', (e.description || '').slice(0, 200)].filter(Boolean).join(' · '),
+      snippet: [e.startTime || '', e.location || '', (e.description || '').slice(0, 200)].filter(Boolean).join(' · '),
       href: `/calendar/agenda?date=${encodeURIComponent(e.startTime || '')}`,
       relevance: lexicalScore(text, queryTokens),
       meta: { startTime: e.startTime, endTime: e.endTime, accountId: e.accountId },
@@ -334,11 +338,19 @@ async function pickProvider(providerId) {
 /**
  * Stream a completion from an API-style provider. Yields text chunks.
  * Falls back to a single-shot call for non-streaming providers (CLI).
+ *
+ * `signal` (optional) is an external AbortSignal — when the caller aborts
+ * (e.g. SSE client disconnects), the provider fetch / child process is
+ * cancelled so we stop wasting tokens/CPU on a stream nobody's reading.
  */
-async function* streamCompletion(provider, model, prompt) {
+async function* streamCompletion(provider, model, prompt, signal) {
   if (provider.type === 'api') {
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
+    // Combine the per-provider timeout with the caller's abort signal so
+    // either one tearing down propagates to the upstream fetch.
+    const timeoutSignal = AbortSignal.timeout(provider.timeout || 300000);
+    const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await fetch(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers,
@@ -348,7 +360,7 @@ async function* streamCompletion(provider, model, prompt) {
         temperature: 0.4,
         stream: true,
       }),
-      signal: AbortSignal.timeout(provider.timeout || 300000),
+      signal: fetchSignal,
     });
     if (!response.ok || !response.body) {
       const text = await response.text().catch(() => '');
@@ -358,6 +370,10 @@ async function* streamCompletion(provider, model, prompt) {
     const decoder = new TextDecoder();
     let buffer = '';
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {});
+        return;
+      }
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -401,12 +417,18 @@ async function* streamCompletion(provider, model, prompt) {
     child.stdout.on('data', (d) => { buf += d.toString(); });
     child.stderr.on('data', (d) => { buf += d.toString(); });
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('CLI timed out')); }, provider.timeout || 300000);
+    const onAbort = () => { child.kill('SIGKILL'); reject(new Error('aborted')); };
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (code === 0) resolve(buf);
       else reject(new Error(`CLI exited ${code}: ${buf.slice(0, 500)}`));
     });
-    child.on('error', (err) => { clearTimeout(timer); reject(err); });
+    child.on('error', (err) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(err); });
   });
   yield out;
 }
@@ -426,6 +448,9 @@ async function* streamCompletion(provider, model, prompt) {
  * @param {number} [opts.maxSources]
  * @param {string} [opts.providerId]
  * @param {string} [opts.model]
+ * @param {AbortSignal} [opts.signal] - Aborts retrieval/provider stream when
+ *   the caller (e.g. SSE client) disconnects, so we don't keep generating
+ *   tokens for a closed connection.
  */
 export async function* runAsk({
   question,
@@ -435,6 +460,7 @@ export async function* runAsk({
   maxSources = 12,
   providerId,
   model,
+  signal,
 }) {
   if (!question || typeof question !== 'string' || !question.trim()) {
     yield { type: 'error', error: 'question is required' };
@@ -453,6 +479,7 @@ export async function* runAsk({
     return;
   }
 
+  if (signal?.aborted) return;
   yield { type: 'sources', sources };
 
   let provider;
@@ -473,12 +500,14 @@ export async function* runAsk({
   // stream has started, we can't change to a 5xx response any longer.
   let answer = '';
   try {
-    for await (const chunk of streamCompletion(provider, effectiveModel, prompt)) {
+    for await (const chunk of streamCompletion(provider, effectiveModel, prompt, signal)) {
+      if (signal?.aborted) return;
       if (!chunk) continue;
       answer += chunk;
       yield { type: 'delta', text: chunk };
     }
   } catch (err) {
+    if (signal?.aborted) return;
     yield { type: 'error', error: `Provider stream failed: ${err.message}` };
     return;
   }

@@ -41,13 +41,14 @@ function SourceChip({ source, index }) {
   );
 }
 
-function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading }) {
+function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading, streaming }) {
   return (
     <aside className="w-full md:w-64 md:shrink-0 border-r border-port-border bg-port-card md:h-full md:overflow-y-auto">
       <div className="p-3 border-b border-port-border flex items-center gap-2">
         <button
           onClick={onNew}
-          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-port-accent/15 text-port-accent hover:bg-port-accent/25 text-sm font-medium transition-colors"
+          disabled={streaming}
+          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-port-accent/15 text-port-accent hover:bg-port-accent/25 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <MessageCircle size={14} /> New conversation
         </button>
@@ -57,30 +58,38 @@ function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading }) 
         {!loading && conversations.length === 0 && (
           <div className="p-3 text-xs text-gray-500">No conversations yet. Ask yourself something.</div>
         )}
-        {conversations.map((c) => (
-          <div
-            key={c.id}
-            className={`group flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-port-border/30 ${c.id === activeId ? 'bg-port-border/40' : ''}`}
-            onClick={() => onPick(c.id)}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-sm truncate">{c.title}</div>
-              <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                <span>{c.mode}</span>
-                <span>·</span>
-                <span>{c.turnCount} turns</span>
-                {c.promoted && <Pin size={10} className="text-amber-400" />}
-              </div>
-            </div>
-            <button
-              onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
-              className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-port-error transition-opacity"
-              title="Delete conversation"
+        {conversations.map((c) => {
+          // Lock conversation switching while a stream is in flight on a
+          // different conversation — switching mid-stream would race the
+          // assistant turn into the wrong local state and URL.
+          const lockedSwitch = streaming && c.id !== activeId;
+          return (
+            <div
+              key={c.id}
+              aria-disabled={lockedSwitch || undefined}
+              title={lockedSwitch ? 'Wait for the current answer to finish' : undefined}
+              className={`group flex items-center justify-between gap-2 px-3 py-2 hover:bg-port-border/30 ${c.id === activeId ? 'bg-port-border/40' : ''} ${lockedSwitch ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              onClick={() => { if (!lockedSwitch) onPick(c.id); }}
             >
-              <Trash2 size={14} />
-            </button>
-          </div>
-        ))}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm truncate">{c.title}</div>
+                <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                  <span>{c.mode}</span>
+                  <span>·</span>
+                  <span>{c.turnCount} turns</span>
+                  {c.promoted && <Pin size={10} className="text-amber-400" />}
+                </div>
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
+                className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-port-error transition-opacity"
+                title="Delete conversation"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </aside>
   );
@@ -162,6 +171,16 @@ export default function Ask() {
     }
   }, [activeConv?.turns?.length, streamingTurn?.content]);
 
+  // Abort any in-flight stream on unmount so we don't leave a dangling fetch
+  // pumping deltas + toasts into a component that's no longer mounted. The
+  // handleSend closure is keyed off `activeConv?.id` so a deliberate
+  // conversation switch unmounts the old subtree's stream by re-running this
+  // effect — anything still streaming dies cleanly.
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
+
   const startNew = useCallback(() => {
     if (streaming) return;
     navigate('/ask');
@@ -225,6 +244,9 @@ export default function Ask() {
       {
         signal: controller.signal,
         onEvent: ({ event, data }) => {
+          // Drop events that arrive after the user navigated away / aborted —
+          // otherwise we'd write into a stale conversation's local state.
+          if (controller.signal.aborted) return;
           if (event === 'open') {
             serverConvId = data.conversationId;
             if (!activeConv?.id || activeConv.id === 'pending') {
@@ -247,8 +269,13 @@ export default function Ask() {
       if (err.name !== 'AbortError') toast.error(err.message || 'Ask failed');
     });
 
+    const wasAborted = controller.signal.aborted;
     setStreamingTurn(null);
-    abortRef.current = null;
+    if (abortRef.current === controller) abortRef.current = null;
+
+    // Skip post-stream state writes if the user navigated/unmounted — those
+    // updates would land in a stale conversation.
+    if (wasAborted) return;
 
     // Append the persisted assistant turn locally rather than refetching the
     // whole conversation — server returned the canonical record in 'done'.
@@ -273,6 +300,7 @@ export default function Ask() {
         onNew={startNew}
         onDelete={handleDelete}
         loading={loadingList}
+        streaming={streaming}
       />
 
       <main className="flex-1 flex flex-col min-w-0">
