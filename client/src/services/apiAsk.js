@@ -57,17 +57,24 @@ export async function streamAskTurn(payload, { onEvent, signal } = {}) {
     onEvent?.({ event: eventName, data });
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split(/\r?\n\r?\n/);
-    buffer = parts.pop() || '';
-    for (const part of parts) flushFrame(part);
-  }
+  // Wrap the read loop so an abort or a thrown error still cancels the
+  // underlying ReadableStream — otherwise the connection can stay half-open
+  // longer than necessary. Mirrors the pattern in `apiOpenClaw.js`.
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() || '';
+      for (const part of parts) flushFrame(part);
+    }
 
-  // Flush any final un-terminated frame (server closed without a trailing
-  // double newline).
-  buffer += decoder.decode();
-  if (buffer.trim()) flushFrame(buffer);
+    // Flush any final un-terminated frame (server closed without a
+    // trailing double newline).
+    buffer += decoder.decode();
+    if (buffer.trim()) flushFrame(buffer);
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
 }

@@ -351,9 +351,13 @@ async function* streamCompletion(provider, model, prompt, signal) {
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
     // Combine the per-provider timeout with the caller's abort signal so
-    // either one tearing down propagates to the upstream fetch. Mirrors the
-    // `AbortSignal.any` fallback in `lib/fetchWithTimeout.js` so older Node
-    // builds without `AbortSignal.any` keep working.
+    // either one tearing down propagates to the upstream fetch + reader.
+    // The timeout stays armed through the entire stream-consumption window
+    // — clearing it after the initial fetch resolved (the previous
+    // implementation) wouldn't catch an upstream that opens the stream and
+    // then stalls indefinitely. Mirrors the `AbortSignal.any` fallback in
+    // `lib/fetchWithTimeout.js` so older Node builds without
+    // `AbortSignal.any` keep working.
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), provider.timeout || 300000);
     let fetchSignal = timeoutController.signal;
@@ -367,6 +371,10 @@ async function* streamCompletion(provider, model, prompt, signal) {
         else signal.addEventListener('abort', externalAbortHandler, { once: true });
       }
     }
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      if (signal && externalAbortHandler) signal.removeEventListener('abort', externalAbortHandler);
+    };
     let response;
     try {
       response = await fetch(`${provider.endpoint}/chat/completions`, {
@@ -380,71 +388,77 @@ async function* streamCompletion(provider, model, prompt, signal) {
         }),
         signal: fetchSignal,
       });
-    } finally {
-      clearTimeout(timeoutId);
-      if (signal && externalAbortHandler) signal.removeEventListener('abort', externalAbortHandler);
+    } catch (err) {
+      cleanup();
+      throw err;
     }
     if (!response.ok || !response.body) {
+      cleanup();
       const text = await response.text().catch(() => '');
       throw new Error(`AI API error: ${response.status} - ${text.slice(0, 500)}`);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    while (true) {
-      if (signal?.aborted) {
-        await reader.cancel().catch(() => {});
-        return;
-      }
-      const { value, done } = await reader.read();
-      if (done) break;
-      // Some SSE producers emit CRLF line terminators (`\r\n\r\n` between
-      // frames); normalise to LF so the `\n\n` frame split below works
-      // regardless of upstream.
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-      let idx;
-      while ((idx = buffer.indexOf('\n\n')) !== -1) {
-        const frame = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 2);
-        if (!frame.startsWith('data:')) continue;
-        const payload = frame.slice(5).trim();
-        if (payload === '[DONE]') return;
-        // A single malformed/partial frame from the upstream provider must
-        // not kill the whole stream — log and skip so subsequent good
-        // frames still flow.
-        let parsed;
-        try {
-          parsed = JSON.parse(payload);
-        } catch {
-          console.warn(`⚠️ Ask: skipping malformed SSE frame from ${provider.id}`);
-          continue;
+    try {
+      while (true) {
+        if (signal?.aborted) {
+          await reader.cancel().catch(() => {});
+          return;
         }
-        const delta = parsed?.choices?.[0]?.delta?.content;
-        if (delta) yield delta;
+        const { value, done } = await reader.read();
+        if (done) break;
+        // Some SSE producers emit CRLF line terminators (`\r\n\r\n` between
+        // frames); normalise to LF so the `\n\n` frame split below works
+        // regardless of upstream.
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 2);
+          if (!frame.startsWith('data:')) continue;
+          const payload = frame.slice(5).trim();
+          if (payload === '[DONE]') return;
+          // A single malformed/partial frame from the upstream provider must
+          // not kill the whole stream — log and skip so subsequent good
+          // frames still flow.
+          let parsed;
+          try {
+            parsed = JSON.parse(payload);
+          } catch {
+            console.warn(`⚠️ Ask: skipping malformed SSE frame from ${provider.id}`);
+            continue;
+          }
+          const delta = parsed?.choices?.[0]?.delta?.content;
+          if (delta) yield delta;
+        }
       }
+    } finally {
+      cleanup();
     }
     return;
   }
 
   // CLI providers can't stream chunked text out of a child process without
   // a lot more wiring; fall back to a single-shot call via the shared
-  // brain-style invocation pattern.
+  // brain-style invocation pattern. The prompt goes via stdin (not argv)
+  // because Ask prompts can run tens of thousands of characters once
+  // sources + history are concatenated, which exceeds OS argv limits
+  // (especially on Windows ~32k).
   const { spawn } = await import('child_process');
   const args = [...(provider.args || [])];
   if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
   if (provider.id === 'gemini-cli') {
     if (!args.includes('--output-format') && !args.includes('-o')) args.push('--output-format', 'text');
     if (model) args.push('--model', model);
-    args.push('--prompt', prompt);
-  } else {
-    if (model) args.push('--model', model);
-    args.push(prompt);
+  } else if (model) {
+    args.push('--model', model);
   }
   const out = await new Promise((resolve, reject) => {
     let buf = '';
     const child = spawn(provider.command, args, {
       env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     });
@@ -463,6 +477,10 @@ async function* streamCompletion(provider, model, prompt, signal) {
       else reject(new Error(`CLI exited ${code}: ${buf.slice(0, 500)}`));
     });
     child.on('error', (err) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(err); });
+    // Pipe the prompt in via stdin so we never blow the OS argv limit on
+    // long retrieval-augmented prompts.
+    child.stdin.on('error', () => { /* child may close stdin first; the close handler resolves */ });
+    child.stdin.end(prompt);
   });
   yield out;
 }

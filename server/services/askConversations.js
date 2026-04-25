@@ -14,9 +14,12 @@
  *   { id, role: 'user'|'assistant', content, sources?, mode?, providerId?, model?, createdAt }
  *
  * Conversation ids are sortable: `ask_<base36-ms>_<hex>`. Lexically sorting
- * filenames descending therefore returns newest-first without reading any
- * file — `listConversations` exploits this so it doesn't have to parse every
- * JSON in the directory just to honour `limit`.
+ * filenames descending returns newest-first without reading any file, which
+ * lets `listConversations` collect its `limit` summaries from the head of
+ * the list. The expiry-prune pass still has to walk the full directory
+ * (otherwise stale unpinned conversations beyond the first page would
+ * persist past 30 days) — bounded by max-30-day's worth of files in a
+ * single-user app, so cost is negligible in practice.
  */
 
 import { join } from 'path';
@@ -73,8 +76,9 @@ export async function listConversations({ limit = 50 } = {}) {
 
   // Filenames carry a sortable timestamp prefix (`ask_<base36-ms>_…`) so a
   // descending lexical sort gives newest-first ordering without reading any
-  // file. This caps the number of disk reads at `limit` instead of scanning
-  // every conversation just to satisfy a paginated UI.
+  // file. The full sweep below still reads every conversation — we need it
+  // to enforce the 30-day expiry on stale unpinned entries beyond the first
+  // page — but the sort lets us fill `summaries` from the head.
   const ids = entries
     .filter((f) => f.endsWith('.json'))
     .map((f) => f.slice(0, -5))

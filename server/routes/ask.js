@@ -122,15 +122,21 @@ router.post('/', asyncHandler(async (req, res) => {
   // Honour socket backpressure — for long answers with many delta frames,
   // a slow reader could otherwise force Node to buffer unbounded SSE data
   // in memory. If `res.write` returns false, await the next `drain` (or
-  // `close`) before queuing more frames.
+  // `close`) before queuing more frames. Both listeners are torn down on
+  // settle so a slow client that disconnects mid-drain doesn't leak
+  // listeners.
   const send = async (event, data) => {
     if (aborted) return;
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     if (!res.write(frame)) {
       await new Promise((resolve) => {
-        const onDrain = () => { res.off('close', onDrain); resolve(); };
-        res.once('drain', onDrain);
-        res.once('close', onDrain);
+        const settle = () => {
+          res.off('drain', settle);
+          res.off('close', settle);
+          resolve();
+        };
+        res.once('drain', settle);
+        res.once('close', settle);
       });
     }
   };
