@@ -42,7 +42,7 @@ const PER_SOURCE_LIMIT = {
 
 // Truncation caps for prompt assembly. Source snippets are short summaries;
 // transcript turns are previous chat turns trimmed so multi-turn history
-// can't blow the token budget alone. Snippets are also normalised at
+// can't blow the token budget alone. Snippets are also normalized at
 // retrieval time (not just at prompt assembly) because they're streamed to
 // the client in the `sources` SSE event and persisted into the
 // conversation JSON on every assistant turn — letting full bodies through
@@ -52,11 +52,11 @@ const HISTORY_TURN_MAX_CHARS = 1500;
 
 // Cap snippet at retrieval time to bound what gets persisted + sent to
 // the client. Collapse whitespace and trim before slicing.
-function normaliseSnippet(text) {
+function normalizeSnippet(text) {
   if (!text) return '';
   const collapsed = String(text).replace(/\s+/g, ' ').trim();
   if (collapsed.length <= SNIPPET_MAX_CHARS) return collapsed;
-  return collapsed.slice(0, SNIPPET_MAX_CHARS - 1) + '…';
+  return `${collapsed.slice(0, SNIPPET_MAX_CHARS - 1)}…`;
 }
 // Autobiography stories grow over time — cap how many we score per question
 // so a user with hundreds of stories doesn't make every Ask quadratic.
@@ -97,7 +97,7 @@ async function retrieveMemories(question) {
       kind: 'memory',
       id: `memory:${mem.id}`,
       title: mem.summary || mem.type || 'Memory',
-      snippet: normaliseSnippet(mem.content),
+      snippet: normalizeSnippet(mem.content),
       relevance: hits[i].rrfScore ?? hits[i].similarity ?? 0.5,
       href: `/brain/memory?id=${encodeURIComponent(mem.id)}`,
       meta: { type: mem.type, importance: mem.importance, updatedAt: mem.updatedAt },
@@ -149,11 +149,11 @@ async function retrieveBrainNotes(question, queryTokens) {
   const candidates = [];
   for (const idea of ideasArr || []) {
     const text = `${idea.title || ''} ${idea.description || ''}`.trim();
-    candidates.push({ kind: 'brain-note', subkind: 'idea', recordId: idea.id, title: idea.title || '(idea)', snippet: normaliseSnippet(text), href: `/brain/memory?type=ideas&id=${encodeURIComponent(idea.id)}`, updatedAt: idea.updatedAt || idea.createdAt });
+    candidates.push({ kind: 'brain-note', subkind: 'idea', recordId: idea.id, title: idea.title || '(idea)', snippet: normalizeSnippet(text), href: `/brain/memory?type=ideas&id=${encodeURIComponent(idea.id)}`, updatedAt: idea.updatedAt || idea.createdAt });
   }
   for (const proj of projectsArr || []) {
     const text = `${proj.title || ''} ${proj.description || ''}`.trim();
-    candidates.push({ kind: 'brain-note', subkind: 'project', recordId: proj.id, title: proj.title || '(project)', snippet: normaliseSnippet(text), href: `/brain/memory?type=projects&id=${encodeURIComponent(proj.id)}`, updatedAt: proj.updatedAt || proj.createdAt });
+    candidates.push({ kind: 'brain-note', subkind: 'project', recordId: proj.id, title: proj.title || '(project)', snippet: normalizeSnippet(text), href: `/brain/memory?type=projects&id=${encodeURIComponent(proj.id)}`, updatedAt: proj.updatedAt || proj.createdAt });
   }
   for (const entry of inbox || []) {
     // Brain inbox records use `capturedText` / `capturedAt` (see
@@ -161,7 +161,7 @@ async function retrieveBrainNotes(question, queryTokens) {
     // forward-compat with any older entries that may exist on disk.
     const text = entry.capturedText || entry.text || entry.summary || '';
     if (!text) continue;
-    candidates.push({ kind: 'brain-note', subkind: 'inbox', recordId: entry.id, title: text.slice(0, 80), snippet: normaliseSnippet(text), href: '/brain/inbox', updatedAt: entry.capturedAt || entry.timestamp || entry.createdAt });
+    candidates.push({ kind: 'brain-note', subkind: 'inbox', recordId: entry.id, title: text.slice(0, 80), snippet: normalizeSnippet(text), href: '/brain/inbox', updatedAt: entry.capturedAt || entry.timestamp || entry.createdAt });
   }
 
   for (const c of candidates) {
@@ -182,7 +182,7 @@ async function retrieveAutobiography(queryTokens) {
     kind: 'autobiography',
     id: `autobiography:${s.id}`,
     title: s.themeId ? `${s.themeId} — ${(s.promptText || '').slice(0, 60)}` : (s.promptText || 'Autobiography'),
-    snippet: normaliseSnippet(s.content),
+    snippet: normalizeSnippet(s.content),
     href: '/digital-twin/autobiography',
     relevance: lexicalScore(`${s.promptText || ''} ${s.content || ''}`, queryTokens),
     meta: { themeId: s.themeId, createdAt: s.createdAt },
@@ -191,6 +191,10 @@ async function retrieveAutobiography(queryTokens) {
 }
 
 async function retrieveGoals(queryTokens) {
+  // Skip the full goals load on tokenless / noise-only questions ("hi",
+  // "ok") — without lexical signal the active-goal floor would otherwise
+  // surface unrelated goals on every empty-ish query.
+  if (!queryTokens.length) return [];
   const goalsData = await getGoals();
   const goals = goalsData?.goals || [];
   // Active goals get a small floor so they surface even on weak lexical
@@ -199,7 +203,7 @@ async function retrieveGoals(queryTokens) {
     kind: 'goal',
     id: `goal:${g.id}`,
     title: g.title || '(goal)',
-    snippet: normaliseSnippet([g.description, g.horizon ? `horizon: ${g.horizon}` : '', g.status ? `status: ${g.status}` : ''].filter(Boolean).join(' · ')),
+    snippet: normalizeSnippet([g.description, g.horizon ? `horizon: ${g.horizon}` : '', g.status ? `status: ${g.status}` : ''].filter(Boolean).join(' · ')),
     href: `/digital-twin/goals?id=${encodeURIComponent(g.id)}`,
     relevance: lexicalScore(`${g.title || ''} ${g.description || ''} ${(g.tags || []).join(' ')}`, queryTokens) + (g.status === 'active' ? 0.05 : 0),
     meta: { status: g.status, horizon: g.horizon, category: g.category },
@@ -225,7 +229,7 @@ async function retrieveCalendar(queryTokens, timeWindow) {
       kind: 'calendar',
       id: `calendar:${e.id || `${e.startTime}-${e.title}`}`,
       title: e.title || '(event)',
-      snippet: normaliseSnippet([e.startTime || '', e.location || '', (e.description || '').slice(0, 200)].filter(Boolean).join(' · ')),
+      snippet: normalizeSnippet([e.startTime || '', e.location || '', (e.description || '').slice(0, 200)].filter(Boolean).join(' · ')),
       href: `/calendar/agenda?date=${encodeURIComponent(e.startTime || '')}`,
       relevance: lexicalScore(text, queryTokens),
       meta: { startTime: e.startTime, endTime: e.endTime, accountId: e.accountId },
@@ -303,7 +307,7 @@ function formatSourcesForPrompt(sources) {
   const lines = ['## Retrieved Sources', ''];
   sources.forEach((s, i) => {
     const tag = `[${i + 1}]`;
-    // Snippets are already normalised + capped at retrieval time, so we
+    // Snippets are already normalized + capped at retrieval time, so we
     // don't repeat the trimming here.
     lines.push(`${tag} ${s.kind} — ${s.title}`);
     if (s.snippet) lines.push(`    ${s.snippet}`);
