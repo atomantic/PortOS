@@ -51,20 +51,23 @@ router.get('/', asyncHandler(async (_req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const conv = await convs.getConversation(String(req.params.id));
+  const id = validateRequest(idSchema, String(req.params.id));
+  const conv = await convs.getConversation(id);
   if (!conv) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
   res.json({ conversation: conv });
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const removed = await convs.deleteConversation(String(req.params.id));
+  const id = validateRequest(idSchema, String(req.params.id));
+  const removed = await convs.deleteConversation(id);
   if (!removed) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
   res.json({ ok: true });
 }));
 
 router.post('/:id/promote', asyncHandler(async (req, res) => {
+  const id = validateRequest(idSchema, String(req.params.id));
   const { promoted } = validateRequest(promoteBodySchema, req.body ?? {});
-  const conv = await convs.setPromoted(String(req.params.id), promoted);
+  const conv = await convs.setPromoted(id, promoted);
   if (!conv) throw new ServerError('Conversation not found', { status: 404, code: 'NOT_FOUND' });
   res.json({ conversation: conv });
 }));

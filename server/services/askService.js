@@ -194,7 +194,7 @@ async function retrieveGoals(queryTokens) {
   return rankAndCap(ranked, 'goal');
 }
 
-async function retrieveCalendar(question, queryTokens, timeWindow) {
+async function retrieveCalendar(queryTokens, timeWindow) {
   if (!queryTokens.length) return [];
   const now = Date.now();
   const days = Number(timeWindow?.days) || CALENDAR_DEFAULT_DAYS;
@@ -235,7 +235,7 @@ export async function gatherSources(question, { timeWindow, maxSources = 12 } = 
     retrieveBrainNotes(question, queryTokens),
     retrieveAutobiography(queryTokens),
     retrieveGoals(queryTokens),
-    retrieveCalendar(question, queryTokens, timeWindow),
+    retrieveCalendar(queryTokens, timeWindow),
   ]);
 
   const all = [

@@ -88,6 +88,7 @@ function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading, st
                 type="button"
                 onClick={() => onDelete(c.id)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity"
+                aria-label={`Delete conversation: ${c.title}`}
                 title="Delete conversation"
               >
                 <Trash2 size={14} />
@@ -191,7 +192,7 @@ export default function Ask() {
   // conversation it belongs to. Brand-new conversations transition through
   // `/ask` → `/ask/<id>` once the server's `open` event arrives — that
   // self-navigation must NOT cancel the stream, so we compare against the
-  // ref the stream populates. On unmount, abort unconditionally.
+  // ref the stream populates.
   useEffect(() => {
     const streamConvId = streamingConvIdRef.current;
     if (streamConvId && conversationId && streamConvId !== conversationId) {
@@ -199,18 +200,11 @@ export default function Ask() {
       abortRef.current = null;
       streamingConvIdRef.current = null;
     }
-    return () => {
-      // Only abort on real unmount, not on every conversationId change.
-      // Detect unmount by checking that React isn't going to re-run the
-      // effect — easiest signal: the ref is still populated *and* the
-      // component will tear down (cleanup runs once on unmount when deps
-      // are stable; we rely on the conditional above to handle in-route
-      // switches).
-    };
   }, [conversationId]);
 
+  // Separately, kill any in-flight stream on real unmount so we don't leak
+  // a fetch + state-update closure into a torn-down tree.
   useEffect(() => () => {
-    // True unmount cleanup — kill any leftover stream.
     abortRef.current?.abort();
     abortRef.current = null;
     streamingConvIdRef.current = null;
