@@ -105,21 +105,32 @@ export async function listConversations({ limit = 50 } = {}) {
   for (const id of ids) {
     const headSlot = summaries.length < limit;
     let conv = null;
+    let mtime = null;
     if (headSlot) {
       conv = await readConversation(id);
       if (!conv) continue;
     } else {
       // Cheap check first — only open the JSON if mtime indicates the file
       // could be expired. atomicWrite touches mtime on every update.
-      const mtime = await stat(pathFor(id)).then((s) => s.mtimeMs, () => null);
+      mtime = await stat(pathFor(id)).then((s) => s.mtimeMs, () => null);
       if (mtime === null) continue;
       if ((now - mtime) <= expiryMs) continue;
       conv = await readConversation(id);
       if (!conv) continue;
     }
 
-    const updated = safeDate(conv.updatedAt) || safeDate(conv.createdAt);
-    if (!conv.promoted && updated && (now - updated) > expiryMs) {
+    // Fall back to file mtime when the JSON's own timestamps are missing or
+    // unparseable — a corrupted record with no usable updatedAt would
+    // otherwise live forever because `safeDate(undefined) === 0` made the
+    // expiry comparison vacuously false.
+    let effectiveTs = safeDate(conv.updatedAt) || safeDate(conv.createdAt);
+    if (!effectiveTs) {
+      if (mtime === null) {
+        mtime = await stat(pathFor(id)).then((s) => s.mtimeMs, () => null);
+      }
+      if (mtime !== null) effectiveTs = mtime;
+    }
+    if (!conv.promoted && effectiveTs && (now - effectiveTs) > expiryMs) {
       // Single-user app — no concurrency races to worry about pruning here.
       await unlink(pathFor(id)).catch(() => {});
       continue;

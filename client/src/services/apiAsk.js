@@ -27,7 +27,22 @@ export async function streamAskTurn(payload, { onEvent, signal } = {}) {
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => '');
     let message = `HTTP ${response.status}`;
-    try { message = JSON.parse(text)?.error || message; } catch { /* not JSON */ }
+    // Server includes `{ error, context: { details: [{ path, message }] } }`
+    // for zod validation failures — surface the first few field-level
+    // messages so users see "question: required" instead of a flat "HTTP 400".
+    if (text) {
+      try {
+        const parsed = JSON.parse(text);
+        const baseError = parsed?.error || message;
+        const details = parsed?.context?.details;
+        if (Array.isArray(details) && details.length) {
+          const fieldNotes = details.slice(0, 3).map((d) => d.path ? `${d.path}: ${d.message}` : d.message).filter(Boolean);
+          message = fieldNotes.length ? `${baseError} — ${fieldNotes.join('; ')}` : baseError;
+        } else {
+          message = baseError;
+        }
+      } catch { /* response body wasn't JSON; keep the HTTP status message */ }
+    }
     throw new Error(message);
   }
 

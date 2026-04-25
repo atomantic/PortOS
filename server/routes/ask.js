@@ -38,7 +38,10 @@ const askBodySchema = z.object({
     days: z.number().int().min(1).max(365).optional(),
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
-  }).optional(),
+  }).refine(
+    (w) => !(w.startDate && w.endDate) || Date.parse(w.startDate) <= Date.parse(w.endDate),
+    { message: 'startDate must be <= endDate', path: ['startDate'] },
+  ).optional(),
 });
 
 const promoteBodySchema = z.object({

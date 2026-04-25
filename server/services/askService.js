@@ -619,12 +619,14 @@ export async function* runAsk({
   // Stream errors are caught here (rather than letting them bubble) so the
   // route can flush a terminal SSE 'error' frame to the client — once the
   // stream has started, we can't change to a 5xx response any longer.
-  let answer = '';
+  // Chunks accumulate into an array and join once at the end; `+=` would be
+  // O(n²) on long responses where each delta re-allocates the running string.
+  const chunks = [];
   try {
     for await (const chunk of streamCompletion(provider, effectiveModel, prompt, signal)) {
       if (signal?.aborted) return;
       if (!chunk) continue;
-      answer += chunk;
+      chunks.push(chunk);
       yield { type: 'delta', text: chunk };
     }
   } catch (err) {
@@ -633,6 +635,7 @@ export async function* runAsk({
     return;
   }
 
+  const answer = chunks.join('');
   console.log(`✅ Ask complete: ${provider.id}/${effectiveModel} ${Date.now() - startedAt}ms ${answer.length} chars`);
 
   yield {
