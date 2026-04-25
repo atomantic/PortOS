@@ -4,6 +4,11 @@ import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, Boo
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 
+// Mirrors the server-side ID_RE in askConversations.js — used to skip
+// forwarding the optimistic 'pending' placeholder (which would 400) while
+// still letting any real persisted id pass through.
+const CONV_ID_RE = /^ask_[a-z0-9]+_[a-f0-9]+$/;
+
 export const ASK_MODES = [
   { id: 'ask', label: 'Ask', help: 'Answer as yourself, grounded in your own notes and goals.' },
   { id: 'advise', label: 'Advise', help: 'Coach you using your goals and constraints — push back where they conflict.' },
@@ -275,13 +280,18 @@ export default function Ask() {
       : { id: 'pending', title: trimmed.slice(0, 80), mode, turns: [optimisticUserTurn], createdAt: nowIso, updatedAt: nowIso },
     );
 
-    let serverConvId = activeConv?.id;
+    // Only forward conversationId when it's a real persisted id. The
+    // optimistic 'pending' placeholder (set when sending in a fresh
+    // conversation) would fail server-side regex validation as a 400; in that
+    // case we omit the field so the server creates a new conversation.
+    const persistedConvId = activeConv?.id && CONV_ID_RE.test(activeConv.id) ? activeConv.id : undefined;
+    let serverConvId = persistedConvId;
     let collectedSources = [];
     let answer = '';
     let persistedTurn = null;
 
     await api.streamAskTurn(
-      { conversationId: activeConv?.id, question: trimmed, mode },
+      { conversationId: persistedConvId, question: trimmed, mode },
       {
         signal: controller.signal,
         onEvent: ({ event, data }) => {

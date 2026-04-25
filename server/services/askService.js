@@ -497,21 +497,47 @@ async function* streamCompletion(provider, model, prompt, signal) {
       shell: false,
       windowsHide: true,
     });
+
+    // Single settlement gate — the timer, the abort listener, and the close
+    // handler are all racing each other. Without a settled flag, SIGKILL on a
+    // platform that doesn't kill the child synchronously would let the timer
+    // fire later and try to settle a Promise that's already done.
+    let settled = false;
+    let timer = null;
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+
     child.stdout.on('data', (d) => { buf += d.toString(); });
     child.stderr.on('data', (d) => { buf += d.toString(); });
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('CLI timed out')); }, provider.timeout || 300000);
-    const onAbort = () => { child.kill('SIGKILL'); reject(new Error('aborted')); };
+
+    timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      settle(reject, new Error('CLI timed out'));
+    }, provider.timeout || 300000);
+
+    function onAbort() {
+      child.kill('SIGKILL');
+      settle(reject, new Error('aborted'));
+    }
     if (signal) {
       if (signal.aborted) { onAbort(); return; }
       signal.addEventListener('abort', onAbort, { once: true });
     }
+
     child.on('close', (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-      if (code === 0) resolve(buf);
-      else reject(new Error(`CLI exited ${code}: ${buf.slice(0, 500)}`));
+      if (code === 0) settle(resolve, buf);
+      else settle(reject, new Error(`CLI exited ${code}: ${buf.slice(0, 500)}`));
     });
-    child.on('error', (err) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(err); });
+    child.on('error', (err) => { settle(reject, err); });
+
     // Pipe the prompt in via stdin so we never blow the OS argv limit on
     // long retrieval-augmented prompts.
     child.stdin.on('error', () => { /* child may close stdin first; the close handler resolves */ });
