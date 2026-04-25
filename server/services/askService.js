@@ -13,7 +13,7 @@
  * The function exported here returns an async iterable of stream events:
  *   { type: 'sources', sources: Source[] }
  *   { type: 'delta', text: string }
- *   { type: 'done', usage?: {...} }
+ *   { type: 'done', answer: string, sources: Source[], providerId: string, model: string }
  *   { type: 'error', error: string }
  *
  * Routes consume this and forward as Server-Sent Events.
@@ -93,9 +93,12 @@ async function retrieveMemories(question) {
   return sources;
 }
 
-// askService scores by query-term overlap, not BM25 — but the tokenizer
-// (lowercase, stopword-strip, punctuation-strip) is identical, so we share
-// it with the BM25 module to keep stopword lists in lockstep.
+// askService scores by query-term overlap, not BM25. We reuse the BM25
+// module's lowercase / punctuation / stopword tokenizer so the stopword
+// list stays in lockstep, then tighten the result for lexical-overlap
+// scoring — drop tokens shorter than 3 chars (single-letter / two-letter
+// query tokens are too noisy for our overlap ratio) and re-check stopwords
+// in case the upstream list was extended after tokenization.
 function tokenize(text) {
   return bm25Tokenize(text).filter((t) => t.length >= 3 && !STOP_WORDS.has(t));
 }

@@ -134,6 +134,11 @@ export default function Ask() {
   const [question, setQuestion] = useState('');
   const [mode, setMode] = useState('ask');
   const abortRef = useRef(null);
+  // The conversationId the in-flight stream belongs to — null when nothing
+  // is streaming. Used by the conversationId-change effect to decide whether
+  // a route change is "switching away from a stream" (abort) vs. "the stream
+  // just told us its id and we're navigating to it" (keep).
+  const streamingConvIdRef = useRef(null);
   const scrollRef = useRef(null);
   const streaming = streamingTurn !== null;
 
@@ -157,7 +162,13 @@ export default function Ask() {
       if (cancelled) return;
       if (data?.conversation) {
         setActiveConv(data.conversation);
-        setMode(data.conversation.mode || 'ask');
+        // Mode is per-turn (each turn carries the mode it was sent with);
+        // initialise the UI to whatever the last turn used so a refresh
+        // restores the user's most-recent mode rather than the
+        // conversation's original creation mode.
+        const turns = data.conversation.turns || [];
+        const lastModeTurn = [...turns].reverse().find((t) => t.mode);
+        setMode(lastModeTurn?.mode || data.conversation.mode || 'ask');
       } else {
         setActiveConv(null);
       }
@@ -176,16 +187,34 @@ export default function Ask() {
     }
   }, [activeConv?.turns?.length, streamingTurn?.content]);
 
-  // Abort any in-flight stream when the user navigates to a different
-  // conversation OR when the page unmounts — React Router reuses the same
-  // `Ask` instance across `/ask/:conversationId` transitions, so an
-  // unmount-only effect would leak a stream from conversation A while the
-  // user reads conversation B. Tying the cleanup to `conversationId`
-  // guarantees stale events can't land in the wrong local state.
+  // Abort the in-flight stream only when the user navigates *away* from the
+  // conversation it belongs to. Brand-new conversations transition through
+  // `/ask` → `/ask/<id>` once the server's `open` event arrives — that
+  // self-navigation must NOT cancel the stream, so we compare against the
+  // ref the stream populates. On unmount, abort unconditionally.
+  useEffect(() => {
+    const streamConvId = streamingConvIdRef.current;
+    if (streamConvId && conversationId && streamConvId !== conversationId) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      streamingConvIdRef.current = null;
+    }
+    return () => {
+      // Only abort on real unmount, not on every conversationId change.
+      // Detect unmount by checking that React isn't going to re-run the
+      // effect — easiest signal: the ref is still populated *and* the
+      // component will tear down (cleanup runs once on unmount when deps
+      // are stable; we rely on the conditional above to handle in-route
+      // switches).
+    };
+  }, [conversationId]);
+
   useEffect(() => () => {
+    // True unmount cleanup — kill any leftover stream.
     abortRef.current?.abort();
     abortRef.current = null;
-  }, [conversationId]);
+    streamingConvIdRef.current = null;
+  }, []);
 
   const startNew = useCallback(() => {
     if (streaming) return;
@@ -236,6 +265,9 @@ export default function Ask() {
     setStreamingTurn({ content: '', sources: [] });
     const controller = new AbortController();
     abortRef.current = controller;
+    // Seed streamingConvIdRef with whatever conversation we're sending into;
+    // for brand-new conversations this is null until the `open` event lands.
+    streamingConvIdRef.current = activeConv?.id && activeConv.id !== 'pending' ? activeConv.id : null;
 
     // Optimistic user turn so the UI doesn't sit blank between submit and
     // the first SSE 'open' event (gather-sources + provider connect = 100s
@@ -262,6 +294,10 @@ export default function Ask() {
           if (controller.signal.aborted) return;
           if (event === 'open') {
             serverConvId = data.conversationId;
+            // Pin the stream to its conversation id so the navigate() below
+            // (which fires on first send) doesn't get treated as a
+            // switch-away by the conversationId-change effect.
+            streamingConvIdRef.current = data.conversationId;
             if (!activeConv?.id || activeConv.id === 'pending') {
               navigate(`/ask/${data.conversationId}`, { replace: true });
             }
@@ -285,6 +321,7 @@ export default function Ask() {
     const wasAborted = controller.signal.aborted;
     setStreamingTurn(null);
     if (abortRef.current === controller) abortRef.current = null;
+    streamingConvIdRef.current = null;
 
     // Skip post-stream state writes if the user navigated/unmounted — those
     // updates would land in a stale conversation.
