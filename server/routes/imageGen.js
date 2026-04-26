@@ -15,7 +15,7 @@ import * as imageGen from '../services/imageGen/index.js';
 import { local } from '../services/imageGen/index.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
-  isExternallyManaged, createVenv,
+  isExternallyManaged, createVenv, isAllowedPython,
 } from '../lib/pythonSetup.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { join } from 'node:path';
@@ -32,7 +32,8 @@ const generateSchema = z.object({
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
-  quantize: z.union([z.string(), z.number()]).optional(),
+  // mflux supports 3/4/5/6/8 bit quantization; 8 is the default.
+  quantize: z.union([z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(8), z.literal('3'), z.literal('4'), z.literal('5'), z.literal('6'), z.literal('8')]).optional(),
   loraPaths: z.array(z.string().max(512)).max(8).optional(),
   loraScales: z.array(z.number().min(0).max(2)).max(8).optional(),
 });
@@ -101,6 +102,9 @@ const checkSchema = z.object({ pythonPath: z.string().min(1) });
 
 router.get('/setup/check', asyncHandler(async (req, res) => {
   const { pythonPath } = validateRequest(checkSchema, req.query);
+  if (!isAllowedPython(pythonPath)) {
+    return res.status(400).json({ error: 'pythonPath must be a python interpreter (basename python/python3/python3.NN)' });
+  }
   const [pkgs, externallyManaged] = await Promise.all([
     checkPackages(pythonPath),
     isExternallyManaged(pythonPath),
@@ -119,6 +123,9 @@ const venvSchema = z.object({
 
 router.post('/setup/create-venv', asyncHandler(async (req, res) => {
   const { basePython } = validateRequest(venvSchema, req.body || {});
+  if (basePython && !isAllowedPython(basePython)) {
+    return res.status(400).json({ error: 'basePython must be a python interpreter (basename python/python3/python3.NN)' });
+  }
   const base = basePython || (await detectPython());
   if (!base) {
     return res.status(400).json({ error: 'No base Python 3 found to bootstrap a venv. Install Python 3.10+ first.' });
@@ -127,6 +134,24 @@ router.post('/setup/create-venv', asyncHandler(async (req, res) => {
   const venvPython = await createVenv(base, target);
   res.json({ pythonPath: venvPython, target });
 }));
+
+// Allowlist: only PortOS's own required pip names (or their pinned variants
+// like `transformers<5`) are installable. Without this, the endpoint would
+// happily pip-install arbitrary PyPI packages — the install runs as the
+// PortOS user and pip itself executes setup.py from the package, so an
+// arbitrary package install is effectively arbitrary code execution.
+const REQUIRED_PIP_NAMES = new Set([
+  ...REQUIRED_PACKAGES,
+  // pip-name variants (see PIP_NAMES in pythonSetup.js)
+  'opencv-python',
+  'transformers<5',
+  // Windows torch path also installs torch + diffusers, which are in
+  // REQUIRED_PACKAGES on Windows but not on macOS — keep them allowlisted
+  // unconditionally so a Windows install requested from a macOS server
+  // (unlikely but possible) doesn't 400 unhelpfully.
+  'torch',
+  'diffusers',
+]);
 
 const installSchema = z.object({
   pythonPath: z.string().min(1),
@@ -141,6 +166,15 @@ router.get('/setup/install', (req, res) => {
   if (!parsed.success) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: parsed.error.message }));
+  }
+  if (!isAllowedPython(parsed.data.pythonPath)) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'pythonPath must be a python interpreter' }));
+  }
+  const disallowed = parsed.data.packages.filter((p) => !REQUIRED_PIP_NAMES.has(p));
+  if (disallowed.length) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: `Packages not in allowlist: ${disallowed.join(', ')}` }));
   }
 
   res.writeHead(200, {

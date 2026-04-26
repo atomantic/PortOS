@@ -18,7 +18,8 @@
 import { Router } from 'express';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { z } from 'zod';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
 import { generateImage, getMode } from '../services/imageGen/index.js';
@@ -103,7 +104,25 @@ router.get('/progress', (_req, res) => {
   });
 });
 
+// Mirror imageGen.js's generateSchema bounds — A1111 clients can be sloppy
+// (e.g. defaulting steps=999 from a preset) and we want a clear 400 instead
+// of letting bad values through to the dispatcher.
+const txt2imgSchema = z.object({
+  prompt: z.string().min(1).max(2000),
+  negative_prompt: z.string().max(2000).optional().nullable(),
+  width: z.number().int().min(64).max(2048).optional(),
+  height: z.number().int().min(64).max(2048).optional(),
+  steps: z.number().int().min(1).max(150).optional(),
+  cfg_scale: z.number().min(0).max(30).optional(),
+  seed: z.number().int().optional(),
+  sd_model_checkpoint: z.string().max(128).optional(),
+}).passthrough(); // tolerate extra A1111 fields the client sends
+
 router.post('/txt2img', asyncHandler(async (req, res) => {
+  const parsed = txt2imgSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
   const {
     prompt,
     negative_prompt,
@@ -113,7 +132,7 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
     cfg_scale,
     seed,
     sd_model_checkpoint,
-  } = req.body || {};
+  } = parsed.data;
 
   // Map an A1111-style "portos-local-<id>" checkpoint name back to our
   // internal model id so remote clients can pick a local model. Anything

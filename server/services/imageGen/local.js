@@ -15,7 +15,7 @@
 import { spawn } from 'child_process';
 import { writeFile, readFile, readdir, stat, unlink, rm, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
@@ -100,7 +100,17 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
   const actualSteps = steps ? Number(steps) : model.steps;
   const actualGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
-  const validLoras = loraPaths.filter((p) => p && existsSync(p));
+  // LoRA paths must resolve to inside data/loras — without this the client
+  // could pass any absolute path that exists, leaking arbitrary-file probing
+  // (the spawn args are not shell-escaped, but mflux would happily try to
+  // mmap whatever it's pointed at and surface "this file exists" via error).
+  const lorasRoot = resolvePath(PATHS.loras) + PATH_SEP;
+  const validLoras = loraPaths.filter((p) => {
+    if (!p || typeof p !== 'string') return false;
+    const resolved = resolvePath(p);
+    if (!resolved.startsWith(lorasRoot)) return false;
+    return existsSync(resolved);
+  });
 
   const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraPaths: validLoras, loraScales, createdAt: new Date().toISOString() };
   const job = { ...meta, clients: [], status: 'running' };

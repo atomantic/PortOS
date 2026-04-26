@@ -68,6 +68,28 @@ export async function detectPython() {
   return stdout.trim().split(/\r?\n/)[0] || null;
 }
 
+// Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
+// before exec. Single-user / Tailnet model means we trust the operator, but
+// "you can shell out to anything" is still too sharp — restrict to actual
+// python interpreters by basename, and accept a candidate path if it is one
+// we discovered ourselves.
+const PYTHON_BASENAMES = IS_WIN
+  ? ['python.exe', 'python3.exe']
+  : ['python', 'python3'];
+
+export function isAllowedPython(pythonPath) {
+  if (typeof pythonPath !== 'string' || !pythonPath) return false;
+  if (PYTHON_CANDIDATES.includes(pythonPath)) return true;
+  // Allow any path whose basename looks like a python interpreter — covers
+  // user-typed venvs (`/path/to/.venv/bin/python3.12`) without opening up
+  // arbitrary-binary execution.
+  const base = pythonPath.split(/[\\/]/).pop().toLowerCase();
+  if (PYTHON_BASENAMES.includes(base)) return true;
+  // Also accept python3.NN variants like python3.10, python3.11, python.exe etc.
+  if (/^python(3(\.\d+)?)?(\.exe)?$/i.test(base)) return true;
+  return false;
+}
+
 // Returns true if `pythonPath` has a PEP 668 EXTERNALLY-MANAGED marker next
 // to its stdlib — pip will refuse to install into it.
 export async function isExternallyManaged(pythonPath) {

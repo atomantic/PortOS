@@ -8,7 +8,8 @@
 
 import { Router } from 'express';
 import { existsSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -32,6 +33,26 @@ const sourceImageUpload = uploadSingle('sourceImage', {
   fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
 });
 
+// Multipart bodies arrive as strings; coerce numerics in the schema. The
+// service layer also coerces, but validating at the route boundary catches
+// out-of-range / wrong-type input before any work happens.
+const numFromString = z.preprocess((v) => v == null || v === '' ? undefined : Number(v), z.number());
+const generateBodySchema = z.object({
+  prompt: z.string().min(1).max(2000),
+  negativePrompt: z.string().max(2000).optional(),
+  modelId: z.string().max(64).optional(),
+  width: numFromString.refine((n) => n >= 64 && n <= 2048, 'width 64..2048').optional(),
+  height: numFromString.refine((n) => n >= 64 && n <= 2048, 'height 64..2048').optional(),
+  numFrames: numFromString.refine((n) => n >= 1 && n <= 1024, 'numFrames 1..1024').optional(),
+  fps: numFromString.refine((n) => n >= 1 && n <= 60, 'fps 1..60').optional(),
+  steps: numFromString.refine((n) => n >= 1 && n <= 200, 'steps 1..200').optional(),
+  guidanceScale: numFromString.refine((n) => n >= 0 && n <= 30, 'guidanceScale 0..30').optional(),
+  seed: numFromString.refine((n) => n >= 0, 'seed >= 0').optional(),
+  tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
+  disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
+  sourceImageFile: z.string().max(512).optional(),
+});
+
 router.get('/status', asyncHandler(async (_req, res) => {
   const s = await getSettings();
   const py = s.imageGen?.local?.pythonPath || null;
@@ -48,31 +69,39 @@ router.get('/models', (_req, res) => {
 });
 
 router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
+  const parsed = generateBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const body = parsed.data;
   const s = await getSettings();
   const pythonPath = s.imageGen?.local?.pythonPath || null;
 
   let sourceImagePath = null;
   if (req.file) {
     sourceImagePath = req.file.path;
-  } else if (req.body.sourceImageFile) {
-    const localPath = join(PATHS.images, basename(req.body.sourceImageFile));
-    if (existsSync(localPath)) sourceImagePath = localPath;
+  } else if (body.sourceImageFile) {
+    // Path-traversal guard: basename() strips dirs, then resolve+prefix-check
+    // against PATHS.images so a unicode trick can't escape data/images.
+    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+    const localPath = resolvePath(join(PATHS.images, basename(body.sourceImageFile)));
+    if (localPath.startsWith(imagesRoot) && existsSync(localPath)) sourceImagePath = localPath;
   }
 
   const result = await generateVideo({
     pythonPath,
-    prompt: req.body.prompt,
-    negativePrompt: req.body.negativePrompt || '',
-    modelId: req.body.modelId,
-    width: req.body.width,
-    height: req.body.height,
-    numFrames: req.body.numFrames,
-    fps: req.body.fps,
-    steps: req.body.steps,
-    guidanceScale: req.body.guidanceScale,
-    seed: req.body.seed,
-    tiling: req.body.tiling || 'auto',
-    disableAudio: req.body.disableAudio === 'true' || req.body.disableAudio === true,
+    prompt: body.prompt,
+    negativePrompt: body.negativePrompt || '',
+    modelId: body.modelId,
+    width: body.width,
+    height: body.height,
+    numFrames: body.numFrames,
+    fps: body.fps,
+    steps: body.steps,
+    guidanceScale: body.guidanceScale,
+    seed: body.seed,
+    tiling: body.tiling || 'auto',
+    disableAudio: body.disableAudio === true || body.disableAudio === 'true',
     sourceImagePath,
   });
 
