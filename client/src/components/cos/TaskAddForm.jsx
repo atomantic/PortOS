@@ -6,7 +6,7 @@ import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
 
-export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultApp = '' }) {
+export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
   const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', app: defaultApp });
   const [addToTop, setAddToTop] = useState(false);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
@@ -20,10 +20,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [attachments, setAttachments] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
-  // Compact mode (the dashboard Quick Task widget) opens with options
-  // visible so the card renders as a complete capture form. Only consulted
-  // by the "More options" toggle in the compact branch.
-  const [expanded, setExpanded] = useState(true);
+  // Compact-mode-only "More options" toggle. Callers that render in a
+  // tall container (the dashboard Quick Task widget) pass defaultExpanded
+  // so the card paints as a complete capture form on first render.
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [showTemplateSave, setShowTemplateSave] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -271,7 +271,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
           aria-expanded={expanded}
         >
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          More options
+          {expanded ? 'Fewer options' : 'More options'}
         </button>
         {expanded && (
           <div className="space-y-3 pt-1">

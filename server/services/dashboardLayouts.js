@@ -73,13 +73,14 @@ const DEFAULT_LAYOUTS = [
     name: 'Focus',
     builtIn: true,
     widgets: ['quick-task', 'upcoming-tasks', 'cos'],
-    // All three widgets above the fold. Quick-task small at top-left for
-    // capture; upcoming-tasks tall on the right (the focus list); cos
-    // below quick-task for streak/progress context.
+    // All three widgets above the fold. Quick-task is sized to show its
+    // expanded options (matches the Everything layout's h=5 capture row);
+    // upcoming-tasks tall on the right (the focus list); cos below
+    // quick-task for streak/progress context.
     grid: [
-      { id: 'quick-task',     x: 0, y: 0, w: 6, h: 2 },
-      { id: 'upcoming-tasks', x: 6, y: 0, w: 6, h: 8 },
-      { id: 'cos',            x: 0, y: 2, w: 6, h: 6 },
+      { id: 'quick-task',     x: 0, y: 0, w: 6, h: 5 },
+      { id: 'upcoming-tasks', x: 6, y: 0, w: 6, h: 10 },
+      { id: 'cos',            x: 0, y: 5, w: 6, h: 5 },
     ],
   },
   {
