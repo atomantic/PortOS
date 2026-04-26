@@ -10,6 +10,10 @@ vi.mock('../services/askConversations.js', () => ({
   appendTurn: vi.fn(),
   deleteConversation: vi.fn(),
   setPromoted: vi.fn(),
+  // The route's idSchema is built from this regex — keep it in lockstep with
+  // the real export (9-char base36 ms + 8-char hex suffix) so route-level
+  // validation in tests matches production.
+  ID_RE: /^ask_[a-z0-9]{9}_[a-f0-9]{8}$/,
 }));
 
 vi.mock('../services/askService.js', () => ({
@@ -38,7 +42,7 @@ beforeEach(() => {
 describe('GET /api/ask', () => {
   it('returns a list of conversation summaries', async () => {
     convs.listConversations.mockResolvedValue([
-      { id: 'ask_a_b', title: 'Old', mode: 'ask', turnCount: 2, createdAt: 'x', updatedAt: 'x', promoted: false },
+      { id: 'ask_lwg2x4abc_abcdef12', title: 'Old', mode: 'ask', turnCount: 2, createdAt: 'x', updatedAt: 'x', promoted: false },
     ]);
     const res = await request(makeApp()).get('/api/ask');
     expect(res.status).toBe(200);
@@ -49,47 +53,47 @@ describe('GET /api/ask', () => {
 describe('GET /api/ask/:id', () => {
   it('404s for missing conversation', async () => {
     convs.getConversation.mockResolvedValue(null);
-    const res = await request(makeApp()).get('/api/ask/ask_x_dead');
+    const res = await request(makeApp()).get('/api/ask/ask_lwg2x4abc_deadbeef');
     expect(res.status).toBe(404);
   });
 
   it('returns the conversation', async () => {
-    convs.getConversation.mockResolvedValue({ id: 'ask_x_a1', turns: [], mode: 'ask' });
-    const res = await request(makeApp()).get('/api/ask/ask_x_a1');
+    convs.getConversation.mockResolvedValue({ id: 'ask_lwg2x4abc_a1b2c3d4', turns: [], mode: 'ask' });
+    const res = await request(makeApp()).get('/api/ask/ask_lwg2x4abc_a1b2c3d4');
     expect(res.status).toBe(200);
-    expect(res.body.conversation.id).toBe('ask_x_a1');
+    expect(res.body.conversation.id).toBe('ask_lwg2x4abc_a1b2c3d4');
   });
 });
 
 describe('DELETE /api/ask/:id', () => {
   it('deletes when the service confirms', async () => {
     convs.deleteConversation.mockResolvedValue(true);
-    const res = await request(makeApp()).delete('/api/ask/ask_x_a1');
+    const res = await request(makeApp()).delete('/api/ask/ask_lwg2x4abc_a1b2c3d4');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
   });
 
   it('404s when nothing was removed', async () => {
     convs.deleteConversation.mockResolvedValue(false);
-    const res = await request(makeApp()).delete('/api/ask/ask_x_a1');
+    const res = await request(makeApp()).delete('/api/ask/ask_lwg2x4abc_a1b2c3d4');
     expect(res.status).toBe(404);
   });
 });
 
 describe('POST /api/ask/:id/promote', () => {
   it('promotes the conversation', async () => {
-    convs.setPromoted.mockResolvedValue({ id: 'ask_x_a1', promoted: true });
+    convs.setPromoted.mockResolvedValue({ id: 'ask_lwg2x4abc_a1b2c3d4', promoted: true });
     const res = await request(makeApp())
-      .post('/api/ask/ask_x_a1/promote')
+      .post('/api/ask/ask_lwg2x4abc_a1b2c3d4/promote')
       .send({ promoted: true });
     expect(res.status).toBe(200);
-    expect(convs.setPromoted).toHaveBeenCalledWith('ask_x_a1', true);
+    expect(convs.setPromoted).toHaveBeenCalledWith('ask_lwg2x4abc_a1b2c3d4', true);
   });
 
   it('404s when the conversation does not exist', async () => {
     convs.setPromoted.mockResolvedValue(null);
     const res = await request(makeApp())
-      .post('/api/ask/ask_x_a1/promote')
+      .post('/api/ask/ask_lwg2x4abc_a1b2c3d4/promote')
       .send({ promoted: true });
     expect(res.status).toBe(404);
   });
@@ -121,14 +125,14 @@ describe('POST /api/ask (validation)', () => {
     convs.getConversation.mockResolvedValue(null);
     const res = await request(makeApp())
       .post('/api/ask')
-      .send({ question: 'hi', conversationId: 'ask_x_aaaaaa' });
+      .send({ question: 'hi', conversationId: 'ask_lwg2x4abc_aaaaaaaa' });
     expect(res.status).toBe(404);
   });
 });
 
 describe('POST /api/ask (streaming happy path)', () => {
   it('streams open → sources → delta → done as SSE', async () => {
-    convs.createConversation.mockResolvedValue({ id: 'ask_new_abcdef', mode: 'ask', turns: [] });
+    convs.createConversation.mockResolvedValue({ id: 'ask_lwgnewabc_abcdef00', mode: 'ask', turns: [] });
     convs.appendTurn.mockImplementation((id, turn) => Promise.resolve({
       conversation: { id, mode: 'ask', turns: [{ ...turn, id: 'tid' }] },
       turn: { ...turn, id: 'tid' },
@@ -151,7 +155,7 @@ describe('POST /api/ask (streaming happy path)', () => {
     // by string matching rather than parsing each frame.
     const body = res.text || '';
     expect(body).toContain('event: open');
-    expect(body).toContain('"conversationId":"ask_new_abcdef"');
+    expect(body).toContain('"conversationId":"ask_lwgnewabc_abcdef00"');
     expect(body).toContain('event: sources');
     expect(body).toContain('event: delta');
     expect(body).toContain('"text":"Hi "');

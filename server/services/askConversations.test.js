@@ -35,7 +35,7 @@ describe('askConversations', () => {
     it('accepts a canonical literal id', () => {
       // Literal so the regex breaks if the format changes silently —
       // generator round-trips alone wouldn't catch a regex relaxation.
-      expect(convs.isValidId('ask_lwg2x4_abcdef12')).toBe(true);
+      expect(convs.isValidId('ask_lwg2x4abc_abcdef12')).toBe(true);
     });
 
     it('accepts ids produced by the generator', () => {
@@ -111,7 +111,7 @@ describe('askConversations', () => {
     });
 
     it('rejects unknown conversation ids', async () => {
-      await expect(convs.appendTurn('ask_zzz_dead', { role: 'user', content: 'x' })).rejects.toThrow(/not found/);
+      await expect(convs.appendTurn('ask_zzzzzzzzz_deadbeef', { role: 'user', content: 'x' })).rejects.toThrow(/not found/);
     });
   });
 

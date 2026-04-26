@@ -37,13 +37,16 @@ export const TITLE_MAX_LENGTH = 120;
 // the retrieval/provider stack via askService.
 export const VALID_MODES = new Set(['ask', 'advise', 'draft']);
 
-const ID_RE = /^ask_[a-z0-9]+_[a-f0-9]+$/;
-
 // Pad base36-ms to 9 chars (35^9 > 5e13, valid until year ~3700) so
 // filename lexical order always matches chronological order — without
 // padding, a digit rollover would make a newer id sort *before* an older
-// one and the newest-first listing would silently flip.
+// one and the newest-first listing would silently flip. The hex suffix is
+// the first 8 chars of a UUID. The regex is locked to those exact widths
+// so non-canonical ids (which would land on disk with the wrong sort key)
+// never pass validation at any layer.
 const BASE36_TS_WIDTH = 9;
+const HEX_SUFFIX_WIDTH = 8;
+export const ID_RE = new RegExp(`^ask_[a-z0-9]{${BASE36_TS_WIDTH}}_[a-f0-9]{${HEX_SUFFIX_WIDTH}}$`);
 
 function generateId() {
   const ts = Date.now().toString(36).padStart(BASE36_TS_WIDTH, '0');

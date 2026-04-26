@@ -4,10 +4,11 @@ import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, Boo
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 
-// Mirrors the server-side ID_RE in askConversations.js — used to skip
-// forwarding the optimistic 'pending' placeholder (which would 400) while
-// still letting any real persisted id pass through.
-const CONV_ID_RE = /^ask_[a-z0-9]+_[a-f0-9]+$/;
+// Mirrors the server-side ID_RE in askConversations.js (9-char base36 ms +
+// 8-char hex suffix) so this regex stays in lockstep with the production
+// generator. Used to skip forwarding the optimistic 'pending' placeholder
+// (which would 400) while still letting any real persisted id pass through.
+const CONV_ID_RE = /^ask_[a-z0-9]{9}_[a-f0-9]{8}$/;
 
 export const ASK_MODES = [
   { id: 'ask', label: 'Ask', help: 'Answer as yourself, grounded in your own notes and goals.' },

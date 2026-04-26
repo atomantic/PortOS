@@ -17,6 +17,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as convs from '../services/askConversations.js';
 import { runAsk, VALID_MODES } from '../services/askService.js';
+import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
 
 const router = Router();
 
@@ -25,7 +26,11 @@ const router = Router();
 // against multi-turn token blowup.
 const PROMPT_HISTORY_TURNS = 12;
 
-const idSchema = z.string().regex(/^ask_[a-z0-9]+_[a-f0-9]+$/, 'invalid conversation id');
+// Sourced from `askConversations.ID_RE` so the route, the storage layer, and
+// the generator are guaranteed to agree on the canonical id shape — variable-
+// width regexes here let non-canonical ids through and break listConversations'
+// lexical-sort = chronological-sort invariant.
+const idSchema = z.string().regex(CONV_ID_RE, 'invalid conversation id');
 
 const askBodySchema = z.object({
   conversationId: idSchema.optional(),
