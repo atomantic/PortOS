@@ -125,7 +125,7 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   return { bin: pythonPath, args };
 };
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Enforce the single-activeProcess invariant — without this a double-submit
@@ -242,6 +242,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // than a path-prefix check — tmpdir() can return a symlinked path
     // (macOS /var → /private/var) so startsWith() can silently miss.
     if (resizedTempPath) await unlink(resizedTempPath).catch(() => {});
+    // Cleanup the original multipart upload temp file too — without this,
+    // every i2v request leaves a file in os.tmpdir() forever.
+    if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
 
     if (code !== 0) {
       job.status = 'error';

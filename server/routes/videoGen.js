@@ -8,6 +8,7 @@
 
 import { Router } from 'express';
 import { existsSync } from 'fs';
+import { unlink } from 'fs/promises';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -78,8 +79,14 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   const pythonPath = s.imageGen?.local?.pythonPath || null;
 
   let sourceImagePath = null;
+  let uploadedTempPath = null;
   if (req.file) {
     sourceImagePath = req.file.path;
+    // Hand the multipart upload's temp path to the service so it can unlink
+    // it in the proc.on('close') cleanup — covers both the success path
+    // (after ffmpeg consumed it for resize) and the no-ffmpeg fallback path
+    // (where the python child reads it directly and we can't unlink earlier).
+    uploadedTempPath = req.file.path;
   } else if (body.sourceImageFile) {
     // Path-traversal guard: basename() strips dirs, then resolve+prefix-check
     // against PATHS.images so a unicode trick can't escape data/images.
@@ -88,24 +95,31 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
     if (localPath.startsWith(imagesRoot) && existsSync(localPath)) sourceImagePath = localPath;
   }
 
-  const result = await generateVideo({
-    pythonPath,
-    prompt: body.prompt,
-    negativePrompt: body.negativePrompt || '',
-    modelId: body.modelId,
-    width: body.width,
-    height: body.height,
-    numFrames: body.numFrames,
-    fps: body.fps,
-    steps: body.steps,
-    guidanceScale: body.guidanceScale,
-    seed: body.seed,
-    tiling: body.tiling || 'auto',
-    disableAudio: body.disableAudio === true || body.disableAudio === 'true',
-    sourceImagePath,
-  });
-
-  res.json(result);
+  try {
+    const result = await generateVideo({
+      pythonPath,
+      prompt: body.prompt,
+      negativePrompt: body.negativePrompt || '',
+      modelId: body.modelId,
+      width: body.width,
+      height: body.height,
+      numFrames: body.numFrames,
+      fps: body.fps,
+      steps: body.steps,
+      guidanceScale: body.guidanceScale,
+      seed: body.seed,
+      tiling: body.tiling || 'auto',
+      disableAudio: body.disableAudio === true || body.disableAudio === 'true',
+      sourceImagePath,
+      uploadedTempPath,
+    });
+    res.json(result);
+  } catch (err) {
+    // generateVideo threw before scheduling the proc.on('close') cleanup
+    // (e.g. PYTHON not configured, BUSY, validation) — drop the upload now.
+    if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
+    throw err;
+  }
 }));
 
 router.get('/:jobId/events', (req, res) => {

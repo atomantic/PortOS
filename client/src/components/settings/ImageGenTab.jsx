@@ -174,9 +174,11 @@ export function ImageGenTab() {
     // Local dev / loopback mirror — we can't infer the tailnet hostname
     // from the browser; tell the user to look it up.
     if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return null;
-    // Otherwise we're already on a real tailnet URL. Force https + the
-    // canonical user-facing port (:5555) regardless of how we got here.
-    return `https://${h}:5555`;
+    // Real tailnet host — use the canonical user-facing port (:5555) and
+    // match the currently-active scheme so the hint works in both HTTPS-on
+    // (Tailscale cert provisioned) and HTTP-only PortOS deployments.
+    const scheme = window.location.protocol === 'http:' ? 'http' : 'https';
+    return `${scheme}://${h}:5555`;
   })();
 
   return (
