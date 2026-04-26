@@ -178,6 +178,12 @@ export async function appendTurn(conversationId, turn) {
   if (!turn || (turn.role !== 'user' && turn.role !== 'assistant')) {
     throw new Error('Turn must include role of "user" or "assistant"');
   }
+  // Storage owns the persistence schema, so an invalid `turn.mode` shouldn't
+  // be written to disk just because a future caller bypassed the route's
+  // zod validation. Mirror the gate `createConversation` already enforces.
+  if (turn.mode != null && !VALID_MODES.has(turn.mode)) {
+    throw new Error(`Invalid mode: ${turn.mode}`);
+  }
   const stamped = {
     id: turn.id || randomUUID(),
     role: turn.role,
