@@ -21,6 +21,7 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
 
   const copy = (text, label = 'Prompt') => {
     if (!text) return;
+    if (!navigator.clipboard?.writeText) { toast.error('Clipboard unavailable on insecure context'); return; }
     navigator.clipboard.writeText(text).then(
       () => toast.success(`${label} copied`),
       () => toast.error('Copy failed')

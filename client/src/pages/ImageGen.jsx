@@ -17,7 +17,7 @@ import MediaLightbox from '../components/media/MediaLightbox';
 import { normalizeImage } from '../components/media/normalize';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
-  Dice5, Copy, AlertTriangle, X, Trash2, Film
+  Dice5, AlertTriangle, X, Film
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -41,6 +41,10 @@ const RESOLUTIONS = [
 
 const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 const MAX_SEED = 0xFFFFFFFF;
+
+function safeParseJSON(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 export default function ImageGen() {
   const navigate = useNavigate();
@@ -126,7 +130,9 @@ export default function ImageGen() {
       const es = new EventSource(`/api/image-gen/${activeJob.generationId}/events`);
       eventSourceRef.current = es;
       es.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
+        if (typeof e.data !== 'string' || !e.data.startsWith('{')) return;
+        const msg = safeParseJSON(e.data);
+        if (!msg) return;
         if (msg.type === 'status') setStatusMsg(msg.message);
         if (msg.type === 'progress') setLocalProgress({ progress: msg.progress });
         if (msg.type === 'complete' || msg.type === 'error') {
@@ -172,7 +178,9 @@ export default function ImageGen() {
       eventSourceRef.current = es;
 
       es.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
+        if (typeof ev.data !== 'string' || !ev.data.startsWith('{')) return;
+        const msg = safeParseJSON(ev.data);
+        if (!msg) return;
         if (msg.type === 'status') setStatusMsg(msg.message);
         if (msg.type === 'progress') {
           setLocalProgress({ progress: msg.progress });
@@ -291,7 +299,7 @@ export default function ImageGen() {
               : 'border-port-error/40 bg-port-error/10 text-port-error'
           }`}>
             {status.connected ? (
-              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || status.mode === 'local' ? 'mflux/local' : 'external SD API'}</>
+              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === 'local' ? 'mflux/local' : 'external SD API')}</>
             ) : (
               <>
                 <AlertTriangle className="w-3 h-3" />

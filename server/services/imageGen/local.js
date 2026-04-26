@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 
@@ -252,7 +252,7 @@ export async function listGallery() {
     let metadata = {};
     if (path) {
       const raw = await readFile(path, 'utf-8').catch(() => null);
-      if (raw) metadata = JSON.parse(raw);
+      if (raw) metadata = safeJSONParse(raw, {});
     }
     return {
       filename: f,
