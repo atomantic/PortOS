@@ -41,7 +41,10 @@ function classifyProbeError(err, peer) {
   if (code === 'ENOTFOUND') return `🌐 ❌ DNS lookup failed for ${peer.host || peer.address} — is Tailscale MagicDNS up?`;
   if (code === 'ECONNREFUSED') return `🌐 ❌ Connection refused — peer not running on this port`;
   if (code === 'EHOSTUNREACH') return `🌐 ❌ Host unreachable — Tailscale tunnel down or peer offline`;
-  if (code === 'ETIMEDOUT' || err?.name === 'AbortError') return `🌐 ⏱️ Probe timeout (${PROBE_TIMEOUT_MS}ms)`;
+  // Native fetch raises AbortError when the AbortSignal fires; insecureFetch
+  // (used for HTTPS peer hops via peerFetch) destroys the request with a
+  // plain `new Error('Request aborted')` instead — both are timeouts here.
+  if (code === 'ETIMEDOUT' || err?.name === 'AbortError' || err?.message === 'Request aborted') return `🌐 ⏱️ Probe timeout (${PROBE_TIMEOUT_MS}ms)`;
   return err?.message || String(err);
 }
 

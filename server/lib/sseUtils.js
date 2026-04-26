@@ -9,11 +9,17 @@ export const PYTHON_NOISE_RE = /xformers|xFormers|triton|Triton|bitsandbytes|Ple
 
 // Late-connecting EventSource clients sometimes re-attach during the brief
 // window between `complete` and the route teardown. Hold the SSE list open
-// for this many ms after the underlying job finishes so they get the final
-// frame instead of an immediate disconnect.
+// for this many ms after the underlying job finishes so a client that
+// connected just after the terminal broadcast still gets it (replayed from
+// `job.lastPayload`) instead of hanging until timeout.
 export const SSE_CLEANUP_DELAY_MS = 5000;
 
 export const broadcastSse = (job, payload) => {
+  // Cache the most recent payload on the job so attachSseClient can replay
+  // it to a client that connects after this fired. Without this, a client
+  // that races with `complete` would hang waiting for a frame that already
+  // shipped.
+  job.lastPayload = payload;
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
   for (const c of job.clients) c.write(msg);
 };
@@ -27,6 +33,12 @@ export const attachSseClient = (jobs, jobId, res) => {
     Connection: 'keep-alive',
   });
   job.clients.push(res);
+  // Replay the last broadcasted frame so a client that connected after a
+  // `complete`/`error` (within the SSE_CLEANUP_DELAY_MS grace window) sees
+  // the terminal state instead of an empty stream.
+  if (job.lastPayload) {
+    res.write(`data: ${JSON.stringify(job.lastPayload)}\n\n`);
+  }
   res.req.on('close', () => {
     job.clients = job.clients.filter((c) => c !== res);
   });

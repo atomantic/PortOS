@@ -176,7 +176,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps}`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta });
 
-  const proc = spawn(bin, args, { env: { ...process.env, PYTHONPATH: undefined }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // Clear PYTHONPATH so the child uses the venv's own site-packages instead
+  // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
+  // NOT unset the var — Node coerces it to the literal string "undefined" —
+  // so build the env explicitly and `delete`.
+  const childEnv = { ...process.env };
+  delete childEnv.PYTHONPATH;
+  const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
 
   let outputBuf = '';

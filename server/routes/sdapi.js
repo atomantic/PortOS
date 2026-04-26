@@ -33,10 +33,15 @@ const router = Router();
 // immediately so a fast Python child can't emit 'completed' before we're
 // listening, but the id-match check uses a registered id (set by .register()
 // once generateImage returns). 5-minute timeout matches the external client.
+// The returned `cleanup()` is exposed so the caller can detach listeners
+// even if generateImage throws before we ever resolve/reject.
 function createCompletionWaiter() {
   let registeredId = null;
   let resolve, reject;
+  // Swallow the unhandled-rejection if the caller never awaits .promise
+  // (e.g. generateImage throws and the route exits via the error path).
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  promise.catch(() => {});
   const onComplete = (ev) => { if (ev.generationId === registeredId) { cleanup(); resolve(ev); } };
   const onFailed = (ev) => { if (ev.generationId === registeredId) { cleanup(); reject(new ServerError(ev.error || 'Generation failed', { status: 500, code: 'GEN_FAILED' })); } };
   const timer = setTimeout(() => { cleanup(); reject(new ServerError('Generation timed out', { status: 504, code: 'GEN_TIMEOUT' })); }, 5 * 60 * 1000);
@@ -47,7 +52,7 @@ function createCompletionWaiter() {
   };
   imageGenEvents.on('completed', onComplete);
   imageGenEvents.on('failed', onFailed);
-  return { register: (id) => { registeredId = id; }, promise };
+  return { register: (id) => { registeredId = id; }, promise, cleanup };
 }
 
 const ensureExposed = async () => {
@@ -187,29 +192,42 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   const mode = await getMode();
   const localWait = mode === 'local'
     ? createCompletionWaiter()
-    : { register: () => {}, promise: Promise.resolve() };
+    : { register: () => {}, promise: Promise.resolve(), cleanup: () => {} };
 
-  const result = await generateImage({
-    prompt,
-    negativePrompt: negative_prompt,
-    modelId,
-    width,
-    height,
-    steps,
-    cfgScale: cfg_scale,
-    seed: seed != null && seed >= 0 ? Number(seed) : undefined,
-  });
+  let result;
+  try {
+    result = await generateImage({
+      prompt,
+      negativePrompt: negative_prompt,
+      modelId,
+      width,
+      height,
+      steps,
+      cfgScale: cfg_scale,
+      seed: seed != null && seed >= 0 ? Number(seed) : undefined,
+    });
+  } catch (err) {
+    // Detach the waiter listeners + clear the timeout if generateImage
+    // threw before we even registered (provider misconfigured / busy).
+    localWait.cleanup();
+    throw err;
+  }
 
   localWait.register(result.generationId);
   await localWait.promise;
 
   // A1111 clients expect base64-encoded images in `images: []`. Read the
-  // file we just wrote (the dispatcher saved it under data/images/) and
-  // hand it back — slightly wasteful, but it keeps client compatibility.
+  // file the dispatcher saved under data/images/. If the read fails AFTER
+  // we already awaited completion, that's a real internal error — surface
+  // it with a 5xx instead of returning images:[] (which A1111 clients
+  // silently treat as a no-op).
   const filePath = join(PATHS.images, result.filename);
   const buf = await readFile(filePath).catch(() => null);
+  if (!buf) {
+    throw new ServerError(`Generation completed but ${result.filename} could not be read`, { status: 500, code: 'GEN_OUTPUT_MISSING' });
+  }
   res.json({
-    images: buf ? [buf.toString('base64')] : [],
+    images: [buf.toString('base64')],
     parameters: { prompt, negative_prompt, width, height, steps, cfg_scale, seed },
     info: JSON.stringify({
       prompt,
