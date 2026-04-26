@@ -513,18 +513,29 @@ export function formatBytes(bytes) {
 // Size in bytes of every file under `path`. Shells out to `du -sk` (or
 // PowerShell on Windows) — orders of magnitude faster than walking with
 // node's recursive readdir on large trees (hundreds of GB / 200k+ files).
+// Returns 0 + logs on failure (missing tool, permission denied, timeout) so
+// the Media Models endpoint stays responsive even on unusual systems instead
+// of throwing and 500ing the whole route.
 export async function dirSize(path) {
   if (!existsSync(path)) return 0;
   if (IS_WIN) {
     // Pass the path via an env var so a literal apostrophe in the path can't
     // close the PowerShell string and inject commands.
-    const { stdout } = await execFileAsync('powershell', [
+    const result = await execFileAsync('powershell', [
       '-NoProfile', '-Command',
       '(Get-ChildItem -Recurse -File $Env:DIRSIZE_TARGET | Measure-Object -Property Length -Sum).Sum',
-    ], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, DIRSIZE_TARGET: path } });
-    return parseInt(stdout.trim(), 10) || 0;
+    ], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, DIRSIZE_TARGET: path } }).catch((err) => ({ error: err }));
+    if (result.error) {
+      console.log(`⚠️ dirSize(${path}) failed: ${result.error.message}`);
+      return 0;
+    }
+    return parseInt(result.stdout.trim(), 10) || 0;
   }
-  const { stdout } = await execFileAsync('du', ['-sk', path], { encoding: 'utf8', timeout: 60_000 });
-  const kb = parseInt(stdout.split('\t')[0], 10) || 0;
+  const result = await execFileAsync('du', ['-sk', path], { encoding: 'utf8', timeout: 60_000 }).catch((err) => ({ error: err }));
+  if (result.error) {
+    console.log(`⚠️ dirSize(${path}) failed: ${result.error.message}`);
+    return 0;
+  }
+  const kb = parseInt(result.stdout.split('\t')[0], 10) || 0;
   return kb * 1024;
 }

@@ -35,6 +35,22 @@ const APP_MODELS = {
   'mlx-community--gemma-3-12b-it-4bit': 'Gemma 3 12B 4-bit (Text Encoder)',
 };
 
+// Bound concurrent dirSize calls — each one spawns a `du` (or PowerShell)
+// child, and a hub with 50+ models would otherwise create a process storm
+// that stalls the API.
+async function mapWithConcurrency(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }));
+  return results;
+}
+
 router.get('/', asyncHandler(async (_req, res) => {
   const hubDir = HF_HUB_DIR();
 
@@ -43,7 +59,7 @@ router.get('/', asyncHandler(async (_req, res) => {
     : [];
 
   const [models, loras, totalImages, totalVideos] = await Promise.all([
-    Promise.all(entries.map(async (dirName) => {
+    mapWithConcurrency(entries, 4, async (dirName) => {
       const fullPath = join(hubDir, dirName);
       const modelKey = dirName.replace('models--', '');
       const [org, ...nameParts] = modelKey.split('--');
@@ -58,7 +74,7 @@ router.get('/', asyncHandler(async (_req, res) => {
         size,
         sizeHuman: formatBytes(size),
       };
-    })),
+    }),
     (async () => {
       const out = [];
       if (!existsSync(PATHS.loras)) return out;

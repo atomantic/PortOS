@@ -11,9 +11,13 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CERT_PATH = join(ROOT, 'data', 'certs', 'cert.pem');
+const KEY_PATH = join(ROOT, 'data', 'certs', 'key.pem');
 const API_PORT = Number(process.env.PORT) || 5555;
 const HTTP_LOOPBACK_PORT = Number(process.env.PORTOS_HTTP_PORT) || 5553;
-const HTTPS_MODE = existsSync(CERT_PATH);
+// The server only enables HTTPS when BOTH cert and key exist (matches
+// lib/tailscale-https.js loadCert) — checking only cert.pem would falsely
+// route to the loopback mirror during a half-finished setup:cert.
+const HTTPS_MODE = existsSync(CERT_PATH) && existsSync(KEY_PATH);
 
 // When HTTPS is on, :5555 speaks TLS only — plain http:// requests hit a TLS
 // mismatch and time out. The loopback HTTP mirror on :5553 serves the same

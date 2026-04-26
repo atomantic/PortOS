@@ -83,6 +83,13 @@ const generateThumbnail = async (videoPath, jobId) => {
   return new Promise((resolve) => {
     const proc = spawn(ffmpeg, ['-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath], { stdio: 'ignore' });
     proc.on('close', (code) => resolve(code === 0 ? thumbFilename : null));
+    // Without this, a stale ffmpeg path or permission error emits 'error'
+    // (never 'close') and the Promise never settles — the entire video gen
+    // close handler that awaits this would hang forever.
+    proc.on('error', (err) => {
+      console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${err.message}`);
+      resolve(null);
+    });
   });
 };
 
@@ -282,6 +289,9 @@ export async function extractLastFrame(historyId) {
       console.log(`🎞️ Extracted last frame: ${frameFilename}`);
       resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
     });
+    proc.on('error', (err) => {
+      reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));
+    });
   });
 }
 
@@ -318,6 +328,7 @@ export async function stitchVideos(videoIds) {
     await new Promise((resolve, reject) => {
       const proc = spawn(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { stdio: 'ignore' });
       proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
+      proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
     });
   } finally {
     await unlink(listFile).catch(() => {});
