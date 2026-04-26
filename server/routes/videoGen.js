@@ -37,18 +37,27 @@ const sourceImageUpload = uploadSingle('sourceImage', {
 // Multipart bodies arrive as strings; coerce numerics in the schema. The
 // service layer also coerces, but validating at the route boundary catches
 // out-of-range / wrong-type input before any work happens.
-const numFromString = z.preprocess((v) => v == null || v === '' ? undefined : Number(v), z.number());
+//
+// `optional()` lives INSIDE the preprocess wrapper so that the inner schema
+// (`z.number()`) actually receives `undefined` rather than failing with
+// "received undefined". With the optional() on the outside the empty-string
+// branch was unreachable — preprocess returned undefined and z.number()
+// rejected it before optional() ever saw the result.
+const optionalNum = (min, max, label) => z.preprocess(
+  (v) => v == null || v === '' ? undefined : Number(v),
+  z.number().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
+);
 const generateBodySchema = z.object({
   prompt: z.string().min(1).max(2000),
   negativePrompt: z.string().max(2000).optional(),
   modelId: z.string().max(64).optional(),
-  width: numFromString.refine((n) => n >= 64 && n <= 2048, 'width 64..2048').optional(),
-  height: numFromString.refine((n) => n >= 64 && n <= 2048, 'height 64..2048').optional(),
-  numFrames: numFromString.refine((n) => n >= 1 && n <= 1024, 'numFrames 1..1024').optional(),
-  fps: numFromString.refine((n) => n >= 1 && n <= 60, 'fps 1..60').optional(),
-  steps: numFromString.refine((n) => n >= 1 && n <= 200, 'steps 1..200').optional(),
-  guidanceScale: numFromString.refine((n) => n >= 0 && n <= 30, 'guidanceScale 0..30').optional(),
-  seed: numFromString.refine((n) => n >= 0, 'seed >= 0').optional(),
+  width: optionalNum(64, 2048, 'width'),
+  height: optionalNum(64, 2048, 'height'),
+  numFrames: optionalNum(1, 1024, 'numFrames'),
+  fps: optionalNum(1, 60, 'fps'),
+  steps: optionalNum(1, 200, 'steps'),
+  guidanceScale: optionalNum(0, 30, 'guidanceScale'),
+  seed: optionalNum(0, Number.MAX_SAFE_INTEGER, 'seed'),
   tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
   disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),

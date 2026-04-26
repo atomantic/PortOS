@@ -104,7 +104,9 @@ export default function VideoGen() {
       .then((s) => {
         setStatus(s);
         setModels(s.models || []);
-        if (s.defaultModel && !modelId) setModelId(s.defaultModel);
+        // Functional update so a stale `modelId` closure can't reset the
+        // user's selected model on a refresh — only set when no choice yet.
+        if (s.defaultModel) setModelId((prev) => prev || s.defaultModel);
       })
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
       .finally(() => setStatusLoading(false));

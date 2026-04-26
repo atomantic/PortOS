@@ -21,10 +21,17 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
   const refreshCheck = useCallback(async (path) => {
     if (!path) { setCheck(null); return; }
     setChecking(true);
-    const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(path)}`);
-    setChecking(false);
-    if (!res.ok) { setCheck(null); return; }
-    setCheck(await res.json());
+    try {
+      const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(path)}`);
+      if (!res.ok) { setCheck(null); return; }
+      setCheck(await res.json());
+    } catch {
+      // Server down / offline — clear the check rather than getting stuck
+      // in a perpetual "Checking…" state.
+      setCheck(null);
+    } finally {
+      setChecking(false);
+    }
   }, []);
 
   // Debounce typing in the path input so we don't spawn a python subprocess

@@ -543,7 +543,7 @@ export function initSocket(io) {
   setupLoopEventForwarding();
 
   // Set up image generation event forwarding
-  setupImageGenEventForwarding();
+  setupMediaGenEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -772,11 +772,12 @@ function setupLoopEventForwarding() {
   loopEvents.on('output', (data) => broadcastToLoops('loop:output', data));
 }
 
-// Set up image generation event forwarding — broadcast to all clients
-let imageGenForwardingSetup = false;
-function setupImageGenEventForwarding() {
-  if (imageGenForwardingSetup) return;
-  imageGenForwardingSetup = true;
+// Bridge both image-gen AND video-gen events from their internal EventEmitters
+// onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
+let mediaGenForwardingSetup = false;
+function setupMediaGenEventForwarding() {
+  if (mediaGenForwardingSetup) return;
+  mediaGenForwardingSetup = true;
   imageGenEvents.on('started', (data) => {
     if (ioInstance) ioInstance.emit('image-gen:started', data);
   });
