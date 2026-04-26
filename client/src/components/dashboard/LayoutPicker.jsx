@@ -81,7 +81,7 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
       {open && (
         <div
           aria-label="Dashboard layout menu"
-          className={`mt-1 w-56 max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-lg shadow-2xl overflow-hidden z-50 ${menuPos ? '' : 'absolute right-0'}`}
+          className={`w-56 max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-lg shadow-2xl overflow-hidden z-50 ${menuPos ? '' : 'absolute right-0 mt-1'}`}
           style={menuPos || undefined}
         >
           <div className="py-1">
