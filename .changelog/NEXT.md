@@ -1,5 +1,9 @@
 # Next Release
 
+## Changed
+
+- **Death Clock now multi-color in every surface (DRY)** — extracted the colored 7-unit countdown from `CompactCountdown` in MeatSpace's Overview tab into a shared `DeathClockCountdown` component used by the Dashboard widget, the Ambient/fullscreen view, and MeatSpace itself. The values are now colored consistently (years/months/weeks/days/hours/minutes/seconds → blue/purple/teal/green/yellow/orange/red) with a `size` prop ('sm' for the dashboard widget, 'md' for the MeatSpace hero, 'lg' for Ambient) so each surface picks its own type scale without duplicating the unit/color list. Adds weeks to the Dashboard widget and Ambient view (was 6 units, now 7) to match the MeatSpace layout. Files: `client/src/components/DeathClockCountdown.jsx` (new), `client/src/components/DeathClockWidget.jsx` (use shared), `client/src/pages/Ambient.jsx` (use shared), `client/src/components/meatspace/tabs/OverviewTab.jsx` (use shared).
+
 ## Fixed
 
 - **Codex 5.5 review round 1: navigation + lint + bundle** — addressed the four "Next 1-2 Days" items from `CODEX5.5_REVIEW.md`.
