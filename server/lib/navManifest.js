@@ -5,9 +5,11 @@
 
 export const NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
+  { id: 'nav.ask', path: '/ask', label: 'Ask Yourself', section: 'Main', aliases: ['ask', 'ask-yourself', 'twin-chat'], keywords: ['chat', 'twin', 'conversation', 'advise', 'draft'] },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
   { id: 'nav.cybercity', path: '/city', label: 'CyberCity', section: 'Main', aliases: ['city', 'cybercity'], keywords: ['3d', 'visualization'] },
   { id: 'nav.character', path: '/character', label: 'Character', section: 'Main', aliases: ['character'] },
+  { id: 'nav.image-gen', path: '/image-gen', label: 'Image Gen', section: 'Main', aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw'] },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'Main', aliases: ['data'] },
   { id: 'nav.goals', path: '/goals/list', label: 'Goals', section: 'Main', aliases: ['goals'] },
   { id: 'nav.insights', path: '/insights/overview', label: 'Insights', section: 'Main', aliases: ['insights'] },
@@ -102,7 +104,7 @@ export const NAV_COMMANDS = [
 
   { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['settings', 'backup'] },
   { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
-  { id: 'nav.settings.image-gen', path: '/settings/image-gen', label: 'Image Gen', section: 'Settings', aliases: ['image-gen'] },
+  { id: 'nav.settings.image-gen', path: '/settings/image-gen', label: 'Image Gen', section: 'Settings', aliases: ['image-gen-settings', 'sd-settings'] },
   { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', aliases: ['settings-telegram', 'telegram'] },
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice'] },
   { id: 'nav.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', aliases: ['prompts'] },

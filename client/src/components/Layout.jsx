@@ -96,6 +96,7 @@ const navItems = [
   { to: '/city', label: 'CyberCity', icon: Building2, single: true },
   { separator: true },
   { label: 'Apps', icon: Package, dynamic: 'apps', children: [] },
+  { to: '/ask', label: 'Ask Yourself', icon: MessageCircle, single: true },
   {
     label: 'Brain',
     icon: Brain,
@@ -189,6 +190,7 @@ const navItems = [
     ]
   },
   { to: '/goals/list', label: 'Goals', icon: Target, single: true },
+  { to: '/image-gen', label: 'Image Gen', icon: ImageIcon, single: true },
   { to: '/insights/overview', label: 'Insights', icon: Lightbulb, single: true },
   {
     label: 'MeatSpace',

@@ -77,6 +77,7 @@ import characterRoutes from './routes/character.js';
 import toolsRoutes from './routes/tools.js';
 import imageGenRoutes from './routes/imageGen.js';
 import openclawRoutes from './routes/openclaw.js';
+import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
 import { backfillOriginInstanceId } from './services/brainStorage.js';
@@ -301,6 +302,7 @@ app.use('/api/character', characterRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/image-gen', imageGenRoutes);
 app.use('/api/openclaw', openclawRoutes);
+app.use('/api/ask', askRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
