@@ -38,10 +38,17 @@ export async function checkConnection() {
 export async function generateImage(params) {
   const s = await getSettings();
   const mode = cfg(s).mode || DEFAULT_MODE;
-  if (mode === 'local') {
-    return local.generateImage({ pythonPath: pythonPath(s), ...params });
+  // Param normalization: A1111 clients (and the /sdapi/v1/txt2img bridge)
+  // send `cfgScale`; local mflux reads `guidance`. Map cfgScale -> guidance
+  // when guidance is not explicitly set so both spellings work in both modes.
+  const normalized = { ...params };
+  if (normalized.guidance == null && normalized.cfgScale != null) {
+    normalized.guidance = normalized.cfgScale;
   }
-  return external.generateImage({ sdapiUrl: sdapiUrl(s), ...params });
+  if (mode === 'local') {
+    return local.generateImage({ pythonPath: pythonPath(s), ...normalized });
+  }
+  return external.generateImage({ sdapiUrl: sdapiUrl(s), ...normalized });
 }
 
 const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';

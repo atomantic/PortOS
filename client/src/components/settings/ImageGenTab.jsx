@@ -140,7 +140,20 @@ export function ImageGenTab() {
 
   if (loading) return <BrailleSpinner text="Loading image gen settings" />;
 
-  const tailnetHost = typeof window !== 'undefined' ? window.location.host : 'this-host';
+  // The advertised A1111 URL must be the canonical user-facing endpoint
+  // (`<tailscale-host>.<tailnet>.ts.net:5555` / `<tailscale-ip>:5555`), not
+  // the loopback HTTP mirror at :5553 or a localhost dev URL — those aren't
+  // reachable from other tailnet machines.
+  const advertisedA1111Url = (() => {
+    if (typeof window === 'undefined') return null;
+    const h = window.location.hostname;
+    // Local dev / loopback mirror — we can't infer the tailnet hostname
+    // from the browser; tell the user to look it up.
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return null;
+    // Otherwise we're already on a real tailnet URL. Force https + the
+    // canonical user-facing port (:5555) regardless of how we got here.
+    return `https://${h}:5555`;
+  })();
 
   return (
     <div className="space-y-5">
@@ -264,7 +277,11 @@ export function ImageGenTab() {
               <AlertTriangle className="w-3 h-3" /> Anyone with tailnet access to this host can hit the API. PortOS does not authenticate.
             </div>
             <div className="text-gray-400">
-              Other machines should set their SD API URL to <code className="text-gray-300">{`${window.location.protocol}//${tailnetHost}`}</code>
+              {advertisedA1111Url ? (
+                <>Other machines should set their SD API URL to <code className="text-gray-300">{advertisedA1111Url}</code></>
+              ) : (
+                <>Other machines should set their SD API URL to <code className="text-gray-300">https://&lt;your-tailscale-host&gt;:5555</code> (run <code className="text-gray-300">tailscale status</code> on this machine to see the hostname).</>
+              )}
             </div>
           </div>
         )}
