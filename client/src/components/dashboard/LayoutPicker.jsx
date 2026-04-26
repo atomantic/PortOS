@@ -37,16 +37,18 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
       // If aligning the dropdown's right edge with the button's right edge
       // would clip the left side, anchor it to the viewport's right edge
       // instead via fixed positioning.
-      if (rect.right - desiredWidth < padding) {
-        setMenuPos({
-          position: 'fixed',
-          top: rect.bottom + 4,
-          right: padding,
-          left: 'auto',
-        });
-      } else {
-        setMenuPos(null);
-      }
+      const next = rect.right - desiredWidth < padding
+        ? { position: 'fixed', top: rect.bottom + 4, right: padding, left: 'auto' }
+        : null;
+      // Same-reference updater short-circuits when nothing changed so the
+      // capture-phase scroll listener doesn't trigger a re-render every
+      // pixel — important on mobile where this fires at touch-scroll rate.
+      setMenuPos((prev) => {
+        if (prev === next) return prev;
+        if (!prev || !next) return next;
+        if (prev.top === next.top && prev.right === next.right) return prev;
+        return next;
+      });
     };
     compute();
     window.addEventListener('resize', compute);
