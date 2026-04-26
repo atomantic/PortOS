@@ -17,7 +17,7 @@
     "node-pty": "1.2.0-beta.10",
     "pg": "8.19.0",
     "pm2": "5.4.3",
-    "portos-ai-toolkit": "0.8.0",
+    "portos-ai-toolkit": "0.8.3",
     "sax": "1.4.4",
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
