@@ -211,8 +211,12 @@ export default function Ask() {
   }, [conversationId]);
 
   // Separately, kill any in-flight stream on real unmount so we don't leak
-  // a fetch + state-update closure into a torn-down tree.
+  // a fetch + state-update closure into a torn-down tree. `mountedRef` is
+  // checked from `handleSend`'s post-stream cleanup so it can skip state
+  // writes if we get there after unmount.
+  const mountedRef = useRef(true);
   useEffect(() => () => {
+    mountedRef.current = false;
     abortRef.current?.abort();
     abortRef.current = null;
     streamingConvIdRef.current = null;
@@ -353,12 +357,19 @@ export default function Ask() {
     }
 
     const wasAborted = controller.signal.aborted;
+    // Bail early if the component unmounted — calling setState on an
+    // unmounted tree is what we're trying to avoid here. Aborts that come
+    // from in-component navigation (still mounted) keep cleaning up so the
+    // streaming UI clears when the user returns to this conversation.
+    if (!mountedRef.current) return;
+
     setStreamingTurn(null);
     if (abortRef.current === controller) abortRef.current = null;
     streamingConvIdRef.current = null;
 
-    // Skip post-stream state writes if the user navigated/unmounted — those
-    // updates would land in a stale conversation.
+    // Skip the post-stream business logic (rollback / append) if the abort
+    // was caused by navigation — those updates would land in a stale
+    // conversation that the user is no longer looking at.
     if (wasAborted) return;
 
     // If the stream failed before the server even acknowledged it (network
