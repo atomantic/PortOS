@@ -20,7 +20,10 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [attachments, setAttachments] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  // Compact mode (the dashboard Quick Task widget) opens with options
+  // visible so the card renders as a complete capture form. Only consulted
+  // by the "More options" toggle in the compact branch.
+  const [expanded, setExpanded] = useState(true);
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [showTemplateSave, setShowTemplateSave] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);

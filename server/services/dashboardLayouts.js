@@ -41,29 +41,31 @@ const DEFAULT_LAYOUTS = [
       'proactive-alerts', 'review-hub', 'system-health', 'backup', 'death-clock', 'quick-stats', 'decision-log',
       'activity-streak', 'hourly-activity',
     ],
-    // Above-the-fold (rows 0–7): capture row + the 3 most-glanced widgets
-    // (system-health, cos, upcoming-tasks). Everything else stacks below.
+    // Above-the-fold capture row stretches to h=5 so the Quick Task card
+    // can show its expanded options (worktree/PR/simplify/etc.) without
+    // forcing a "More options" click. Quick-brain stays small and
+    // upcoming-tasks aligns with the taller capture cards.
     grid: [
-      // Row 0–1: capture row + tasks
+      // Row 0–4: capture row + tasks
       { id: 'quick-brain',      x: 0,  y: 0,  w: 3, h: 2 },
-      { id: 'quick-task',       x: 3,  y: 0,  w: 5, h: 2 },
-      { id: 'upcoming-tasks',   x: 8,  y: 0,  w: 4, h: 4 },
-      // Row 2–6: primary monitoring + alerts
-      { id: 'system-health',    x: 0,  y: 2,  w: 5, h: 5 },
-      { id: 'proactive-alerts', x: 5,  y: 2,  w: 3, h: 3 },
-      { id: 'death-clock',      x: 8,  y: 4,  w: 4, h: 2 },
-      { id: 'review-hub',       x: 5,  y: 5,  w: 3, h: 2 },
-      { id: 'activity-streak',  x: 9,  y: 6,  w: 3, h: 3 },
-      // Row 7–10: secondary widgets
-      { id: 'backup',           x: 0,  y: 7,  w: 3, h: 4 },
-      { id: 'quick-stats',      x: 3,  y: 7,  w: 3, h: 3 },
-      { id: 'goal-progress',    x: 6,  y: 7,  w: 3, h: 4 },
-      // Row 11–14: lower-priority + cos
-      { id: 'decision-log',     x: 0,  y: 11, w: 4, h: 2 },
-      { id: 'cos',              x: 4,  y: 11, w: 5, h: 4 },
-      // Row 15+: full-width visualizations + apps
-      { id: 'hourly-activity',  x: 0,  y: 15, w: 12, h: 3 },
-      { id: 'apps',             x: 0,  y: 18, w: 12, h: 8 },
+      { id: 'quick-task',       x: 3,  y: 0,  w: 5, h: 5 },
+      { id: 'upcoming-tasks',   x: 8,  y: 0,  w: 4, h: 5 },
+      // Row 5–9: primary monitoring + alerts
+      { id: 'system-health',    x: 0,  y: 5,  w: 5, h: 5 },
+      { id: 'proactive-alerts', x: 5,  y: 5,  w: 3, h: 3 },
+      { id: 'death-clock',      x: 8,  y: 5,  w: 4, h: 2 },
+      { id: 'review-hub',       x: 5,  y: 8,  w: 3, h: 2 },
+      { id: 'activity-streak',  x: 8,  y: 7,  w: 4, h: 3 },
+      // Row 10–13: secondary widgets
+      { id: 'backup',           x: 0,  y: 10, w: 3, h: 4 },
+      { id: 'quick-stats',      x: 3,  y: 10, w: 3, h: 3 },
+      { id: 'goal-progress',    x: 6,  y: 10, w: 3, h: 4 },
+      // Row 14–17: lower-priority + cos
+      { id: 'decision-log',     x: 0,  y: 14, w: 4, h: 2 },
+      { id: 'cos',              x: 4,  y: 14, w: 5, h: 4 },
+      // Row 18+: full-width visualizations + apps
+      { id: 'hourly-activity',  x: 0,  y: 18, w: 12, h: 3 },
+      { id: 'apps',             x: 0,  y: 21, w: 12, h: 8 },
     ],
   },
   {
