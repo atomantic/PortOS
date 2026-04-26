@@ -22,11 +22,33 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
-import { generateImage, getMode } from '../services/imageGen/index.js';
+import { generateImage, getMode, getActiveJob } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
+import { imageGenEvents } from '../services/imageGenEvents.js';
 import { listVideoModels, defaultVideoModelId } from '../services/videoGen/local.js';
 
 const router = Router();
+
+// Build a completion waiter for a future generationId. Listeners attach
+// immediately so a fast Python child can't emit 'completed' before we're
+// listening, but the id-match check uses a registered id (set by .register()
+// once generateImage returns). 5-minute timeout matches the external client.
+function createCompletionWaiter() {
+  let registeredId = null;
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  const onComplete = (ev) => { if (ev.generationId === registeredId) { cleanup(); resolve(ev); } };
+  const onFailed = (ev) => { if (ev.generationId === registeredId) { cleanup(); reject(new ServerError(ev.error || 'Generation failed', { status: 500, code: 'GEN_FAILED' })); } };
+  const timer = setTimeout(() => { cleanup(); reject(new ServerError('Generation timed out', { status: 504, code: 'GEN_TIMEOUT' })); }, 5 * 60 * 1000);
+  const cleanup = () => {
+    clearTimeout(timer);
+    imageGenEvents.off('completed', onComplete);
+    imageGenEvents.off('failed', onFailed);
+  };
+  imageGenEvents.on('completed', onComplete);
+  imageGenEvents.on('failed', onFailed);
+  return { register: (id) => { registeredId = id; }, promise };
+}
 
 const ensureExposed = async () => {
   const s = await getSettings();
@@ -90,19 +112,33 @@ router.get('/portos/video-models', (_req, res) => {
 });
 
 // Live progress — A1111 clients poll this every ~500ms while a generation is
-// running. We don't have a perfect "live current_image" preview when running
-// in local mode (the model never streams partial latents to disk), so we
-// report progress=0 until completion. For the external pass-through mode,
-// the upstream SD already exposes this and clients can talk to that directly.
-router.get('/progress', (_req, res) => {
+// running. The dispatcher's getActiveJob() surfaces the current generation
+// snapshot for both modes (local mflux emits stepwise frames as currentImage
+// base64; external SD polls the upstream /progress endpoint). When nothing
+// is in flight we return a "no active job" payload that A1111 clients
+// understand as idle.
+router.get('/progress', asyncHandler(async (_req, res) => {
+  const job = await getActiveJob();
+  if (!job) {
+    return res.json({
+      progress: 0,
+      eta_relative: 0,
+      state: { sampling_step: 0, sampling_steps: 0 },
+      current_image: null,
+      textinfo: 'PortOS — no active generation',
+    });
+  }
   res.json({
-    progress: 0,
+    progress: typeof job.progress === 'number' ? job.progress : 0,
     eta_relative: 0,
-    state: { sampling_step: 0, sampling_steps: 0 },
-    current_image: null,
-    textinfo: 'PortOS — call /sdapi/v1/txt2img to start a job',
+    state: {
+      sampling_step: typeof job.step === 'number' ? job.step : 0,
+      sampling_steps: typeof job.totalSteps === 'number' ? job.totalSteps : 0,
+    },
+    current_image: job.currentImage || null,
+    textinfo: `PortOS — ${job.mode || 'unknown'} mode${job.modelId ? ` (${job.modelId})` : ''}`,
   });
-});
+}));
 
 // Mirror imageGen.js's generateSchema bounds — A1111 clients can be sloppy
 // (e.g. defaulting steps=999 from a preset) and we want a clear 400 instead
@@ -142,6 +178,17 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
     modelId = sd_model_checkpoint.replace(/^portos-local-/, '').split(' ')[0];
   }
 
+  // In local mode generateImage returns the moment the Python child is
+  // spawned — the file isn't on disk yet. Subscribe to the completion event
+  // BEFORE calling generateImage so a fast job (cached weights, low steps)
+  // can't fire before we attach. External mode awaits internally and the
+  // file is on disk by the time generateImage resolves, so the wait is a
+  // no-op there.
+  const mode = await getMode();
+  const localWait = mode === 'local'
+    ? createCompletionWaiter()
+    : { register: () => {}, promise: Promise.resolve() };
+
   const result = await generateImage({
     prompt,
     negativePrompt: negative_prompt,
@@ -152,6 +199,9 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
     cfgScale: cfg_scale,
     seed: seed != null && seed >= 0 ? Number(seed) : undefined,
   });
+
+  localWait.register(result.generationId);
+  await localWait.promise;
 
   // A1111 clients expect base64-encoded images in `images: []`. Read the
   // file we just wrote (the dispatcher saved it under data/images/) and
