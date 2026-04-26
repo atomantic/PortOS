@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import { getSettings, updateSettings } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
@@ -79,6 +79,13 @@ const PageLoader = () => (
     <BrailleSpinner text="Loading" />
   </div>
 );
+
+// Preserve query string when redirecting legacy media routes — Settings.jsx's
+// /image-gen?settings=1 chain depends on ?settings=1 reaching the new path.
+function RedirectWithSearch({ to }) {
+  const { search } = useLocation();
+  return <Navigate to={`${to}${search}`} replace />;
+}
 
 // Force full reload on HMR — partial hot-replacement of the route tree
 // causes stale lazy imports and React Router errors on nested paths
@@ -177,10 +184,10 @@ export default function App() {
             <Route path="history" element={<MediaHistory />} />
             <Route path="models" element={<MediaModels />} />
           </Route>
-          <Route path="image-gen" element={<Navigate to="/media/image" replace />} />
-          <Route path="video-gen" element={<Navigate to="/media/video" replace />} />
-          <Route path="media-history" element={<Navigate to="/media/history" replace />} />
-          <Route path="media-models" element={<Navigate to="/media/models" replace />} />
+          <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
+          <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
+          <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
+          <Route path="media-models" element={<RedirectWithSearch to="/media/models" />} />
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="agents" element={<Agents />} />
