@@ -214,7 +214,12 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   }
 
   localWait.register(result.generationId);
-  await localWait.promise;
+  // Local mode: the completion event carries the actual seed used (mflux
+  // generates a random one when the client didn't pass one). External mode
+  // returns Promise.resolve() with no payload — fall back to result.seed
+  // (which providers populate from their own response when available) and
+  // finally to the request seed.
+  const completionEvent = await localWait.promise;
 
   // A1111 clients expect base64-encoded images in `images: []`. Read the
   // file the dispatcher saved under data/images/. If the read fails AFTER
@@ -226,13 +231,14 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   if (!buf) {
     throw new ServerError(`Generation completed but ${result.filename} could not be read`, { status: 500, code: 'GEN_OUTPUT_MISSING' });
   }
+  const actualSeed = completionEvent?.seed ?? result.seed ?? seed;
   res.json({
     images: [buf.toString('base64')],
-    parameters: { prompt, negative_prompt, width, height, steps, cfg_scale, seed },
+    parameters: { prompt, negative_prompt, width, height, steps, cfg_scale, seed: actualSeed },
     info: JSON.stringify({
       prompt,
       negative_prompt,
-      seed: result.seed ?? seed,
+      seed: actualSeed,
       model: result.model || sd_model_checkpoint,
       width,
       height,

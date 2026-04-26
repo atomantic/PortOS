@@ -225,12 +225,14 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}`);
       const result = { filename, seed: actualSeed, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
+      // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
+      // (mflux generates a random one if the client didn't pass one).
+      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename, seed: actualSeed });
     }
     closeJobAfterDelay(jobs, jobId);
   });
 
-  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: 'local', model: modelId };
+  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: 'local', model: modelId, seed: actualSeed };
 }
 
 export async function listGallery() {

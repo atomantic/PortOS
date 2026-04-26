@@ -129,7 +129,31 @@ export function ImageGenTab() {
     setRenderResult(null);
     try {
       const result = await generateImage({ prompt: testPrompt.trim() });
-      setRenderResult(result);
+      // Local mode returns immediately after spawning the Python child —
+      // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
+      // mark the render complete on the `complete` event (or fail on
+      // `error`). External mode awaits internally and the file is on disk
+      // by the time generateImage resolves, so we can short-circuit.
+      if (result?.mode === 'local' && result?.generationId) {
+        await new Promise((resolve, reject) => {
+          const es = new EventSource(`/api/image-gen/${result.generationId}/events`);
+          es.onmessage = (e) => {
+            const msg = (() => { try { return JSON.parse(e.data); } catch { return null; } })();
+            if (!msg) return;
+            if (msg.type === 'complete') {
+              es.close();
+              setRenderResult({ ...result, ...msg.result });
+              resolve();
+            } else if (msg.type === 'error') {
+              es.close();
+              reject(new Error(msg.error || 'Generation failed'));
+            }
+          };
+          es.onerror = () => { es.close(); reject(new Error('Lost connection during test render')); };
+        });
+      } else {
+        setRenderResult(result);
+      }
       toast.success('Test render complete');
     } catch (err) {
       toast.error(err.message || 'Test render failed');
