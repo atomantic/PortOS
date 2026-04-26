@@ -18,15 +18,62 @@ import { readFileSync, writeFileSync } from 'fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 
-// Read PGMODE from .env
-function getMode() {
-  try {
-    const env = readFileSync(join(rootDir, '.env'), 'utf8');
-    const match = env.match(/^PGMODE=(\w+)/m);
-    return match?.[1] || 'docker';
-  } catch {
-    return 'docker';
+// Parse .env into a key/value map. Tolerates blank lines, # comments, and
+// optional surrounding single/double quotes around values. Returns {} when
+// the file is missing.
+function parseEnvFile() {
+  const result = {};
+  let content = '';
+  try { content = readFileSync(join(rootDir, '.env'), 'utf8'); } catch { return result; }
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    let value = trimmed.slice(idx + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
   }
+  return result;
+}
+
+const envFile = parseEnvFile();
+// Resolve PG config from process.env first, then .env, then defaults — so a
+// user who sets PGPASSWORD in .env (without exporting it into the shell) is
+// respected the same way getMode() respects PGMODE in .env.
+const envVar = (key, fallback) => process.env[key] ?? envFile[key] ?? fallback;
+// Tolerate accidental whitespace / inline comments / non-numeric junk in
+// .env values — fall back to the canonical native port (5432) on anything
+// that doesn't parse to a finite integer, instead of letting NaN flow into
+// `psql -p` and the success log.
+const parsePgPort = (value) => {
+  const parsed = Number.parseInt(String(value).trim(), 10);
+  return Number.isFinite(parsed) ? parsed : 5432;
+};
+const PG_USER = envVar('PGUSER', 'portos');
+const PG_DATABASE = envVar('PGDATABASE', 'portos');
+const PG_PASSWORD = envVar('PGPASSWORD', 'portos');
+const PG_PORT_NATIVE = parsePgPort(envVar('PGPORT', 5432));
+
+// Environment to pass to `db.sh` and other psql-wrapping subprocesses, so
+// values configured in .env (but not exported into the shell) reach the
+// child process. Without this, db.sh setup-native would provision the
+// default `portos`/`portos` while isPortOSDbReady() probes with the
+// customized creds — leaving setup looping forever.
+const PG_CHILD_ENV = {
+  ...process.env,
+  PGUSER: PG_USER,
+  PGDATABASE: PG_DATABASE,
+  PGPASSWORD: PG_PASSWORD,
+  PGPORT: String(PG_PORT_NATIVE)
+};
+
+function getMode() {
+  return envVar('PGMODE', 'docker');
 }
 
 // Check if Docker is available
@@ -72,11 +119,35 @@ function isContainerRunning() {
   }
 }
 
-// Check if native PostgreSQL is accepting connections
-function isNativeReady(port = 5432) {
+// Domain-level readiness check: the configured PG_USER role can authenticate
+// to PG_DATABASE AND the `memories` table from init-db.sql exists in the
+// public schema. This is what `db.sh setup-native` produces. The probe
+// itself is a single cheap psql round-trip; passing it lets us skip the
+// full setup-native path (brew checks, ALTER USER, schema reapply) on
+// every `npm start`/`npm run dev`, which would otherwise reset the role's
+// password+SUPERUSER privileges on every invocation.
+//
+// `psql -tAc` exits 0 even when the SELECT returns no rows, so we capture
+// stdout and require the literal "1" — without this, an empty result (db
+// exists but schema not yet applied) would falsely report "ready" and the
+// app would boot against an unmigrated database. `-X` skips the user's
+// .psqlrc so a custom prompt or echo setting can't pollute stdout.
+function isPortOSDbReady(port = PG_PORT_NATIVE) {
   try {
-    execFileSync('pg_isready', ['-h', 'localhost', '-p', String(port)], { stdio: 'pipe' });
-    return true;
+    const output = execFileSync(
+      'psql',
+      [
+        '-X',
+        '-h', 'localhost',
+        '-p', String(port),
+        '-U', PG_USER,
+        '-d', PG_DATABASE,
+        '-tAc',
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"
+      ],
+      { stdio: 'pipe', env: PG_CHILD_ENV }
+    ).toString();
+    return output.trim() === '1';
   } catch {
     return false;
   }
@@ -165,14 +236,25 @@ function promptStorageChoice(message, hint) {
   });
 }
 
-// Attempt full native PostgreSQL setup via db.sh setup-native
+// Attempt full native PostgreSQL setup via db.sh setup-native. Idempotent:
+// db.sh setup-native re-checks each step (brew install, role, db, extensions,
+// schema). Verifies success at the *domain* level — the role can auth and the
+// schema is in place — not just that the port is listening, since the whole
+// point of this PR is that port-listening isn't proof of usable PortOS state.
 function setupNativePostgres() {
   const dbScript = join(rootDir, 'scripts', 'db.sh');
   try {
     console.log('🍺 Running native PostgreSQL setup...');
-    execFileSync('bash', [dbScript, 'setup-native'], { stdio: 'inherit', cwd: rootDir });
-    if (isNativeReady()) {
-      console.log('✅ System PostgreSQL ready on port 5432');
+    // Pass resolved PG_* settings via env so db.sh provisions the same
+    // role/db/port that isPortOSDbReady() probes. db.sh itself doesn't
+    // source .env — without this, customized creds in .env would mismatch.
+    execFileSync('bash', [dbScript, 'setup-native'], {
+      stdio: 'inherit',
+      cwd: rootDir,
+      env: PG_CHILD_ENV
+    });
+    if (isPortOSDbReady()) {
+      console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
       return true;
     }
   } catch (err) {
@@ -199,11 +281,15 @@ async function handleDockerUnavailable(message, issue) {
   if (choice === 'native') {
     console.log('   Switching to native PostgreSQL mode...');
     setPgMode('native');
-    if (isNativeReady()) {
-      console.log('✅ System PostgreSQL ready on port 5432');
+    // Fast path: portos role can already authenticate to portos db and the
+    // schema is in place. Skip setup-native to avoid re-ALTERing credentials
+    // and the brew/psql startup-time hit on every `npm start`.
+    if (isPortOSDbReady()) {
+      console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
       process.exit(0);
     }
-    // Attempt automatic setup via db.sh setup-native (installs + configures)
+    // Otherwise (fresh checkout, missing role, missing schema, wrong password)
+    // run the full bootstrap.
     if (setupNativePostgres()) {
       process.exit(0);
     }
@@ -233,13 +319,15 @@ if (mode === 'file') {
 console.log(`🗄️  Setting up PostgreSQL (mode: ${mode})...`);
 
 if (mode === 'native') {
-  // Native mode: check if system PostgreSQL is running
-  if (isNativeReady()) {
-    console.log('✅ System PostgreSQL ready on port 5432');
+  // Fast path: portos role can already authenticate to portos db and the
+  // schema is in place. Skip setup-native to avoid re-ALTERing credentials
+  // and the brew/psql startup-time hit on every `npm start`.
+  if (isPortOSDbReady()) {
+    console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
     process.exit(0);
   }
-
-  // Attempt automatic setup via db.sh (installs + starts + configures)
+  // Otherwise (fresh checkout, missing role, missing schema, wrong password)
+  // run the full bootstrap.
   if (setupNativePostgres()) {
     process.exit(0);
   }

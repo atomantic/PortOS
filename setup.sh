@@ -19,12 +19,13 @@ if [ "$NODE_VERSION" -lt 18 ]; then
     exit 1
 fi
 
-echo "Installing dependencies..."
-npm install
-
-echo ""
-echo "Setting up data directory..."
-if ! npm run setup; then
+# Run the canonical install: submodules + root/client/server/autofixer deps +
+# esbuild postinstall + node-pty rebuild + npm run setup (data dir, db, browser).
+# install:all ends with `npm run setup` so this single call covers what the old
+# split `npm install` + `npm run setup` did, plus the workspace deps the old
+# script was missing.
+echo "Installing dependencies and running setup..."
+if ! npm run install:all; then
     echo ""
     echo "==================================="
     echo "  Setup incomplete"
@@ -37,22 +38,72 @@ fi
 
 echo ""
 
-# Optional Ghostty setup
-read -p "Set up Ghostty terminal themes? (y/N): " setup_ghostty
-if [[ $setup_ghostty =~ ^[Yy]$ ]]; then
-    node scripts/setup-ghostty.js
+# Optional Ghostty setup. Skip on non-TTY (CI, piped stdin) so `read` doesn't
+# abort the script under `set -e`, and `||` the read itself so a Ctrl-D in an
+# interactive shell defaults to "skip" instead of aborting.
+if [ -t 0 ]; then
+    setup_ghostty=""
+    read -p "Set up Ghostty terminal themes? (y/N): " setup_ghostty || true
+    if [[ $setup_ghostty =~ ^[Yy]$ ]]; then
+        node scripts/setup-ghostty.js
+    fi
 fi
 
 echo ""
-echo "==================================="
-echo "  Setup Complete!"
-echo "==================================="
-echo ""
-echo "Start PortOS:"
-echo "  Development:  npm run dev"
-echo "  Production:   npm start (or npm run pm2:start)"
-echo "  Stop:         npm run pm2:stop"
-echo "  Logs:         npm run pm2:logs"
-echo ""
-echo "Access at: http://localhost:5555"
-echo ""
+
+# Optional: start PortOS now. Accept y/yes/Y/YES (and Enter) to start, n/no
+# to skip, and reprompt on anything else so a stray "asdf" doesn't silently
+# launch pm2. On non-TTY (CI, piped stdin) default to "no" so the script
+# completes unattended without auto-launching pm2. A Ctrl-D inside the loop
+# is treated as "no" so the script can still finish cleanly.
+start_now=0
+if [ -t 0 ]; then
+    while true; do
+        answer=""
+        if ! read -p "Start PortOS now via pm2? (Y/n): " answer; then
+            start_now=0
+            break
+        fi
+        case "$answer" in
+            ""|[Yy]|[Yy][Ee][Ss])
+                start_now=1
+                break
+                ;;
+            [Nn]|[Nn][Oo])
+                start_now=0
+                break
+                ;;
+            *)
+                echo "Please answer yes or no (y/n)."
+                ;;
+        esac
+    done
+fi
+
+if [ "$start_now" = "1" ]; then
+    echo ""
+    echo "Starting PortOS..."
+    npm start
+    echo ""
+    echo "==================================="
+    echo "  PortOS is running"
+    echo "==================================="
+    echo ""
+    echo "Access at: http://localhost:5555"
+    echo "Logs:      npm run pm2:logs"
+    echo "Stop:      npm run pm2:stop"
+    echo ""
+else
+    echo "==================================="
+    echo "  Setup Complete!"
+    echo "==================================="
+    echo ""
+    echo "Start PortOS:"
+    echo "  Development:  npm run dev"
+    echo "  Production:   npm start (or npm run pm2:start)"
+    echo "  Stop:         npm run pm2:stop"
+    echo "  Logs:         npm run pm2:logs"
+    echo ""
+    echo "Access at: http://localhost:5555"
+    echo ""
+fi
