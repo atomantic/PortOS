@@ -686,6 +686,85 @@ describe('instances.js', () => {
       const inboundCount = result.peer.directions.filter(d => d === 'inbound').length;
       expect(inboundCount).toBe(1);
     });
+
+    it('should store host on a new peer announced over Tailscale', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      fetch.mockRejectedValue(new Error('offline'));
+
+      const result = await handleAnnounce({
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'null.taile8179.ts.net'
+      });
+
+      expect(result.created).toBe(true);
+      expect(result.peer.host).toBe('null.taile8179.ts.net');
+    });
+
+    it('should learn host on existing peer when previously absent', async () => {
+      const existing = {
+        id: 'p1',
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: null,
+        status: 'offline',
+        directions: ['outbound']
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
+
+      const result = await handleAnnounce({
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'null.taile8179.ts.net'
+      });
+
+      expect(result.peer.host).toBe('null.taile8179.ts.net');
+    });
+
+    it('should not overwrite a user-set host on existing peer', async () => {
+      const existing = {
+        id: 'p1',
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'manual.example.ts.net',
+        status: 'online',
+        directions: ['outbound']
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
+
+      const result = await handleAnnounce({
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'auto.different.ts.net'
+      });
+
+      expect(result.peer.host).toBe('manual.example.ts.net');
+    });
+
+    it('should drop invalid host strings via validHost', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      fetch.mockRejectedValue(new Error('offline'));
+
+      const result = await handleAnnounce({
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'has spaces and:colons'
+      });
+
+      expect(result.peer.host).toBeNull();
+    });
   });
 
   // --- Polling ---

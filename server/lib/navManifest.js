@@ -9,8 +9,12 @@ export const NAV_COMMANDS = [
   { id: 'nav.cybercity', path: '/city', label: 'CyberCity', section: 'Main', aliases: ['city', 'cybercity'], keywords: ['3d', 'visualization'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
 
-  { id: 'nav.image-gen', path: '/image-gen', label: 'Image Gen', section: 'AI', aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw'] },
-  { id: 'nav.settings.image-gen', path: '/settings/image-gen', label: 'Image Gen Settings', section: 'AI', aliases: ['image-gen-settings', 'sd-settings'] },
+  { id: 'nav.media', path: '/media/image', label: 'Media Gen', section: 'AI', aliases: ['media', 'media-gen', 'mediagen', 'generate'], keywords: ['image', 'video', 'render', 'art', 'movie'] },
+  { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'AI', aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw', 'flux', 'mflux'] },
+  { id: 'nav.media.video', path: '/media/video', label: 'Video', section: 'AI', aliases: ['video-gen', 'videogen', 'generate-video', 'ltx'], keywords: ['video', 'animate', 'movie', 'clip', 'ltx'] },
+  { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'AI', aliases: ['media-history', 'video-history'], keywords: ['videos', 'gallery', 'stitch'] },
+  { id: 'nav.media.models', path: '/media/models', label: 'Media Models', section: 'AI', aliases: ['media-models', 'image-models', 'video-models', 'huggingface', 'loras'], keywords: ['hf cache', 'lora', 'model storage', 'disk'] },
+  { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'AI', aliases: ['media-settings', 'image-gen-settings', 'sd-settings', 'video-gen-settings'] },
   { id: 'nav.prompts', path: '/prompts', label: 'Prompts', section: 'AI', aliases: ['prompts'] },
   { id: 'nav.providers', path: '/ai', label: 'Providers', section: 'AI', aliases: ['providers', 'ai-providers'] },
 
@@ -101,12 +105,14 @@ export const NAV_COMMANDS = [
   { id: 'nav.post.memory', path: '/post/memory', label: 'Memory', section: 'POST', aliases: ['post-memory'] },
   { id: 'nav.post.wordplay', path: '/post/wordplay', label: 'Wordplay', section: 'POST', aliases: ['post-wordplay'] },
 
-  { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', aliases: ['settings', 'settings-telegram', 'telegram'] },
-  { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice'] },
+  { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'] },
+  { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
+  { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', aliases: ['settings', 'settings-general', 'general'] },
+  { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', aliases: ['settings-mortalloom', 'mortalloom'] },
+  { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', aliases: ['settings-telegram', 'telegram'] },
+  { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
 
-  { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'System', aliases: ['backup'] },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'System', aliases: ['data'] },
-  { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'System', aliases: ['settings-database', 'database'] },
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'System', aliases: ['cos-health'] },
   { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'System', aliases: ['instances'] },
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'System', aliases: ['loops'] },

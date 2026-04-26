@@ -32,17 +32,15 @@ The default database password `portos` (in `ecosystem.config.cjs`, `docker-compo
 
 ## Architecture
 
-PortOS is a monorepo with Express.js server (port 5555) and React/Vite client (port 5554). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.
+PortOS is a monorepo with Express.js server (always user-facing on `:5555`, HTTP or HTTPS) and React/Vite client (Vite dev server on `:5554` in `npm run dev`; in `npm start` the built client is served from `:5555` directly). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.
 
 ### Port Allocation
 
-PortOS uses ports 5554-5561. In native mode, PostgreSQL uses the system pg on port 5432; in Docker mode, port 5561. Define all ports in `ecosystem.config.cjs` using the `ports` object:
+PortOS uses ports 5553-5561. In native mode, PostgreSQL uses the system pg on port 5432; in Docker mode, port 5561.
 
-```javascript
-ports: { api: 5555, health: 5554 }  // labeled ports for documentation
-```
+The user-facing port is always **`:5555`** — its scheme flips between HTTP and HTTPS based on whether a TLS cert is provisioned (`npm run setup:cert`), but the port number does not. When HTTPS is on, a loopback-only HTTP mirror also spawns on `:5553` so local curl/scripts don't have to deal with cert warnings. `:5554` is the Vite dev server, used only in `npm run dev`.
 
-See `docs/PORTS.md` for the full port allocation guide.
+Define all ports in the top-level `PORTS` object in `ecosystem.config.cjs` (see `server/lib/ports.js` for the canonical re-export). See `docs/PORTS.md` for the full port allocation guide and a diagram of how `:5555`, `:5553`, and `:5554` relate.
 
 ### Server (`server/`)
 - **Routes**: HTTP handlers with Zod validation

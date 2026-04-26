@@ -67,8 +67,8 @@ import {
   FilePen,
   MessageCircle,
   Swords,
-  Image as ImageIcon,
   HardDrive,
+  Layers,
   MessagesSquare,
   BookOpen,
   NotebookPen,
@@ -100,16 +100,16 @@ const navItems = [
     label: 'AI',
     icon: Bot,
     children: [
-      { to: '/image-gen', label: 'Image Gen', icon: ImageIcon },
-      { to: '/settings/image-gen', label: 'Image Gen Settings', icon: Settings },
+      { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot }
     ]
   },
-  { label: 'Apps', icon: Package, dynamic: 'apps', children: [] },
+  { label: 'Apps', icon: Package, dynamic: 'apps', defaultTo: '/apps', children: [] },
   {
     label: 'Brain',
     icon: Brain,
+    defaultTo: '/brain/inbox',
     children: [
       { to: '/brain/config', label: 'Config', icon: Settings },
       { to: '/brain/daily-log', label: 'Daily Log', icon: NotebookPen },
@@ -142,6 +142,7 @@ const navItems = [
     label: 'Chief of Staff',
     icon: Crown,
     showBadge: true,
+    defaultTo: '/cos/tasks',
     children: [
       { to: '/cos/agents', label: 'Agents', icon: Cpu },
       { to: '/cos/briefing', label: 'Briefing', icon: Newspaper },
@@ -158,6 +159,7 @@ const navItems = [
   {
     label: 'Comms',
     icon: MessagesSquare,
+    defaultTo: '/messages/inbox',
     children: [
       { to: '/messages/config', label: 'Config', icon: Settings },
       { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
@@ -190,6 +192,7 @@ const navItems = [
   {
     label: 'Digital Twin',
     icon: Heart,
+    defaultTo: '/digital-twin/overview',
     children: [
       { to: '/digital-twin/accounts', label: 'Accounts', icon: Globe },
       { to: '/ask', label: 'Ask Yourself', icon: MessageCircle },
@@ -211,6 +214,7 @@ const navItems = [
   {
     label: 'MeatSpace',
     icon: Skull,
+    defaultTo: '/meatspace/overview',
     children: [
       { to: '/meatspace/age', label: 'Age', icon: Clock },
       { to: '/meatspace/alcohol', label: 'Alcohol', icon: Activity },
@@ -227,6 +231,7 @@ const navItems = [
   {
     label: 'POST',
     icon: Zap,
+    defaultTo: '/post/launcher',
     children: [
       { to: '/post/config', label: 'Config', icon: Settings },
       { to: '/post/history', label: 'History', icon: History },
@@ -238,7 +243,12 @@ const navItems = [
   {
     label: 'Settings',
     icon: Settings,
+    defaultTo: '/settings/general',
     children: [
+      { to: '/settings/backup', label: 'Backup', icon: Download },
+      { to: '/settings/database', label: 'Database', icon: Database },
+      { to: '/settings/general', label: 'General', icon: Settings },
+      { to: '/settings/mortalloom', label: 'MortalLoom', icon: Activity },
       { to: '/settings/telegram', label: 'Telegram', icon: MessageSquare },
       { to: '/settings/voice', label: 'Voice', icon: Mic }
     ]
@@ -246,10 +256,9 @@ const navItems = [
   {
     label: 'System',
     icon: HardDrive,
+    defaultTo: '/cos/health',
     children: [
-      { to: '/settings/backup', label: 'Backup', icon: Download },
       { to: '/data', label: 'Data', icon: HardDrive },
-      { to: '/settings/database', label: 'Database', icon: Database },
       { to: '/cos/health', label: 'Health', icon: Activity },
       { to: '/instances', label: 'Instances', icon: Network },
       { to: '/loops', label: 'Loops', icon: RefreshCw },
@@ -458,57 +467,71 @@ export default function Layout() {
     }
 
     // Collapsible section
+    const defaultChildPath = item.defaultTo
+      || (item.children && item.children.find(c => c.to)?.to)
+      || null;
+
+    const navigateToSection = () => {
+      if (defaultChildPath) {
+        navigate(defaultChildPath);
+        // Ensure the section is expanded so the user can see siblings
+        if (!expandedSections[item.label] && !collapsed) {
+          toggleSection(item.label);
+        }
+      } else {
+        toggleSection(item.label);
+      }
+      setMobileOpen(false);
+    };
+
+    const sectionRowClasses = `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+      isSectionActive(item)
+        ? 'bg-port-accent/10 text-port-accent'
+        : 'text-gray-400 hover:text-white hover:bg-port-border/50'
+    }`;
+
     return (
       <div key={item.label} className="mx-2">
-        <button
-          onClick={() => {
-            if (collapsed) {
-              // When collapsed, navigate to first child
-              if (item.children && item.children.length > 0) {
-                navigate(item.children[0].to);
-              }
-            } else {
-              toggleSection(item.label);
-            }
-          }}
-          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
-          } ${
-            isSectionActive(item)
-              ? 'bg-port-accent/10 text-port-accent'
-              : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-          }`}
-          title={collapsed ? item.label : undefined}
-        >
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <Icon size={20} className="shrink-0" />
-              {/* Badge for collapsed state on collapsible sections */}
-              {item.showBadge && unreadCount > 0 && collapsed && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
-              )}
+        <div className={`flex items-stretch ${collapsed ? 'lg:justify-center' : ''}`}>
+          <button
+            type="button"
+            onClick={navigateToSection}
+            className={`flex-1 ${sectionRowClasses} ${collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
+            title={collapsed ? item.label : undefined}
+          >
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Icon size={20} className="shrink-0" />
+                {item.showBadge && unreadCount > 0 && collapsed && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </div>
+              <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
+                {item.label}
+              </span>
             </div>
-            <span className={`whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
-              {item.label}
-            </span>
-          </div>
+            {!collapsed && item.showBadge && unreadCount > 0 && (
+              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </button>
           {!collapsed && (
-            <div className="flex items-center gap-2">
-              {/* Badge for expanded state on collapsible sections */}
-              {item.showBadge && unreadCount > 0 && (
-                <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
-              )}
+            <button
+              type="button"
+              aria-label={expandedSections[item.label] ? `Collapse ${item.label}` : `Expand ${item.label}`}
+              onClick={() => toggleSection(item.label)}
+              className="px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
+            >
               {expandedSections[item.label]
                 ? <ChevronDown size={16} />
                 : <ChevronRight size={16} />
               }
-            </div>
+            </button>
           )}
-        </button>
+        </div>
 
         {/* Children items */}
         {expandedSections[item.label] && !collapsed && (

@@ -6,9 +6,14 @@
 
 import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { randomUUID } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+
+const execFileAsync = promisify(execFile);
+const IS_WIN = process.platform === 'win32';
 
 // Cache __dirname calculation for services importing this module
 const __lib_filename = fileURLToPath(import.meta.url);
@@ -57,6 +62,9 @@ export const PATHS = {
   missions: join(__lib_dirname, '../../data/cos/missions'),
   tools: join(__lib_dirname, '../../data/tools'),
   images: join(__lib_dirname, '../../data/images'),
+  loras: join(__lib_dirname, '../../data/loras'),
+  videos: join(__lib_dirname, '../../data/videos'),
+  videoThumbnails: join(__lib_dirname, '../../data/video-thumbnails'),
   slashdo: join(__lib_dirname, '../../lib/slashdo')
 };
 
@@ -493,4 +501,30 @@ export async function loadSlashdoFile(commandName, { stripFrontmatter = false } 
     if (libContent) content = content.replace(pattern, libContent);
   }
   return content;
+}
+
+export function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
+}
+
+// Size in bytes of every file under `path`. Shells out to `du -sk` (or
+// PowerShell on Windows) — orders of magnitude faster than walking with
+// node's recursive readdir on large trees (hundreds of GB / 200k+ files).
+export async function dirSize(path) {
+  if (!existsSync(path)) return 0;
+  if (IS_WIN) {
+    // Pass the path via an env var so a literal apostrophe in the path can't
+    // close the PowerShell string and inject commands.
+    const { stdout } = await execFileAsync('powershell', [
+      '-NoProfile', '-Command',
+      '(Get-ChildItem -Recurse -File $Env:DIRSIZE_TARGET | Measure-Object -Property Length -Sum).Sum',
+    ], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, DIRSIZE_TARGET: path } });
+    return parseInt(stdout.trim(), 10) || 0;
+  }
+  const { stdout } = await execFileAsync('du', ['-sk', path], { encoding: 'utf8', timeout: 60_000 });
+  const kb = parseInt(stdout.split('\t')[0], 10) || 0;
+  return kb * 1024;
 }

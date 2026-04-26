@@ -16,7 +16,11 @@ const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);
 const CDP_HOST = process.env.CDP_HOST || '127.0.0.1';
 
 let chromeProcess = null;
-let headlessMode = true;
+// Default headed — PortOS runs on a single user's dev machine where seeing
+// the browser window matters (auto-opening the UI on setup/update, debugging
+// CDP automation visually). Set `headless: true` in data/browser-config.json
+// to opt back in for headless workflows.
+let headlessMode = false;
 let downloadWs = null;
 let downloadWsReconnectTimer = null;
 let downloadDirCurrent = null;
@@ -147,7 +151,7 @@ async function launchBrowser() {
     return;
   }
 
-  headlessMode = config.headless !== false;
+  headlessMode = config.headless === true;
   const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
   const chromePath = getChromePath();
 

@@ -19,13 +19,11 @@ if [ "$NODE_VERSION" -lt 18 ]; then
     exit 1
 fi
 
-# Run the canonical install: submodules + root/client/server/autofixer deps +
-# esbuild postinstall + node-pty rebuild + npm run setup (data dir, db, browser).
-# install:all ends with `npm run setup` so this single call covers what the old
-# split `npm install` + `npm run setup` did, plus the workspace deps the old
-# script was missing.
+# `npm run setup` is the all-in-one: submodules + root/client/server/autofixer
+# deps + esbuild postinstall + node-pty rebuild + data dir, db, and browser
+# setup. install:all is kept as a backward-compat alias.
 echo "Installing dependencies and running setup..."
-if ! npm run install:all; then
+if ! npm run setup; then
     echo ""
     echo "==================================="
     echo "  Setup incomplete"
@@ -84,6 +82,8 @@ if [ "$start_now" = "1" ]; then
     echo ""
     echo "Starting PortOS..."
     npm start
+    # Open the dashboard in the PortOS-managed browser. Fail-soft.
+    node scripts/open-ui-in-browser.js || true
     echo ""
     echo "==================================="
     echo "  PortOS is running"

@@ -3,13 +3,21 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import imageGenRoutes from './imageGen.js';
 
-vi.mock('../services/imageGen.js', () => ({
+vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
-  generateAvatar: vi.fn()
+  generateAvatar: vi.fn(),
+  local: {
+    listImageModels: vi.fn(() => []),
+    listLoras: vi.fn(async () => []),
+    listGallery: vi.fn(async () => []),
+    attachSseClient: vi.fn(() => false),
+    cancel: vi.fn(() => false),
+    deleteImage: vi.fn(async () => ({ ok: true })),
+  },
 }));
 
-import * as imageGen from '../services/imageGen.js';
+import * as imageGen from '../services/imageGen/index.js';
 
 describe('Image Gen Routes', () => {
   let app;

@@ -146,9 +146,15 @@ if (-not (Test-Path "client/node_modules/vite/bin/vite.js")) {
 }
 Step "npm-install" "done" "Dependencies installed"
 
-# Run setup (data dirs + browser deps)
+# Run data/db/browser setup. Don't call `npm run setup` — that re-runs the
+# installs we just did above. The three scripts here are the data-side half
+# of `npm run setup` and are idempotent.
 Step "setup" "running" "Running setup..."
-Invoke-Logged npm run setup
+Invoke-Logged node scripts/setup-data.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-Logged node scripts/setup-db.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-Logged node scripts/setup-browser.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Invoke-Logged node scripts/setup-ghostty.js
 Step "setup" "done" "Setup complete"
@@ -215,6 +221,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 Step "restart" "done" "PortOS restarted"
 Write-SafeHost ""
+
+# Open the dashboard in the PortOS-managed browser. Fail-soft.
+Invoke-Logged node scripts/open-ui-in-browser.js
+# Don't exit on failure — the update is already complete.
 
 Write-SafeHost "===================================" -ForegroundColor Green
 Write-SafeHost "  ✅ Update Complete!" -ForegroundColor Green

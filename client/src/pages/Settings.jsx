@@ -1,9 +1,8 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Navigate } from 'react-router-dom';
 import { BackupTab } from '../components/settings/BackupTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
-import { ImageGenTab } from '../components/settings/ImageGenTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
 
@@ -11,16 +10,26 @@ const TABS = [
   { id: 'general', label: 'General' },
   { id: 'backup', label: 'Backup' },
   { id: 'database', label: 'Database' },
-  { id: 'image-gen', label: 'Image Gen' },
   { id: 'voice', label: 'Voice' },
   { id: 'telegram', label: 'Telegram' },
   { id: 'mortalloom', label: 'MortalLoom' }
 ];
 
+// Settings pages now host themselves as drawers on their feature pages where
+// it makes sense. Redirect old direct URLs to the new home so bookmarks and
+// stale palette entries keep working.
+const REDIRECTS = {
+  'image-gen': '/image-gen?settings=1'
+};
+
 export default function Settings() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'general';
+
+  if (REDIRECTS[activeTab]) {
+    return <Navigate to={REDIRECTS[activeTab]} replace />;
+  }
 
   const handleTabChange = (tabId) => {
     navigate(`/settings/${tabId}`);
@@ -31,7 +40,6 @@ export default function Settings() {
       case 'general': return <GeneralTab />;
       case 'backup': return <BackupTab />;
       case 'database': return <DatabaseTab />;
-      case 'image-gen': return <ImageGenTab />;
       case 'voice': return <VoiceTab />;
       case 'telegram': return <TelegramTab />;
       case 'mortalloom': return <MortalLoomTab />;

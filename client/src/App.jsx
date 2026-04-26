@@ -45,7 +45,11 @@ const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
+const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
+const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
+const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
+const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
 const Templates = lazyWithReload(() => import('./pages/Templates'));
 const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
@@ -166,7 +170,17 @@ export default function App() {
           <Route path="character" element={<CharacterSheet />} />
           <Route path="ask" element={<Ask />} />
           <Route path="ask/:conversationId" element={<Ask />} />
-          <Route path="image-gen" element={<ImageGen />} />
+          <Route path="media" element={<MediaGen />}>
+            <Route index element={<Navigate to="/media/image" replace />} />
+            <Route path="image" element={<ImageGen />} />
+            <Route path="video" element={<VideoGen />} />
+            <Route path="history" element={<MediaHistory />} />
+            <Route path="models" element={<MediaModels />} />
+          </Route>
+          <Route path="image-gen" element={<Navigate to="/media/image" replace />} />
+          <Route path="video-gen" element={<Navigate to="/media/video" replace />} />
+          <Route path="media-history" element={<Navigate to="/media/history" replace />} />
+          <Route path="media-models" element={<Navigate to="/media/models" replace />} />
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="agents" element={<Agents />} />

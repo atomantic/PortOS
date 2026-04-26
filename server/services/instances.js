@@ -14,6 +14,8 @@ import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
+import { peerFetch } from '../lib/peerHttpClient.js';
+import { getSelfHost } from '../lib/peerSelfHost.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
@@ -33,6 +35,15 @@ const BACKOFF_TIERS_MS = [
 
 const withLock = createMutex();
 let pollTimer = null;
+
+function classifyProbeError(err, peer) {
+  const code = err?.code;
+  if (code === 'ENOTFOUND') return `🌐 ❌ DNS lookup failed for ${peer.host || peer.address} — is Tailscale MagicDNS up?`;
+  if (code === 'ECONNREFUSED') return `🌐 ❌ Connection refused — peer not running on this port`;
+  if (code === 'EHOSTUNREACH') return `🌐 ❌ Host unreachable — Tailscale tunnel down or peer offline`;
+  if (code === 'ETIMEDOUT' || err?.name === 'AbortError') return `🌐 ⏱️ Probe timeout (${PROBE_TIMEOUT_MS}ms)`;
+  return err?.message || String(err);
+}
 
 // Default data shape
 const DEFAULT_DATA = {
@@ -116,9 +127,13 @@ function isIPAddress(str) {
   return net.isIP(str) !== 0;
 }
 
+// Returns: null = explicit clear, undefined = invalid input (callers should
+// ignore), string = valid lowercased hostname. Three-state distinction lets
+// callers choose between "noisy/optional input" (use undefined) vs "user
+// asked to clear" (use null).
 function validHost(str) {
-  if (str === '' || str === null) return null; // explicit clear
-  if (typeof str !== 'string') return undefined; // ignore
+  if (str === '' || str === null) return null;
+  if (typeof str !== 'string') return undefined;
   const trimmed = str.trim();
   if (!trimmed) return null;
   // Accept DNS names: letters, digits, hyphens, dots. No scheme, no port, no path.
@@ -225,9 +240,9 @@ export async function probePeer(peer) {
   try {
     // Fetch health details, apps, and sync status in parallel
     const [healthRes, appsRes, syncRes] = await Promise.all([
-      fetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }),
-      fetch(`${baseUrl}/api/apps`, { signal: controller.signal }).catch(() => null),
-      fetch(`${baseUrl}/api/instances/sync-status`, { signal: controller.signal }).catch(() => null)
+      peerFetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }),
+      peerFetch(`${baseUrl}/api/apps`, { signal: controller.signal }).catch(() => null),
+      peerFetch(`${baseUrl}/api/instances/sync-status`, { signal: controller.signal }).catch(() => null)
     ]);
     if (!healthRes.ok) throw new Error(`HTTP ${healthRes.status}`);
     const json = await healthRes.json();
@@ -249,7 +264,7 @@ export async function probePeer(peer) {
       remoteSyncSeqs = await syncRes.json().catch(() => null);
     }
   } catch (err) {
-    console.log(`⚠️ Probe failed for ${baseUrl}: ${err.message}`);
+    console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(err, peer)}`);
     status = 'offline';
     lastHealth = peer.lastHealth; // preserve last known
     lastSeen = peer.lastSeen;
@@ -339,7 +354,7 @@ export async function queryPeer(id, apiPath) {
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await peerFetch(url, { signal: controller.signal });
     const json = await res.json();
     return { success: true, data: json };
   } catch (err) {
@@ -351,7 +366,7 @@ export async function queryPeer(id, apiPath) {
 
 // --- Announce (Bidirectional Registration) ---
 
-export async function handleAnnounce({ address, port, instanceId, name }) {
+export async function handleAnnounce({ address, port, instanceId, name, host }) {
   const result = await withData(async (data) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
@@ -359,6 +374,8 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
     if (!existing) {
       existing = data.peers.find(p => p.address === address && p.port === port);
     }
+
+    const normalizedHost = validHost(host);
 
     if (existing) {
       existing.lastSeen = new Date().toISOString();
@@ -369,6 +386,12 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       const sanitized = validName(name, null);
       if (sanitized && isIPAddress(existing.name)) {
         existing.name = sanitized;
+      }
+      // Adopt host from inbound announce only when we don't already have one —
+      // never overwrite a user-set value, never blank one on a noisy announce.
+      if (normalizedHost && !existing.host) {
+        existing.host = normalizedHost;
+        console.log(`🌐 Peer host learned via announce: ${existing.name} → ${normalizedHost}`);
       }
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
@@ -382,8 +405,9 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
     const peer = {
       id: crypto.randomUUID(),
       address,
+      host: normalizedHost || null,
       port,
-      name: validName(name, address),
+      name: validName(name, normalizedHost || address),
       instanceId,
       addedAt: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
@@ -397,7 +421,7 @@ export async function handleAnnounce({ address, port, instanceId, name }) {
       directions: ['inbound']
     };
     data.peers.push(peer);
-    console.log(`🌐 Peer announced (new): ${peer.name} (${address}:${port})`);
+    console.log(`🌐 Peer announced (new): ${peer.name} (${peerBaseUrl(peer)})`);
     instanceEvents.emit('peers:updated', data.peers);
     return { created: true, peer };
   });
@@ -417,18 +441,20 @@ async function announceSelf(peer) {
   if (!data.self) return;
 
   const selfPort = parseInt(process.env.PORT, 10) || DEFAULT_PEER_PORT;
+  const selfHost = getSelfHost();
   const url = `${peerBaseUrl(peer)}/api/instances/peers/announce`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
+    const res = await peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         port: selfPort,
         instanceId: data.self.instanceId,
-        name: data.self.name
+        name: data.self.name,
+        host: selfHost
       }),
       signal: controller.signal
     });
@@ -471,6 +497,20 @@ async function markDirection(peerId, direction) {
 export function startPolling() {
   if (pollTimer) return;
   console.log(`🌐 Instance polling started (${POLL_INTERVAL_MS / 1000}s interval)`);
+
+  // Backoff is a rate limit on the polling loop, not a durable judgment about
+  // the peer — boot may itself be the deploy that fixes connectivity, so clear it.
+  withData(async (data) => {
+    let cleared = 0;
+    for (const peer of data.peers) {
+      if (peer.nextProbeAt) {
+        peer.nextProbeAt = null;
+        peer.consecutiveFailures = 0;
+        cleared++;
+      }
+    }
+    if (cleared > 0) console.log(`🌐 Cleared backoff on ${cleared} peer(s) for fresh probe after boot`);
+  }).catch(err => console.error(`❌ Failed to clear peer backoff on boot: ${err.message}`));
 
   // Initial probe after a short delay
   setTimeout(() => probeAllPeers(), INITIAL_PROBE_DELAY_MS);

@@ -72,5 +72,22 @@ export function useImageGenProgress() {
     setProgress(null);
   }, []);
 
-  return { progress, begin, end };
+  // Resume tracking an in-flight job spawned before this hook mounted.
+  // Seeds state from the server snapshot (last frame + step) so the user
+  // sees current progress immediately after navigating back.
+  const resume = useCallback((activeJob) => {
+    if (!activeJob?.generationId) return;
+    activeRef.current = true;
+    generationIdRef.current = activeJob.generationId;
+    setProgress({
+      generationId: activeJob.generationId,
+      progress: activeJob.progress ?? 0,
+      step: activeJob.step ?? 0,
+      totalSteps: activeJob.totalSteps ?? null,
+      eta: activeJob.eta ?? null,
+      currentImage: activeJob.currentImage ?? null,
+    });
+  }, []);
+
+  return { progress, begin, end, resume };
 }

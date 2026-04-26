@@ -19,6 +19,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { videoGenEvents } from './videoGen/events.js';
 import * as shellService from './shell.js';
 import {
   validateSocketData,
@@ -787,5 +788,18 @@ function setupImageGenEventForwarding() {
   });
   imageGenEvents.on('failed', (data) => {
     if (ioInstance) ioInstance.emit('image-gen:failed', data);
+  });
+
+  videoGenEvents.on('started', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:started', data);
+  });
+  videoGenEvents.on('progress', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:progress', data);
+  });
+  videoGenEvents.on('completed', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:completed', data);
+  });
+  videoGenEvents.on('failed', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:failed', data);
   });
 }

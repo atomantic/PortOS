@@ -8,6 +8,7 @@
 import { io } from 'socket.io-client';
 import { instanceEvents } from './instanceEvents.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
+import { peerFetch, peerSocketOptions } from '../lib/peerHttpClient.js';
 
 // Map<peerId, { socket, agents: Map<agentId, agent>, peer }>
 const peerConnections = new Map();
@@ -25,7 +26,8 @@ export function connectToPeer(peer) {
     reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 5000,
-    timeout: CONNECT_TIMEOUT_MS
+    timeout: CONNECT_TIMEOUT_MS,
+    ...peerSocketOptions
   });
 
   // `host` is required so fetchPeerAgents() can rebuild the HTTPS URL via peerBaseUrl()
@@ -101,7 +103,7 @@ async function fetchPeerAgents(conn) {
   const timeout = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
 
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await peerFetch(url, { signal: controller.signal });
     if (!res.ok) return;
     const data = await res.json();
     const agents = data.running || data.agents || [];
