@@ -350,12 +350,18 @@ export async function buildPrompt({ question, mode = 'ask', sources = [], histor
   const persona = await buildPersonaPreamble();
   const directive = MODE_DIRECTIVES[mode] || MODE_DIRECTIVES.ask;
   const transcript = formatTranscriptForPrompt(history);
+  // Citation instruction is only useful for `ask`/`advise` answers — `draft`
+  // mode produces text in the user's voice for an external recipient who
+  // would never want raw `[1]`-style markers leaking into the output.
+  const citeInstruction = mode === 'draft'
+    ? 'Use the sources below to inform tone and content, but do NOT include any citation markers, bracket numbers, or source references in the drafted text.'
+    : 'Cite sources inline using their bracket numbers, e.g. [1] [3]. Only cite sources you actually relied on.';
   return [
     persona,
     '',
     directive,
     '',
-    'Cite sources inline using their bracket numbers, e.g. [1] [3]. Only cite sources you actually relied on.',
+    citeInstruction,
     '',
     formatSourcesForPrompt(sources),
     '',

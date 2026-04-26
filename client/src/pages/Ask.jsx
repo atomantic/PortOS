@@ -310,6 +310,10 @@ export default function Ask() {
     // doesn't ghost a turn that was never persisted.
     let streamOpened = false;
     let streamFailure = null;
+    // Captures the message from any in-stream `event: error` frame so we can
+    // preserve partial assistant text + flag the failure on the local turn
+    // when the server bails after streaming some deltas (provider 5xx, etc.).
+    let sseErrorMessage = null;
 
     await api.streamAskTurn(
       { conversationId: persistedConvId, question: trimmed, mode },
@@ -338,7 +342,8 @@ export default function Ask() {
           } else if (event === 'done') {
             persistedTurn = data.turn || null;
           } else if (event === 'error') {
-            toast.error(data.error || 'Stream error');
+            sseErrorMessage = data.error || 'Stream error';
+            toast.error(sseErrorMessage);
           }
         },
       },
@@ -404,6 +409,24 @@ export default function Ask() {
           return prev.id === serverConvId ? prev : { ...prev, id: serverConvId };
         }
         return { ...prev, id: serverConvId, turns: [...existingTurns, persistedTurn], updatedAt: persistedTurn.createdAt };
+      });
+    } else if (sseErrorMessage && chunks.length && serverConvId) {
+      // Provider/server bailed mid-stream after we already received content.
+      // Preserve the partial answer as a local-only assistant turn (no
+      // `persistedTurn` from the server) so the user can still read/copy
+      // what arrived. Tag with `error` so a future render can style it.
+      const partialContent = chunks.join('');
+      const partialTurn = {
+        id: `partial-${Date.now()}`,
+        role: 'assistant',
+        content: partialContent,
+        sources: collectedSources,
+        error: sseErrorMessage,
+        createdAt: new Date().toISOString(),
+      };
+      setActiveConv((prev) => {
+        if (!prev || (prev.id !== 'pending' && prev.id !== serverConvId)) return prev;
+        return { ...prev, id: serverConvId, turns: [...(prev.turns || []), partialTurn], updatedAt: partialTurn.createdAt };
       });
     }
     refreshList();
