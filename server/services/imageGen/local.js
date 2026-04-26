@@ -88,6 +88,10 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
 export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraPaths = [], loraScales = [] }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  // Enforce the single-activeProcess invariant the rest of this module relies
+  // on — without this, a double-click on Generate would orphan the first
+  // child (cancel() can only kill the one stored in activeProcess).
+  if (activeProcess) throw new ServerError('A generation is already in progress — cancel it before starting another', { status: 409, code: 'IMAGE_GEN_BUSY' });
   const model = IMAGE_MODELS[modelId];
   if (!model || model.broken) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
 

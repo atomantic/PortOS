@@ -11,6 +11,12 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
   const [installLog, setInstallLog] = useState([]);
   const [creatingVenv, setCreatingVenv] = useState(false);
   const logRef = useRef(null);
+  const installEsRef = useRef(null);
+
+  // Closing the install EventSource on unmount stops setInstalling /
+  // setInstallLog calls firing on a torn-down component if the user
+  // navigates away mid pip-install.
+  useEffect(() => () => installEsRef.current?.close(), []);
 
   const refreshCheck = useCallback(async (path) => {
     if (!path) { setCheck(null); return; }
@@ -54,17 +60,21 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
 
     const url = `/api/image-gen/setup/install?pythonPath=${encodeURIComponent(pythonPath)}&packages=${encodeURIComponent(check.missingPip.join(','))}`;
     const es = new EventSource(url);
+    installEsRef.current = es;
 
     es.onmessage = (e) => {
-      const event = JSON.parse(e.data);
+      const event = (() => { try { return JSON.parse(e.data); } catch { return null; } })();
+      if (!event) return;
       setInstallLog(prev => [...prev.slice(-200), event]);
       if (event.type === 'complete') {
         es.close();
+        installEsRef.current = null;
         setInstalling(false);
         toast.success('Packages installed');
         refreshCheck(pythonPath);
       } else if (event.type === 'error') {
         es.close();
+        installEsRef.current = null;
         setInstalling(false);
         toast.error(event.message);
         refreshCheck(pythonPath);
@@ -73,6 +83,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
 
     es.onerror = () => {
       es.close();
+      installEsRef.current = null;
       setInstalling(false);
     };
   };

@@ -184,9 +184,12 @@ router.get('/setup/install', (req, res) => {
   });
   const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
 
-  installPackages(parsed.data.pythonPath, parsed.data.packages, send).then(() => res.end());
+  const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, send);
+  promise.then(() => res.end());
 
-  req.on('close', () => res.end());
+  // Client navigation away should kill pip — a torch upgrade can run for
+  // 10+ minutes and would otherwise keep going invisibly.
+  req.on('close', () => { kill(); res.end(); });
 });
 
 export default router;

@@ -121,6 +121,9 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  // Enforce the single-activeProcess invariant — without this a double-submit
+  // would orphan the first child (cancel() only kills the one in activeProcess).
+  if (activeProcess) throw new ServerError('A video generation is already in progress — cancel it before starting another', { status: 409, code: 'VIDEO_GEN_BUSY' });
 
   const model = VIDEO_MODELS[modelId];
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });

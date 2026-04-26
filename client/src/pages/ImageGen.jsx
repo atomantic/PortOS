@@ -608,8 +608,11 @@ export default function ImageGen() {
       <MediaLightbox
         item={preview ? normalizeImage(preview) : null}
         onClose={() => setPreview(null)}
-        onRemix={() => handleRemix(preview)}
-        onSendToVideo={() => sendToVideo(preview.filename)}
+        // Guard against the click landing after the lightbox close path has
+        // already nulled `preview` — without this the closure throws on
+        // preview.filename access.
+        onRemix={() => preview && handleRemix(preview)}
+        onSendToVideo={() => preview?.filename && sendToVideo(preview.filename)}
       />
 
 

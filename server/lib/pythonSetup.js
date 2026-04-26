@@ -133,16 +133,19 @@ export async function checkPackages(pythonPath) {
 
 // Spawn pip install; emit each line via onLog. Resolves on exit.
 // onLog gets `{ type: 'log' | 'error' | 'complete', message }`.
+// Returns `{ promise, kill }` so the route can SIGTERM the pip child if
+// the SSE client disconnects mid-install (otherwise a 10-minute torch
+// upgrade would keep running invisibly).
 export function installPackages(pythonPath, importNames, onLog) {
-  return new Promise((resolve) => {
-    const pipSpecs = importNames.map(pipNameFor);
-    onLog({ type: 'log', message: `pip install ${pipSpecs.join(' ')}` });
+  const pipSpecs = importNames.map(pipNameFor);
+  onLog({ type: 'log', message: `pip install ${pipSpecs.join(' ')}` });
 
-    const proc = spawn(pythonPath, [
-      '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on',
-      ...pipSpecs,
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(pythonPath, [
+    '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on',
+    ...pipSpecs,
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
+  const promise = new Promise((resolve) => {
     const handleOutput = (chunk) => {
       for (const line of chunk.toString().split(/[\r\n]+/)) {
         const trimmed = line.trim();
@@ -166,4 +169,6 @@ export function installPackages(pythonPath, importNames, onLog) {
       resolve({ ok: false, code: -1 });
     });
   });
+
+  return { promise, kill: () => { if (!proc.killed) proc.kill('SIGTERM'); } };
 }
