@@ -20,7 +20,7 @@ export default function QuickTaskWidget() {
           Tasks &rarr;
         </Link>
       </div>
-      <TaskAddForm providers={providers} apps={apps} onTaskAdded={() => {}} compact />
+      <TaskAddForm providers={providers} apps={apps} onTaskAdded={() => {}} compact defaultExpanded />
     </div>
   );
 }
