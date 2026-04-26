@@ -26,6 +26,7 @@ import {
   getImageGenStatus, generateImage, listImageModels, listLoras, listImageGallery,
   cancelImageGen, deleteImage, getActiveImageJob,
 } from '../services/api';
+import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
 const RESOLUTIONS = [
   { label: '512×512', w: 512, h: 512 },
@@ -40,11 +41,6 @@ const RESOLUTIONS = [
 ];
 
 const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
-const MAX_SEED = 0xFFFFFFFF;
-
-function safeParseJSON(s) {
-  try { return JSON.parse(s); } catch { return null; }
-}
 
 export default function ImageGen() {
   const navigate = useNavigate();
@@ -130,7 +126,6 @@ export default function ImageGen() {
       const es = new EventSource(`/api/image-gen/${activeJob.generationId}/events`);
       eventSourceRef.current = es;
       es.onmessage = (e) => {
-        if (typeof e.data !== 'string' || !e.data.startsWith('{')) return;
         const msg = safeParseJSON(e.data);
         if (!msg) return;
         if (msg.type === 'status') setStatusMsg(msg.message);
@@ -154,7 +149,7 @@ export default function ImageGen() {
     if (r) { setWidth(r.w); setHeight(r.h); }
   };
 
-  const handleRandomSeed = () => setSeed(String(Math.floor(Math.random() * MAX_SEED)));
+  const handleRandomSeed = () => setSeed(randomSeed());
 
   const startLocalGeneration = async () => {
     setLocalProgress({ progress: 0 });
@@ -178,7 +173,6 @@ export default function ImageGen() {
       eventSourceRef.current = es;
 
       es.onmessage = (ev) => {
-        if (typeof ev.data !== 'string' || !ev.data.startsWith('{')) return;
         const msg = safeParseJSON(ev.data);
         if (!msg) return;
         if (msg.type === 'status') setStatusMsg(msg.message);

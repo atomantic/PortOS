@@ -24,6 +24,7 @@ import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, extractLastFrame,
 } from '../services/api';
+import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
 const RESOLUTIONS = [
   { label: '512×320 (16:10)', w: 512, h: 320 },
@@ -42,7 +43,6 @@ const TILING_OPTIONS = [
   { value: 'spatial', label: 'Spatial only' },
   { value: 'temporal', label: 'Temporal only' },
 ];
-const MAX_SEED = 0xFFFFFFFF;
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -126,7 +126,7 @@ export default function VideoGen() {
     if (r) { setWidth(r.w); setHeight(r.h); }
   };
 
-  const handleRandomSeed = () => setSeed(String(Math.floor(Math.random() * MAX_SEED)));
+  const handleRandomSeed = () => setSeed(randomSeed());
 
   const clearSourceImage = () => {
     setSourceImageFile(null);
@@ -169,7 +169,8 @@ export default function VideoGen() {
       eventSourceRef.current = es;
 
       es.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
+        const msg = safeParseJSON(ev.data);
+        if (!msg) return;
         if (msg.type === 'status') setStatusMsg(msg.message);
         if (msg.type === 'progress') {
           setProgress({ progress: msg.progress });

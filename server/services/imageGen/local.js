@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -37,8 +38,6 @@ export const IMAGE_MODELS = {
 export const listImageModels = () =>
   Object.values(IMAGE_MODELS).filter((m) => !m.broken);
 
-const NOISE_RE = /xformers|xFormers|triton|Triton|bitsandbytes|Please reinstall|Memory-efficient|Set XFORMERS|FutureWarning|UserWarning|DeprecationWarning|torch\.distributed|Unable to import.*torchao|Skipping import of cpp|NOTE: Redirects/i;
-
 // Per-job clients: jobId -> { clients, status, meta, broadcast }
 const jobs = new Map();
 let activeProcess = null;
@@ -49,25 +48,7 @@ let activeJob = null;
 
 export const getActiveJob = () => activeJob;
 
-const broadcastSse = (job, payload) => {
-  const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const c of job.clients) c.write(msg);
-};
-
-export const attachSseClient = (jobId, res) => {
-  const job = jobs.get(jobId);
-  if (!job) return false;
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  job.clients.push(res);
-  res.req.on('close', () => {
-    job.clients = job.clients.filter((c) => c !== res);
-  });
-  return true;
-};
+export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export const cancel = () => {
   if (!activeProcess) return false;
@@ -165,7 +146,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
         if (activeJob && activeJob.generationId === jobId) activeJob.currentImage = currentImage;
         imageGenEvents.emit('progress', { generationId: jobId, currentImage });
       }
-    } catch { /* swallow — a partially-written file or tmp dir gone */ }
+    } catch (err) {
+      // Partial PNG mid-write or stepwise dir gone after cancel — common,
+      // don't spam, but surface the message so a stalled preview is debuggable.
+      console.log(`⚠️ Frame read error [${jobId.slice(0, 8)}]: ${err?.message}`);
+    }
     reading = false;
     if (pendingFrame) { pendingFrame = false; processLatestFrame(); }
   };
@@ -178,7 +163,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   let stderrBuffer = '';
   const handleLine = (line) => {
     const trimmed = line.trim();
-    if (!trimmed || NOISE_RE.test(trimmed)) return;
+    if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return;
     // mflux progress: "100%|████| 8/8 [00:05<00:00,  1.43it/s]"
     const m = trimmed.match(/(\d+)%\|.*?(\d+)\/(\d+)/);
     if (m) {
@@ -228,10 +213,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       broadcastSse(job, { type: 'complete', result });
       imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
     }
-    setTimeout(() => {
-      for (const c of job.clients) c.end();
-      jobs.delete(jobId);
-    }, 5000);
+    closeJobAfterDelay(jobs, jobId);
   });
 
   return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: 'local', model: modelId };

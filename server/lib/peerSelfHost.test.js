@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('./fileUtils.js', () => ({
-  PATHS: { data: '/mock/data' }
+  PATHS: { data: '/mock/data' },
+  safeJSONParse: (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }
 }));
 
 vi.mock('node:fs', () => ({

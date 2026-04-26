@@ -10,15 +10,19 @@
  * the model sees them.
  */
 
-import { spawn, execFileSync } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { unlink, writeFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { promisify } from 'util';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
+
+const execFileAsync = promisify(execFile);
 
 const IS_WIN = process.platform === 'win32';
 
@@ -38,32 +42,12 @@ export const listVideoModels = () =>
 
 export const defaultVideoModelId = () => IS_WIN ? 'ltx_video' : 'ltx2_unified';
 
-const NOISE_RE = /xformers|xFormers|triton|Triton|bitsandbytes|Please reinstall|Memory-efficient|Set XFORMERS|FutureWarning|UserWarning|DeprecationWarning|torch\.distributed|Unable to import.*torchao|Skipping import of cpp|NOTE: Redirects/i;
-
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
 
 const jobs = new Map();
 let activeProcess = null;
 
-const broadcastSse = (job, payload) => {
-  const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const c of job.clients) c.write(msg);
-};
-
-export const attachSseClient = (jobId, res) => {
-  const job = jobs.get(jobId);
-  if (!job) return false;
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  job.clients.push(res);
-  res.req.on('close', () => {
-    job.clients = job.clients.filter((c) => c !== res);
-  });
-  return true;
-};
+export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export const cancel = () => {
   if (!activeProcess) return false;
@@ -72,21 +56,29 @@ export const cancel = () => {
   return true;
 };
 
-const findFfmpeg = () => {
+// ffmpeg discovery is async (which/where takes ~10ms+) and the result is
+// stable for the process lifetime — cache the first hit so subsequent video
+// generations don't re-shell-out and don't block the event loop.
+let cachedFfmpegPath;
+const findFfmpeg = async () => {
+  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
   const candidates = IS_WIN
     ? ['C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe']
     : ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg'];
-  for (const p of candidates) if (existsSync(p)) return p;
+  for (const p of candidates) {
+    if (existsSync(p)) { cachedFfmpegPath = p; return p; }
+  }
   const cmd = IS_WIN ? 'where' : 'which';
-  return execFileSync(cmd, ['ffmpeg'], { encoding: 'utf8', timeout: 5000 })
-    .trim().split('\n')[0] || null;
+  const { stdout } = await execFileAsync(cmd, ['ffmpeg'], { timeout: 5000 }).catch(() => ({ stdout: '' }));
+  cachedFfmpegPath = stdout.trim().split(/\r?\n/)[0] || null;
+  return cachedFfmpegPath;
 };
 
 const generateThumbnail = async (videoPath, jobId) => {
   await ensureDir(PATHS.videoThumbnails);
   const thumbFilename = `${jobId}.jpg`;
   const thumbPath = join(PATHS.videoThumbnails, thumbFilename);
-  const ffmpeg = findFfmpeg();
+  const ffmpeg = await findFfmpeg();
   if (!ffmpeg) return null;
   return new Promise((resolve) => {
     const proc = spawn(ffmpeg, ['-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath], { stdio: 'ignore' });
@@ -152,20 +144,22 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // hard way that letting the model upscale a portrait reference makes
   // garbled output.
   let resolvedSourceImage = sourceImagePath;
+  let resizedTempPath = null;
   if (resolvedSourceImage) {
-    const ffmpeg = findFfmpeg();
+    const ffmpeg = await findFfmpeg();
     if (ffmpeg) {
       const resizedPath = join(tmpdir(), `resized-${jobId}.png`);
-      try {
-        execFileSync(ffmpeg, [
-          '-i', resolvedSourceImage,
-          '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
-          '-update', '1', '-frames:v', '1',
-          '-y', resizedPath,
-        ], { timeout: 10000 });
+      const resizeResult = await execFileAsync(ffmpeg, [
+        '-i', resolvedSourceImage,
+        '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
+        '-update', '1', '-frames:v', '1',
+        '-y', resizedPath,
+      ], { timeout: 10000 }).catch((err) => ({ error: err }));
+      if (resizeResult.error) {
+        console.log(`⚠️ Failed to resize source image, using original: ${resizeResult.error.message}`);
+      } else {
         resolvedSourceImage = resizedPath;
-      } catch (err) {
-        console.log(`⚠️ Failed to resize source image, using original: ${err.message}`);
+        resizedTempPath = resizedPath;
       }
     }
   }
@@ -186,7 +180,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   const handleLine = (raw) => {
     const line = raw.trim();
-    if (!line || NOISE_RE.test(line)) return;
+    if (!line || PYTHON_NOISE_RE.test(line)) return;
     if (line.startsWith('STATUS:')) {
       broadcastSse(job, { type: 'status', message: line.slice(7) });
     } else if (line.startsWith('STAGE:')) {
@@ -228,10 +222,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   proc.on('close', async (code, signal) => {
     activeProcess = null;
-    // Cleanup the resized temp image if we made one
-    if (resolvedSourceImage && resolvedSourceImage.startsWith(tmpdir())) {
-      await unlink(resolvedSourceImage).catch(() => {});
-    }
+    // Cleanup the resized temp image if we made one. Track via a flag rather
+    // than a path-prefix check — tmpdir() can return a symlinked path
+    // (macOS /var → /private/var) so startsWith() can silently miss.
+    if (resizedTempPath) await unlink(resizedTempPath).catch(() => {});
 
     if (code !== 0) {
       job.status = 'error';
@@ -251,10 +245,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });
       videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
     }
-    setTimeout(() => {
-      for (const c of job.clients) c.end();
-      jobs.delete(jobId);
-    }, 5000);
+    closeJobAfterDelay(jobs, jobId);
   });
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
@@ -266,7 +257,7 @@ export async function extractLastFrame(historyId) {
   const history = await loadHistory();
   const item = history.find((h) => h.id === historyId);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
-  const ffmpeg = findFfmpeg();
+  const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const videoPath = join(PATHS.videos, item.filename);
   if (!existsSync(videoPath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
@@ -293,7 +284,7 @@ export async function stitchVideos(videoIds) {
   if (!Array.isArray(videoIds) || videoIds.length < 2) {
     throw new ServerError('Need at least 2 videos to stitch', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const ffmpeg = findFfmpeg();
+  const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const history = await loadHistory();
@@ -312,11 +303,16 @@ export async function stitchVideos(videoIds) {
   const outFilename = `stitched-${jobId}.mp4`;
   const outPath = join(PATHS.videos, outFilename);
 
-  await new Promise((resolve, reject) => {
-    const proc = spawn(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { stdio: 'ignore' });
-    proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
-  });
-  await unlink(listFile).catch(() => {});
+  // Use a try/finally so the concat list temp file is cleaned up even when
+  // ffmpeg rejects — otherwise it leaks one file per failed stitch.
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { stdio: 'ignore' });
+      proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
+    });
+  } finally {
+    await unlink(listFile).catch(() => {});
+  }
 
   const thumb = await generateThumbnail(outPath, jobId);
   const stitchedMeta = {
