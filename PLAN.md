@@ -85,7 +85,7 @@ Three high-value work items drawn from an inventory of the current app surface (
 
 ### 3. "Ask Yourself" — Unified Conversational Twin over Brain + Memory + Goals + Identity + Calendar — slice (a) ✅ SHIPPED 2026-04-24
 
-> **Slice (a) — text chat + sources — shipped.** `/ask` and `/ask/:conversationId` are live. `server/services/askService.js` orchestrates parallel retrieval across memory (hybrid), brain notes, autobiography, goals, and calendar with kind-weighted reranking. Persona preamble is sourced from `character.json`. Three modes (`ask` / `advise` / `draft`) swap directives. API providers stream SSE; CLI providers single-shot. Conversations persist to `data/ask-conversations/<id>.json` with 30-day auto-expiry unless pinned. Source chips deep-link back to origin. Registered in the nav manifest so `⌘K` and voice (`ui_navigate`) resolve "ask" automatically. **Slice (b) (voice + promotion actions) still pending** — see backlog item below.
+> **Slice (a) — text chat + sources — shipped.** `/ask` and `/ask/:conversationId` are live. `server/services/askService.js` orchestrates parallel retrieval across memory (hybrid), brain notes, autobiography, goals, and calendar with kind-weighted reranking. Persona preamble is sourced from `character.json`. Three modes (`ask` / `advise` / `draft`) swap directives. API providers stream SSE; CLI providers single-shot. Conversations persist to `data/ask-conversations/<id>.json` with 30-day auto-expiry unless pinned. Source chips navigate to the origin section landing page (Goals chips additionally deep-link to the record via existing `?id=` routing); record ids ride in `meta` so slice (b) can add record-level deep-linking for Brain Memory / Calendar Agenda without changing the source contract. Registered in the nav manifest so `⌘K` and voice (`ui_navigate`) resolve "ask" automatically. **Slice (b) (voice + promotion actions) still pending** — see backlog item below.
 >
 > 40 new tests (askService 11, askConversations 17, ask routes 12); full server suite stays green at 2549/2549.
 
@@ -116,7 +116,7 @@ Three high-value work items drawn from an inventory of the current app surface (
 
 **Definition of done (slice a).**
 - `/ask` page accepts a question, streams an answer in the twin's voice, shows ≥3 source chips per answer.
-- Clicking a source deep-links to the origin (Brain note, Memory item, Goal, Calendar event).
+- Clicking a source navigates to the origin section (Goal chips deep-link to the record; Brain Memory + Calendar Agenda chips land on the section page until record-level routing lands in slice b).
 - Conversations persist and are listable at `/ask`.
 - `Cmd+K` → typing a question routes into a new conversation.
 

@@ -154,13 +154,17 @@ async function retrieveBrainNotes(question, queryTokens) {
   ]);
 
   const candidates = [];
+  // Brain Memory tab doesn't currently consume `type`/`id` query params, so
+  // chips land on the section page; the record id rides in `meta` for a
+  // future record-level deep-link to consume without touching the source
+  // shape. (Same pattern as memory/calendar after round 18.)
   for (const idea of ideasArr || []) {
     const text = `${idea.title || ''} ${idea.description || ''}`.trim();
-    candidates.push({ kind: 'brain-note', subkind: 'idea', recordId: idea.id, title: idea.title || '(idea)', snippet: normalizeSnippet(text), href: `/brain/memory?type=ideas&id=${encodeURIComponent(idea.id)}`, updatedAt: idea.updatedAt || idea.createdAt });
+    candidates.push({ kind: 'brain-note', subkind: 'idea', recordId: idea.id, title: idea.title || '(idea)', snippet: normalizeSnippet(text), href: '/brain/memory', updatedAt: idea.updatedAt || idea.createdAt });
   }
   for (const proj of projectsArr || []) {
     const text = `${proj.title || ''} ${proj.description || ''}`.trim();
-    candidates.push({ kind: 'brain-note', subkind: 'project', recordId: proj.id, title: proj.title || '(project)', snippet: normalizeSnippet(text), href: `/brain/memory?type=projects&id=${encodeURIComponent(proj.id)}`, updatedAt: proj.updatedAt || proj.createdAt });
+    candidates.push({ kind: 'brain-note', subkind: 'project', recordId: proj.id, title: proj.title || '(project)', snippet: normalizeSnippet(text), href: '/brain/memory', updatedAt: proj.updatedAt || proj.createdAt });
   }
   for (const entry of inbox || []) {
     // Brain inbox records use `capturedText` / `capturedAt` (see
@@ -174,6 +178,7 @@ async function retrieveBrainNotes(question, queryTokens) {
   for (const c of candidates) {
     c.relevance = lexicalScore(`${c.title} ${c.snippet}`, queryTokens);
     c.id = `brain-note:${c.subkind}:${c.recordId}`;
+    c.meta = { subkind: c.subkind, recordId: c.recordId, updatedAt: c.updatedAt };
   }
   return rankAndCap(candidates, 'brain-note');
 }
