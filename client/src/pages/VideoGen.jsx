@@ -69,6 +69,15 @@ export default function VideoGen() {
   const [disableAudio, setDisableAudio] = useState(false);
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
+  // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
+  // React Router doesn't remount on query-string-only navigation, so the
+  // initial useState capture would otherwise stick.
+  useEffect(() => {
+    if (incomingSourceImage) {
+      setSourceImageFile(incomingSourceImage);
+      setSourceImageUpload(null);
+    }
+  }, [incomingSourceImage]);
   const [history, setHistory] = useState([]);
   const [preview, setPreview] = useState(null);
   const navigate = useNavigate();

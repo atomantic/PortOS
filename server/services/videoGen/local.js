@@ -51,8 +51,18 @@ export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export const cancel = () => {
   if (!activeProcess) return false;
-  activeProcess.kill('SIGTERM');
-  activeProcess = null;
+  const proc = activeProcess;
+  proc.kill('SIGTERM');
+  // KEEP activeProcess set until proc.on('close') clears it. Without this,
+  // the BUSY guard immediately allows a new generation while the SIGTERM'd
+  // child is still running (mlx_video can ignore SIGTERM mid-tensor-op),
+  // and we'd lose the handle for a follow-up SIGKILL. Escalate after 8s.
+  setTimeout(() => {
+    if (activeProcess === proc && !proc.killed) {
+      console.log(`⚠️ video child didn't exit on SIGTERM — escalating to SIGKILL`);
+      proc.kill('SIGKILL');
+    }
+  }, 8000);
   return true;
 };
 

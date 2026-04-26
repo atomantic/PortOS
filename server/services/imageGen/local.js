@@ -52,9 +52,18 @@ export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export const cancel = () => {
   if (!activeProcess) return false;
-  activeProcess.kill('SIGTERM');
-  activeProcess = null;
-  activeJob = null;
+  const proc = activeProcess;
+  proc.kill('SIGTERM');
+  // KEEP activeProcess + activeJob set until proc.on('close') clears them.
+  // Otherwise BUSY immediately allows a new generation while the SIGTERM'd
+  // mflux child is still running, and we lose the handle for a follow-up
+  // SIGKILL. Escalate after 8s if the child ignored SIGTERM.
+  setTimeout(() => {
+    if (activeProcess === proc && !proc.killed) {
+      console.log(`⚠️ image child didn't exit on SIGTERM — escalating to SIGKILL`);
+      proc.kill('SIGKILL');
+    }
+  }, 8000);
   return true;
 };
 
