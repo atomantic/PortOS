@@ -14,12 +14,34 @@ export function useImageGenProgress() {
     const onStarted = (data) => {
       if (activeRef.current && !generationIdRef.current) {
         generationIdRef.current = data.generationId;
+        // Seed with totalSteps from the started event so the status row
+        // can show "Step 0/N" immediately instead of falling back to
+        // "Waiting for first preview..." on the first poll cycle.
+        setProgress({
+          generationId: data.generationId,
+          progress: 0,
+          step: 0,
+          totalSteps: data.totalSteps ?? null,
+          eta: null,
+          currentImage: null
+        });
       }
     };
+    // Merge fields rather than replacing — the server throttles
+    // `currentImage` (every ~2s) and the SD API may omit step/totalSteps
+    // on some polls. Replacing on every event makes the preview flicker
+    // back to "Waiting for first preview..." between frames.
     const onProgress = (data) => {
-      if (activeRef.current && data.generationId === generationIdRef.current) {
-        setProgress(data);
-      }
+      if (!activeRef.current || data.generationId !== generationIdRef.current) return;
+      setProgress(prev => ({
+        ...(prev || {}),
+        generationId: data.generationId,
+        progress: data.progress ?? prev?.progress ?? 0,
+        eta: data.eta ?? prev?.eta ?? null,
+        step: data.step ?? prev?.step ?? 0,
+        totalSteps: data.totalSteps ?? prev?.totalSteps ?? null,
+        currentImage: data.currentImage ?? prev?.currentImage ?? null
+      }));
     };
     const onDone = (data) => {
       if (activeRef.current && data.generationId === generationIdRef.current) {
