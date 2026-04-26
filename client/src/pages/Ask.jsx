@@ -288,7 +288,17 @@ export default function Ask() {
     const persistedConvId = activeConv?.id && CONV_ID_RE.test(activeConv.id) ? activeConv.id : undefined;
     let serverConvId = persistedConvId;
     let collectedSources = [];
-    let answer = '';
+    // Accumulate deltas into an array; concat-on-state would be O(n²) since
+    // each render also pays the React diff for an ever-growing string. We
+    // join() only when flushing to state, and we batch state flushes with
+    // requestAnimationFrame so the render rate is bounded by the display
+    // refresh, not by the SSE delta rate.
+    const chunks = [];
+    let pendingFrame = 0;
+    const flushStreamingTurn = () => {
+      pendingFrame = 0;
+      setStreamingTurn({ content: chunks.join(''), sources: collectedSources });
+    };
     let persistedTurn = null;
 
     await api.streamAskTurn(
@@ -310,10 +320,10 @@ export default function Ask() {
             }
           } else if (event === 'sources') {
             collectedSources = data.sources || [];
-            setStreamingTurn((prev) => ({ content: prev?.content || '', sources: collectedSources }));
+            if (!pendingFrame) pendingFrame = requestAnimationFrame(flushStreamingTurn);
           } else if (event === 'delta') {
-            answer += data.text || '';
-            setStreamingTurn({ content: answer, sources: collectedSources });
+            if (data.text) chunks.push(data.text);
+            if (!pendingFrame) pendingFrame = requestAnimationFrame(flushStreamingTurn);
           } else if (event === 'done') {
             persistedTurn = data.turn || null;
           } else if (event === 'error') {
@@ -324,6 +334,13 @@ export default function Ask() {
     ).catch((err) => {
       if (err.name !== 'AbortError') toast.error(err.message || 'Ask failed');
     });
+
+    // Cancel any rAF queued after the last delta so a flush can't race with
+    // the cleanup `setStreamingTurn(null)` below.
+    if (pendingFrame) {
+      cancelAnimationFrame(pendingFrame);
+      pendingFrame = 0;
+    }
 
     const wasAborted = controller.signal.aborted;
     setStreamingTurn(null);

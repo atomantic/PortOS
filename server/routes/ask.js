@@ -175,7 +175,11 @@ router.post('/', asyncHandler(async (req, res) => {
   // the last PROMPT_HISTORY_TURNS prior turns as multi-turn context.
   const history = (conversation.turns || []).slice(-(PROMPT_HISTORY_TURNS + 1), -1);
 
-  let assistantText = '';
+  // Accumulate deltas into an array and join once at the end; `+=` would be
+  // O(n²) on long answers where each chunk reallocates the running string.
+  // Mirrors `askService.runAsk`'s producer-side pattern.
+  const assistantChunks = [];
+  let assistantFallback = '';
   let assistantSources = [];
   let providerInfo = {};
 
@@ -201,20 +205,22 @@ router.post('/', asyncHandler(async (req, res) => {
         assistantSources = evt.sources;
         await send('sources', { sources: evt.sources });
       } else if (evt.type === 'delta') {
-        assistantText += evt.text;
+        assistantChunks.push(evt.text);
         await send('delta', { text: evt.text });
       } else if (evt.type === 'done') {
         providerInfo = { providerId: evt.providerId, model: evt.model };
         // Both API and CLI providers stream their text via `delta` events
         // (CLI providers yield a single big chunk). The terminal `done`
         // event also carries the full answer as a defensive fallback —
-        // populate `assistantText` from it only if no deltas arrived.
-        if (!assistantText && evt.answer) assistantText = evt.answer;
+        // capture it only if no deltas arrived.
+        if (assistantChunks.length === 0 && evt.answer) assistantFallback = evt.answer;
       } else if (evt.type === 'error') {
         streamErrored = true;
         await send('error', { error: evt.error });
       }
     }
+
+    const assistantText = assistantChunks.length ? assistantChunks.join('') : assistantFallback;
 
     // If the client bailed mid-stream we still persist whatever assistant
     // text we accumulated so the conversation isn't silently lossy on
