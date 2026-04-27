@@ -145,37 +145,162 @@ const enqueuePlay = async (bytes) => {
 const isTtsActive = () => ttsQueueDepth > 0 || currentSource !== null;
 const isInTtsEchoWindow = () => isTtsActive() || performance.now() < ttsCooldownUntil;
 
-// Ring of recently-spoken TTS sentences (lowercased). Web Speech STT has no
-// energy-based echo rejection like continuous-VAD mode, so short fragments
-// from the bot's own speaker ("specific block", "or") get transcribed back
-// as user turns. We compare each final against this buffer and drop
-// substring matches even after the time-based echo window expires — late
-// reverb or a slow STT result can still land outside the tail.
+// Ring of recently-spoken TTS sentences (with cached trigrams). Echo
+// detection uses two stacked filters:
+//   1. Length gate: utterances < MIN_TOKENS_FOR_ECHO_CHECK words bypass the
+//      check entirely, so short barge-ins ("wait", "stop", "hold on") still
+//      interrupt the bot even if those words appear in TTS.
+//   2. Trigram overlap: for longer utterances, require ≥ 2 shared 3-word
+//      windows with a recent TTS sentence. Two contiguous 3-word matches
+//      are strong evidence — coincidental overlap on common words rarely
+//      produces multiple shared trigrams. A clean substring match also
+//      counts (handles the case where STT picks up a clean slice of TTS).
+//
+// This client gate runs only on the Web Speech path where transcripts are
+// produced in-browser and sent as voice:text. Whisper-based continuous mode
+// sends audio to the server, so its echo gate lives in
+// server/services/voice/echo.js — KEEP THE TWO IN SYNC. Both implement the
+// same algorithm so tuning one (threshold, window, tokenizer) requires the
+// other to match.
 const TTS_ECHO_MEMORY_MS = 8000;
+const MIN_TOKENS_FOR_ECHO_CHECK = 4;
+const MIN_SHARED_TRIGRAMS = 2;
 const recentTtsSentences = [];
 
-const normalizeForEcho = (s) => (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+const tokenizeForEcho = (s) => (s || '')
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+  .split(/\s+/)
+  .filter(Boolean);
+
+const buildTrigrams = (tokens) => {
+  if (tokens.length < 3) return [];
+  const out = [];
+  for (let i = 0; i + 3 <= tokens.length; i++) {
+    out.push(`${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`);
+  }
+  return out;
+};
 
 const rememberTtsSentence = (sentence) => {
-  const text = normalizeForEcho(sentence);
-  if (!text) return;
+  const tokens = tokenizeForEcho(sentence);
+  if (!tokens.length) return;
   const now = performance.now();
   while (recentTtsSentences.length && now - recentTtsSentences[0].t > TTS_ECHO_MEMORY_MS) {
     recentTtsSentences.shift();
   }
-  recentTtsSentences.push({ text, t: now });
+  recentTtsSentences.push({
+    text: tokens.join(' '),
+    trigrams: new Set(buildTrigrams(tokens)),
+    t: now,
+  });
 };
 
 const looksLikeTtsEcho = (text) => {
-  const needle = normalizeForEcho(text);
-  if (!needle) return false;
+  // Headphone setups have no acoustic echo path — the speaker output goes
+  // into the user's ears, not the open air around the mic. Bypass the
+  // content gate entirely so we never misclassify the user's actual speech.
+  if (audioRoute.likelyHeadset) return false;
+
+  const tokens = tokenizeForEcho(text);
+  if (tokens.length < MIN_TOKENS_FOR_ECHO_CHECK) return false;
+  const heardText = tokens.join(' ');
+  const heardTrigrams = buildTrigrams(tokens);
+  if (!heardTrigrams.length) return false;
   const now = performance.now();
   for (const entry of recentTtsSentences) {
     if (now - entry.t > TTS_ECHO_MEMORY_MS) continue;
-    if (entry.text.includes(needle)) return true;
+    if (entry.text.includes(heardText)) return true;
+    let shared = 0;
+    for (const tg of heardTrigrams) {
+      if (entry.trigrams.has(tg)) {
+        shared += 1;
+        if (shared >= MIN_SHARED_TRIGRAMS) return true;
+      }
+    }
   }
   return false;
 };
+
+// ─── Audio route detection (headset vs built-in) ────────────────────────
+// Headphones eliminate the speaker-into-mic acoustic path that causes the
+// echo loop, so we can relax echo gates when we're confident the user is
+// on a headset. Default-tight on uncertainty: a false "headset" detection
+// re-opens the loop, while a false "built-in" detection only makes barge-in
+// slightly less twitchy.
+//
+// Strong signal: the active mic shares a `groupId` with an audiooutput
+// device AND the device label looks headset-y (AirPods, headset, buds, …).
+// `groupId` alone isn't enough — a laptop's built-in mic + built-in speakers
+// also share a groupId. Labels alone aren't enough either — a custom-named
+// device ("Adam's USB Mic") won't match. Both required → high confidence.
+
+const HEADSET_LABEL_RE = /(headphone|headset|airpods|buds|earphone|in[- ]?ear|jabra|sennheiser|bose|sony wh-|sony wf-)/i;
+const BUILTIN_LABEL_RE = /(macbook|built[- ]?in|internal)/i;
+
+const audioRoute = {
+  likelyHeadset: false,
+  label: null,
+  reason: 'not detected',
+  checkedAt: 0,
+};
+
+const detectAudioRoute = async (activeStream) => {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    audioRoute.likelyHeadset = false;
+    audioRoute.reason = 'enumerateDevices unsupported';
+    return audioRoute;
+  }
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const mics = devices.filter((d) => d.kind === 'audioinput');
+  const outs = devices.filter((d) => d.kind === 'audiooutput');
+  const settings = activeStream?.getAudioTracks?.()?.[0]?.getSettings?.() || {};
+  const activeMic = mics.find((d) => d.deviceId === settings.deviceId)
+    || mics.find((d) => d.deviceId === 'default')
+    || mics[0];
+  if (!activeMic) {
+    audioRoute.likelyHeadset = false;
+    audioRoute.reason = 'no active mic';
+    return audioRoute;
+  }
+  const sameGroup = activeMic.groupId
+    && outs.some((o) => o.groupId === activeMic.groupId);
+  const label = activeMic.label || '';
+  const headsetByLabel = HEADSET_LABEL_RE.test(label);
+  const builtInByLabel = BUILTIN_LABEL_RE.test(label);
+  // Require BOTH groupId match AND headset-y label, AND not explicitly a
+  // built-in device. This is the conservative configuration.
+  audioRoute.likelyHeadset = !!(sameGroup && headsetByLabel && !builtInByLabel);
+  audioRoute.label = label;
+  audioRoute.reason = audioRoute.likelyHeadset
+    ? 'groupId+label match'
+    : `sameGroup=${!!sameGroup} headsetByLabel=${headsetByLabel} builtInByLabel=${builtInByLabel}`;
+  audioRoute.checkedAt = performance.now();
+  console.log(`🎧 [voice] audio route: ${audioRoute.likelyHeadset ? 'headset' : 'open-air'} (${audioRoute.reason}) label="${label}"`);
+  return audioRoute;
+};
+
+// Re-detect when the user plugs/unplugs hardware mid-session. Without this,
+// disconnecting headphones leaves us in "headset" mode and the loop returns.
+if (typeof navigator !== 'undefined' && navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    // We don't have an active stream reference here, so re-detect against
+    // whatever device the next getUserMedia() picks. Until then, be safe
+    // and assume open-air.
+    audioRoute.likelyHeadset = false;
+    audioRoute.reason = 'devicechange — pending re-detect';
+  });
+}
+
+// Live introspection from the browser console: `window.__portosAudioRoute`.
+// Mirrors the existing `__portosVadDebug` pattern so both diagnostics live
+// at the same handle.
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, '__portosAudioRoute', {
+    configurable: true,
+    get: () => ({ ...audioRoute }),
+  });
+}
 
 // socket.io may deliver a plain ArrayBuffer, a sliced TypedArray/DataView,
 // or a serialized Buffer-like { type: 'Buffer', data: [...] }. Using the raw
@@ -220,6 +345,9 @@ export const startCapture = async () => {
       autoGainControl: true,
     },
   });
+  // Run after permission is granted — `enumerateDevices` only returns
+  // device labels post-grant, and the headset heuristic relies on labels.
+  detectAudioRoute(stream).catch(() => {});
   const mimeType = pickMime();
   chunks = [];
   recorder = new MediaRecorder(stream, { mimeType });
@@ -470,7 +598,9 @@ const handleFrame = (frame) => {
   if (vadState === 'idle') {
     // Raise the bar while TTS plays AND during the echo tail so neither the
     // bot's live audio nor reverb through the mic trigger a false barge-in.
-    const inEcho = isInTtsEchoWindow();
+    // Skip the bump entirely on a confirmed headset — there's no acoustic
+    // path from speaker to mic, so the user can interrupt at normal volume.
+    const inEcho = isInTtsEchoWindow() && !audioRoute.likelyHeadset;
     const effectiveOnRms = inEcho ? onRms * VAD.bargeInMul : onRms;
     const effectiveConfirmMs = inEcho ? VAD.bargeInOnsetConfirmMs : VAD.onsetConfirmMs;
     if (rms > effectiveOnRms) {
@@ -548,6 +678,7 @@ export const startContinuous = async (callbacks = {}) => {
       autoGainControl: false,
     },
   });
+  detectAudioRoute(continuousStream).catch(() => {});
 
   const Ctor = window.AudioContext || window.webkitAudioContext;
   continuousCtx = new Ctor();

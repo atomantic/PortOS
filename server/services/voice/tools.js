@@ -90,7 +90,11 @@ const GROUP_INTENT = {
   goals: /\b(goals?|progress|objective)\b/i,
   system: /\b(restart|crash(?:ed)?|pm2|process|service|is.*(?:running|down|up)|status)\b/i,
   feeds: /\b(feeds?|news|unread|article|rss|digest)\b/i,
-  dailylog: /\b(daily ?log|journal|dictat|log entry|log something|to my log|read (?:back )?my log)\b/i,
+  // `daily ?logi?n?s?` absorbs whisper/Web-Speech transcription drift on
+  // "daily log": variants like "daily logs" (plural), "daily login" (heard as
+  // a familiar word), "daily logins" all gate the daily-log toolset on. The
+  // \b anchors keep it from matching inside unrelated words like "logging".
+  dailylog: /\b(daily ?logi?n?s?|journal|dictat|log entry|log something|to my log|read (?:back )?my log)\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -745,9 +749,10 @@ const TOOLS = [
   {
     name: 'ui_navigate',
     description:
-      'Navigate the UI to a page. Use for "take me to X" / "open X" / "go to X" EXCEPT Daily Log (use daily_log_open). ' +
-      'Pass `page` as a short name the user would say: tasks, agents, gsd, briefing, calendar, goals, brain, meatspace, memory, messages, settings, shell, instances, wiki, character, health, body, alcohol, etc. ' +
-      'Server resolves fuzzy — "chief of staff tasks", "cos tasks", "task page" all map to tasks. If no match, the error lists valid names.',
+      'Navigate the UI to a page. Use for "take me to X" / "open X" / "go to X" — including the Daily Log when the user just wants to VIEW it without writing. ' +
+      'Pass `page` as a short name the user would say: tasks, agents, gsd, briefing, calendar, goals, brain, meatspace, memory, messages, settings, shell, instances, wiki, character, health, body, alcohol, daily log, journal, etc. ' +
+      'Server resolves fuzzy — "chief of staff tasks", "cos tasks", "task page" all map to tasks. If no match, the error lists valid names. ' +
+      'Only prefer daily_log_open over this tool when the user clearly wants to write/dictate ("start", "new", "entry", "make", "dictate"); plain "open my daily log" or "go to the daily log" should use ui_navigate.',
     parameters: {
       type: 'object',
       properties: {
@@ -915,6 +920,11 @@ const toSpec = (t) => ({
 });
 
 export const getToolSpecs = () => TOOLS.map(toSpec);
+
+// Canonical list of tool names, used by pipeline.js to detect the
+// "narrate-instead-of-call" failure where the LLM emits a literal tool name
+// in its prose. Exported so the regex can't drift when tools are added.
+export const getAllToolNames = () => TOOLS.map((t) => t.name);
 
 // Plain-format metadata for non-LLM consumers (the command palette) so routes
 // don't need to reach through OpenAI-shaped function specs to get to the same
