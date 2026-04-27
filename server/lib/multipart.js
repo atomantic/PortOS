@@ -122,7 +122,15 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
           let fr = null;
           fileFilter(req, fileMeta, (err, accept) => { fr = { err, accept }; });
           if (fr.err) return fail(fr.err);
-          if (!fr.accept) return fail(new Error('File type not allowed'));
+          if (!fr.accept) {
+            // Set status/code so the centralized error middleware returns a
+            // 400 to the client instead of a 500 (the err thrown by the
+            // filter rejection is a client-input error, not a server bug).
+            const rejectErr = new Error('File type not allowed');
+            rejectErr.status = 400;
+            rejectErr.code = 'INVALID_FILE_TYPE';
+            return fail(rejectErr);
+          }
         }
 
         const rawExt = currentFilename.match(/\.[^.]+$/)?.[0] || '';
