@@ -1,8 +1,9 @@
 import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Float, MeshDistortMaterial, OrbitControls, Sparkles } from '@react-three/drei';
+import { Float, MeshDistortMaterial, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
+import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 
 // Holographic wireframe skull/head geometry
 function CyberHead({ color, state, speaking }) {
@@ -426,14 +427,7 @@ function Scene({ state, speaking }) {
       <GroundGlow color={color} />
 
       {/* Drag-to-rotate controls */}
-      <OrbitControls
-        enablePan={false}
-        enableZoom={false}
-        enableDamping
-        dampingFactor={0.08}
-        rotateSpeed={0.6}
-        makeDefault
-      />
+      <CoSAvatarOrbitControls />
     </>
   );
 }

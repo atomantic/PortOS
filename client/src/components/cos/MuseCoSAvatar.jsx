@@ -1,8 +1,9 @@
 import { useRef, useMemo, useEffect, useState, Suspense } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF, OrbitControls, Sparkles } from '@react-three/drei';
+import { useGLTF, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
+import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 
 const MODEL_URL = '/api/avatar/model.glb';
 
@@ -137,14 +138,7 @@ function Scene({ state, speaking }) {
       <StateEffects color={color} state={state} />
       <GroundGlow color={color} />
 
-      <OrbitControls
-        enablePan={false}
-        enableZoom={false}
-        enableDamping
-        dampingFactor={0.08}
-        rotateSpeed={0.6}
-        makeDefault
-      />
+      <CoSAvatarOrbitControls />
     </>
   );
 }

@@ -1,8 +1,9 @@
 import { useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Float, MeshDistortMaterial, OrbitControls, Sparkles } from '@react-three/drei';
+import { Float, MeshDistortMaterial, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
+import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 
 function SigilCore({ color, state, speaking }) {
   const coreRef = useRef();
@@ -274,14 +275,7 @@ function Scene({ state, speaking }) {
         color={color}
       />
 
-      <OrbitControls
-        enablePan={false}
-        enableZoom={false}
-        enableDamping
-        dampingFactor={0.08}
-        rotateSpeed={0.6}
-        makeDefault
-      />
+      <CoSAvatarOrbitControls />
     </>
   );
 }
