@@ -21,11 +21,17 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
     const menu = menuRef.current;
     if (!trigger || !menu) return;
 
-    const triggerRect = trigger.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const width = Math.min(MENU_WIDTH, Math.max(180, viewportWidth - VIEWPORT_PADDING * 2));
+
+    // Apply width before measuring height — narrow viewports may wrap content
+    // and grow the menu's height. Measuring at the wrong width produces a
+    // top value that under-clamps and lets the portal overflow.
+    menu.style.width = `${width}px`;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
     const maxLeft = viewportWidth - width - VIEWPORT_PADDING;
     const left = Math.min(
       Math.max(triggerRect.right - width, VIEWPORT_PADDING),

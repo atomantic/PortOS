@@ -47,6 +47,7 @@ const REQUIRED_TOKEN_VARS = [
   '--port-backdrop-filter',
   '--port-body-gradient',
   '--port-body-texture',
+  '--port-body-overlay-opacity',
   '--port-app-backdrop',
   '--port-sidebar-bg',
   '--port-input-bg',
@@ -62,6 +63,13 @@ const REQUIRED_TOKEN_VARS = [
   '--port-chart-3',
   '--port-chart-4',
   '--port-chart-grid',
+  '--port-bg-alpha',
+  '--port-card-alpha',
+  '--port-border-alpha',
+  '--port-border-style',
+  '--port-motion-fast',
+  '--port-motion-medium',
+  '--port-motion-slow',
 ];
 
 const REQUIRED_DOC_SECTIONS = [

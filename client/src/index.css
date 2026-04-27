@@ -239,8 +239,7 @@ html[data-port-theme] header button {
 }
 
 html[data-port-theme] aside nav :is(a, button):hover,
-html[data-port-theme] header :is(a, button):hover,
-html[data-port-theme] [class*="hover:bg-port-border"]:hover {
+html[data-port-theme] header :is(a, button):hover {
   background: var(--port-hover-bg) !important;
 }
 

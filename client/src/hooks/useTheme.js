@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   THEMES,
   THEME_LIST,
@@ -35,22 +35,26 @@ export default function useTheme() {
     applyTheme(id);
     return id;
   });
+  const userPickedRef = useRef(false);
 
   useEffect(() => {
     fetch('/api/settings')
       .then(r => r.ok ? r.json() : null)
       .then(settings => {
+        if (userPickedRef.current) return;
         const serverTheme = settings?.theme ? normalizeThemeId(settings.theme) : null;
-        if (serverTheme && serverTheme !== themeId) {
+        const currentSaved = normalizeThemeId(localStorage.getItem(STORAGE_KEY));
+        if (serverTheme && serverTheme !== currentSaved) {
           localStorage.setItem(STORAGE_KEY, serverTheme);
           applyTheme(serverTheme);
           setThemeId(serverTheme);
         }
       })
       .catch(() => console.log('Theme fetch failed, using localStorage fallback'));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const setTheme = useCallback((id) => {
+    userPickedRef.current = true;
     const normalized = normalizeThemeId(id);
     localStorage.setItem(STORAGE_KEY, normalized);
     applyTheme(normalized);
