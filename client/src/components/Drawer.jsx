@@ -36,6 +36,7 @@ export default function Drawer({ open, onClose, title, children, widthClass = 's
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
           <h2 className="text-base font-medium text-white">{title}</h2>
           <button
+            type="button"
             onClick={onClose}
             className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[40px] min-w-[40px] flex items-center justify-center"
             aria-label="Close settings"

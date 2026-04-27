@@ -22,9 +22,10 @@ export const stitchVideos = (videoIds) => request('/video-gen/stitch', {
   body: JSON.stringify({ videoIds }),
 });
 
-// generateVideo uses multipart/form-data when there's an upload, or
-// application/x-www-form-urlencoded otherwise. Bypass the JSON-only request()
-// helper so we can attach the source image when present.
+// generateVideo always sends multipart/form-data via FormData. Bypass the
+// JSON-only request() helper because the server route expects multipart for
+// the optional sourceImage upload (and uniform multipart parsing for both
+// upload and no-upload paths is simpler than branching on Content-Type).
 export async function generateVideo(fields) {
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) {

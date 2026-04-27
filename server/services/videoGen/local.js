@@ -13,7 +13,7 @@
 import { execFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { unlink, writeFile } from 'fs/promises';
-import { join, basename } from 'path';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
@@ -43,6 +43,16 @@ export const listVideoModels = () =>
 export const defaultVideoModelId = () => IS_WIN ? 'ltx_video' : 'ltx2_unified';
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
+
+// Validate that a sidecar/history-supplied filename is a safe basename under
+// the expected directory — guards against tampered history entries with
+// path-traversal segments (`../etc/passwd`) leaking into ffmpeg or unlink.
+const safeUnder = (root, name) => {
+  if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\\') || name.includes('..')) return null;
+  const rootResolved = resolvePath(root) + PATH_SEP;
+  const fullPath = resolvePath(join(root, name));
+  return fullPath.startsWith(rootResolved) ? fullPath : null;
+};
 
 const jobs = new Map();
 let activeProcess = null;
@@ -291,7 +301,10 @@ export async function extractLastFrame(historyId) {
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
-  const videoPath = join(PATHS.videos, item.filename);
+  // Validate against tampered history entries — without this, a `../...`
+  // filename could make ffmpeg read arbitrary files outside data/videos.
+  const videoPath = safeUnder(PATHS.videos, item.filename);
+  if (!videoPath) throw new ServerError('Invalid video filename', { status: 400, code: 'VALIDATION_ERROR' });
   if (!existsSync(videoPath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
 
   await ensureDir(PATHS.images);
@@ -376,8 +389,14 @@ export async function deleteHistoryItem(id) {
   const history = await loadHistory();
   const item = history.find((h) => h.id === id);
   if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  await unlink(join(PATHS.videos, item.filename)).catch(() => {});
-  if (item.thumbnail) await unlink(join(PATHS.videoThumbnails, item.thumbnail)).catch(() => {});
+  // Same path-traversal guard as extractLastFrame — unlink only if the
+  // filename resolves to inside the expected dir.
+  const videoFile = safeUnder(PATHS.videos, item.filename);
+  if (videoFile) await unlink(videoFile).catch(() => {});
+  if (item.thumbnail) {
+    const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
+    if (thumbFile) await unlink(thumbFile).catch(() => {});
+  }
   await saveHistory(history.filter((h) => h.id !== id));
   return { ok: true };
 }

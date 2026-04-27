@@ -186,14 +186,20 @@ router.get('/setup/install', (req, res) => {
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
   });
-  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+  // `send` and `safeEnd` no-op once the response has ended so a late
+  // pip-output line (or the promise.then below) doesn't trigger
+  // ERR_STREAM_WRITE_AFTER_END or double-end the response.
+  const send = (event) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const safeEnd = () => { if (!res.writableEnded) res.end(); };
 
   const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, send);
-  promise.then(() => res.end());
+  promise.then(safeEnd);
 
   // Client navigation away should kill pip — a torch upgrade can run for
   // 10+ minutes and would otherwise keep going invisibly.
-  req.on('close', () => { kill(); res.end(); });
+  req.on('close', () => { kill(); safeEnd(); });
 });
 
 export default router;

@@ -68,7 +68,13 @@ if (!apiReady) process.exit(0);
 // we still POST navigate, which will trigger a launch via the route handler
 // when CDP isn't yet up. The poll just gives Chrome a head start.
 await poll(async () => {
-  const res = await fetch(browserHealthUrl).catch(() => null);
+  // Use the same per-request AbortController guard that ping() uses — without
+  // a timeout, a hung TCP connection (accepted but never responds) would let
+  // a single fetch await forever and ignore BROWSER_TIMEOUT_MS entirely.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  const res = await fetch(browserHealthUrl, { signal: controller.signal }).catch(() => null);
+  clearTimeout(timer);
   if (!res?.ok) return false;
   const json = await res.json().catch(() => null);
   return json?.connected === true;
