@@ -7,16 +7,23 @@ vi.mock('fs', () => ({
     const chunks = [];
     const handlers = {};
     return {
-      write: (c) => chunks.push(Buffer.from(c)),
+      // Node's writable.write returns true (no backpressure) — match that.
+      write: (c) => { chunks.push(Buffer.from(c)); return true; },
+      // Mirror Node's end signatures: end(), end(buf), end(buf, cb), end(cb).
       end: (data, cb) => {
-        if (data) chunks.push(Buffer.from(data));
-        if (typeof data === 'function') data();
-        else if (typeof cb === 'function') cb();
-        // Fire 'finish' so the parser's Promise resolves.
+        let callback;
+        if (typeof data === 'function') {
+          callback = data;
+        } else {
+          if (data) chunks.push(Buffer.from(data));
+          if (typeof cb === 'function') callback = cb;
+        }
+        if (callback) callback();
         setImmediate(() => handlers.finish?.());
       },
       destroy: () => {},
       on: (evt, fn) => { handlers[evt] = fn; },
+      once: (evt, fn) => { handlers[evt] = fn; },
       _chunks: chunks,
     };
   },

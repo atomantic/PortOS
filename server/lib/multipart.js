@@ -1,17 +1,20 @@
 /**
  * Streaming multipart/form-data parser — multer.diskStorage() replacement.
- * Streams the matching file part directly to disk; collects text fields
- * into req.body. The file field is OPTIONAL — a multipart request that
- * carries only text fields populates req.body and leaves req.file undefined.
+ *
+ * True streaming: file content is written to disk in chunks as it arrives,
+ * never buffered in memory. Text fields are buffered (small by definition).
+ * Boundary detection keeps a small lookback (boundary length) between
+ * chunks so a boundary spanning a chunk edge isn't missed.
  *
  * Returns an Express middleware. Populates:
  *   - req.body[name]  — for text parts (Content-Disposition has no filename)
  *   - req.file = { path, originalname, mimetype, size } — for the matching
  *     file part (Content-Disposition has filename and name === fieldName).
- *     Other file parts (different field names) are skipped silently.
+ *     Other file parts (different field names) are silently skipped.
  */
 
 import { createWriteStream } from 'fs';
+import { unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
@@ -19,134 +22,256 @@ import { randomUUID } from 'crypto';
 export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
   const maxSize = limits.fileSize ?? Infinity;
 
-  return async (req, res, next) => {
+  return (req, res, next) => {
     const ct = req.headers['content-type'] || '';
     if (!ct.startsWith('multipart/form-data')) return next(new Error('Expected multipart/form-data'));
     const bm = ct.match(/boundary=([^\s;]+)/);
     if (!bm) return next(new Error('Missing multipart boundary'));
-    const result = await parseMultipart(req, bm[1], fieldName, maxSize, fileFilter).catch((err) => ({ err }));
-    if (result.err) return next(result.err);
-    req.body = result.body;
-    if (result.file) req.file = result.file;
-    next();
+    streamMultipart(req, bm[1], fieldName, maxSize, fileFilter, next);
   };
 }
 
-// Read the full request body into a single Buffer with an upper bound. We
-// enforce maxBodySize while accumulating chunks and destroy the stream the
-// moment we exceed it — a malicious client can't blow heap by streaming
-// gigabytes through. The cap is `maxSize + 1MB` for headers/boundary
-// overhead — text fields stay small in practice and the file part is the
-// only thing that approaches maxSize.
-function readAllBytes(stream, maxBodySize) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let total = 0;
-    stream.on('data', (c) => {
-      total += c.length;
-      if (total > maxBodySize) {
-        stream.destroy();
-        reject(new Error(`Request body too large (max ${maxBodySize} bytes)`));
-        return;
-      }
-      chunks.push(c);
-    });
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', reject);
-  });
-}
-
-async function parseMultipart(stream, boundary, fileFieldName, maxSize, fileFilter) {
-  // Cap the in-memory buffer at maxSize + 1MB for headers/text-field overhead.
-  // If maxSize is Infinity (no limit) we still cap at 100 MB so a runaway
-  // upload can't OOM the server.
-  const overheadBytes = 1024 * 1024;
-  const maxBodySize = Number.isFinite(maxSize) ? maxSize + overheadBytes : 100 * 1024 * 1024;
-  const buf = await readAllBytes(stream, maxBodySize);
-  const PART_DELIM = Buffer.from('--' + boundary);
+function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next) {
+  const PART_DELIM = Buffer.from('\r\n--' + boundary);
+  const FIRST_DELIM = Buffer.from('--' + boundary);
   const HEADER_END = Buffer.from('\r\n\r\n');
   const CRLF = Buffer.from('\r\n');
 
+  const STATE_PREAMBLE = 0;       // before first boundary
+  const STATE_HEADERS = 1;        // accumulating part headers
+  const STATE_BODY = 2;           // streaming part body (text or file)
+  const STATE_AFTER_BOUNDARY = 3; // just past a boundary; expect CRLF or `--`
+  const STATE_DONE = 4;
+
+  let state = STATE_PREAMBLE;
+  let buf = Buffer.alloc(0);
+  let done = false;
+  let pendingFlush = 0;       // outstanding async ws.end callbacks
+  let endSeen = false;        // 'end' event fired but we may still be flushing
+  let textCharCount = 0;
+  const TEXT_FIELD_TOTAL_CAP = 1024 * 1024; // 1MB cap on aggregate text fields
+
+  // Per-part state
+  let currentName = null;
+  let currentFilename = null;
+  let isMatchingFile = false;     // true when current part is the file we want
+  let writeStream = null;
+  let writePath = null;
+  let bytesWritten = 0;
+  let textBuf = null;             // Buffer when current part is a text field
+
   const body = {};
-  let file = null;
+  let fileResult = null;
 
-  // Walk the body part-by-part. Each boundary is `--<boundary>` followed
-  // by either `\r\n` (more parts) or `--` (end-of-stream).
-  let cursor = 0;
-  // Skip preamble: find first boundary.
-  const firstBoundary = buf.indexOf(PART_DELIM, cursor);
-  if (firstBoundary === -1) throw new Error('Missing first multipart boundary');
-  cursor = firstBoundary + PART_DELIM.length;
+  const fail = (err) => {
+    if (done) return;
+    done = true;
+    state = STATE_DONE;
+    if (writeStream) {
+      writeStream.destroy();
+      // Best-effort cleanup of the partially-written file.
+      if (writePath) unlink(writePath).catch(() => {});
+    }
+    req.removeAllListeners('data');
+    next(err);
+  };
 
-  while (cursor < buf.length) {
-    // Check for end-of-stream marker.
-    if (buf.slice(cursor, cursor + 2).equals(Buffer.from('--'))) break;
-    // Skip CRLF after boundary.
-    if (!buf.slice(cursor, cursor + 2).equals(CRLF)) throw new Error('Malformed multipart: missing CRLF after boundary');
-    cursor += 2;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    state = STATE_DONE;
+    req.body = body;
+    if (fileResult) req.file = fileResult;
+    next();
+  };
 
-    // Find headers/body split.
-    const headerEnd = buf.indexOf(HEADER_END, cursor);
-    if (headerEnd === -1) throw new Error('Malformed multipart part: missing header terminator');
-    const headerStr = buf.slice(cursor, headerEnd).toString('utf-8');
-    const partBodyStart = headerEnd + HEADER_END.length;
-
-    // Find this part's terminator (next CRLF--<boundary>).
-    const partTerminator = Buffer.concat([CRLF, PART_DELIM]);
-    const partBodyEnd = buf.indexOf(partTerminator, partBodyStart);
-    if (partBodyEnd === -1) throw new Error('Malformed multipart part: missing terminating boundary');
-    const partBody = buf.slice(partBodyStart, partBodyEnd);
-
-    // Parse Content-Disposition. The negative-lookbehind prevents `name=`
-    // inside `filename=` from being matched as the part name (that bug
-    // caused file parts to be parsed as text fields keyed on the filename).
+  // Start a new part — parse headers, set up text buffer or file write stream.
+  const startPart = (headerBlock) => {
+    const headerStr = headerBlock.toString('utf-8');
+    // Negative lookbehind keeps `name=` inside `filename=` from matching.
     const nameMatch = headerStr.match(/(?<!file)name="([^"]+)"/i);
-    if (!nameMatch) throw new Error('Multipart part missing Content-Disposition name');
-    const name = nameMatch[1];
+    if (!nameMatch) return fail(new Error('Multipart part missing Content-Disposition name'));
+    currentName = nameMatch[1];
     const filenameMatch = headerStr.match(/filename="([^"]*)"/i);
-    const filename = filenameMatch?.[1];
+    currentFilename = filenameMatch?.[1];
 
-    if (filename != null && filename !== '') {
-      // File part. Stream-to-disk only the matching field; skip others.
-      if (name === fileFieldName) {
-        if (partBody.length > maxSize) throw new Error(`File too large (max ${maxSize} bytes)`);
-        const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
-        const mimetype = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
-        const rawExt = filename.match(/\.[^.]+$/)?.[0] || '';
-        const ext = rawExt.replace(/[^a-zA-Z0-9.]/g, '');
-        const fileMeta = { originalname: filename, mimetype };
+    if (currentFilename != null && currentFilename !== '') {
+      isMatchingFile = currentName === fileFieldName;
+      const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
+      currentFileMimetype = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
+      if (isMatchingFile) {
+        const fileMeta = { originalname: currentFilename, mimetype: currentFileMimetype };
 
         if (fileFilter) {
           let fr = null;
-          fileFilter(null, fileMeta, (err, accept) => { fr = { err, accept }; });
-          if (fr.err) throw fr.err;
-          if (!fr.accept) throw new Error('File type not allowed');
+          fileFilter(req, fileMeta, (err, accept) => { fr = { err, accept }; });
+          if (fr.err) return fail(fr.err);
+          if (!fr.accept) return fail(new Error('File type not allowed'));
         }
 
-        const filePath = join(tmpdir(), `upload-${randomUUID()}${ext}`);
-        await new Promise((resolve, reject) => {
-          const ws = createWriteStream(filePath);
-          ws.on('error', reject);
-          ws.on('finish', resolve);
-          ws.end(partBody);
-        });
-        file = { path: filePath, originalname: filename, mimetype, size: partBody.length };
+        const rawExt = currentFilename.match(/\.[^.]+$/)?.[0] || '';
+        const ext = rawExt.replace(/[^a-zA-Z0-9.]/g, '');
+        writePath = join(tmpdir(), `upload-${randomUUID()}${ext}`);
+        writeStream = createWriteStream(writePath);
+        writeStream.on('error', fail);
+        bytesWritten = 0;
       }
-      // Other file fields are silently skipped (no req.file/body entry).
+      // Non-matching file part: no buffer, no stream — bytes are silently
+      // discarded as the body advances past them.
     } else {
-      // Text field — append into req.body. Repeated names become arrays.
-      const value = partBody.toString('utf-8');
-      if (Object.prototype.hasOwnProperty.call(body, name)) {
-        if (Array.isArray(body[name])) body[name].push(value);
-        else body[name] = [body[name], value];
-      } else {
-        body[name] = value;
-      }
+      textBuf = Buffer.alloc(0);
     }
+  };
 
-    // Advance past the part body + terminating CRLF--boundary.
-    cursor = partBodyEnd + partTerminator.length;
-  }
+  // Emit `chunk` to the current part's destination (file write or text buffer
+  // or the void). Enforces maxSize for the matching file and the global
+  // text-field cap. Returns true to keep streaming, false on error/abort.
+  const writePartChunk = (chunk) => {
+    if (chunk.length === 0) return true;
+    if (currentFilename != null && currentFilename !== '') {
+      if (isMatchingFile) {
+        bytesWritten += chunk.length;
+        if (bytesWritten > maxSize) { fail(new Error(`File too large (max ${maxSize} bytes)`)); return false; }
+        if (!writeStream.write(chunk)) {
+          // Backpressure: pause the request stream and resume on drain.
+          req.pause();
+          writeStream.once('drain', () => req.resume());
+        }
+      }
+      // Non-matching file: drop bytes silently.
+    } else {
+      textCharCount += chunk.length;
+      if (textCharCount > TEXT_FIELD_TOTAL_CAP) { fail(new Error(`Text fields too large (max ${TEXT_FIELD_TOTAL_CAP} bytes)`)); return false; }
+      textBuf = Buffer.concat([textBuf, chunk]);
+    }
+    return true;
+  };
 
-  return { body, file };
+  // Finalize the current part — flush any pending data, then move on.
+  const endPart = (cb) => {
+    if (currentFilename != null && currentFilename !== '') {
+      if (isMatchingFile && writeStream) {
+        const ws = writeStream;
+        const path = writePath;
+        const size = bytesWritten;
+        const filename = currentFilename;
+        const mimetype = currentFileMimetype || 'application/octet-stream';
+        writeStream = null;
+        writePath = null;
+        pendingFlush += 1;
+        ws.end(() => {
+          fileResult = { path, originalname: filename, mimetype, size };
+          pendingFlush -= 1;
+          cb();
+          // If 'end' arrived while we were still flushing, finalize now.
+          if (endSeen && pendingFlush === 0 && !done) finish();
+        });
+      } else {
+        cb();
+      }
+    } else if (textBuf != null) {
+      const value = textBuf.toString('utf-8');
+      if (Object.prototype.hasOwnProperty.call(body, currentName)) {
+        if (Array.isArray(body[currentName])) body[currentName].push(value);
+        else body[currentName] = [body[currentName], value];
+      } else {
+        body[currentName] = value;
+      }
+      textBuf = null;
+      cb();
+    } else {
+      cb();
+    }
+  };
+
+  // Captured by startPart so endPart's async cb has the right mimetype even
+  // after the next part may have started.
+  let currentFileMimetype = null;
+
+  const tick = () => {
+    if (done) return;
+
+    while (true) {
+      if (state === STATE_PREAMBLE) {
+        const idx = buf.indexOf(FIRST_DELIM);
+        if (idx === -1) {
+          // Need more bytes; drop everything past the last possible boundary start.
+          const safe = buf.length - (FIRST_DELIM.length - 1);
+          if (safe > 0) buf = buf.slice(safe);
+          return;
+        }
+        buf = buf.slice(idx + FIRST_DELIM.length);
+        state = STATE_AFTER_BOUNDARY;
+        continue;
+      }
+
+      if (state === STATE_AFTER_BOUNDARY) {
+        if (buf.length < 2) return;
+        const trailing = buf.slice(0, 2);
+        if (trailing[0] === 0x2d && trailing[1] === 0x2d) { // `--`
+          buf = Buffer.alloc(0);
+          return finish();
+        }
+        if (trailing[0] !== 0x0d || trailing[1] !== 0x0a) return fail(new Error('Malformed multipart: missing CRLF after boundary'));
+        buf = buf.slice(2);
+        state = STATE_HEADERS;
+        continue;
+      }
+
+      if (state === STATE_HEADERS) {
+        const hEnd = buf.indexOf(HEADER_END);
+        if (hEnd === -1) return; // wait for more bytes
+        const headers = buf.slice(0, hEnd);
+        buf = buf.slice(hEnd + HEADER_END.length);
+        startPart(headers);
+        if (done) return;
+        state = STATE_BODY;
+        continue;
+      }
+
+      if (state === STATE_BODY) {
+        const idx = buf.indexOf(PART_DELIM);
+        if (idx === -1) {
+          // No boundary yet — emit what's safe and hold back PART_DELIM.length-1
+          // trailing bytes so a boundary spanning the next chunk isn't missed.
+          const safe = buf.length - (PART_DELIM.length - 1);
+          if (safe > 0) {
+            if (!writePartChunk(buf.slice(0, safe))) return;
+            buf = buf.slice(safe);
+          }
+          return;
+        }
+        // Found end of part. Emit everything before the boundary, then advance.
+        if (!writePartChunk(buf.slice(0, idx))) return;
+        buf = buf.slice(idx + PART_DELIM.length);
+        // endPart may be async (file flush) — pause the request, resume after.
+        req.pause();
+        endPart(() => {
+          state = STATE_AFTER_BOUNDARY;
+          req.resume();
+          tick(); // process anything already buffered
+        });
+        return;
+      }
+
+      return; // unknown state
+    }
+  };
+
+  req.on('data', (chunk) => {
+    if (done) return;
+    buf = Buffer.concat([buf, chunk]);
+    tick();
+  });
+
+  req.on('end', () => {
+    if (done) return;
+    endSeen = true;
+    // Drain anything still in buf as part of the current state.
+    tick();
+    // If a file flush is still pending, the endPart callback will finalize.
+    if (!done && pendingFlush === 0) finish();
+  });
+
+  req.on('error', fail);
 }
