@@ -15,7 +15,7 @@
 import { spawn } from 'child_process';
 import { writeFile, readFile, readdir, stat, unlink, rm, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
-import { join, dirname, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
@@ -94,7 +94,7 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraPaths = [], loraScales = [] }) {
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [] }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Enforce the single-activeProcess invariant the rest of this module relies
@@ -113,19 +113,27 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
   const actualSteps = steps ? Number(steps) : model.steps;
   const actualGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
-  // LoRA paths must resolve to inside data/loras — without this the client
-  // could pass any absolute path that exists, leaking arbitrary-file probing
-  // (the spawn args are not shell-escaped, but mflux would happily try to
-  // mmap whatever it's pointed at and surface "this file exists" via error).
+  // The new client-side surface sends `loraFilenames` (basenames only); the
+  // server resolves them against PATHS.loras. `loraPaths` is kept as a
+  // back-compat input for old gallery sidecars that stored absolute paths
+  // pre-refactor — both go through the same resolve+prefix-check.
   const lorasRoot = resolvePath(PATHS.loras) + PATH_SEP;
-  const validLoras = loraPaths.filter((p) => {
+  const candidates = [
+    ...loraFilenames.map((f) => (typeof f === 'string' ? join(PATHS.loras, basename(f)) : null)),
+    ...loraPaths,
+  ];
+  const validLoras = candidates.filter((p) => {
     if (!p || typeof p !== 'string') return false;
     const resolved = resolvePath(p);
     if (!resolved.startsWith(lorasRoot)) return false;
     return existsSync(resolved);
   });
 
-  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraPaths: validLoras, loraScales, createdAt: new Date().toISOString() };
+  // Store loraFilenames (basenames) in the sidecar going forward — that's
+  // what the new client API uses for remix. Keep `loraPaths` populated too
+  // so older code paths reading the sidecar don't break.
+  const validLoraFilenames = validLoras.map((p) => basename(p));
+  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, createdAt: new Date().toISOString() };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
@@ -281,12 +289,14 @@ export async function deleteImage(filename) {
   return { ok: true };
 }
 
+// Returns just `{ filename, name }` — clients send `filename` back in the
+// generate payload's `loraFilenames` and the server resolves it against
+// PATHS.loras. Avoids leaking absolute server paths into the API surface.
 export async function listLoras() {
   await ensureDir(PATHS.loras);
   const files = await readdir(PATHS.loras).catch(() => []);
   return files.filter((f) => f.endsWith('.safetensors')).map((f) => ({
     filename: f,
     name: f.replace(/^lora-/, '').replace(/\.safetensors$/, ''),
-    path: join(PATHS.loras, f),
   }));
 }

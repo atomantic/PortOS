@@ -34,6 +34,10 @@ const generateSchema = z.object({
   seed: z.number().int().min(0).optional(),
   // mflux supports 3/4/5/6/8 bit quantization; 8 is the default.
   quantize: z.union([z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(8), z.literal('3'), z.literal('4'), z.literal('5'), z.literal('6'), z.literal('8')]).optional(),
+  // Filenames only (basenames) — server resolves against PATHS.loras and
+  // applies the prefix-check. Old payloads sent absolute server paths
+  // (`loraPaths`); accept both for back-compat with stored gallery sidecars.
+  loraFilenames: z.array(z.string().max(256).regex(/^[^/\\]+$/, 'lora filename must not contain path separators')).max(8).optional(),
   loraPaths: z.array(z.string().max(512)).max(8).optional(),
   loraScales: z.array(z.number().min(0).max(2)).max(8).optional(),
 });

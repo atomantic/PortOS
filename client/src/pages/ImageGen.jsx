@@ -162,7 +162,7 @@ export default function ImageGen() {
       guidance: guidance ? Number(guidance) : undefined,
       seed: seed && Number(seed) >= 0 ? Number(seed) : undefined,
       quantize,
-      loraPaths: selectedLoras.map((l) => l.path),
+      loraFilenames: selectedLoras.map((l) => l.filename),
       loraScales: selectedLoras.map((l) => l.scale),
     };
     const data = await generateImage(payload);
@@ -271,10 +271,16 @@ export default function ImageGen() {
     if (img.height) setHeight(img.height);
     if (img.modelId && models.some((m) => m.id === img.modelId)) setModelId(img.modelId);
 
-    if (img.loraPaths?.length) {
-      const restored = img.loraPaths.map((p, i) => {
-        const match = availableLoras.find((l) => l.path === p);
-        return match ? { path: match.path, name: match.name, scale: img.loraScales?.[i] ?? 1.0 } : null;
+    // Restore LoRAs from the new `loraFilenames` field; fall back to the
+    // legacy `loraPaths` (absolute server paths) for older sidecar metadata
+    // — extract the basename so the lookup against `availableLoras` works.
+    const sidecarFilenames = img.loraFilenames?.length
+      ? img.loraFilenames
+      : (img.loraPaths || []).map((p) => p.split(/[\\/]/).pop());
+    if (sidecarFilenames.length) {
+      const restored = sidecarFilenames.map((fn, i) => {
+        const match = availableLoras.find((l) => l.filename === fn);
+        return match ? { filename: match.filename, name: match.name, scale: img.loraScales?.[i] ?? 1.0 } : null;
       }).filter(Boolean);
       setSelectedLoras(restored);
     }
@@ -462,17 +468,17 @@ export default function ImageGen() {
               <label className="block text-sm font-medium text-gray-300 mb-2">LoRAs</label>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {availableLoras.map((lora) => {
-                  const selected = selectedLoras.find((s) => s.path === lora.path);
+                  const selected = selectedLoras.find((s) => s.filename === lora.filename);
                   return (
-                    <div key={lora.path} className="flex items-center gap-3">
+                    <div key={lora.filename} className="flex items-center gap-3">
                       <label className="flex items-center gap-2 cursor-pointer flex-1">
                         <input
                           type="checkbox"
                           checked={!!selected}
                           disabled={generating}
                           onChange={(e) => {
-                            if (e.target.checked) setSelectedLoras((p) => [...p, { path: lora.path, name: lora.name, scale: 1.0 }]);
-                            else setSelectedLoras((p) => p.filter((s) => s.path !== lora.path));
+                            if (e.target.checked) setSelectedLoras((p) => [...p, { filename: lora.filename, name: lora.name, scale: 1.0 }]);
+                            else setSelectedLoras((p) => p.filter((s) => s.filename !== lora.filename));
                           }}
                           className="rounded"
                         />
@@ -487,7 +493,7 @@ export default function ImageGen() {
                             disabled={generating}
                             onChange={(e) => {
                               const scale = parseFloat(e.target.value) || 0;
-                              setSelectedLoras((p) => p.map((s) => s.path === lora.path ? { ...s, scale } : s));
+                              setSelectedLoras((p) => p.map((s) => s.filename === lora.filename ? { ...s, scale } : s));
                             }}
                             className="w-20 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200"
                           />
