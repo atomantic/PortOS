@@ -32,22 +32,37 @@ export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
   };
 }
 
-// Read the full request body into a single Buffer. Multipart text fields
-// are typically small — the file part is the only thing that could be
-// large, and it's streamed to disk inside the parse loop below as we walk
-// past its boundary. Buffering the body avoids the chunk-boundary state
-// machine that the previous implementation got tangled in.
-function readAllBytes(stream) {
+// Read the full request body into a single Buffer with an upper bound. We
+// enforce maxBodySize while accumulating chunks and destroy the stream the
+// moment we exceed it — a malicious client can't blow heap by streaming
+// gigabytes through. The cap is `maxSize + 1MB` for headers/boundary
+// overhead — text fields stay small in practice and the file part is the
+// only thing that approaches maxSize.
+function readAllBytes(stream, maxBodySize) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    stream.on('data', (c) => chunks.push(c));
+    let total = 0;
+    stream.on('data', (c) => {
+      total += c.length;
+      if (total > maxBodySize) {
+        stream.destroy();
+        reject(new Error(`Request body too large (max ${maxBodySize} bytes)`));
+        return;
+      }
+      chunks.push(c);
+    });
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
   });
 }
 
 async function parseMultipart(stream, boundary, fileFieldName, maxSize, fileFilter) {
-  const buf = await readAllBytes(stream);
+  // Cap the in-memory buffer at maxSize + 1MB for headers/text-field overhead.
+  // If maxSize is Infinity (no limit) we still cap at 100 MB so a runaway
+  // upload can't OOM the server.
+  const overheadBytes = 1024 * 1024;
+  const maxBodySize = Number.isFinite(maxSize) ? maxSize + overheadBytes : 100 * 1024 * 1024;
+  const buf = await readAllBytes(stream, maxBodySize);
   const PART_DELIM = Buffer.from('--' + boundary);
   const HEADER_END = Buffer.from('\r\n\r\n');
   const CRLF = Buffer.from('\r\n');

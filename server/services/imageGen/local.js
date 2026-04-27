@@ -194,6 +194,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
     });
   } catch { /* if watch fails, we still get final image — degrade gracefully */ }
 
+  // Bounded tail of recent stderr — only the last ~64KB is kept, since the
+  // failure path only uses the trailing 10 lines for context. Without this
+  // bound a noisy backend (HF download progress, deprecation warnings)
+  // would grow this buffer for the full duration of a long render.
+  const STDERR_TAIL_BYTES = 64 * 1024;
   let stderrBuffer = '';
   const handleLine = (line) => {
     const trimmed = line.trim();
@@ -217,6 +222,9 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString();
     stderrBuffer += text;
+    if (stderrBuffer.length > STDERR_TAIL_BYTES) {
+      stderrBuffer = stderrBuffer.slice(-STDERR_TAIL_BYTES);
+    }
     for (const line of text.split(/[\n\r]+/)) handleLine(line);
   });
   proc.stdout.on('data', (chunk) => {
