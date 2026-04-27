@@ -103,6 +103,13 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
 
   // Start a new part — parse headers, set up text buffer or file write stream.
   const startPart = (headerBlock) => {
+    // Reset per-part state so a part with no Content-Type can't inherit
+    // the previous part's mimetype, and stale flags don't carry over.
+    currentName = null;
+    currentFilename = null;
+    currentFileMimetype = null;
+    isMatchingFile = false;
+    textBuf = null;
     const headerStr = headerBlock.toString('utf-8');
     // Negative lookbehind keeps `name=` inside `filename=` from matching.
     const nameMatch = headerStr.match(/(?<!file)name="([^"]+)"/i);
