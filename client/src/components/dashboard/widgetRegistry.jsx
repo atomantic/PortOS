@@ -26,7 +26,7 @@ import HourlyActivityWidget from './builtins/HourlyActivityWidget';
 // been edited, persisted h values win.
 export const WIDGETS = [
   { id: 'quick-brain',       label: 'Quick Brain Capture',   Component: QuickBrainCapture,      width: 'half',    defaultH: 3 },
-  { id: 'quick-task',        label: 'Quick Task',            Component: QuickTaskWidget,        width: 'half',    defaultH: 3 },
+  { id: 'quick-task',        label: 'Quick Task',            Component: QuickTaskWidget,        width: 'half',    defaultH: 5 },
   { id: 'apps',              label: 'Apps Grid',             Component: AppsGridWidget,         width: 'full',    defaultH: 5 },
   { id: 'cos',               label: 'Chief of Staff',        Component: CosDashboardWidget,     width: 'third',   defaultH: 6 },
   { id: 'goal-progress',     label: 'Goal Progress',         Component: GoalProgressWidget,     width: 'third',   defaultH: 5 },
