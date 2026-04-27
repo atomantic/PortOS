@@ -134,8 +134,21 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
         const fileMeta = { originalname: currentFilename, mimetype: currentFileMimetype };
 
         if (fileFilter) {
+          // CONTRACT: fileFilter MUST call its `cb` synchronously. We read
+          // `fr` immediately because the parser is consuming a streaming
+          // body and can't pause headers indefinitely without buffering
+          // unbounded bytes for the next part. (multer's docs allow async
+          // filters, but in this codebase all callers — appleHealth.js
+          // and videoGen.js — are sync. We surface a clear error if a
+          // future async filter slips in instead of crashing on `fr.err`
+          // dereference.)
           let fr = null;
           fileFilter(req, fileMeta, (err, accept) => { fr = { err, accept }; });
+          if (fr === null) {
+            const err = new Error('fileFilter must invoke its callback synchronously');
+            err.status = 500; err.code = 'INVALID_FILE_FILTER';
+            return fail(err);
+          }
           if (fr.err) return fail(fr.err);
           if (!fr.accept) {
             // Set status/code so the centralized error middleware returns a

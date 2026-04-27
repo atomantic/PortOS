@@ -365,11 +365,11 @@ export async function stitchVideos(videoIds) {
   const jobId = randomUUID();
   const listFile = join(tmpdir(), `concat-${jobId}.txt`);
   // ffmpeg concat-demuxer escape: per its docs, single quotes in filenames
-  // must be replaced with `'\''` (close-quote, escaped quote, reopen-quote).
-  // Filenames here have already passed safeUnder so they're sane basenames
-  // under PATHS.videos, but defense in depth — if PATHS.videos itself ever
-  // contains an apostrophe it shouldn't break the manifest.
-  const escapeForConcat = (p) => p.replace(/'/g, "'\\''");
+  // must be replaced with `'\''`. Inside quoted strings ffmpeg also treats
+  // backslash as an escape character — on Windows where paths are
+  // `C:\foo\bar.mp4`, that corrupts the path. Normalize to forward slashes
+  // (which ffmpeg accepts on Windows just fine) before quoting.
+  const escapeForConcat = (p) => p.replace(/\\/g, '/').replace(/'/g, "'\\''");
   await writeFile(listFile, videoPaths.map((p) => `file '${escapeForConcat(p)}'`).join('\n'));
 
   const outFilename = `stitched-${jobId}.mp4`;
