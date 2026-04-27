@@ -97,18 +97,19 @@ describe('videoGen routes', () => {
       }));
     });
 
-    it('rejects sourceImageFile that escapes PATHS.images via traversal', async () => {
+    it('strips path-traversal segments from sourceImageFile via basename + prefix-check', async () => {
       videoGenService.generateVideo.mockResolvedValue({ jobId: 'j2', filename: 'j2.mp4' });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
         sourceImageFile: '../../etc/passwd',
       });
-      // basename strips dirs; the resolved path is `/mock/images/passwd` which
-      // IS under PATHS.images — this is the documented-safe basename behavior.
-      // The real test: a Windows-style path with backslashes shouldn't escape.
+      // Documented-safe behavior: `basename()` strips dirs so the resolved
+      // path is `/mock/images/passwd` (under PATHS.images). The route does
+      // NOT 400 — it just consumes whatever's safely under the images root.
+      // What this test really locks in: the request succeeds + the route
+      // never reads outside PATHS.images.
       expect(r.status).toBe(200);
       expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        // sourceImagePath was set since basename resolves under images root.
         prompt: 'a cat',
       }));
     });

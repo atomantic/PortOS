@@ -78,8 +78,25 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
 
   const finish = () => {
     if (done) return;
+    // If 'end' fires before we hit the terminal `--<boundary>--`, the
+    // request is truncated/malformed — reject with 400 instead of silently
+    // accepting a partial upload (could matter for a 2GB Apple Health
+    // import that gets cut off mid-stream).
+    if (state !== STATE_DONE) {
+      // Clean up any partially-written file before failing.
+      if (writeStream) writeStream.destroy();
+      if (writePath) unlink(writePath).catch(() => {});
+      // Also drop the in-progress fileResult if endPart already finalized
+      // a file from a part that was followed by truncated data.
+      if (fileResult?.path) unlink(fileResult.path).catch(() => {});
+      done = true;
+      const err = new Error('Truncated multipart request — never reached terminal boundary');
+      err.code = 'INVALID_MULTIPART';
+      err.status = 400;
+      next(err);
+      return;
+    }
     done = true;
-    state = STATE_DONE;
     req.body = body;
     if (fileResult) req.file = fileResult;
     next();
@@ -210,6 +227,9 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
         const trailing = buf.slice(0, 2);
         if (trailing[0] === 0x2d && trailing[1] === 0x2d) { // `--`
           buf = Buffer.alloc(0);
+          // Mark clean termination so finish() can distinguish a proper
+          // end from a truncated request that hit 'end' mid-stream.
+          state = STATE_DONE;
           return finish();
         }
         if (trailing[0] !== 0x0d || trailing[1] !== 0x0a) return fail(new Error('Malformed multipart: missing CRLF after boundary'));
