@@ -222,9 +222,12 @@ if ($LASTEXITCODE -ne 0) {
 Step "restart" "done" "PortOS restarted"
 Write-SafeHost ""
 
-# Open the dashboard in the PortOS-managed browser. Fail-soft.
+# Open the dashboard in the PortOS-managed browser. Fail-soft — explicitly
+# reset $LASTEXITCODE to 0 after the call so a non-zero exit from the auto-
+# open script doesn't propagate as the script's own exit code (the update
+# is already complete by this point).
 Invoke-Logged node scripts/open-ui-in-browser.js
-# Don't exit on failure — the update is already complete.
+$global:LASTEXITCODE = 0
 
 Write-SafeHost "===================================" -ForegroundColor Green
 Write-SafeHost "  ✅ Update Complete!" -ForegroundColor Green
