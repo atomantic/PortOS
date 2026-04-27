@@ -79,11 +79,14 @@ export default function MediaHistory() {
   };
 
   const handleDelete = async (item) => {
-    const op = item.kind === 'image'
-      ? deleteImage(item.filename)
-      : deleteVideoHistoryItem(item.id);
-    await op.catch((err) => toast.error(err.message || 'Delete failed'));
-    setItems((all) => all.filter((x) => x.key !== item.key));
+    try {
+      await (item.kind === 'image'
+        ? deleteImage(item.filename)
+        : deleteVideoHistoryItem(item.id));
+      setItems((all) => all.filter((x) => x.key !== item.key));
+    } catch (err) {
+      toast.error(err.message || 'Delete failed');
+    }
   };
 
   const handleContinue = async (item) => {

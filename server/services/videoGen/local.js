@@ -58,7 +58,10 @@ export const cancel = () => {
   // child is still running (mlx_video can ignore SIGTERM mid-tensor-op),
   // and we'd lose the handle for a follow-up SIGKILL. Escalate after 8s.
   setTimeout(() => {
-    if (activeProcess === proc && !proc.killed) {
+    // proc.killed is set the moment proc.kill() is called; it does NOT mean
+    // the child has exited. Check exitCode (null until 'close' fires) so the
+    // SIGKILL escalation actually triggers when mlx_video ignores SIGTERM.
+    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
       console.log(`⚠️ video child didn't exit on SIGTERM — escalating to SIGKILL`);
       proc.kill('SIGKILL');
     }

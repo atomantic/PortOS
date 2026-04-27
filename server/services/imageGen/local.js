@@ -59,7 +59,10 @@ export const cancel = () => {
   // mflux child is still running, and we lose the handle for a follow-up
   // SIGKILL. Escalate after 8s if the child ignored SIGTERM.
   setTimeout(() => {
-    if (activeProcess === proc && !proc.killed) {
+    // proc.killed is set the moment proc.kill() is called; it does NOT mean
+    // the child has exited. Check exitCode (null until 'close' fires) so the
+    // SIGKILL escalation actually triggers when mflux ignores SIGTERM.
+    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
       console.log(`⚠️ image child didn't exit on SIGTERM — escalating to SIGKILL`);
       proc.kill('SIGKILL');
     }
