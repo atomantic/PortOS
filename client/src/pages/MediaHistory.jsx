@@ -110,7 +110,11 @@ export default function MediaHistory() {
   };
 
   const handleSendToVideo = (item) => {
-    navigate(`/media/video?sourceImageFile=${encodeURIComponent(item.filename)}`);
+    const params = new URLSearchParams({ sourceImageFile: item.filename });
+    if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
+    const neg = item.negativePrompt || item.raw?.negativePrompt || item.raw?.negative_prompt;
+    if (neg) params.set('negativePrompt', neg);
+    navigate(`/media/video?${params}`);
   };
 
   return (

@@ -256,8 +256,14 @@ export default function ImageGen() {
     setGallery((g) => g.filter((img) => img.filename !== filename));
   };
 
-  const sendToVideo = (filename) => {
-    navigate(`/video-gen?sourceImageFile=${encodeURIComponent(filename)}`);
+  const sendToVideo = (img) => {
+    if (!img?.filename) return;
+    const params = new URLSearchParams({ sourceImageFile: img.filename });
+    const srcPrompt = img.prompt || img.metadata?.prompt;
+    const srcNegative = img.negativePrompt || img.negative_prompt || img.metadata?.negativePrompt;
+    if (srcPrompt) params.set('prompt', srcPrompt);
+    if (srcNegative) params.set('negativePrompt', srcNegative);
+    navigate(`/media/video?${params}`);
   };
 
   const handleRemix = (img) => {
@@ -575,7 +581,7 @@ export default function ImageGen() {
               {result.seed != null && <span>seed {result.seed}</span>}
               <button
                 type="button"
-                onClick={() => sendToVideo(result.filename)}
+                onClick={() => sendToVideo(result)}
                 className="flex items-center gap-1 px-2 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success rounded text-xs"
               >
                 <Film className="w-3 h-3" /> Send to Video
@@ -602,7 +608,7 @@ export default function ImageGen() {
                   item={item}
                   onPreview={() => setPreview(img)}
                   onRemix={() => handleRemix(img)}
-                  onSendToVideo={() => sendToVideo(img.filename)}
+                  onSendToVideo={() => sendToVideo(img)}
                   onDelete={() => handleDelete(img.filename)}
                 />
               );
@@ -618,7 +624,7 @@ export default function ImageGen() {
         // already nulled `preview` — without this the closure throws on
         // preview.filename access.
         onRemix={() => preview && handleRemix(preview)}
-        onSendToVideo={() => preview?.filename && sendToVideo(preview.filename)}
+        onSendToVideo={() => preview?.filename && sendToVideo(preview)}
       />
 
 
