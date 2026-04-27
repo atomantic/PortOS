@@ -113,6 +113,15 @@ async function main() {
     assert(theme.accent?.startsWith('#'), `${id} needs a hex accent`);
     assert(Array.isArray(theme.swatches) && theme.swatches.length >= 4, `${id} needs at least four swatches`);
 
+    assert(
+      theme.colors && typeof theme.colors === 'object' && !Array.isArray(theme.colors),
+      `${id} colors must be a plain object`,
+    );
+    assert(
+      theme.tokens && typeof theme.tokens === 'object' && !Array.isArray(theme.tokens),
+      `${id} tokens must be a plain object`,
+    );
+
     for (const varName of REQUIRED_COLOR_VARS) {
       assertRgbChannels(theme.colors[varName], id, varName);
     }
