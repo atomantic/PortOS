@@ -35,7 +35,6 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
   const PART_DELIM = Buffer.from('\r\n--' + boundary);
   const FIRST_DELIM = Buffer.from('--' + boundary);
   const HEADER_END = Buffer.from('\r\n\r\n');
-  const CRLF = Buffer.from('\r\n');
 
   const STATE_PREAMBLE = 0;       // before first boundary
   const STATE_HEADERS = 1;        // accumulating part headers
