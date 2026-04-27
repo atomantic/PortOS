@@ -4,6 +4,7 @@ import { useGLTF, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
+import CoSAvatarFrame from './CoSAvatarFrame';
 
 const MODEL_URL = '/api/avatar/model.glb';
 
@@ -184,7 +185,7 @@ export default function MuseCoSAvatar({ state, speaking }) {
   if (!modelPresent) return <MissingModelHint />;
 
   return (
-    <div className="relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6] cursor-grab active:cursor-grabbing touch-none" title="Drag to rotate">
+    <CoSAvatarFrame label="Muse 3D avatar. Drag to rotate.">
       <Canvas
         camera={{ position: [0, 0, 3.3], fov: 45 }}
         style={{ background: 'transparent' }}
@@ -194,7 +195,7 @@ export default function MuseCoSAvatar({ state, speaking }) {
           <Scene state={state} speaking={speaking} />
         </Suspense>
       </Canvas>
-    </div>
+    </CoSAvatarFrame>
   );
 }
 
