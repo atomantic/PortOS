@@ -32,7 +32,17 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false
         },
-        '/data': {
+        '/data/images': {
+          target: API_TARGET,
+          changeOrigin: true,
+          secure: false
+        },
+        '/data/videos': {
+          target: API_TARGET,
+          changeOrigin: true,
+          secure: false
+        },
+        '/data/video-thumbnails': {
           target: API_TARGET,
           changeOrigin: true,
           secure: false

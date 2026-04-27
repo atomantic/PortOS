@@ -30,7 +30,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               style: {
                 background: 'rgb(var(--port-card))',
                 color: 'rgb(var(--port-text))',
-                border: '1px solid rgb(var(--port-border))'
+                border: '1px solid rgb(var(--port-border) / var(--port-border-alpha, 1))',
+                borderRadius: 'var(--port-radius-lg)',
+                backdropFilter: 'var(--port-backdrop-filter)',
+                boxShadow: 'var(--port-shadow-elevated)'
               }
             }}
           />
