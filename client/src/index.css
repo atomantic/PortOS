@@ -159,15 +159,43 @@ html[data-port-theme] .bg-port-card {
   background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
 }
 
-html[data-port-theme] [class~="bg-port-card/50"] {
-  background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.5)) !important;
-}
+/*
+ * Tailwind opacity modifiers (e.g. bg-port-bg/50) skip the per-theme alpha
+ * tokens unless we restate them here. Each rule scales --port-X-alpha by the
+ * requested opacity so semi-transparent surfaces stay consistent with each
+ * theme's intent (notably for translucent themes like Lumen Glass).
+ */
+html[data-port-theme] [class~="bg-port-bg/20"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.2)) !important; }
+html[data-port-theme] [class~="bg-port-bg/30"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.3)) !important; }
+html[data-port-theme] [class~="bg-port-bg/40"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.4)) !important; }
+html[data-port-theme] [class~="bg-port-bg/50"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.5)) !important; }
+html[data-port-theme] [class~="bg-port-bg/60"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.6)) !important; }
+html[data-port-theme] [class~="bg-port-bg/70"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.7)) !important; }
+html[data-port-theme] [class~="bg-port-bg/80"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.8)) !important; }
+html[data-port-theme] [class~="bg-port-bg/90"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.9)) !important; }
+
+html[data-port-theme] [class~="bg-port-card/30"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.3)) !important; }
+html[data-port-theme] [class~="bg-port-card/40"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.4)) !important; }
+html[data-port-theme] [class~="bg-port-card/50"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.5)) !important; }
+html[data-port-theme] [class~="bg-port-card/60"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.6)) !important; }
+html[data-port-theme] [class~="bg-port-card/70"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.7)) !important; }
+html[data-port-theme] [class~="bg-port-card/80"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.8)) !important; }
+html[data-port-theme] [class~="bg-port-card/90"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.9)) !important; }
+html[data-port-theme] [class~="bg-port-card/95"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.95)) !important; }
 
 html[data-port-theme] .border-port-border,
 html[data-port-theme] .divide-port-border > :not([hidden]) ~ :not([hidden]) {
   border-color: rgb(var(--port-border) / var(--port-border-alpha)) !important;
   border-style: var(--port-border-style);
 }
+
+html[data-port-theme] [class~="border-port-border/20"] { border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.2)) !important; border-style: var(--port-border-style); }
+html[data-port-theme] [class~="border-port-border/30"] { border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.3)) !important; border-style: var(--port-border-style); }
+html[data-port-theme] [class~="border-port-border/40"] { border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.4)) !important; border-style: var(--port-border-style); }
+html[data-port-theme] [class~="border-port-border/50"],
+html[data-port-theme] [class~="divide-port-border/50"] > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.5)) !important; border-style: var(--port-border-style); }
+html[data-port-theme] [class~="border-port-border/60"] { border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.6)) !important; border-style: var(--port-border-style); }
+html[data-port-theme] [class~="border-port-border/80"] { border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.8)) !important; border-style: var(--port-border-style); }
 
 html[data-port-theme] .rounded {
   border-radius: var(--port-radius-md) !important;
@@ -251,9 +279,13 @@ html[data-port-theme] .bg-port-border {
   background: var(--port-control-bg) !important;
 }
 
-html[data-port-theme] [class~="bg-port-border/50"] {
-  background: color-mix(in srgb, var(--port-control-bg) 50%, transparent) !important;
-}
+html[data-port-theme] [class~="bg-port-border/20"] { background: color-mix(in srgb, var(--port-control-bg) 20%, transparent) !important; }
+html[data-port-theme] [class~="bg-port-border/30"] { background: color-mix(in srgb, var(--port-control-bg) 30%, transparent) !important; }
+html[data-port-theme] [class~="bg-port-border/40"] { background: color-mix(in srgb, var(--port-control-bg) 40%, transparent) !important; }
+html[data-port-theme] [class~="bg-port-border/50"] { background: color-mix(in srgb, var(--port-control-bg) 50%, transparent) !important; }
+html[data-port-theme] [class~="bg-port-border/60"] { background: color-mix(in srgb, var(--port-control-bg) 60%, transparent) !important; }
+html[data-port-theme] [class~="bg-port-border/70"] { background: color-mix(in srgb, var(--port-control-bg) 70%, transparent) !important; }
+html[data-port-theme] [class~="bg-port-border/80"] { background: color-mix(in srgb, var(--port-control-bg) 80%, transparent) !important; }
 
 html[data-port-theme] [class*="hover:bg-port-border"]:hover {
   background: var(--port-control-bg-hover) !important;
