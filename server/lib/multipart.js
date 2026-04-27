@@ -24,9 +24,17 @@ export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
 
   return (req, res, next) => {
     const ct = req.headers['content-type'] || '';
-    if (!ct.startsWith('multipart/form-data')) return next(new Error('Expected multipart/form-data'));
+    if (!ct.startsWith('multipart/form-data')) {
+      const err = new Error('Expected multipart/form-data');
+      err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
+      return next(err);
+    }
     const bm = ct.match(/boundary=([^\s;]+)/);
-    if (!bm) return next(new Error('Missing multipart boundary'));
+    if (!bm) {
+      const err = new Error('Missing multipart boundary');
+      err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
+      return next(err);
+    }
     streamMultipart(req, bm[1], fieldName, maxSize, fileFilter, next);
   };
 }
@@ -162,7 +170,12 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
     if (currentFilename != null && currentFilename !== '') {
       if (isMatchingFile) {
         bytesWritten += chunk.length;
-        if (bytesWritten > maxSize) { fail(new Error(`File too large (max ${maxSize} bytes)`)); return false; }
+        if (bytesWritten > maxSize) {
+          const err = new Error(`File too large (max ${maxSize} bytes)`);
+          err.status = 413; err.code = 'PAYLOAD_TOO_LARGE';
+          fail(err);
+          return false;
+        }
         if (!writeStream.write(chunk)) {
           // Backpressure: pause the request stream and resume on drain.
           req.pause();
@@ -172,7 +185,12 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
       // Non-matching file: drop bytes silently.
     } else {
       textCharCount += chunk.length;
-      if (textCharCount > TEXT_FIELD_TOTAL_CAP) { fail(new Error(`Text fields too large (max ${TEXT_FIELD_TOTAL_CAP} bytes)`)); return false; }
+      if (textCharCount > TEXT_FIELD_TOTAL_CAP) {
+        const err = new Error(`Text fields too large (max ${TEXT_FIELD_TOTAL_CAP} bytes)`);
+        err.status = 413; err.code = 'PAYLOAD_TOO_LARGE';
+        fail(err);
+        return false;
+      }
       textBuf = Buffer.concat([textBuf, chunk]);
     }
     return true;
@@ -246,7 +264,11 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
           state = STATE_DONE;
           return finish();
         }
-        if (trailing[0] !== 0x0d || trailing[1] !== 0x0a) return fail(new Error('Malformed multipart: missing CRLF after boundary'));
+        if (trailing[0] !== 0x0d || trailing[1] !== 0x0a) {
+          const err = new Error('Malformed multipart: missing CRLF after boundary');
+          err.status = 400; err.code = 'INVALID_MULTIPART';
+          return fail(err);
+        }
         buf = buf.slice(2);
         state = STATE_HEADERS;
         continue;
