@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import useContainerWidth from '../../../hooks/useContainerWidth';
 
 const ICON_MAP = {
   coffee: Coffee, droplets: Droplets, utensils: Utensils, dumbbell: Dumbbell,
@@ -110,22 +111,6 @@ const UNIT_CELL_SIZES = {
   weeks: { size: 7, gap: 1 },
   days: { size: 16, gap: 2 },
 };
-
-// Hook: track container width via ResizeObserver for responsive sizing
-function useContainerWidth() {
-  const ref = useRef(null);
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(entries => {
-      const w = entries[0]?.contentRect?.width;
-      if (w) setWidth(Math.floor(w));
-    });
-    ro.observe(ref.current);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, width];
-}
 
 const MS_PER_DAY = 86400000;
 

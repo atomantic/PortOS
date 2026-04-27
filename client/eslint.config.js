@@ -11,6 +11,7 @@ const browserGlobals = {
   requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly',
   queueMicrotask: 'readonly',
   fetch: 'readonly', URL: 'readonly', URLSearchParams: 'readonly',
+  EventSource: 'readonly',
   FormData: 'readonly', File: 'readonly', FileReader: 'readonly',
   Blob: 'readonly', Event: 'readonly', CustomEvent: 'readonly',
   EventTarget: 'readonly', AbortController: 'readonly', AbortSignal: 'readonly',
@@ -34,6 +35,14 @@ const browserGlobals = {
   Image: 'readonly', Audio: 'readonly', SVGElement: 'readonly',
   getComputedStyle: 'readonly', matchMedia: 'readonly',
   self: 'readonly', globalThis: 'readonly',
+  CSS: 'readonly',
+  AudioContext: 'readonly', OfflineAudioContext: 'readonly',
+  AudioWorkletNode: 'readonly', MediaRecorder: 'readonly',
+  MediaStream: 'readonly', MediaStreamTrack: 'readonly',
+  RTCPeerConnection: 'readonly', RTCSessionDescription: 'readonly',
+  WebSocket: 'readonly', SpeechRecognition: 'readonly',
+  webkitSpeechRecognition: 'readonly', SpeechSynthesisUtterance: 'readonly',
+  speechSynthesis: 'readonly',
 };
 
 const nodeGlobals = {

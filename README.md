@@ -158,7 +158,16 @@ pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-Access PortOS at `http://localhost:5554` (or via Tailscale at `http://[your-machine]:5554`).
+Access PortOS at `http://localhost:5555` (or via Tailscale at `http://<machine>.<tailnet>.ts.net:5555`).
+
+For HTTPS (recommended — required for the in-browser microphone, and you'll get a trusted cert via Tailscale's Let's Encrypt integration):
+
+```bash
+npm run setup:cert         # uses `tailscale cert` if available, else self-signed
+pm2 restart ecosystem.config.cjs
+```
+
+After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on every device. The same `:5555` is used for both HTTP and HTTPS — only the scheme changes. When HTTPS is enabled a loopback-only HTTP mirror also spawns at `http://localhost:5553` so local curl/scripts skip cert warnings (override with `PORTOS_HTTP_PORT`).
 
 PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm2 save` + `pm2 startup`).
 
@@ -166,8 +175,10 @@ PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm
 
 ```bash
 npm run install:all    # Install all dependencies
-npm run dev            # Vite hot-reload on 5554, API on 5555
+npm run dev            # Vite hot-reload on :5554, API on :5555 — open :5554 in dev
 ```
+
+`:5554` is **only** used in dev for the Vite hot-reload server; in production (`npm start` / PM2) the React build is served from `:5555` directly.
 
 ## Network Access
 
@@ -177,7 +188,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 - Check logs and restart services from your phone
 - View dashboard on your tablet while coding on your laptop
 
-> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose ports 5554-5561 to the public internet. See the [Security Audit](./docs/SECURITY_AUDIT.md) for hardening details.
+> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose ports 5553-5561 to the public internet. See the [Security Audit](./docs/SECURITY_AUDIT.md) for hardening details.
 
 ## Tech Stack
 
@@ -232,7 +243,7 @@ Configure AI providers for the runner and Chief of Staff:
 ### Architecture & Operations
 - [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
 - [API Reference](./docs/API.md) — 50+ REST endpoints and WebSocket events
-- [Port Allocation](./docs/PORTS.md) — Port conventions (5554-5561) and allocation guide
+- [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5561) and allocation guide
 - [PM2 Configuration](./docs/PM2.md) — PM2 patterns and best practices
 
 ### Development

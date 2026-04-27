@@ -1,33 +1,11 @@
 import { Suspense, lazy, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import { getSettings, updateSettings } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import Dashboard from './pages/Dashboard';
-import Ambient from './pages/Ambient';
 import Apps from './pages/Apps';
-import CreateApp from './pages/CreateApp';
-import Templates from './pages/Templates';
-import PromptManager from './pages/PromptManager';
-import Brain from './pages/Brain';
-import Security from './pages/Security';
-import DigitalTwin from './pages/DigitalTwin';
-import Agents from './pages/Agents';
-import Uploads from './pages/Uploads';
-import Settings from './pages/Settings';
-import Shell from './pages/Shell';
-import BrowserPage from './pages/Browser';
-import Jira from './pages/Jira';
-import JiraReports from './pages/JiraReports';
-import DataManager from './pages/DataManager';
-import Insights from './pages/Insights';
-import Instances from './pages/Instances';
-import MeatSpace from './pages/MeatSpace';
-import Post from './pages/Post';
-import Review from './pages/Review';
-import Loops from './pages/Loops';
-import CharacterSheet from './pages/CharacterSheet';
-import Wiki from './pages/Wiki';
+import Ambient from './pages/Ambient';
 
 // Auto-reload on stale chunk errors (e.g., after a rebuild changes chunk hashes)
 // Uses sessionStorage to prevent infinite reload loops (max 1 reload per session)
@@ -66,6 +44,34 @@ const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
+const Ask = lazyWithReload(() => import('./pages/Ask'));
+const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
+const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
+const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
+const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
+const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
+const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
+const Templates = lazyWithReload(() => import('./pages/Templates'));
+const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
+const Brain = lazyWithReload(() => import('./pages/Brain'));
+const Security = lazyWithReload(() => import('./pages/Security'));
+const DigitalTwin = lazyWithReload(() => import('./pages/DigitalTwin'));
+const Agents = lazyWithReload(() => import('./pages/Agents'));
+const Uploads = lazyWithReload(() => import('./pages/Uploads'));
+const Settings = lazyWithReload(() => import('./pages/Settings'));
+const Shell = lazyWithReload(() => import('./pages/Shell'));
+const BrowserPage = lazyWithReload(() => import('./pages/Browser'));
+const Jira = lazyWithReload(() => import('./pages/Jira'));
+const JiraReports = lazyWithReload(() => import('./pages/JiraReports'));
+const DataManager = lazyWithReload(() => import('./pages/DataManager'));
+const Insights = lazyWithReload(() => import('./pages/Insights'));
+const Instances = lazyWithReload(() => import('./pages/Instances'));
+const MeatSpace = lazyWithReload(() => import('./pages/MeatSpace'));
+const Post = lazyWithReload(() => import('./pages/Post'));
+const Review = lazyWithReload(() => import('./pages/Review'));
+const Loops = lazyWithReload(() => import('./pages/Loops'));
+const CharacterSheet = lazyWithReload(() => import('./pages/CharacterSheet'));
+const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -73,6 +79,13 @@ const PageLoader = () => (
     <BrailleSpinner text="Loading" />
   </div>
 );
+
+// Preserve query string when redirecting legacy media routes — Settings.jsx's
+// /image-gen?settings=1 chain depends on ?settings=1 reaching the new path.
+function RedirectWithSearch({ to }) {
+  const { search } = useLocation();
+  return <Navigate to={`${to}${search}`} replace />;
+}
 
 // Force full reload on HMR — partial hot-replacement of the route tree
 // causes stale lazy imports and React Router errors on nested paths
@@ -162,6 +175,19 @@ export default function App() {
           <Route path="city/settings" element={<CyberCity />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
+          <Route path="ask" element={<Ask />} />
+          <Route path="ask/:conversationId" element={<Ask />} />
+          <Route path="media" element={<MediaGen />}>
+            <Route index element={<Navigate to="/media/image" replace />} />
+            <Route path="image" element={<ImageGen />} />
+            <Route path="video" element={<VideoGen />} />
+            <Route path="history" element={<MediaHistory />} />
+            <Route path="models" element={<MediaModels />} />
+          </Route>
+          <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
+          <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
+          <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
+          <Route path="media-models" element={<RedirectWithSearch to="/media/models" />} />
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="agents" element={<Agents />} />

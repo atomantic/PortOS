@@ -104,9 +104,13 @@ if [ ! -f "client/node_modules/vite/bin/vite.js" ]; then
 fi
 step "npm-install" "done" "Dependencies installed"
 
-# Run setup (data dirs + browser deps)
+# Run data/db/browser setup. Don't call `npm run setup` — that re-runs the
+# installs we just did above. The three scripts here are the data-side half
+# of `npm run setup` and are idempotent.
 step "setup" "running" "Running setup..."
-run npm run setup
+run node scripts/setup-data.js
+run node scripts/setup-db.js
+run node scripts/setup-browser.js
 run node scripts/setup-ghostty.js || true
 step "setup" "done" "Setup complete"
 log ""
@@ -167,6 +171,10 @@ if ! run npm run pm2:restart; then
 fi
 step "restart" "done" "PortOS restarted"
 log ""
+
+# Open the dashboard in the PortOS-managed browser. Fail-soft — never blocks
+# the update return.
+run node scripts/open-ui-in-browser.js || true
 
 log "==================================="
 log "  ✅ Update Complete!"

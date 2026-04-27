@@ -6,7 +6,7 @@
 import https from 'https';
 
 // Wraps https.request as fetch-compatible for self-signed cert support
-function insecureFetch(agent) {
+export function insecureFetch(agent) {
   return async (url, { method = 'GET', headers = {}, body, signal } = {}) => {
     const u = new URL(url);
     return new Promise((resolve, reject) => {

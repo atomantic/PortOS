@@ -24,14 +24,33 @@ Common port labels:
 | Port | Process | Label | Description |
 |------|---------|-------|-------------|
 | 5553 | portos-server | api-local | Loopback-only HTTP mirror of the API (only listens when HTTPS is active on 5555). Lets `http://localhost:5553` work without cert warnings. Override with `PORTOS_HTTP_PORT`. |
-| 5554 | portos-client | ui | Vite dev server (React UI) |
-| 5555 | portos-server | api | Main API server |
+| 5554 | portos-client | ui | Vite dev server (React UI) — only present in `npm run dev`; `npm start` serves the built client from :5555 directly. |
+| 5555 | portos-server | api | Main API server — **always the user-facing port**. Switches between HTTP and HTTPS based on whether `data/certs/{cert,key}.pem` exists. |
 | 5556 | portos-browser | cdp | Chrome DevTools Protocol |
 | 5557 | portos-browser | health | Browser health check API |
 | 5558 | portos-cos | api | CoS Agent Runner (isolated process) |
 | 5559 | portos-autofixer | api | Autofixer daemon API |
 | 5560 | portos-autofixer-ui | ui | Autofixer web UI |
 | 5561 | portos-db | db | PostgreSQL Docker container (native mode uses system pg on 5432) |
+
+## How `:5555`, `:5553`, and `:5554` Relate
+
+These three ports are easy to confuse, so:
+
+```
+                          ┌─ :5555 ─ HTTPS app (Tailscale cert)            ← always user-facing
+remote browser  ──────────┤
+                          └─ :5555 ─ HTTP app (no cert)                    ← always user-facing
+
+local scripts / curl  ────── :5553 ─ HTTP loopback mirror (HTTPS mode only, 127.0.0.1)
+
+vite dev (npm run dev)  ──── :5554 ─ Vite dev server (dev only, separate process)
+```
+
+Rules of thumb:
+1. **`:5555` is the only port a remote user ever needs.** The scheme (HTTP vs HTTPS) flips based on whether a TLS cert is provisioned (`npm run setup:cert`); the port number does not.
+2. **`:5553` is a convenience for local terminals.** When HTTPS is on, `https://localhost:5555` would trip a cert warning (the cert covers `<machine>.<tailnet>.ts.net`, not `localhost`). The loopback HTTP mirror on `:5553` lets curl/scripts skip TLS entirely. It binds to `127.0.0.1` only — never reachable over the network.
+3. **`:5554` is `vite dev` only.** In `npm run dev`, Vite serves the React UI from `:5554` and proxies `/api` calls to `:5555`. In `npm start` (production), the React build is served from `:5555` itself; `:5554` is unused.
 
 ## Defining Ports in ecosystem.config.cjs
 

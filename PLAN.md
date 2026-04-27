@@ -8,7 +8,131 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 1. **God file decomposition** — routes/cos.js ✅, routes/scaffold.js ✅, client/api.js ✅, services/digital-twin.js ✅ (split into 10 focused modules), services/subAgentSpawner.js ✅ (split into 9 focused modules). **All god files decomposed.**
 
+## Proposed Features — 2026-04-24
+
+Three high-value work items drawn from an inventory of the current app surface (45+ pages, 50+ services, rich Brain/Memory/Twin/Goals/Calendar systems with no unified conversational surface, static Dashboard, and growing sidebar sprawl).
+
+### 1. Global Command Palette (`Cmd+K` / `Ctrl+K`) ✅ SHIPPED 2026-04-24
+
+> Shared-backbone implementation complete. `server/lib/navManifest.js` is the single source of truth for navigation, consumed by both the palette (`GET /api/palette/manifest`) and the voice agent (`ui_navigate` via `resolveNavCommand`). Palette-safe voice tools dispatch through `POST /api/palette/action/:id`. See CLAUDE.md "Command Palette & Voice Nav" section for the entry shape every new page must register.
+
+**Problem.** The sidebar now carries 45+ pages across 10+ collapsible sections (Brain, Calendar, Character, CoS, Data, DevTools, Digital Twin, MeatSpace, Messages, Settings…). Finding a page is becoming the slowest part of using the app — especially on mobile where the drawer is a finger marathon. The keyboard-shortcut help modal (`?`) already proved that a global overlay paradigm works here.
+
+**What it is.** A single keystroke-triggered overlay with a fuzzy-matched input that unifies four action types into one search surface:
+
+- **Navigate** — every route in `Layout.jsx` nav config, plus deep routes (e.g. `/brain/inbox`, `/cos/schedule`, `/meatspace/alcohol`).
+- **Do** — run CoS tasks (`> Run task "sec audit"`), quick-capture a thought to Brain (`> Capture: …`), queue a voice agent prompt, trigger a loop, run an allowlisted shell command.
+- **Jump to entity** — fuzzy-pick an app, agent, goal, thought, memory, repo, JIRA issue by title/slug.
+- **Recent** — last 5 navigations / last 5 CoS task runs as default results when the palette opens empty.
+
+**Why it's high value.**
+- Zero-training UX for power users; instant on mobile as well (drawer is slow on small screens).
+- Naturally surfaces features the user hasn't rediscovered yet — a palette exposes the whole app without demanding nav hierarchy be "right".
+- Reuses existing data: routes table, CoS task list, Brain capture endpoint, Goals + Apps + Agents lists.
+
+**Approach.**
+- `client/src/components/CommandPalette.jsx` — Headless listbox, modal overlay, subscribes to `keydown` for `Cmd+K` / `Ctrl+K`. Follow the existing keyboard-shortcut modal pattern so focus traps + ESC behavior are consistent.
+- `client/src/services/commandRegistry.js` — Each nav entry, CoS task type, and quick-action exports a `{ id, label, keywords, section, run() }` record. Registry is assembled at app boot; individual pages can register contextual commands (e.g. Brain page registers "Capture thought").
+- Fuzzy ranker: tiny owned implementation (subsequence score + section prefix weight) — no new dependency. ~80 lines.
+- Entity search hits existing endpoints (`/api/apps`, `/api/agents`, `/api/goals`, `/api/brain/search`) debounced at 150ms; cache last result in a `Map` keyed by query.
+- Keyboard shortcut registered via the existing shortcuts help modal so it shows up there too.
+
+**Size.** Medium. ~1 week. No new deps. Mostly additive.
+
+**Definition of done.**
+- `Cmd+K` opens the palette from any page, mobile included.
+- Typing `goals` jumps to `/digital-twin/goals` in ≤2 keystrokes.
+- Typing `> capture buy milk` records a Brain thought without leaving the current page.
+- Escape / outside-click closes cleanly; palette reopens with the last query pre-selected for 30s.
+
+---
+
+### 2. Customizable Dashboard with Saved Layouts ✅ SHIPPED 2026-04-24
+
+> Widget registry at `client/src/components/dashboard/widgetRegistry.jsx` (15 widgets, 3 data-gated). Layouts persist to `data/dashboard-layouts.json` via `GET/PUT/DELETE /api/dashboard/layouts`. Built-in layouts seeded on first read: `default` (Everything), `focus`, `morning-review`, `ops`. Keyboard-accessible layout editor with up/down reorder buttons, inline add-widget picker, inline confirm-before-delete, rename + "save as new" in-line prompts (no `window.confirm`/`prompt`). Palette integration: `⌘K` → any layout name switches instantly. Drag-and-drop deferred — reorder buttons are fully functional and a11y-correct without a new dependency. See CLAUDE.md "Dashboard Widgets & Layouts" for the widget contract.
+
+**Problem.** `client/src/pages/Dashboard.jsx` hard-codes the widget list: `BackupWidget`, `SystemHealthWidget`, `CosDashboardWidget`, `GoalProgressWidget`, `UpcomingTasksWidget`, `DecisionLogWidget`, `DeathClockWidget`, `ProactiveAlertsWidget`, `QuickBrainCapture`, `QuickTaskWidget`, `ReviewHubCard`. Every user-visible feature competes for space on the same grid; nothing can be hidden, reordered, or scoped to context. Already called out in `PLAN.md` Future Ideas as "Dashboard Customization — Drag-and-drop widgets, named layouts."
+
+**What it is.** A dashboard with multiple named layouts the user can switch between via dropdown (or `Cmd+K`), each layout storing its own widget selection and order. Starter layouts:
+
+- **Morning Review** — ProactiveAlerts, UpcomingTasks, ReviewHub, GoalProgress, DeathClock.
+- **Focus** — QuickTask, CoS activity, UpcomingTasks only. Minimal chrome.
+- **Health** — DeathClock, MeatSpace deltas, chronotype energy overlay, recent biomarkers.
+- **Ops** — SystemHealth, CoS dashboard, Backup, recent app activity.
+- **Everything** — the current all-widgets view, preserved as default.
+
+**Why it's high value.**
+- Dashboard is the most-opened page — every quality-of-life gain compounds.
+- Context-sensitive layouts ("Focus" hides noise) directly support chronotype-aware work modes already in PortOS's DNA.
+- Makes room to add new widgets later without further crowding — the feature scales.
+
+**Approach.**
+- `data/dashboard-layouts.json` — array of `{ id, name, widgets: [{ type, w, h, x, y, props? }] }`. Default layout seeded on first run from the current hard-coded order.
+- `server/routes/dashboardLayouts.js` — GET/PUT with Zod validation; atomic write via `server/lib/fileUtils.js#atomicWrite` (which the audit backlog already wants extracted — this feature can be the forcing function).
+- `client/src/components/DashboardGrid.jsx` — Lightweight 12-column grid. Evaluate: (a) write 150–200 lines of owned grid + drag handlers on top of HTML5 DnD, vs (b) resurrect the deferred `@dnd-kit/*` dep purely for accessibility (keyboard + ARIA). Decide in a brainstorm; lean toward owned code per project dep rules, falling back to `@dnd-kit` only if a11y correctness takes it past the 300-line ceiling.
+- Widget registry: each widget exports `{ id, label, defaultSize, Component }`. Dashboard renders from the active layout, not a static import list.
+- Layout picker: dropdown in the Dashboard header + palette commands `> Layout: Focus`.
+
+**Size.** Medium–Large. ~1.5 weeks. Either no new deps (owned grid) or one resurrected dep with accessibility justification.
+
+**Definition of done.**
+- User can switch layouts from a dropdown and via `Cmd+K`.
+- Drag-and-drop reorder persists across reload (keyboard-accessible).
+- Hide/show widgets per layout; layouts survive PortOS restart.
+- New widgets can be added by dropping a file into `client/src/components/dashboard/widgets/` and registering it — no Dashboard.jsx edit needed.
+
+---
+
+### 3. "Ask Yourself" — Unified Conversational Twin over Brain + Memory + Goals + Identity + Calendar — slice (a) ✅ SHIPPED 2026-04-24
+
+> **Slice (a) — text chat + sources — shipped.** `/ask` and `/ask/:conversationId` are live. `server/services/askService.js` orchestrates parallel retrieval across memory (hybrid), brain notes, autobiography, goals, and calendar with kind-weighted reranking. Persona preamble is sourced from `character.json`. Three modes (`ask` / `advise` / `draft`) swap directives. API providers stream SSE; CLI providers single-shot. Conversations persist to `data/ask-conversations/<id>.json` with 30-day auto-expiry unless pinned. Source chips navigate to the origin section landing page (Goals chips additionally deep-link to the record via existing `?id=` routing); record ids ride in `meta` so slice (b) can add record-level deep-linking for Brain Memory / Calendar Agenda without changing the source contract. Registered in the nav manifest so `⌘K` and voice (`ui_navigate`) resolve "ask" automatically. **Slice (b) (voice + promotion actions) still pending** — see backlog item below.
+>
+> 40 new tests (askService 11, askConversations 17, ask routes 12); full server suite stays green at 2549/2549.
+
+**Problem.** PortOS has spent many milestones building a rich model of the user: Brain (thoughts, daily log, notes, links), Memory (pgvector + BM25 hybrid retrieval), Digital Twin (identity, autobiography, personality, behavioral feedback), Goals, Calendar, MeatSpace biomarkers. These live on separate pages with separate inputs. There is still no single conversational surface where the user can ask their own system a question like *"What did I decide about my exercise routine in March?"*, *"What's on my plate this afternoon given how I slept?"*, or *"Draft a status update to my team as me."* Without this, the twin is a library nobody borrows from.
+
+**What it is.** A dedicated "Ask" page (and a palette entry / voice intent) that runs a retrieval-augmented, twin-flavored chat:
+
+- **Retrieval.** Every question fans out in parallel across memory semantic search, Brain notes full-text, Goals, Calendar events for the relevant time window, and recent MeatSpace metrics. Hybrid ranker picks top-N per source.
+- **Persona.** System prompt injects the user's digital-twin preamble (tone, values, communication style) so answers sound like them — not like a generic assistant. Reuses the "Identity Context Injection" idea already in Future Ideas.
+- **Modes.** `Ask` (answer as yourself), `Advise` (answer as a coach who knows you), `Draft` (produce text in your voice for a specified recipient/platform).
+- **Trails.** Every answer shows its sources as expandable chips (click to jump to the Brain note / Memory / Goal / Calendar event). Builds trust and surfaces where knowledge is thin.
+- **Continuations.** Each turn is saved to a short-lived conversation and can be one-click promoted to a Brain note, CoS task, or Goal update.
+
+**Why it's high value.**
+- Highest leverage feature relative to existing investment: nearly zero new data, maximum new utility. Takes the twin from "archive" to "assistant".
+- Directly advances three GOALS.md pillars: Personal Knowledge Management, Digital Identity Modeling, Full Digital Autonomy.
+- Pairs naturally with the existing voice widget — once text works, the same pipeline is the brain for "talk to yourself."
+
+**Approach.**
+- `server/services/askService.js` — Orchestrates: (a) parallel retrieval via existing `memoryEmbeddings` + `brain` + `goals` + `calendarGoogleApiSync` services, (b) source-weighted reranking, (c) prompt assembly with twin preamble from `services/character.js` / `services/identity.js`, (d) streamed completion through `portos-ai-toolkit` with the user's preferred model tier.
+- `server/routes/ask.js` — `POST /api/ask` (stream via SSE or existing Socket.IO channel). Zod-validated `{ question, mode, timeWindow?, maxSources? }`.
+- `client/src/pages/Ask.jsx` — Chat transcript, source chips, mode switcher, "turn into task/note/goal" actions. Deep-linkable per CLAUDE.md (e.g. `/ask/:conversationId`).
+- Voice integration: register an `ask` intent that routes through the same service, so "Hey, what did I decide about X?" works without UI.
+- Persistence: conversations live in `data/ask-conversations/` as JSON; auto-expire after 30 days unless promoted. Keeps the data store boring.
+- Safety: no cross-user data (it's single-user), but cap retrieval to the user's own stores — never hit external APIs without explicit mode (`Ask web`).
+
+**Size.** Large. ~3–4 weeks real-time. Ships in two slices: (a) text chat + sources (weeks 1–2), (b) voice + promotion actions (weeks 3–4). Each slice is shippable on its own.
+
+**Definition of done (slice a).**
+- `/ask` page accepts a question, streams an answer in the twin's voice, shows ≥3 source chips per answer.
+- Clicking a source navigates to the origin section (Goal chips deep-link to the record; Brain Memory + Calendar Agenda chips land on the section page until record-level routing lands in slice b).
+- Conversations persist and are listable at `/ask`.
+- `Cmd+K` → typing a question routes into a new conversation.
+
+**Definition of done (slice b).**
+- Voice widget can route questions through the same pipeline.
+- Each answer shows three 1-click promotions: "Save as Brain note", "Create CoS task", "Attach to Goal…".
+
+---
+
 ## Backlog
+
+- [ ] **Ask Yourself — slice (b)** — voice + promotion actions on top of the shipped text chat:
+  - `ui_ask` voice tool that pipes a spoken question through `askService.runAsk` and reads the streamed answer aloud (reuses the existing voice widget's TTS path).
+  - One-click promotions on each assistant turn: "Save as Brain note" (POST `/api/brain/capture`), "Create CoS task" (POST `/api/cos/tasks`), "Attach to Goal…" (link the answer text + sources as a goal note).
+  - Promote action also sets `conversation.promoted = true` (already wired) so the conversation is exempt from 30-day auto-expiry once anything from it has been saved elsewhere.
+  - Add `Ask` to the palette action whitelist (`server/routes/palette.js`) once the voice tool exists, so `⌘K` → "ask: …" can fire a prompt without leaving the current page.
 
 - [ ] **Voice CoS tool expansion** — tools now include the original domain set plus `ui_navigate`, `ui_list_interactables`, `ui_click`, `ui_fill`, `ui_select`, `ui_check` for accessibility-style page driving. Remaining candidates:
   - `calendar_today` / `calendar_next` — surface today's Google Calendar events through the existing Google MCP integration

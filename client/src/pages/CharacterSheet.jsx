@@ -215,7 +215,7 @@ export default function CharacterSheet() {
     generateAvatar({ name: char.name, characterClass: char.class })
       .then(result => {
         setChar(prev => ({ ...prev, avatarPath: result.path }));
-        return put({ avatarPath: result.path });
+        return charPut({ avatarPath: result.path });
       })
       .catch(err => toast.error(err.message || 'Failed to generate avatar'))
       .finally(() => {

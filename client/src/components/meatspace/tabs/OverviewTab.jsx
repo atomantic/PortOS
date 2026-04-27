@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar } from 'lucide-react';
 import * as api from '../../../services/api';
-import { useDeathClock } from '../../../hooks/useDeathClock';
 import BrailleSpinner from '../../BrailleSpinner';
+import DeathClockCountdown from '../../DeathClockCountdown';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
   return (
@@ -30,48 +30,20 @@ function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
 }
 
 function CompactCountdown({ deathDate, lifeExpectancy, percentComplete, lev }) {
-  const countdown = useDeathClock(deathDate);
-
-  if (!countdown) {
+  if (!deathDate) {
     return <p className="text-gray-500 text-sm">Death clock unavailable. Set birth date in Digital Twin &gt; Goals.</p>;
   }
-
-  if (countdown.expired) {
-    return <p className="text-port-error font-bold">Time expired. You&apos;re on borrowed time.</p>;
-  }
-
-  const units = [
-    { value: countdown.years, label: 'y', color: 'text-port-accent' },
-    { value: countdown.months, label: 'mo', color: 'text-purple-400' },
-    { value: countdown.weeks, label: 'w', color: 'text-teal-400' },
-    { value: countdown.days, label: 'd', color: 'text-port-success' },
-    { value: countdown.hours, label: 'h', color: 'text-port-warning' },
-    { value: countdown.minutes, label: 'm', color: 'text-orange-400' },
-    { value: countdown.seconds, label: 's', color: 'text-port-error' },
-  ];
 
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-2">
         <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Time Remaining</h3>
-        {deathDate && (
-          <span className="text-xs text-gray-500">
-            ({new Date(deathDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })})
-            {lev?.onTrack && <span className="text-port-success font-medium"> +LEV</span>}
-          </span>
-        )}
+        <span className="text-xs text-gray-500">
+          ({new Date(deathDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })})
+          {lev?.onTrack && <span className="text-port-success font-medium"> +LEV</span>}
+        </span>
       </div>
-      <div className="flex items-baseline gap-1 flex-wrap mb-3">
-        {units.map((u, i) => (
-          <span key={i} className="whitespace-nowrap">
-            <span className={`text-2xl font-mono font-bold tabular-nums ${u.color}`}>
-              {String(u.value).padStart(2, '0')}
-            </span>
-            <span className="text-xs text-gray-500">{u.label}</span>
-            {i < units.length - 1 && <span className="text-gray-600 mx-0.5">:</span>}
-          </span>
-        ))}
-      </div>
+      <DeathClockCountdown deathDate={deathDate} size="md" className="mb-3" />
 
       {lifeExpectancy && (
         <p className="text-xs text-gray-400 mb-3">

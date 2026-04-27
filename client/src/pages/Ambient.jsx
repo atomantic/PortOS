@@ -1,22 +1,13 @@
-import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Maximize, Minimize } from 'lucide-react';
 import * as api from '../services/api';
-import { useDeathClock } from '../hooks/useDeathClock';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
+import DeathClockCountdown from '../components/DeathClockCountdown';
 
 const REFRESH_INTERVAL = 30000;
 const IDLE_DELAY = 3000;
-
-const COUNTDOWN_UNITS = [
-  { key: 'years', label: 'yr' },
-  { key: 'months', label: 'mo' },
-  { key: 'days', label: 'd' },
-  { key: 'hours', label: 'h' },
-  { key: 'minutes', label: 'm' },
-  { key: 'seconds', label: 's' },
-];
 
 const goalColor = (rate) =>
   rate >= 80 ? '#22c55e' : rate >= 50 ? '#f59e0b' : '#ef4444';
@@ -91,8 +82,6 @@ export default function Ambient() {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  const countdown = useDeathClock(data?.deathClock?.deathDate);
-
   const cosSummary = data?.cosSummary;
   const today = useMemo(() => cosSummary?.today || {}, [cosSummary]);
   const streak = useMemo(() => cosSummary?.streak || {}, [cosSummary]);
@@ -141,19 +130,18 @@ export default function Ambient() {
           </div>
         </div>
 
-        {countdown && !countdown.expired && deathData && (
+        {deathData?.deathDate && (
           <div className="text-center">
-            <div className="flex items-center justify-center gap-3 sm:gap-4 text-gray-500">
-              {COUNTDOWN_UNITS.map((unit, i) => (
-                <Fragment key={unit.key}>
-                  {i > 0 && <span className="text-gray-700 text-xl font-light self-start mt-1">:</span>}
-                  <CountdownUnit value={countdown[unit.key]} label={unit.label} />
-                </Fragment>
-              ))}
-            </div>
-            <div className="text-xs text-gray-700 mt-1">
-              {deathData.percentComplete}% of life elapsed
-            </div>
+            <DeathClockCountdown
+              deathDate={deathData.deathDate}
+              size="lg"
+              align="center"
+            />
+            {deathData.percentComplete != null && (
+              <div className="text-xs text-gray-700 mt-1">
+                {deathData.percentComplete}% of life elapsed
+              </div>
+            )}
           </div>
         )}
 
@@ -238,17 +226,6 @@ export default function Ambient() {
           {data?.health ? 'System Online' : 'Connecting...'}
         </span>
       </div>
-    </div>
-  );
-}
-
-function CountdownUnit({ value, label }) {
-  return (
-    <div className="text-center">
-      <div className="text-2xl sm:text-3xl font-mono tabular-nums text-gray-400">
-        {String(value).padStart(2, '0')}
-      </div>
-      <div className="text-[10px] text-gray-700 uppercase tracking-wider">{label}</div>
     </div>
   );
 }

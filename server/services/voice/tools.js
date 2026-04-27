@@ -11,133 +11,9 @@ import { listProcesses, restartApp } from '../pm2.js';
 import { getItems, getFeeds } from '../feeds.js';
 import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
+import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
-
-// Named pages the voice agent can navigate to. Keys are spoken-friendly aliases
-// (what the user is likely to say); values are app routes. Keep in sync with
-// Layout.jsx — when you add a nav item the user might ask for by voice, add
-// its alias(es) here.
-const NAV_PAGES = {
-  dashboard: '/',
-  home: '/',
-  apps: '/apps',
-  'review-hub': '/review',
-  review: '/review',
-  cybercity: '/city',
-  city: '/city',
-  character: '/character',
-  data: '/data',
-  shell: '/shell',
-  browser: '/browser',
-  instances: '/instances',
-  loops: '/loops',
-  openclaw: '/openclaw',
-  'social-agents': '/agents',
-  // Chief of Staff
-  'chief-of-staff': '/cos/tasks',
-  cos: '/cos/tasks',
-  tasks: '/cos/tasks',
-  'cos-tasks': '/cos/tasks',
-  'cos-agents': '/cos/agents',
-  agents: '/cos/agents',
-  'cos-briefing': '/cos/briefing',
-  briefing: '/cos/briefing',
-  'cos-gsd': '/cos/gsd',
-  gsd: '/cos/gsd',
-  'cos-health': '/cos/health',
-  'cos-jobs': '/cos/jobs',
-  'system-tasks': '/cos/jobs',
-  'cos-schedule': '/cos/schedule',
-  schedule: '/cos/schedule',
-  'cos-scripts': '/cos/scripts',
-  'cos-memory': '/cos/memory',
-  'cos-learning': '/cos/learning',
-  'cos-productivity': '/cos/productivity',
-  streaks: '/cos/productivity',
-  'cos-digest': '/cos/digest',
-  'cos-config': '/cos/config',
-  // Brain
-  brain: '/brain/inbox',
-  'brain-inbox': '/brain/inbox',
-  inbox: '/brain/inbox',
-  'daily-log': '/brain/daily-log',
-  'brain-digest': '/brain/digest',
-  'brain-graph': '/brain/graph',
-  'brain-links': '/brain/links',
-  'brain-memory': '/brain/memory',
-  'brain-notes': '/brain/notes',
-  notes: '/brain/notes',
-  'brain-trust': '/brain/trust',
-  // Calendar
-  calendar: '/calendar/agenda',
-  agenda: '/calendar/agenda',
-  'calendar-day': '/calendar/day',
-  'calendar-week': '/calendar/week',
-  'calendar-month': '/calendar/month',
-  'calendar-lifetime': '/calendar/lifetime',
-  'calendar-review': '/calendar/review',
-  'calendar-sync': '/calendar/sync',
-  // Digital Twin
-  'digital-twin': '/digital-twin/overview',
-  twin: '/digital-twin/overview',
-  'twin-autobiography': '/digital-twin/autobiography',
-  'twin-documents': '/digital-twin/documents',
-  'twin-identity': '/digital-twin/identity',
-  'twin-interview': '/digital-twin/interview',
-  // Goals & Insights
-  goals: '/goals/list',
-  insights: '/insights/overview',
-  // MeatSpace
-  meatspace: '/meatspace/overview',
-  'meatspace-health': '/meatspace/health',
-  'meatspace-body': '/meatspace/body',
-  'meatspace-alcohol': '/meatspace/alcohol',
-  'meatspace-nicotine': '/meatspace/nicotine',
-  'meatspace-age': '/meatspace/age',
-  'meatspace-blood': '/meatspace/blood',
-  'meatspace-genome': '/meatspace/genome',
-  'meatspace-lifestyle': '/meatspace/lifestyle',
-  // Messages
-  messages: '/messages/inbox',
-  drafts: '/messages/drafts',
-  // POST
-  post: '/post/launcher',
-  'post-launcher': '/post/launcher',
-  'post-history': '/post/history',
-  'post-wordplay': '/post/wordplay',
-  // Wiki
-  wiki: '/wiki/overview',
-  'wiki-browse': '/wiki/browse',
-  'wiki-graph': '/wiki/graph',
-  'wiki-search': '/wiki/search',
-  // Dev tools
-  devtools: '/devtools/runs',
-  'ai-runs': '/devtools/runs',
-  'ai-agents': '/devtools/agents',
-  'feature-agents': '/feature-agents',
-  'devtools-github': '/devtools/github',
-  github: '/devtools/github',
-  'devtools-jira': '/devtools/jira',
-  jira: '/devtools/jira',
-  'devtools-datadog': '/devtools/datadog',
-  datadog: '/devtools/datadog',
-  'devtools-history': '/devtools/history',
-  'devtools-processes': '/devtools/processes',
-  'devtools-usage': '/devtools/usage',
-  'devtools-runner': '/devtools/runner',
-  'devtools-submodules': '/devtools/submodules',
-  // Settings
-  settings: '/settings/backup',
-  'settings-voice': '/settings/voice',
-  'settings-telegram': '/settings/telegram',
-  'settings-database': '/settings/database',
-  prompts: '/prompts',
-  providers: '/ai',
-  'ai-providers': '/ai',
-  security: '/security',
-  uploads: '/uploads',
-};
 
 // Shorthand presets for voice logging. A user saying "I had a beer" should
 // not need to recite oz + ABV — these defaults match typical US servings.
@@ -228,11 +104,6 @@ for (const [name, group] of Object.entries(TOOL_GROUPS)) {
   }
 }
 
-const normalizeLabel = (s) => (s || '')
-  .toLowerCase()
-  .replace(/\s+/g, ' ')
-  .trim()
-  .replace(/[.!?:;,"']+$/, '');
 
 // Accepts one kind OR an array of kinds for multi-kind tools like ui_fill
 // (input|textarea) and ui_check (checkbox|radio). The error pool and label
@@ -894,24 +765,8 @@ const TOOLS = [
       let target = null;
       let resolvedKey = null;
       if (page && typeof page === 'string') {
-        const norm = normalizeLabel(page).replace(/\s+/g, '-');
-        const keys = Object.keys(NAV_PAGES);
-        // Tiered match: exact → key prefixes norm → norm prefixes key → key
-        // contained in norm (so "chief-of-staff-tasks" finds "tasks") → key
-        // contains norm substring. Last word tried as a standalone key at
-        // the end since voice phrasings often end with the target page.
-        const tail = norm.split('-').filter(Boolean).pop();
-        const picks = [
-          keys.find((k) => k === norm),
-          keys.find((k) => norm.startsWith(k) && k.length >= 3),
-          keys.find((k) => k.startsWith(norm)),
-          keys.find((k) => norm.endsWith(`-${k}`) && k.length >= 3),
-          keys.find((k) => norm.includes(k) && k.length >= 4),
-          keys.find((k) => k.includes(norm)),
-          tail && tail !== norm ? keys.find((k) => k === tail) : null,
-        ];
-        const hit = picks.find(Boolean);
-        if (hit) { target = NAV_PAGES[hit]; resolvedKey = hit; }
+        const hit = resolveNavCommand(page);
+        if (hit) { target = hit.path; resolvedKey = hit.matched; }
       }
       if (!target && path && typeof path === 'string' && path.startsWith('/')) target = path;
       if (!target) {
@@ -1060,6 +915,15 @@ const toSpec = (t) => ({
 });
 
 export const getToolSpecs = () => TOOLS.map(toSpec);
+
+// Plain-format metadata for non-LLM consumers (the command palette) so routes
+// don't need to reach through OpenAI-shaped function specs to get to the same
+// fields. Shape-independent from getToolSpecs.
+export const getToolMetadata = (id) => {
+  const tool = TOOLS.find((t) => t.name === id);
+  if (!tool) return null;
+  return { id: tool.name, description: tool.description, parameters: tool.parameters };
+};
 
 // Intent-filtered spec list. Pass the user's current utterance; returns the
 // filtered spec array PLUS the set of active groups so downstream consumers

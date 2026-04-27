@@ -19,6 +19,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { videoGenEvents } from './videoGen/events.js';
 import * as shellService from './shell.js';
 import {
   validateSocketData,
@@ -542,7 +543,7 @@ export function initSocket(io) {
   setupLoopEventForwarding();
 
   // Set up image generation event forwarding
-  setupImageGenEventForwarding();
+  setupMediaGenEventForwarding();
 }
 
 function cleanupStream(socketId) {
@@ -771,11 +772,12 @@ function setupLoopEventForwarding() {
   loopEvents.on('output', (data) => broadcastToLoops('loop:output', data));
 }
 
-// Set up image generation event forwarding — broadcast to all clients
-let imageGenForwardingSetup = false;
-function setupImageGenEventForwarding() {
-  if (imageGenForwardingSetup) return;
-  imageGenForwardingSetup = true;
+// Bridge both image-gen AND video-gen events from their internal EventEmitters
+// onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
+let mediaGenForwardingSetup = false;
+function setupMediaGenEventForwarding() {
+  if (mediaGenForwardingSetup) return;
+  mediaGenForwardingSetup = true;
   imageGenEvents.on('started', (data) => {
     if (ioInstance) ioInstance.emit('image-gen:started', data);
   });
@@ -787,5 +789,18 @@ function setupImageGenEventForwarding() {
   });
   imageGenEvents.on('failed', (data) => {
     if (ioInstance) ioInstance.emit('image-gen:failed', data);
+  });
+
+  videoGenEvents.on('started', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:started', data);
+  });
+  videoGenEvents.on('progress', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:progress', data);
+  });
+  videoGenEvents.on('completed', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:completed', data);
+  });
+  videoGenEvents.on('failed', (data) => {
+    if (ioInstance) ioInstance.emit('video-gen:failed', data);
   });
 }

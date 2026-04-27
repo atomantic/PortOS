@@ -117,6 +117,17 @@ export const updateBrainMemory = (id, data) => request(`/brain/memories/${id}`, 
 });
 export const deleteBrainMemory = (id) => request(`/brain/memories/${id}`, { method: 'DELETE' });
 
+// Brain - Third-party Imports
+export const getBrainImportSources = () => request('/brain/import/sources');
+export const previewChatgptImport = (data) => request('/brain/import/chatgpt/preview', {
+  method: 'POST',
+  body: JSON.stringify({ data })
+});
+export const runChatgptImport = (data, options = {}) => request('/brain/import/chatgpt', {
+  method: 'POST',
+  body: JSON.stringify({ data, ...options })
+});
+
 // Brain - Digests & Reviews
 export const getBrainLatestDigest = () => request('/brain/digest/latest');
 export const getBrainDigests = (limit = 10) => request(`/brain/digests?limit=${limit}`);

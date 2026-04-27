@@ -7,6 +7,7 @@ import { PORTS } from './lib/ports.js';
 import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
+import { getSelfHost } from './lib/peerSelfHost.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -38,6 +39,7 @@ import memoryRoutes from './routes/memory.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
+import brainImportRoutes from './routes/brainImport.js';
 import notesRoutes from './routes/notes.js';
 import mediaRoutes from './routes/media.js';
 import calendarRoutes from './routes/calendar.js';
@@ -60,6 +62,8 @@ import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
 import databaseRoutes from './routes/database.js';
 import searchRoutes from './routes/search.js';
+import paletteRoutes from './routes/palette.js';
+import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
 import dataSyncRoutes from './routes/dataSync.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
@@ -74,7 +78,11 @@ import loopsRoutes from './routes/loops.js';
 import characterRoutes from './routes/character.js';
 import toolsRoutes from './routes/tools.js';
 import imageGenRoutes from './routes/imageGen.js';
+import videoGenRoutes from './routes/videoGen.js';
+import imageVideoModelsRoutes from './routes/imageVideoModels.js';
+import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
+import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
 import { backfillOriginInstanceId } from './services/brainStorage.js';
@@ -244,6 +252,8 @@ app.use('/api/git', gitRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/palette', paletteRoutes);
+app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/database', databaseRoutes);
@@ -265,6 +275,7 @@ app.use('/api/feeds', feedsRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
+app.use('/api/brain/import', brainImportRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/notes', notesRoutes);
 app.use('/api/media', mediaRoutes);
@@ -296,7 +307,13 @@ app.use('/api/loops', loopsRoutes);
 app.use('/api/character', characterRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/image-gen', imageGenRoutes);
+app.use('/api/video-gen', videoGenRoutes);
+app.use('/api/image-video/models', imageVideoModelsRoutes);
+// AUTOMATIC1111-compatible surface for tailnet clients — gated by
+// settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
+app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
+app.use('/api/ask', askRoutes);
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
@@ -380,6 +397,10 @@ restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.messag
 
 // Serve generated images from configured images directory
 app.use('/data/images', express.static(PATHS.images));
+// Serve generated videos + thumbnails so the Media UI and tailnet clients
+// can pull them by URL without going through an explicit download route.
+app.use('/data/videos', express.static(PATHS.videos));
+app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
@@ -415,23 +436,28 @@ ensureSelf()
   .then(() => {
     // Start server only after sync log is initialized
     httpServer.listen(PORT, HOST, () => {
-      console.log(`🚀 PortOS server running at ${scheme}://${HOST}:${PORT}`);
-      if (!httpsEnabled) {
-        console.log(`⚠️  HTTP only — getUserMedia (mic) will not work over Tailscale IP. Run "npm run setup:cert" to enable HTTPS.`);
-      } else {
+      // One canonical "where do I open this" banner — :5555 is always user-facing
+      // (HTTP or HTTPS), :PORTOS_HTTP_PORT (default 5553) is the loopback HTTP
+      // mirror that only spawns when HTTPS is active. See docs/PORTS.md.
+      console.log(`🚀 PortOS listening on :${PORT} (${scheme})`);
+      if (httpsEnabled) {
+        const selfHost = getSelfHost();
+        if (selfHost) console.log(`   ✅ https://${selfHost}:${PORT} (trusted via Tailscale)`);
+        console.log(`   🔐 https://<tailscale-ip>:${PORT} (cert warning unless using the hostname above)`);
         initCertRenewer(httpServer);
-        // Loopback-HTTP mirror (created by createTailscaleServers) — attach
-        // Socket.IO to the same instance so websocket events are identical.
         const localHttpPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
         if (localHttpServer) {
           io.attach(localHttpServer);
           localHttpServer.listen(localHttpPort, '127.0.0.1', () => {
-            console.log(`🔓 Local HTTP also at http://localhost:${localHttpPort} (loopback only, no cert warnings)`);
+            console.log(`   🔓 http://localhost:${localHttpPort} (loopback HTTP mirror, no cert warnings)`);
           });
           localHttpServer.on('error', (err) => {
-            console.warn(`⚠️  Local HTTP fallback on :${localHttpPort} failed: ${err.message} — Tailscale HTTPS still active`);
+            console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — HTTPS still active`);
           });
         }
+      } else {
+        console.log(`   🌐 http://localhost:${PORT}`);
+        console.log(`⚠️  HTTP only — getUserMedia (mic) won't work over Tailscale IP. Run "npm run setup:cert" to enable HTTPS.`);
       }
 
       // Set up process error handlers with io instance

@@ -9,17 +9,17 @@ const SHORTCUT_SECTIONS = [
   {
     title: 'Global',
     shortcuts: [
-      { keys: [`${modKey}+K`], description: 'Open search' },
+      { keys: [`${modKey}+K`], description: 'Open command palette' },
       { keys: ['?'], description: 'Show keyboard shortcuts' },
       { keys: ['Esc'], description: 'Close overlays' },
     ],
   },
   {
-    title: 'Search (when open)',
+    title: 'Command Palette (when open)',
     shortcuts: [
-      { keys: ['\u2191', '\u2193'], description: 'Navigate results' },
-      { keys: ['Enter'], description: 'Go to selected result' },
-      { keys: ['Esc'], description: 'Close search' },
+      { keys: ['\u2191', '\u2193'], description: 'Navigate commands and results' },
+      { keys: ['Enter'], description: 'Go to page, run action, or open result' },
+      { keys: ['Esc'], description: 'Close palette' },
     ],
   },
   {
