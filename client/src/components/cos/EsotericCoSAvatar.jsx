@@ -10,15 +10,15 @@ import CoSAvatarFrame from './CoSAvatarFrame';
 function EsotericCore({ color, state, speaking }) {
   const meshRef = useRef();
   const glowRef = useRef();
-  
+
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
-    
+
     // Core rotation and pulse
     if (meshRef.current) {
       meshRef.current.rotation.x = Math.sin(t * 0.2) * 0.5;
       meshRef.current.rotation.y += 0.01;
-      
+
       // React to speaking
       const speakPulse = speaking ? Math.sin(t * 20) * 0.2 : 0;
       meshRef.current.scale.setScalar(1 + Math.sin(t * 1.5) * 0.05 + speakPulse);
@@ -47,7 +47,7 @@ function EsotericCore({ color, state, speaking }) {
             wireframe={state === 'investigating'}
           />
         </mesh>
-        
+
         {/* Outer Glow Shell */}
         <mesh ref={glowRef}>
           <icosahedronGeometry args={[0.9, 2]} />
@@ -83,17 +83,17 @@ function RunicShards({ color, state }) {
       groupRef.current.children.forEach((child, i) => {
         const shard = shards[i];
         const angle = t * shard.orbitSpeed + shard.phase;
-        
+
         // Orbital motion
         child.position.x = Math.cos(angle) * shard.orbitRadius;
         child.position.z = Math.sin(angle) * shard.orbitRadius;
         child.position.y = Math.sin(t * 0.5 + shard.phase) * 0.5;
-        
+
         // Self rotation
         child.rotation.x += shard.rotationSpeed * 0.02;
         child.rotation.y += shard.rotationSpeed * 0.03;
       });
-      
+
       // Speed up for active states
       const speedMult = state === 'coding' || state === 'thinking' ? 2 : 1;
       groupRef.current.rotation.y = t * 0.1 * speedMult;
@@ -141,8 +141,8 @@ function AncientHalo({ color }) {
         <group>
              <mesh ref={ringRef}>
                 <torusGeometry args={[1.8, 0.02, 16, 100]} />
-                <meshStandardMaterial 
-                    color={color} 
+                <meshStandardMaterial
+                    color={color}
                     emissive={color}
                     emissiveIntensity={0.5}
                     transparent
@@ -151,8 +151,8 @@ function AncientHalo({ color }) {
             </mesh>
              <mesh ref={ring2Ref}>
                 <torusGeometry args={[2.2, 0.01, 16, 100]} />
-                <meshStandardMaterial 
-                    color={color} 
+                <meshStandardMaterial
+                    color={color}
                     emissive={color}
                     emissiveIntensity={0.3}
                     transparent
@@ -165,7 +165,7 @@ function AncientHalo({ color }) {
 
 function FloatingRunes({ color }) {
     return (
-        <Sparkles 
+        <Sparkles
             count={30}
             scale={4}
             size={4}
@@ -186,12 +186,12 @@ function Scene({ state, speaking }) {
       <ambientLight intensity={0.2} />
       <pointLight position={[10, 10, 10]} intensity={1} color={color} />
       <pointLight position={[-10, -10, -10]} intensity={0.5} color="#4c1d95" />
-      
+
       <EsotericCore color={color} state={state} speaking={speaking} />
       <RunicShards color={color} state={state} />
       <AncientHalo color={color} state={state} />
       <FloatingRunes color={color} />
-      
+
       {/* Background stars for depth */}
       <Stars radius={100} depth={50} count={1000} factor={4} saturation={0} fade speed={1} />
 
