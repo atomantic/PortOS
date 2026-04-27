@@ -152,6 +152,19 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
 
   const proc = spawn(bin, args, { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
+  // Without an 'error' handler, a missing/non-executable pythonPath would
+  // crash the server with an unhandled error event.
+  proc.on('error', (err) => {
+    job.status = 'error';
+    const reason = `Failed to spawn ${bin}: ${err.message}`;
+    console.log(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+    activeProcess = null;
+    activeJob = null;
+    rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+    closeJobAfterDelay(jobs, jobId);
+  });
 
   // Watch the stepwise output dir for new PNGs. When a new file appears,
   // base64-encode the latest one and emit it as `currentImage`. fs.watch

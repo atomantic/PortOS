@@ -80,14 +80,20 @@ await poll(async () => {
   return json?.connected === true;
 }, 'PortOS browser CDP', BROWSER_TIMEOUT_MS);
 
+// 5s navigate timeout — without this, a hung accept-without-response would
+// stall setup.sh / update.* indefinitely even though this step is fail-soft.
+const navController = new AbortController();
+const navTimer = setTimeout(() => navController.abort(), 5000);
 const res = await fetch(navigateUrl, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ url: TARGET_URL })
+  body: JSON.stringify({ url: TARGET_URL }),
+  signal: navController.signal,
 }).catch(err => {
   console.warn(`⚠️  Could not reach navigate endpoint: ${err.message}`);
   return null;
 });
+clearTimeout(navTimer);
 
 if (!res) process.exit(0);
 if (!res.ok) {

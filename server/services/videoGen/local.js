@@ -214,6 +214,18 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   delete childEnv.PYTHONPATH;
   const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
+  // Without an 'error' handler, a missing/non-executable pythonPath would
+  // crash the server with an unhandled error event.
+  proc.on('error', (err) => {
+    job.status = 'error';
+    const reason = `Failed to spawn ${bin}: ${err.message}`;
+    console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+    activeProcess = null;
+    if (resizedTempPath) unlink(resizedTempPath).catch(() => {});
+    closeJobAfterDelay(jobs, jobId);
+  });
 
   let outputBuf = '';
 
