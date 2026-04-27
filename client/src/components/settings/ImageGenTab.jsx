@@ -4,7 +4,7 @@
  * machines can use this PortOS as their image/video backend.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
   Sparkles
@@ -41,6 +41,11 @@ export function ImageGenTab() {
   const [testPrompt, setTestPrompt] = useState(DEFAULT_TEST_PROMPT);
   const [rendering, setRendering] = useState(false);
   const [renderResult, setRenderResult] = useState(null);
+  const renderEsRef = useRef(null);
+
+  // Close any in-flight test-render SSE on unmount so we don't fire setState
+  // on a torn-down component if the user navigates away mid-render.
+  useEffect(() => () => renderEsRef.current?.close(), []);
 
   useEffect(() => {
     Promise.all([getSettings(), getToolsList()])
@@ -137,19 +142,21 @@ export function ImageGenTab() {
       if (result?.mode === 'local' && result?.generationId) {
         await new Promise((resolve, reject) => {
           const es = new EventSource(`/api/image-gen/${result.generationId}/events`);
+          renderEsRef.current = es;
+          const closeEs = () => { es.close(); renderEsRef.current = null; };
           es.onmessage = (e) => {
             const msg = (() => { try { return JSON.parse(e.data); } catch { return null; } })();
             if (!msg) return;
             if (msg.type === 'complete') {
-              es.close();
+              closeEs();
               setRenderResult({ ...result, ...msg.result });
               resolve();
             } else if (msg.type === 'error') {
-              es.close();
+              closeEs();
               reject(new Error(msg.error || 'Generation failed'));
             }
           };
-          es.onerror = () => { es.close(); reject(new Error('Lost connection during test render')); };
+          es.onerror = () => { closeEs(); reject(new Error('Lost connection during test render')); };
         });
       } else {
         setRenderResult(result);

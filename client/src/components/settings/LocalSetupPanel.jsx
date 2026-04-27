@@ -48,15 +48,22 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
 
   const handleDetect = async () => {
     setDetecting(true);
-    const res = await fetch('/api/image-gen/setup/python');
-    setDetecting(false);
-    if (!res.ok) { toast.error('Detection failed'); return; }
-    const { path } = await res.json();
-    if (path) {
-      onPythonPathChange(path);
-      toast.success(`Detected ${path}`);
-    } else {
-      toast.error('No Python 3 found on this system');
+    try {
+      const res = await fetch('/api/image-gen/setup/python');
+      if (!res.ok) { toast.error('Detection failed'); return; }
+      const { path } = await res.json();
+      if (path) {
+        onPythonPathChange(path);
+        toast.success(`Detected ${path}`);
+      } else {
+        toast.error('No Python 3 found on this system');
+      }
+    } catch {
+      toast.error('Detection failed');
+    } finally {
+      // Always clear detecting state — without this, a fetch reject would
+      // leave the button stuck disabled forever.
+      setDetecting(false);
     }
   };
 
@@ -97,20 +104,26 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange }) {
 
   const handleCreateVenv = async () => {
     setCreatingVenv(true);
-    const res = await fetch('/api/image-gen/setup/create-venv', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    setCreatingVenv(false);
-    if (!res.ok) {
-      const json = await res.json().catch(() => ({}));
-      toast.error(json.error || 'Venv creation failed');
-      return;
+    try {
+      const res = await fetch('/api/image-gen/setup/create-venv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        toast.error(json.error || 'Venv creation failed');
+        return;
+      }
+      const { pythonPath: venvPython } = await res.json();
+      onPythonPathChange(venvPython);
+      toast.success(`Created venv at ${venvPython}`);
+    } catch {
+      toast.error('Failed to create venv');
+    } finally {
+      // Always clear so a fetch reject doesn't leave the button disabled.
+      setCreatingVenv(false);
     }
-    const { pythonPath: venvPython } = await res.json();
-    onPythonPathChange(venvPython);
-    toast.success(`Created venv at ${venvPython}`);
   };
 
   return (

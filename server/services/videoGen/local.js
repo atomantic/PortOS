@@ -339,14 +339,26 @@ export async function stitchVideos(videoIds) {
   const videos = videoIds.map((id) => history.find((h) => h.id === id)).filter(Boolean);
   if (videos.length < 2) throw new ServerError('Some videos not found', { status: 400, code: 'VALIDATION_ERROR' });
 
-  const videoPaths = videos.map((v) => join(PATHS.videos, v.filename));
+  // Validate every history-supplied filename through safeUnder before
+  // letting it reach ffmpeg's concat manifest. Tampered history entries
+  // could otherwise smuggle `..` segments into ffmpeg input.
+  const videoPaths = videos.map((v) => safeUnder(PATHS.videos, v.filename));
+  if (videoPaths.some((p) => !p)) {
+    throw new ServerError('One or more video filenames failed validation', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   for (const p of videoPaths) {
     if (!existsSync(p)) throw new ServerError(`Missing: ${basename(p)}`, { status: 404, code: 'NOT_FOUND' });
   }
 
   const jobId = randomUUID();
   const listFile = join(tmpdir(), `concat-${jobId}.txt`);
-  await writeFile(listFile, videoPaths.map((p) => `file '${p}'`).join('\n'));
+  // ffmpeg concat-demuxer escape: per its docs, single quotes in filenames
+  // must be replaced with `'\''` (close-quote, escaped quote, reopen-quote).
+  // Filenames here have already passed safeUnder so they're sane basenames
+  // under PATHS.videos, but defense in depth — if PATHS.videos itself ever
+  // contains an apostrophe it shouldn't break the manifest.
+  const escapeForConcat = (p) => p.replace(/'/g, "'\\''");
+  await writeFile(listFile, videoPaths.map((p) => `file '${escapeForConcat(p)}'`).join('\n'));
 
   const outFilename = `stitched-${jobId}.mp4`;
   const outPath = join(PATHS.videos, outFilename);
