@@ -15,7 +15,7 @@ import * as imageGen from '../services/imageGen/index.js';
 import { local } from '../services/imageGen/index.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
-  isExternallyManaged, createVenv, isAllowedPython,
+  isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
 } from '../lib/pythonSetup.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { join } from 'node:path';
@@ -144,17 +144,26 @@ router.post('/setup/create-venv', asyncHandler(async (req, res) => {
 // happily pip-install arbitrary PyPI packages — the install runs as the
 // PortOS user and pip itself executes setup.py from the package, so an
 // arbitrary package install is effectively arbitrary code execution.
+// Build the pip-spec allowlist from REQUIRED_PACKAGES via pipNameFor — that
+// translates import names (`cv2`) to their actual pip specs
+// (`opencv-python`). Without this mapping, the allowlist would contain
+// import-only names that can't actually be installed but ALSO don't appear
+// here as their pip specs, so the legitimate install request would 400.
+// Worse: an import name like `cv2` isn't a real PyPI package but if a
+// typosquat existed under that name it'd be installable.
 const REQUIRED_PIP_NAMES = new Set([
-  ...REQUIRED_PACKAGES,
-  // pip-name variants (see PIP_NAMES in pythonSetup.js)
-  'opencv-python',
-  'transformers<5',
+  ...REQUIRED_PACKAGES.map(pipNameFor),
   // Windows torch path also installs torch + diffusers, which are in
   // REQUIRED_PACKAGES on Windows but not on macOS — keep them allowlisted
   // unconditionally so a Windows install requested from a macOS server
   // (unlikely but possible) doesn't 400 unhelpfully.
   'torch',
   'diffusers',
+  // Both the bare `transformers` and the macOS-pinned `transformers<5`
+  // variant should be installable; pipNameFor only emits the pinned
+  // variant on macOS, so list both unconditionally for safety.
+  'transformers',
+  'transformers<5',
 ]);
 
 const installSchema = z.object({

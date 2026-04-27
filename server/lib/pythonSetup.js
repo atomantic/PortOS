@@ -22,7 +22,7 @@ const PIP_NAMES = {
   ...(IS_DARWIN ? { transformers: 'transformers<5' } : {}),
 };
 
-const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
+export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
 
 const HOME = homedir();
 
