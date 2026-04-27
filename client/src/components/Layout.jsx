@@ -116,6 +116,7 @@ const navItems = [
       { to: '/brain/digest', label: 'Digest', icon: Calendar },
       { to: '/brain/feeds', label: 'Feeds', icon: Rss },
       { to: '/brain/graph', label: 'Graph', icon: Network },
+      { to: '/brain/import', label: 'Import', icon: Upload },
       { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
       { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
       { to: '/brain/links', label: 'Links', icon: Link2 },

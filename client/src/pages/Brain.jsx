@@ -16,6 +16,7 @@ import TrustTab from '../components/brain/tabs/TrustTab';
 import NotesTab from '../components/brain/tabs/NotesTab';
 import DailyLogTab from '../components/brain/tabs/DailyLogTab';
 import ConfigTab from '../components/brain/tabs/ConfigTab';
+import ImportTab from '../components/brain/tabs/ImportTab';
 
 export default function Brain() {
   const { tab } = useParams();
@@ -66,6 +67,8 @@ export default function Brain() {
         return <FeedsTab onRefresh={fetchData} />;
       case 'trust':
         return <TrustTab onRefresh={fetchData} />;
+      case 'import':
+        return <ImportTab />;
       case 'config':
         return <ConfigTab onRefresh={fetchData} />;
       default:
