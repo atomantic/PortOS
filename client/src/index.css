@@ -181,10 +181,6 @@ html[data-port-theme] .rounded-2xl {
   border-radius: var(--port-radius-xl) !important;
 }
 
-html[data-port-theme] .rounded-full {
-  border-radius: var(--port-radius-pill) !important;
-}
-
 html[data-port-theme] input,
 html[data-port-theme] textarea,
 html[data-port-theme] select {
@@ -194,7 +190,7 @@ html[data-port-theme] select {
   transition:
     border-color var(--port-motion-fast) ease,
     box-shadow var(--port-motion-fast) ease,
-    background-color var(--port-motion-fast) ease;
+    background var(--port-motion-fast) ease;
 }
 
 html[data-port-theme] input::placeholder,
