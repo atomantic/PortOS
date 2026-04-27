@@ -160,28 +160,47 @@ html[data-port-theme] .bg-port-card {
 }
 
 /*
- * Tailwind opacity modifiers (e.g. bg-port-bg/50) skip the per-theme alpha
- * tokens unless we restate them here. Each rule scales --port-X-alpha by the
- * requested opacity so semi-transparent surfaces stay consistent with each
- * theme's intent (notably for translucent themes like Lumen Glass).
+ * Tailwind opacity modifiers (e.g. bg-port-bg/50, hover:bg-port-card/30) skip
+ * the per-theme alpha tokens unless we restate them here — Tailwind v4 emits
+ * color-mix(...) on the raw color and ignores --port-X-alpha. Each rule below
+ * scales --port-X-alpha by the requested opacity so semi-transparent surfaces
+ * stay consistent with each theme's intent (notably translucent themes like
+ * Lumen Glass) across base + state variants (hover/active/focus where used).
  */
-html[data-port-theme] [class~="bg-port-bg/20"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.2)) !important; }
-html[data-port-theme] [class~="bg-port-bg/30"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.3)) !important; }
-html[data-port-theme] [class~="bg-port-bg/40"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.4)) !important; }
-html[data-port-theme] [class~="bg-port-bg/50"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.5)) !important; }
-html[data-port-theme] [class~="bg-port-bg/60"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.6)) !important; }
-html[data-port-theme] [class~="bg-port-bg/70"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.7)) !important; }
-html[data-port-theme] [class~="bg-port-bg/80"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.8)) !important; }
-html[data-port-theme] [class~="bg-port-bg/90"] { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.9)) !important; }
+html[data-port-theme] [class~="bg-port-bg/20"],
+html[data-port-theme] [class~="hover:bg-port-bg/20"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.2)) !important; }
+html[data-port-theme] [class~="bg-port-bg/30"],
+html[data-port-theme] [class~="hover:bg-port-bg/30"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.3)) !important; }
+html[data-port-theme] [class~="bg-port-bg/40"],
+html[data-port-theme] [class~="hover:bg-port-bg/40"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.4)) !important; }
+html[data-port-theme] [class~="bg-port-bg/50"],
+html[data-port-theme] [class~="hover:bg-port-bg/50"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.5)) !important; }
+html[data-port-theme] [class~="bg-port-bg/60"],
+html[data-port-theme] [class~="hover:bg-port-bg/60"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.6)) !important; }
+html[data-port-theme] [class~="bg-port-bg/70"],
+html[data-port-theme] [class~="hover:bg-port-bg/70"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.7)) !important; }
+html[data-port-theme] [class~="bg-port-bg/80"],
+html[data-port-theme] [class~="hover:bg-port-bg/80"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.8)) !important; }
+html[data-port-theme] [class~="bg-port-bg/90"],
+html[data-port-theme] [class~="hover:bg-port-bg/90"]:hover { background-color: rgb(var(--port-bg) / calc(var(--port-bg-alpha) * 0.9)) !important; }
 
-html[data-port-theme] [class~="bg-port-card/30"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.3)) !important; }
-html[data-port-theme] [class~="bg-port-card/40"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.4)) !important; }
-html[data-port-theme] [class~="bg-port-card/50"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.5)) !important; }
-html[data-port-theme] [class~="bg-port-card/60"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.6)) !important; }
-html[data-port-theme] [class~="bg-port-card/70"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.7)) !important; }
-html[data-port-theme] [class~="bg-port-card/80"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.8)) !important; }
-html[data-port-theme] [class~="bg-port-card/90"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.9)) !important; }
-html[data-port-theme] [class~="bg-port-card/95"] { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.95)) !important; }
+html[data-port-theme] [class~="bg-port-card/30"],
+html[data-port-theme] [class~="hover:bg-port-card/30"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.3)) !important; }
+html[data-port-theme] [class~="bg-port-card/40"],
+html[data-port-theme] [class~="hover:bg-port-card/40"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.4)) !important; }
+html[data-port-theme] [class~="bg-port-card/50"],
+html[data-port-theme] [class~="hover:bg-port-card/50"]:hover,
+html[data-port-theme] [class~="active:bg-port-card/50"]:active { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.5)) !important; }
+html[data-port-theme] [class~="bg-port-card/60"],
+html[data-port-theme] [class~="hover:bg-port-card/60"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.6)) !important; }
+html[data-port-theme] [class~="bg-port-card/70"],
+html[data-port-theme] [class~="hover:bg-port-card/70"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.7)) !important; }
+html[data-port-theme] [class~="bg-port-card/80"],
+html[data-port-theme] [class~="hover:bg-port-card/80"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.8)) !important; }
+html[data-port-theme] [class~="bg-port-card/90"],
+html[data-port-theme] [class~="hover:bg-port-card/90"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.9)) !important; }
+html[data-port-theme] [class~="bg-port-card/95"],
+html[data-port-theme] [class~="hover:bg-port-card/95"]:hover { background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.95)) !important; }
 
 html[data-port-theme] .border-port-border,
 html[data-port-theme] .divide-port-border > :not([hidden]) ~ :not([hidden]) {
@@ -287,9 +306,16 @@ html[data-port-theme] [class~="bg-port-border/60"] { background: color-mix(in sr
 html[data-port-theme] [class~="bg-port-border/70"] { background: color-mix(in srgb, var(--port-control-bg) 70%, transparent) !important; }
 html[data-port-theme] [class~="bg-port-border/80"] { background: color-mix(in srgb, var(--port-control-bg) 80%, transparent) !important; }
 
-html[data-port-theme] [class*="hover:bg-port-border"]:hover {
+html[data-port-theme] [class~="hover:bg-port-border"]:hover {
   background: var(--port-control-bg-hover) !important;
 }
+
+html[data-port-theme] [class~="hover:bg-port-border/20"]:hover { background: color-mix(in srgb, var(--port-control-bg-hover) 20%, transparent) !important; }
+html[data-port-theme] [class~="hover:bg-port-border/30"]:hover { background: color-mix(in srgb, var(--port-control-bg-hover) 30%, transparent) !important; }
+html[data-port-theme] [class~="hover:bg-port-border/50"]:hover,
+html[data-port-theme] [class~="focus:bg-port-border/50"]:focus { background: color-mix(in srgb, var(--port-control-bg-hover) 50%, transparent) !important; }
+html[data-port-theme] [class~="hover:bg-port-border/70"]:hover { background: color-mix(in srgb, var(--port-control-bg-hover) 70%, transparent) !important; }
+html[data-port-theme] [class~="hover:bg-port-border/80"]:hover { background: color-mix(in srgb, var(--port-control-bg-hover) 80%, transparent) !important; }
 
 html[data-port-theme] :is(.bg-port-border, [class~="bg-port-border/50"]):is([class~="text-gray-400"], [class~="text-gray-500"]) {
   color: rgb(var(--port-control-text)) !important;
