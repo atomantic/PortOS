@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff } from 'lucide-react';
 import {
@@ -58,11 +58,13 @@ export default function VoiceWidget() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [dictationActive, setDictationActive] = useState(false);
-  // Refs held by the voice:dictation listener so it can call the latest
-  // handleStart/handleStop closures without re-binding socket listeners on
-  // every prop change. Populated in the effect that defines the handlers.
+  // Refs held by the voice:dictation listener and the sidebar engage/disengage
+  // listeners so they can call the latest handleStart/handleStop/handleCancel
+  // closures without re-binding socket listeners on every prop change.
+  // Populated in the layout effect that defines the handlers.
   const handleStartRef = useRef(null);
   const handleStopRef = useRef(null);
+  const handleCancelRef = useRef(null);
   const [handsFree, setHandsFree] = useState(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
@@ -291,11 +293,30 @@ export default function VoiceWidget() {
     warnIfQuiet(r.peak);
   }, [handsFree, useWebSpeech]);
 
-  // Keep the refs the dictation listener uses pointed at the latest closures.
-  // Rebinding the listener itself would tear down/rebuild the socket
-  // subscription on every prop change, which is wasteful.
-  useEffect(() => { handleStartRef.current = handleStart; }, [handleStart]);
-  useEffect(() => { handleStopRef.current = handleStop; }, [handleStop]);
+  // Cancel any in-flight capture without submitting — used by the sidebar
+  // disengage path so hiding the widget mid-utterance doesn't accidentally
+  // ship a partial PTT recording to the LLM. Also drops queued TTS so the
+  // bot stops speaking when the user explicitly disengages.
+  const handleCancel = useCallback(() => {
+    if (useWebSpeech) {
+      if (isWebSpeechCapturing()) stopWebSpeechCapture();
+      setInterimTranscript('');
+    } else {
+      if (isContinuous()) stopContinuous();
+      if (isCapturing()) stopCapture({ submit: false });
+    }
+    interrupt();
+    setStage('idle');
+  }, [useWebSpeech]);
+
+  // Keep the refs the dictation/engage/disengage listeners use pointed at the
+  // latest closures. useLayoutEffect (not useEffect) so the refs are updated
+  // synchronously after commit — without this, a window event firing in the
+  // same tick as `enabled` flipping true could read a stale closure where
+  // `enabled` was still false, making the first engage a no-op.
+  useLayoutEffect(() => { handleStartRef.current = handleStart; }, [handleStart]);
+  useLayoutEffect(() => { handleStopRef.current = handleStop; }, [handleStop]);
+  useLayoutEffect(() => { handleCancelRef.current = handleCancel; }, [handleCancel]);
 
   const handleClear = () => {
     resetConversation();
@@ -378,9 +399,12 @@ export default function VoiceWidget() {
   // Sidebar Voice toggle dispatches engage/disengage so engaging the widget
   // also starts listening (and disengaging stops the mic) — without this the
   // user would have to click the toggle, then click mic separately.
+  // Disengage routes through handleCancel (not handleStop) so a PTT user who
+  // hides the widget mid-recording doesn't have a partial utterance shipped
+  // to the LLM by stopCapture's default `{ submit: true }` behavior.
   useEffect(() => {
     const onEngage = () => { handleStartRef.current?.(); };
-    const onDisengage = () => { handleStopRef.current?.(); };
+    const onDisengage = () => { handleCancelRef.current?.(); };
     window.addEventListener(ENGAGE_EVENT, onEngage);
     window.addEventListener(DISENGAGE_EVENT, onDisengage);
     return () => {
