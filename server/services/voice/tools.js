@@ -14,7 +14,6 @@ import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 import * as imageGen from '../imageGen/index.js';
-import { IMAGE_GEN_MODES } from '../imageGen/index.js';
 import { getSettings } from '../settings.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
@@ -1075,7 +1074,7 @@ const TOOLS = [
         },
         provider: {
           type: 'string',
-          enum: ['auto', ...IMAGE_GEN_MODES],
+          enum: ['auto', ...imageGen.IMAGE_GEN_MODES],
           description: '"auto" (default) uses the user\'s saved backend. Override only when the user explicitly asks for a specific one or the task strongly favors it.',
         },
         negativePrompt: {

@@ -197,6 +197,34 @@ describe('codex provider — image harvest', () => {
     expect(failedListener.mock.calls[0][0].error).toMatch(/no session id/i);
   });
 
+  it('recovers from a spawn error so subsequent generations can run', async () => {
+    // Simulate ENOENT (codex binary not found) by emitting 'error' on the
+    // child. Without the activeProcess-clear fix, the next generateImage
+    // call would forever throw 409 IMAGE_GEN_BUSY because activeProcess
+    // would still be set to the dead child.
+    const failedListener = vi.fn();
+    imageGenEvents.on('failed', failedListener);
+
+    await codex.generateImage({ prompt: 'first', codexPath: '/nonexistent/codex' });
+    const child = spawnCalls[0].child;
+    child.emit('error', Object.assign(new Error('spawn /nonexistent/codex ENOENT'), { code: 'ENOENT' }));
+    // The 'close' event also fires for spawn errors; emit it so the
+    // idempotence guard is exercised.
+    child.exitCode = 1;
+    child.emit('close', 1, null);
+    await flush();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(failedListener).toHaveBeenCalled();
+    // Critical: activeProcess must be cleared so a follow-up call works.
+    const second = await codex.generateImage({ prompt: 'second' });
+    expect(second.mode).toBe('codex');
+    expect(spawnCalls.length).toBe(2);
+    spawnCalls[1].child.exitCode = 1;
+    spawnCalls[1].child.emit('close', 1, null);
+    await flush();
+  });
+
   it('emits a failed event when codex exits non-zero', async () => {
     const failedListener = vi.fn();
     imageGenEvents.on('failed', failedListener);

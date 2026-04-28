@@ -1,11 +1,11 @@
 /**
  * Image Generation page.
  *
- * Works against either an external SD API (default) or PortOS's local mflux
- * backend, picked in Settings → Image Gen. The external mode uses the
- * /api/image-gen/generate JSON endpoint; the local mode kicks off a job and
- * subscribes to /api/image-gen/:jobId/events SSE for streaming progress and
- * additional knobs (model picker, LoRAs, quantization).
+ * Backend is picked per-render via the chip strip (Local / External / Codex);
+ * default comes from Settings → Image Gen. External mode is synchronous over
+ * /api/image-gen/generate. Local + Codex are async — both kick off a job and
+ * stream progress over /api/image-gen/:jobId/events SSE. Codex requires the
+ * "Enable Codex Imagegen" toggle in Settings; otherwise its chip is hidden.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';

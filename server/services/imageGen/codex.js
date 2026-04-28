@@ -218,6 +218,15 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta) {
 }
 
 const finalizeError = (job, jobId, reason) => {
+  // Idempotent — spawn failures fire 'error' AND a follow-up 'close', so
+  // both paths reach finalizeError. Without this guard, listeners would
+  // see duplicate 'failed' events.
+  if (job.status === 'error' || job.status === 'complete') return;
+  // Clear activeProcess too. The 'close' handler does this for normal exits,
+  // but a spawn failure (ENOENT, EACCES) routes through 'error' before any
+  // 'close' may fire — without this, a single bad codexPath would
+  // permanently lock the provider into 409 BUSY for every later request.
+  activeProcess = null;
   job.status = 'error';
   activeJob = null;
   console.log(`❌ codex image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);

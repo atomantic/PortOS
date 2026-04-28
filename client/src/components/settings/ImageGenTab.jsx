@@ -1,7 +1,9 @@
 /**
- * Image Gen Settings — mode picker (External SD API vs local mflux), per-mode
- * configuration, and the "expose A1111 API on the tailnet" toggle so other
- * machines can use this PortOS as their image/video backend.
+ * Image Gen Settings — backend picker (External SD API / local mflux / Codex
+ * CLI), per-mode configuration, and the "expose A1111 API on the tailnet"
+ * toggle so other machines can use this PortOS as their image/video backend.
+ * Codex appears as a backend tile only after the user enables it; the toggle
+ * lives in the always-visible Codex CLI Imagegen section.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';

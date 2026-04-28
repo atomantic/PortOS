@@ -1,10 +1,12 @@
 /**
- * Image Generation Routes — works against either the external SD API or the
- * local mflux backend, depending on settings.imageGen.mode.
+ * Image Generation Routes — works against the external SD API, local mflux,
+ * or the Codex CLI built-in image_gen tool, depending on settings.imageGen.mode
+ * (or the per-request `mode` override).
  *
  * Generic endpoints (status, generate, avatar) go through the dispatcher.
- * Local-mode endpoints (events SSE, gallery, loras, cancel, delete) target
- * the local module directly because their shape doesn't apply to external.
+ * Async-mode endpoints (events SSE, cancel) also go through the dispatcher
+ * which routes the jobId to whichever provider owns it. Local-only endpoints
+ * (gallery, loras, models, delete) target the local module directly.
  */
 
 import { Router } from 'express';
