@@ -32,6 +32,20 @@ vi.mock('../feeds.js', () => ({
   markItemRead: vi.fn(async () => ({ updated: true })),
   markAllRead: vi.fn(async () => ({ marked: 0 })),
 }));
+// imageGen dispatcher — tests pin the dispatch and let us assert what mode
+// the voice tool forwards. The settings mock controls the codex-enabled gate.
+const generateImageMock = vi.fn(async (params) => ({
+  filename: 'mock.png', path: '/data/images/mock.png', mode: params?.mode || 'external',
+}));
+const codexEnabledRef = { value: false };
+vi.mock('../imageGen/index.js', () => ({
+  generateImage: (...args) => generateImageMock(...args),
+  IMAGE_GEN_MODES: ['external', 'local', 'codex'],
+}));
+vi.mock('../settings.js', () => ({
+  getSettings: vi.fn(async () => ({ imageGen: { codex: { enabled: codexEnabledRef.value } } })),
+}));
+
 // askService.runAsk is an async generator. Default mock yields a small
 // synthetic stream so ui_ask tests don't need to spin up real providers.
 vi.mock('../askService.js', () => ({
@@ -419,5 +433,61 @@ describe('getToolSpecsForIntent — ui_ask gating', () => {
   it('hides ui_ask on plain capture turns', () => {
     const { specs } = getToolSpecsForIntent('remember to buy milk');
     expect(names(specs)).not.toContain('ui_ask');
+  });
+});
+
+// image_generate uses imageGen.generateImage under the hood; mocked
+// above. The codexEnabledRef toggle drives the disabled-gate test.
+describe("image_generate", () => {
+  it("rejects empty prompt", async () => {
+    const r = await dispatchTool("image_generate", { prompt: "  " });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/prompt is required/);
+  });
+
+  it("forwards prompt to dispatcher with no mode by default (auto)", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox" });
+    expect(r.ok).toBe(true);
+    expect(generateImageMock).toHaveBeenCalledTimes(1);
+    const args = generateImageMock.mock.calls[0][0];
+    expect(args.prompt).toBe("a fox");
+    expect(args.mode).toBeUndefined();
+  });
+
+  it("treats provider=auto the same as no provider", async () => {
+    generateImageMock.mockClear();
+    await dispatchTool("image_generate", { prompt: "a fox", provider: "auto" });
+    expect(generateImageMock.mock.calls[0][0].mode).toBeUndefined();
+  });
+
+  it("forwards provider=local as mode=local", async () => {
+    generateImageMock.mockClear();
+    await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    expect(generateImageMock.mock.calls[0][0].mode).toBe("local");
+  });
+
+  it("rejects provider=codex when codex is disabled in settings", async () => {
+    codexEnabledRef.value = false;
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/Codex Imagegen is disabled/);
+    expect(generateImageMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards provider=codex when codex is enabled", async () => {
+    codexEnabledRef.value = true;
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    expect(r.ok).toBe(true);
+    expect(generateImageMock.mock.calls[0][0].mode).toBe("codex");
+    codexEnabledRef.value = false;
+  });
+
+  it("includes the saved file path in summary", async () => {
+    const r = await dispatchTool("image_generate", { prompt: "a fox" });
+    expect(r.path).toBe("/data/images/mock.png");
+    expect(r.filename).toBe("mock.png");
   });
 });

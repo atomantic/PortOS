@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
-  Sparkles
+  Sparkles, Terminal
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -18,6 +18,7 @@ import {
 } from '../../services/api';
 
 const SDAPI_TOOL_ID = 'sdapi';
+const CODEX_TOOL_ID = 'codex-imagegen';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 
@@ -30,13 +31,22 @@ export function ImageGenTab() {
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
   const [exposeA1111, setExposeA1111] = useState(false);
+  // Codex CLI provider config — gated by `codexEnabled` so users without
+  // a paid Codex plan that includes image_gen can hide the option entirely.
+  const [codexEnabled, setCodexEnabled] = useState(false);
+  const [codexPath, setCodexPath] = useState('');
+  const [codexModel, setCodexModel] = useState('');
 
   // Snapshot of saved values so we can show the "dirty" state
-  const [saved, setSaved] = useState({ mode: 'external', sdapiUrl: '', pythonPath: '', exposeA1111: false });
+  const [saved, setSaved] = useState({
+    mode: 'external', sdapiUrl: '', pythonPath: '', exposeA1111: false,
+    codexEnabled: false, codexPath: '', codexModel: '',
+  });
 
   const [status, setStatus] = useState(null);
   const [checking, setChecking] = useState(false);
   const [toolRegistered, setToolRegistered] = useState(false);
+  const [codexToolRegistered, setCodexToolRegistered] = useState(false);
 
   const [testPrompt, setTestPrompt] = useState(DEFAULT_TEST_PROMPT);
   const [rendering, setRendering] = useState(false);
@@ -55,12 +65,23 @@ export function ImageGenTab() {
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
         const expose = ig.expose?.a1111 === true;
+        const cx = ig.codex || {};
+        const cxEnabled = cx.enabled === true;
+        const cxPath = cx.codexPath || '';
+        const cxModel = cx.model || '';
         setMode(m);
         setSdapiUrl(url);
         setPythonPath(py);
         setExposeA1111(expose);
-        setSaved({ mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose });
+        setCodexEnabled(cxEnabled);
+        setCodexPath(cxPath);
+        setCodexModel(cxModel);
+        setSaved({
+          mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
+          codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel,
+        });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
+        setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
       })
       .catch(() => toast.error('Failed to load image gen settings'))
       .finally(() => setLoading(false));
@@ -77,16 +98,22 @@ export function ImageGenTab() {
   const isDirty = mode !== saved.mode
     || normalizeUrl(sdapiUrl) !== saved.sdapiUrl
     || pythonPath !== saved.pythonPath
-    || exposeA1111 !== saved.exposeA1111;
+    || exposeA1111 !== saved.exposeA1111
+    || codexEnabled !== saved.codexEnabled
+    || codexPath !== saved.codexPath
+    || codexModel !== saved.codexModel;
 
   const handleSave = async () => {
     setSaving(true);
     const url = normalizeUrl(sdapiUrl) || undefined;
+    const cxPath = codexPath?.trim() || undefined;
+    const cxModel = codexModel?.trim() || undefined;
     const patch = {
       imageGen: {
         mode,
         external: { sdapiUrl: url },
         local: { pythonPath: pythonPath || undefined },
+        codex: { enabled: codexEnabled, codexPath: cxPath, model: cxModel },
         expose: { a1111: exposeA1111 },
         // Keep the legacy field populated so anything still reading
         // `imageGen.sdapiUrl` directly stays working.
@@ -95,7 +122,10 @@ export function ImageGenTab() {
     };
     try {
       await updateSettings(patch);
-      setSaved({ mode, sdapiUrl: url || '', pythonPath, exposeA1111 });
+      setSaved({
+        mode, sdapiUrl: url || '', pythonPath, exposeA1111,
+        codexEnabled, codexPath, codexModel,
+      });
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -103,27 +133,52 @@ export function ImageGenTab() {
       return;
     }
 
-    // Register/update CoS tool entry. The tool is "enabled" whenever the
-    // active provider is configured (external URL set, or local Python set).
-    const enabled = mode === 'external' ? !!url : !!pythonPath;
-    const toolData = {
-      name: mode === 'external' ? 'Stable Diffusion (External)' : 'Stable Diffusion (Local mflux)',
+    // Both tool entries are independent — sync them in parallel so a
+    // tailnet save doesn't pay two sequential HTTP round-trips.
+    const sdEnabled = mode === 'external' ? !!url : (mode === 'local' ? !!pythonPath : false);
+    const sdToolData = {
+      name: mode === 'external' ? 'Stable Diffusion (External)' : (mode === 'local' ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
       category: 'image-generation',
       description: 'Generate images via the active PortOS image gen backend',
-      enabled,
+      enabled: sdEnabled,
       config: { mode, sdapiUrl: url, pythonPath },
       promptHints: 'Use POST /api/image-gen/generate with { prompt, negativePrompt, width, height, steps }. Use POST /api/image-gen/avatar for character portraits.',
     };
-    if (toolRegistered) {
-      await updateTool(SDAPI_TOOL_ID, toolData).catch((err) => toast.error(err.message || 'Failed to update CoS tools registry'));
-    } else if (enabled) {
-      try {
-        await registerTool({ id: SDAPI_TOOL_ID, ...toolData });
-        setToolRegistered(true);
-      } catch (err) {
-        toast.error(err.message || 'Failed to register in CoS tools registry');
+    const codexToolData = {
+      name: 'Codex Imagegen',
+      category: 'image-generation',
+      description: 'Generate images via the Codex CLI built-in image_gen tool ($imagegen prompt prefix). Requires a Codex plan that includes image_gen.',
+      enabled: codexEnabled,
+      config: { codexPath: cxPath, model: cxModel },
+      promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "codex" } — or call the image_generate voice tool with provider: "codex".',
+    };
+
+    const syncTool = async ({ id, registered, data, shouldCreate, onCreated, errLabel }) => {
+      if (registered) {
+        return updateTool(id, data).catch((err) => toast.error(err.message || `Failed to update ${errLabel}`));
       }
-    }
+      if (shouldCreate) {
+        try {
+          await registerTool({ id, ...data });
+          onCreated?.();
+        } catch (err) {
+          toast.error(err.message || `Failed to register ${errLabel}`);
+        }
+      }
+    };
+
+    await Promise.all([
+      syncTool({
+        id: SDAPI_TOOL_ID, registered: toolRegistered, data: sdToolData,
+        shouldCreate: sdEnabled, onCreated: () => setToolRegistered(true),
+        errLabel: 'CoS tools registry',
+      }),
+      syncTool({
+        id: CODEX_TOOL_ID, registered: codexToolRegistered, data: codexToolData,
+        shouldCreate: codexEnabled, onCreated: () => setCodexToolRegistered(true),
+        errLabel: 'Codex Imagegen tool',
+      }),
+    ]);
 
     setSaving(false);
   };
@@ -133,13 +188,16 @@ export function ImageGenTab() {
     setRendering(true);
     setRenderResult(null);
     try {
-      const result = await generateImage({ prompt: testPrompt.trim() });
-      // Local mode returns immediately after spawning the Python child —
+      // Use the saved mode for the test render. Codex is async like local
+      // (returns a job descriptor immediately) so the SSE branch handles it.
+      const result = await generateImage({ prompt: testPrompt.trim(), mode });
+      // Local + Codex modes return immediately after spawning the child —
       // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
       // mark the render complete on the `complete` event (or fail on
       // `error`). External mode awaits internally and the file is on disk
       // by the time generateImage resolves, so we can short-circuit.
-      if (result?.mode === 'local' && result?.generationId) {
+      const isAsync = (result?.mode === 'local' || result?.mode === 'codex');
+      if (isAsync && result?.generationId) {
         await new Promise((resolve, reject) => {
           const es = new EventSource(`/api/image-gen/${result.generationId}/events`);
           renderEsRef.current = es;
@@ -201,7 +259,7 @@ export function ImageGenTab() {
           generation locally with mflux on this Mac. Pick whichever fits — you can also
           expose this PortOS as an A1111-compatible endpoint for other tailnet boxes.
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className={`grid grid-cols-1 sm:grid-cols-2 ${codexEnabled ? 'lg:grid-cols-3' : ''} gap-3`}>
           <button
             type="button"
             onClick={() => setMode('external')}
@@ -224,6 +282,19 @@ export function ImageGenTab() {
             </div>
             <p className="text-xs text-gray-500 mt-1">Run Flux + LTX models on this machine. Apple Silicon recommended.</p>
           </button>
+          {codexEnabled && (
+            <button
+              type="button"
+              onClick={() => setMode('codex')}
+              className={`text-left p-4 rounded-lg border transition-colors ${mode === 'codex' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4" />
+                <span className="font-medium text-sm">Codex CLI</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Route through the Codex CLI built-in image_gen tool. Counts against your Codex plan.</p>
+            </button>
+          )}
         </div>
       </div>
 
@@ -254,6 +325,65 @@ export function ImageGenTab() {
           <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} />
         </div>
       )}
+
+      {/* Codex CLI config — always visible (the toggle that enables the
+          option lives here). Codex appears as a backend tile only after
+          the user flips this on. */}
+      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+        <div className="flex items-center gap-2 text-white">
+          <Terminal size={18} />
+          <h2 className="text-lg font-semibold">Codex CLI Imagegen</h2>
+        </div>
+        <p className="text-xs text-gray-500">
+          Route image generation through the Codex CLI's built-in
+          <code className="text-gray-400"> image_gen </code> tool — invoked headlessly with a
+          <code className="text-gray-400"> $imagegen </code> prompt. Uses your logged-in Codex session, no
+          OPENAI_API_KEY required. Not every Codex plan exposes
+          <code className="text-gray-400"> image_gen </code>; if yours doesn't, leave this off.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={codexEnabled}
+            onChange={(e) => {
+              const v = e.target.checked;
+              setCodexEnabled(v);
+              // If the user just disabled Codex while it was the active
+              // backend, fall back to external so saving doesn't leave the
+              // dispatcher pointing at a disabled provider.
+              if (!v && mode === 'codex') setMode('external');
+            }}
+            className="rounded"
+          />
+          <span className="text-sm text-gray-300">Enable Codex Imagegen</span>
+        </label>
+        {codexEnabled && (
+          <div className="space-y-3 pl-6 border-l-2 border-port-border">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Codex binary path (optional)</label>
+              <input
+                type="text"
+                value={codexPath}
+                onChange={(e) => setCodexPath(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="codex (uses $PATH)"
+              />
+              <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>codex</code> from $PATH.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Model override (optional)</label>
+              <input
+                type="text"
+                value={codexModel}
+                onChange={(e) => setCodexModel(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="gpt-5.4"
+              />
+              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave empty to use Codex's default.</p>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Save + status */}
       <div className="flex items-center gap-3">

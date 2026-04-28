@@ -17,14 +17,14 @@ import MediaLightbox from '../components/media/MediaLightbox';
 import { normalizeImage } from '../components/media/normalize';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
-  Dice5, AlertTriangle, X, Film
+  Dice5, AlertTriangle, X, Film, Cloud, Cpu, Terminal
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
 import {
   getImageGenStatus, generateImage, listImageModels, listLoras, listImageGallery,
-  cancelImageGen, deleteImage, getActiveImageJob,
+  cancelImageGen, deleteImage, getActiveImageJob, getSettings,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
@@ -55,6 +55,9 @@ export default function ImageGen() {
   const [gallery, setGallery] = useState([]);
   const [preview, setPreview] = useState(null);
 
+  const [selectedMode, setSelectedMode] = useState(null);
+  const [availableBackends, setAvailableBackends] = useState([]);
+
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE);
   const [modelId, setModelId] = useState('');
@@ -79,7 +82,12 @@ export default function ImageGen() {
   // via imageGenEvents so the same UI bits light up).
   const { progress: externalProgress, begin: beginGenerate, end: endGenerate, resume: resumeGenerate } = useImageGenProgress();
 
-  const isLocalMode = status?.mode === 'local';
+  // selectedMode is null until settings load — fall back to status.mode
+  // so the form doesn't flicker between defaults.
+  const effectiveMode = selectedMode || status?.mode || 'external';
+  const isLocalMode = effectiveMode === 'local';
+  const isCodexMode = effectiveMode === 'codex';
+  const isAsyncMode = isLocalMode || isCodexMode;
   // Prefer the socket-driven hook (carries currentImage for both modes since
   // local mflux now writes stepwise frames). Fall back to the local SSE's
   // simpler progress shape if the hook hasn't received its first event yet.
@@ -106,6 +114,27 @@ export default function ImageGen() {
     }).catch(() => {});
     listLoras().then(setAvailableLoras).catch(() => {});
     refreshGallery();
+    getSettings().then((s) => {
+      const ig = s?.imageGen || {};
+      const externalUrl = (ig.external?.sdapiUrl || ig.sdapiUrl || '').trim();
+      const pyPath = (ig.local?.pythonPath || '').trim();
+      const codexOn = ig.codex?.enabled === true;
+      const backends = [];
+      if (externalUrl) backends.push({ id: 'external', label: 'External', icon: Cloud });
+      if (pyPath) backends.push({ id: 'local', label: 'Local', icon: Cpu });
+      if (codexOn) backends.push({ id: 'codex', label: 'Codex', icon: Terminal });
+      setAvailableBackends(backends);
+      const saved = ig.mode || 'external';
+      // Pick the saved mode if viable; otherwise the first viable backend
+      // (so a freshly-configured setup with only one provider Just Works).
+      if (backends.find((b) => b.id === saved)) {
+        setSelectedMode(saved);
+      } else if (backends.length) {
+        setSelectedMode(backends[0].id);
+      } else {
+        setSelectedMode(saved);
+      }
+    }).catch(() => {});
     // Resume an in-flight job so the user can navigate away mid-render and
     // come back to the same prompt + settings + live preview frame.
     getActiveImageJob().then(({ activeJob }) => {
@@ -153,7 +182,15 @@ export default function ImageGen() {
 
   const startLocalGeneration = async () => {
     setLocalProgress({ progress: 0 });
-    const payload = {
+    // Codex shares the SSE-driven async pipeline with local but ignores
+    // local-only knobs (model, LoRAs, quantize, guidance) — the dispatcher
+    // strips them on its way to the codex provider.
+    const payload = isCodexMode ? {
+      prompt: prompt.trim(),
+      negativePrompt: negativePrompt.trim() || undefined,
+      width, height,
+      mode: 'codex',
+    } : {
       prompt: prompt.trim(),
       negativePrompt: negativePrompt.trim() || undefined,
       modelId: modelId || undefined,
@@ -164,6 +201,7 @@ export default function ImageGen() {
       quantize,
       loraFilenames: selectedLoras.map((l) => l.filename),
       loraScales: selectedLoras.map((l) => l.scale),
+      mode: 'local',
     };
     const data = await generateImage(payload);
 
@@ -218,7 +256,7 @@ export default function ImageGen() {
     beginGenerate();
 
     try {
-      if (isLocalMode) {
+      if (isAsyncMode) {
         await startLocalGeneration();
       } else {
         const payload = {
@@ -227,6 +265,7 @@ export default function ImageGen() {
           width, height,
           steps: steps ? Number(steps) : 25,
           cfgScale,
+          mode: 'external',
         };
         if (seed && Number(seed) >= 0) payload.seed = Number(seed);
         const data = await generateImage(payload);
@@ -298,25 +337,44 @@ export default function ImageGen() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-2 text-xs">
-        {status ? (
-          <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
-            status.connected
-              ? 'border-port-success/40 bg-port-success/10 text-port-success'
-              : 'border-port-error/40 bg-port-error/10 text-port-error'
-          }`}>
-            {status.connected ? (
-              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === 'local' ? 'mflux/local' : 'external SD API')}</>
-            ) : (
-              <>
-                <AlertTriangle className="w-3 h-3" />
-                {status.reason || 'Not connected'} —
-                <button type="button" onClick={openSettings} className="underline">Settings</button>
-              </>
-            )}
-          </span>
-        ) : (
-          <span className="text-gray-500">Checking…</span>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {status ? (
+            <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
+              status.connected
+                ? 'border-port-success/40 bg-port-success/10 text-port-success'
+                : 'border-port-error/40 bg-port-error/10 text-port-error'
+            }`}>
+              {status.connected ? (
+                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === 'local' ? 'mflux/local' : status.mode === 'codex' ? 'codex CLI' : 'external SD API')}</>
+              ) : (
+                <>
+                  <AlertTriangle className="w-3 h-3" />
+                  {status.reason || 'Not connected'} —
+                  <button type="button" onClick={openSettings} className="underline">Settings</button>
+                </>
+              )}
+            </span>
+          ) : (
+            <span className="text-gray-500">Checking…</span>
+          )}
+          {availableBackends.length > 1 && (
+            <div className="inline-flex items-center gap-1 p-0.5 border border-port-border rounded-full bg-port-bg" role="group" aria-label="Backend">
+              {availableBackends.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSelectedMode(id)}
+                  disabled={generating}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs transition-colors disabled:opacity-50 ${effectiveMode === id ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white hover:bg-port-border/40'}`}
+                  title={`Use ${label} for the next render`}
+                >
+                  <Icon className="w-3 h-3" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={refreshStatus}
@@ -391,44 +449,51 @@ export default function ImageGen() {
               </select>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
-              <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  value={seed}
-                  onChange={(e) => setSeed(e.target.value)}
-                  disabled={generating}
-                  placeholder="Random"
-                  className="flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                />
-                <button
-                  type="button"
-                  onClick={handleRandomSeed}
-                  disabled={generating}
-                  className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
-                  title="Randomize seed"
-                >
-                  <Dice5 className="w-4 h-4" />
-                </button>
+            {/* Codex's built-in image_gen tool ignores seed/steps/guidance —
+                only the prompt + (optional) resolution hint matter. Hide
+                irrelevant knobs in that mode. */}
+            {!isCodexMode && (
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    value={seed}
+                    onChange={(e) => setSeed(e.target.value)}
+                    disabled={generating}
+                    placeholder="Random"
+                    className="flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRandomSeed}
+                    disabled={generating}
+                    className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
+                    title="Randomize seed"
+                  >
+                    <Dice5 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">
-                Steps {currentModel?.steps && `(default: ${currentModel.steps})`}
-              </label>
-              <input
-                type="number" min={1} max={150}
-                value={steps}
-                onChange={(e) => setSteps(e.target.value)}
-                placeholder={String(currentModel?.steps || 25)}
-                disabled={generating}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              />
-            </div>
+            {!isCodexMode && (
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">
+                  Steps {currentModel?.steps && `(default: ${currentModel.steps})`}
+                </label>
+                <input
+                  type="number" min={1} max={150}
+                  value={steps}
+                  onChange={(e) => setSteps(e.target.value)}
+                  placeholder={String(currentModel?.steps || 25)}
+                  disabled={generating}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                />
+              </div>
+            )}
 
-            {isLocalMode ? (
+            {!isCodexMode && (isLocalMode ? (
               <>
                 <div>
                   <label className="block text-xs font-medium text-gray-400 mb-1">
@@ -466,7 +531,7 @@ export default function ImageGen() {
                   className="w-full accent-port-accent"
                 />
               </div>
-            )}
+            ))}
           </div>
 
           {isLocalMode && availableLoras.length > 0 && (

@@ -13,6 +13,9 @@ import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timez
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
+import * as imageGen from '../imageGen/index.js';
+import { IMAGE_GEN_MODES } from '../imageGen/index.js';
+import { getSettings } from '../settings.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
 
@@ -66,6 +69,7 @@ const TOOL_GROUPS = {
   ui_select: 'ui',
   ui_check: 'ui',
   ui_ask: 'ask',
+  image_generate: 'media',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -108,6 +112,10 @@ const GROUP_INTENT = {
   // want it stealing turns the cheaper tools handle. Catches "advise me",
   // "draft a/an X", "what did I decide", "what's on my plate", "ask myself".
   ask: /\b(?:ask my ?self|advise me|coach me|draft (?:a|an|my|me|something)|what(?:'s| is) on my plate|what (?:did|do|should) i (?:decide|think|believe|say|want|do)|why did i|when did i|recall (?:my|that|when))\b/i,
+  // Imagery verbs that should surface image_generate. Tight-ish: avoids
+  // common false positives like "imagine if" or "show me a picture of the
+  // page" by anchoring on creation verbs paired with visual nouns.
+  media: /\b(?:generate|render|create|draw|sketch|paint|illustrate|make|design|produce)\b[^.!?\n]{0,30}\b(?:image|picture|photo|illustration|art(?:work)?|render|drawing|sketch|portrait|wallpaper|scene|asset|graphic|logo|icon)\b|\bimagegen\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -1050,6 +1058,64 @@ const TOOLS = [
         providerId,
         model,
         summary: `Answered "${trimmed.slice(0, 60)}${trimmed.length > 60 ? '…' : ''}" using ${sources.length} source${sources.length === 1 ? '' : 's'}.`,
+      };
+    },
+  },
+
+  {
+    name: 'image_generate',
+    description:
+      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool (subject to the user enabling it in Settings). Returns the saved file path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'What to draw, in natural language. Be specific about subject, style, and mood.',
+        },
+        provider: {
+          type: 'string',
+          enum: ['auto', ...IMAGE_GEN_MODES],
+          description: '"auto" (default) uses the user\'s saved backend. Override only when the user explicitly asks for a specific one or the task strongly favors it.',
+        },
+        negativePrompt: {
+          type: 'string',
+          description: 'Optional list of things to avoid (e.g. "watermark, low quality").',
+        },
+        width: { type: 'integer', description: 'Optional pixel width (64-2048).' },
+        height: { type: 'integer', description: 'Optional pixel height (64-2048).' },
+      },
+      required: ['prompt'],
+    },
+    execute: async ({ prompt, provider, negativePrompt, width, height } = {}) => {
+      if (typeof prompt !== 'string' || !prompt.trim()) {
+        return { ok: false, summary: 'prompt is required' };
+      }
+      const requestedMode = (provider && provider !== 'auto') ? provider : undefined;
+      // Codex is gated separately — it costs against the user's Codex plan,
+      // and not every plan exposes image_gen. The dispatcher would also
+      // reject this, but catching it here lets us return a friendlier
+      // summary to the voice agent / palette.
+      if (requestedMode === 'codex') {
+        const s = await getSettings();
+        if (!s?.imageGen?.codex?.enabled) {
+          return { ok: false, summary: 'Codex Imagegen is disabled — enable it in Settings → Image Gen first.' };
+        }
+      }
+      const result = await imageGen.generateImage({
+        prompt: prompt.trim(),
+        negativePrompt: negativePrompt?.trim() || undefined,
+        width: width || undefined,
+        height: height || undefined,
+        mode: requestedMode,
+      });
+      const usedMode = result?.mode || requestedMode || 'default';
+      return {
+        ok: true,
+        path: result?.path,
+        filename: result?.filename,
+        mode: usedMode,
+        summary: `Generating image (${usedMode}): ${result?.filename || 'pending'}`,
       };
     },
   },

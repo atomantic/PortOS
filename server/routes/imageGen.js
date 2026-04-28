@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as imageGen from '../services/imageGen/index.js';
-import { local } from '../services/imageGen/index.js';
+import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
@@ -25,6 +25,9 @@ const router = Router();
 const generateSchema = z.object({
   prompt: z.string().min(1).max(2000),
   negativePrompt: z.string().max(2000).optional(),
+  // Per-request backend override. If omitted, the dispatcher uses
+  // `imageGen.mode` from settings.json.
+  mode: z.enum(IMAGE_GEN_MODES).optional(),
   modelId: z.string().max(64).optional(),
   width: z.number().int().min(64).max(2048).optional(),
   height: z.number().int().min(64).max(2048).optional(),
@@ -48,8 +51,12 @@ const avatarSchema = z.object({
   prompt: z.string().max(2000).optional(),
 });
 
-router.get('/status', asyncHandler(async (_req, res) => {
-  res.json(await imageGen.checkConnection());
+router.get('/status', asyncHandler(async (req, res) => {
+  // Optional ?mode= override lets the Image Gen page probe a specific
+  // backend (e.g. when the user flips the per-render chip to Codex but
+  // hasn't saved Codex as the default yet).
+  const mode = IMAGE_GEN_MODES.includes(req.query.mode) ? req.query.mode : undefined;
+  res.json(await imageGen.checkConnection({ mode }));
 }));
 
 router.get('/active', asyncHandler(async (_req, res) => {
@@ -79,15 +86,15 @@ router.get('/gallery', asyncHandler(async (_req, res) => {
   res.json(await local.listGallery());
 }));
 
-// SSE progress stream for the local backend. EventSource consumers (the
-// ImageGen page) attach here using the jobId returned from POST /generate.
+// SSE progress stream. Local + Codex both produce job-keyed SSE; the
+// dispatcher picks the right provider for whichever owns the job.
 router.get('/:jobId/events', (req, res) => {
-  const ok = local.attachSseClient(req.params.jobId, res);
+  const ok = imageGen.attachSseClient(req.params.jobId, res);
   if (!ok) res.status(404).json({ error: 'Job not found or expired' });
 });
 
 router.post('/cancel', (_req, res) => {
-  const cancelled = local.cancel();
+  const cancelled = imageGen.cancel();
   res.json({ ok: cancelled });
 });
 

@@ -7,12 +7,13 @@ vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
   generateAvatar: vi.fn(),
+  attachSseClient: vi.fn(() => false),
+  cancel: vi.fn(() => false),
+  IMAGE_GEN_MODES: ['external', 'local', 'codex'],
   local: {
     listImageModels: vi.fn(() => []),
     listLoras: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
-    attachSseClient: vi.fn(() => false),
-    cancel: vi.fn(() => false),
     deleteImage: vi.fn(async () => ({ ok: true })),
   },
 }));

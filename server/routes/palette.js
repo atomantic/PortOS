@@ -42,6 +42,7 @@ const PALETTE_ACTIONS = [
   { id: 'daily_log_read',          label: "Read today's log",        section: 'Brain' },
   { id: 'daily_log_append',        label: 'Append to daily log',     section: 'Brain' },
   { id: 'ui_ask',                  label: 'Ask Yourself',            section: 'Ask' },
+  { id: 'image_generate',          label: 'Generate Image',          section: 'Create' },
   { id: 'time_now',                label: 'Current time',            section: 'System' },
 ];
 
