@@ -128,11 +128,10 @@ Three high-value work items drawn from an inventory of the current app surface (
 
 ## Backlog
 
-- [ ] **Ask Yourself — slice (b)** — voice + promotion actions on top of the shipped text chat:
-  - `ui_ask` voice tool that pipes a spoken question through `askService.runAsk` and reads the streamed answer aloud (reuses the existing voice widget's TTS path).
-  - One-click promotions on each assistant turn: "Save as Brain note" (POST `/api/brain/capture`), "Create CoS task" (POST `/api/cos/tasks`), "Attach to Goal…" (link the answer text + sources as a goal note).
-  - Promote action also sets `conversation.promoted = true` (already wired) so the conversation is exempt from 30-day auto-expiry once anything from it has been saved elsewhere.
-  - Add `Ask` to the palette action whitelist (`server/routes/palette.js`) once the voice tool exists, so `⌘K` → "ask: …" can fire a prompt without leaving the current page.
+- [ ] **Ask Yourself — slice (b)** — voice integration on top of the shipped text chat + promotions:
+  - **Promotions ✅ shipped 2026-04-28.** Per-turn buttons on each assistant turn fire `POST /api/ask/:id/turns/:turnId/promote` (discriminated body `{ target: 'brain' | 'task' | 'goal', goalId? }`). Brain target calls `brainService.captureThought`, task target creates a CoS task with description capped at 280 chars and a "promoted from Ask Yourself <id>" context note, goal target appends a `progressLog` entry via `identityService.addProgressEntry`. Server pins the conversation (`promoted = true`) on every successful promotion so anything saved elsewhere survives the 30-day expiry sweep. UI shows inline "Saved to Brain"/"Task created"/"Attached: <goal title>" confirmation chips that deep-link to the saved record. 13 new route tests — full server suite stays green at 2746/2746.
+  - `ui_ask` voice tool that pipes a spoken question through `askService.runAsk` and reads the streamed answer aloud (reuses the existing voice widget's TTS path). **Pending.**
+  - Add `Ask` to the palette action whitelist (`server/routes/palette.js`) once the voice tool exists, so `⌘K` → "ask: …" can fire a prompt without leaving the current page. **Pending.**
 
 - [ ] **Voice CoS tool expansion** — tools now include the original domain set plus `ui_navigate`, `ui_list_interactables`, `ui_click`, `ui_fill`, `ui_select`, `ui_check` for accessibility-style page driving, and `feeds_mark_read` (pairs with `feeds_digest` — fuzzy-matches an unread item by title or marks all read, optionally scoped to a feed). Remaining candidates:
   - `calendar_today` / `calendar_next` — surface today's Google Calendar events through the existing Google MCP integration

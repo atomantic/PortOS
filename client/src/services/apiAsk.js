@@ -8,6 +8,17 @@ export const promoteAskConversation = (id, promoted = true) => request(`/ask/${e
   body: JSON.stringify({ promoted }),
 });
 
+// One-click promotion of an assistant turn to a Brain note, CoS task, or Goal
+// progress entry. `payload` shape matches the server's discriminated union:
+//   { target: 'brain' }
+//   { target: 'task', priority?: 'LOW'|'MEDIUM'|'HIGH' }
+//   { target: 'goal', goalId: string }
+export const promoteAskTurn = (conversationId, turnId, payload) =>
+  request(`/ask/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/promote`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
 /**
  * Stream an Ask turn via Server-Sent Events. Consumes the event-stream
  * response from POST /api/ask manually because EventSource only supports GET.

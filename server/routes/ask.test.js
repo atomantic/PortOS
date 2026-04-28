@@ -23,8 +23,23 @@ vi.mock('../services/askService.js', () => ({
   runAsk: vi.fn(),
 }));
 
+vi.mock('../services/brain.js', () => ({
+  captureThought: vi.fn(),
+}));
+
+vi.mock('../services/cos.js', () => ({
+  addTask: vi.fn(),
+}));
+
+vi.mock('../services/identity.js', () => ({
+  addProgressEntry: vi.fn(),
+}));
+
 const convs = await import('../services/askConversations.js');
 const svc = await import('../services/askService.js');
+const brainService = await import('../services/brain.js');
+const cosService = await import('../services/cos.js');
+const identityService = await import('../services/identity.js');
 const { default: routes } = await import('./ask.js');
 
 const makeApp = () => {
@@ -96,6 +111,179 @@ describe('POST /api/ask/:id/promote', () => {
       .post('/api/ask/ask_lwg2x4abc_a1b2c3d4/promote')
       .send({ promoted: true });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/ask/:id/turns/:turnId/promote', () => {
+  const convId = 'ask_lwg2x4abc_a1b2c3d4';
+  const fullConv = {
+    id: convId,
+    mode: 'ask',
+    promoted: false,
+    turns: [
+      { id: 'u1', role: 'user', content: 'what should I do?' },
+      { id: 'a1', role: 'assistant', content: 'Block 30 minutes for deep work after lunch.' },
+    ],
+  };
+
+  it('promotes an assistant turn to a Brain note and pins the conversation', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+    convs.setPromoted.mockResolvedValue({ ...fullConv, promoted: true });
+    brainService.captureThought.mockResolvedValue({ inboxLog: { id: 'inbox-1' } });
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'brain' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.target).toBe('brain');
+    expect(res.body.ref).toEqual({ type: 'brain', id: 'inbox-1' });
+    expect(res.body.conversation.promoted).toBe(true);
+    expect(brainService.captureThought).toHaveBeenCalledWith('Block 30 minutes for deep work after lunch.');
+    expect(convs.setPromoted).toHaveBeenCalledWith(convId, true);
+  });
+
+  it('promotes an assistant turn to a CoS task with priority and source context', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+    convs.setPromoted.mockResolvedValue({ ...fullConv, promoted: true });
+    cosService.addTask.mockResolvedValue({ id: 'task-1', status: 'pending' });
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'task', priority: 'HIGH' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.target).toBe('task');
+    expect(res.body.ref).toEqual({ type: 'task', id: 'task-1' });
+    expect(cosService.addTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: 'Block 30 minutes for deep work after lunch.',
+        priority: 'HIGH',
+        context: expect.stringContaining(convId),
+      }),
+      'user',
+    );
+  });
+
+  it('truncates long assistant text when promoting to a CoS task', async () => {
+    const longContent = 'x'.repeat(600);
+    convs.getConversation.mockResolvedValue({
+      ...fullConv,
+      turns: [{ id: 'a1', role: 'assistant', content: longContent }],
+    });
+    convs.setPromoted.mockResolvedValue({ ...fullConv, promoted: true });
+    cosService.addTask.mockResolvedValue({ id: 'task-2' });
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'task' });
+
+    expect(res.status).toBe(200);
+    const description = cosService.addTask.mock.calls[0][0].description;
+    expect(description.length).toBeLessThanOrEqual(280);
+    expect(description.endsWith('…')).toBe(true);
+  });
+
+  it('returns 409 when the promoted task is a duplicate', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+    cosService.addTask.mockResolvedValue({ id: 'task-existing', duplicate: true, status: 'pending' });
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'task' });
+
+    expect(res.status).toBe(409);
+    expect(convs.setPromoted).not.toHaveBeenCalled();
+  });
+
+  it('promotes an assistant turn to a goal progress entry', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+    convs.setPromoted.mockResolvedValue({ ...fullConv, promoted: true });
+    identityService.addProgressEntry.mockResolvedValue({ id: 'prog-1', date: '2026-04-28', note: 'x' });
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'goal', goalId: 'goal-123' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ref).toEqual({ type: 'goal', id: 'goal-123', entryId: 'prog-1' });
+    expect(identityService.addProgressEntry).toHaveBeenCalledWith(
+      'goal-123',
+      expect.objectContaining({ note: 'Block 30 minutes for deep work after lunch.', durationMinutes: null }),
+    );
+  });
+
+  it('404s when the goal does not exist', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+    identityService.addProgressEntry.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'goal', goalId: 'missing-goal' });
+
+    expect(res.status).toBe(404);
+    expect(convs.setPromoted).not.toHaveBeenCalled();
+  });
+
+  it('rejects promoting a user turn', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/u1/promote`)
+      .send({ target: 'brain' });
+
+    expect(res.status).toBe(400);
+    expect(brainService.captureThought).not.toHaveBeenCalled();
+  });
+
+  it('404s when the turn id is not in the conversation', async () => {
+    convs.getConversation.mockResolvedValue(fullConv);
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/missing/promote`)
+      .send({ target: 'brain' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects promoting an empty turn', async () => {
+    convs.getConversation.mockResolvedValue({
+      ...fullConv,
+      turns: [{ id: 'a1', role: 'assistant', content: '   ' }],
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'brain' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('404s when the conversation does not exist', async () => {
+    convs.getConversation.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'brain' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects unknown promotion targets', async () => {
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'mars' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects goal target without goalId', async () => {
+    const res = await request(makeApp())
+      .post(`/api/ask/${convId}/turns/a1/promote`)
+      .send({ target: 'goal' });
+
+    expect(res.status).toBe(400);
   });
 });
 
