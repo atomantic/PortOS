@@ -50,6 +50,7 @@ function extractTaskType(description) {
     if (d.includes('dependency')) return 'task:dependency-updates';
     if (d.includes('jira') && d.includes('report')) return 'task:jira-status-report';
     if (d.includes('jira') || d.includes('sprint')) return 'task:jira-sprint-manager';
+    if (d.includes('replan') || d.includes('audit plan.md') || d.includes('plan.md')) return 'task:do-replan';
   }
 
   // General task type classification

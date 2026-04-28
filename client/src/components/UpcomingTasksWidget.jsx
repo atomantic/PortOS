@@ -57,7 +57,8 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
       'documentation': '📝',
       'feature-ideas': '💡',
       'accessibility': '♿',
-      'dependency-updates': '📦'
+      'dependency-updates': '📦',
+      'do-replan': '📋'
     };
     return icons[taskType] || '📋';
   };

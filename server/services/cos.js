@@ -1065,7 +1065,8 @@ function getTaskDescription(taskType, appName) {
       'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
       'release-check': `Verify release readiness for ${appName}`,
       'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
-      'jira-status-report': `Generate JIRA weekly status report for ${appName}`
+      'jira-status-report': `Generate JIRA weekly status report for ${appName}`,
+      'do-replan': `Replan: audit PLAN.md for ${appName}, archive done items, prune stale work (worktree+PR)`
     };
     return descriptions[taskType] ?? null;
   }
@@ -1085,7 +1086,8 @@ function getTaskDescription(taskType, appName) {
     'typing': 'Add or fix TypeScript/JSDoc type annotations',
     'release-check': 'Verify release readiness (changelog, version, tests)',
     'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
-    'jira-status-report': 'Generate JIRA weekly status report'
+    'jira-status-report': 'Generate JIRA weekly status report',
+    'do-replan': 'Replan: audit PLAN.md, archive done items, prune stale work (worktree+PR)'
   };
   return descriptions[taskType] ?? null;
 }
