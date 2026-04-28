@@ -71,6 +71,11 @@ export default function VoiceWidget() {
   // would otherwise make the first sidebar click a no-op. Queue the engage
   // here and replay it when `enabled` becomes true.
   const pendingEngageRef = useRef(false);
+  // Tracks the in-flight handleCancel() promise so a rapid disengage→engage
+  // can await teardown before starting a new capture. voiceClient holds
+  // module-level stream/recorder, so without this serialization the in-flight
+  // stop can tear down tracks from the freshly-started capture.
+  const cancelInFlightRef = useRef(null);
   const [handsFree, setHandsFree] = useState(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
@@ -415,8 +420,12 @@ export default function VoiceWidget() {
   // Engage uses a pending-flag fallback: if the click lands before this
   // widget's own config fetch resolves (handleStart short-circuits while
   // !enabled), we replay the engage in the effect below once enabled flips.
+  // Engage also awaits any in-flight cancel — voiceClient's module-level
+  // stream/recorder means a rapid disengage→engage can otherwise let the
+  // pending teardown stop tracks from the new capture.
   useEffect(() => {
-    const onEngage = () => {
+    const onEngage = async () => {
+      if (cancelInFlightRef.current) await cancelInFlightRef.current;
       if (!enabled) {
         pendingEngageRef.current = true;
         return;
@@ -425,7 +434,13 @@ export default function VoiceWidget() {
     };
     const onDisengage = () => {
       pendingEngageRef.current = false;
-      handleCancelRef.current?.();
+      const p = handleCancelRef.current?.();
+      if (p && typeof p.then === 'function') {
+        cancelInFlightRef.current = p;
+        p.finally(() => {
+          if (cancelInFlightRef.current === p) cancelInFlightRef.current = null;
+        });
+      }
     };
     window.addEventListener(ENGAGE_EVENT, onEngage);
     window.addEventListener(DISENGAGE_EVENT, onDisengage);
@@ -437,11 +452,15 @@ export default function VoiceWidget() {
 
   // Drain a queued engage once config has loaded and voice is actually on.
   // Without this, a click on the sidebar toggle that beats getVoiceConfig()
-  // resolving would show the widget but leave the mic dormant.
+  // resolving would show the widget but leave the mic dormant. Await any
+  // in-flight cancel first to keep engage/disengage serialized.
   useEffect(() => {
     if (!enabled || !pendingEngageRef.current) return;
     pendingEngageRef.current = false;
-    handleStartRef.current?.();
+    (async () => {
+      if (cancelInFlightRef.current) await cancelInFlightRef.current;
+      handleStartRef.current?.();
+    })();
   }, [enabled]);
 
   // Reuse handleCancel for teardown so we don't duplicate the awaited stop
@@ -469,7 +488,7 @@ export default function VoiceWidget() {
           {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border rounded-full px-2 py-1 ${fabSurface}`}>{label}</span>}
           <button
             onClick={hideWidget}
-            title="Hide voice widget (restore in Settings → Voice)"
+            title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             className={`p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
           >
             <EyeOff size={14} />
@@ -614,7 +633,7 @@ export default function VoiceWidget() {
           </button>
           <button
             onClick={hideWidget}
-            title="Hide voice widget (restore in Settings → Voice)"
+            title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <EyeOff size={14} />
