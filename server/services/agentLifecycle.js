@@ -1261,21 +1261,33 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
     });
     emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
   } else {
-    // PR creation failed — spawn an agent to investigate and retry
+    // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
+    // glab based on the repo's forge so the recovery agent gets commands that
+    // actually work against this remote.
+    const { cli } = await git.resolveForgeForRepo(sourceWorkspace).catch(() => ({ cli: 'gh' }));
+    const isGitLab = cli === 'glab';
+    const reqWord = isGitLab ? 'MR' : 'PR';
+    const listCmd = isGitLab
+      ? `glab mr list --source-branch ${staleBranch}`
+      : `gh pr list --head ${staleBranch}`;
+    const createCmd = isGitLab
+      ? `glab mr create --source-branch ${staleBranch} --target-branch main --title '...' --description '...'`
+      : `gh pr create --head ${staleBranch} --base main --title '...' --body '...'`;
+
     addTask({
-      description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed PR for branch ${staleBranch} in ${appName}`,
+      description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
       isRecovery: true,
-      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated PR creation failed. `
-        + `Investigate by: (1) checking if a PR already exists for this branch: "gh pr list --head ${staleBranch}"; `
-        + `(2) if no PR exists, review the branch changes and create one: "gh pr create --head ${staleBranch} --base main --title '...' --body '...'"; `
+      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated ${reqWord} creation failed. `
+        + `Investigate by: (1) checking if a ${reqWord} already exists for this branch: "${listCmd}"; `
+        + `(2) if no ${reqWord} exists, review the branch changes and create one: "${createCmd}"; `
         + `(3) if the branch is stale or changes are already on main, delete the remote branch: "git push origin --delete ${staleBranch}". `
         + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
       useWorktree: false,
     }, 'user').catch(err => {
-      emitLog('warn', `Failed to create PR recovery task: ${err.message}`, { agentId, staleBranch });
+      emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
     });
-    emitLog('info', `🔧 Auto-created PR recovery task for branch ${staleBranch}`, { agentId, appName });
+    emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
   }
 }
