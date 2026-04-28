@@ -20,6 +20,10 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **M50 P10 — Auto-Send with AI Review Gate** — Per-account/per-recipient trust level + dual-LLM review (drafter + reviewer). Only auto-send when both approve or trust ≥ 0.9. See [Messages Security](./docs/features/messages-security.md).
 - [ ] **M34 P5-P7 — Digital Twin** — Multi-modal capture (voice/video/image identity sources), advanced testing, personas. Ties to GOALS.md secondary "Multi-Modal Identity Capture".
 
+### Depfree Audit — 2026-04-28
+
+All dependencies audited and justified. 0 removals. See [docs/DEPS.md](./docs/DEPS.md) for the full classification table and per-package rationale.
+
 ### Better Audit — pending (2026-04-21)
 
 - [ ] **[HIGH][DRY]** `server/services/socket.js:595-814` — extract `broadcastToSet` + `registerSubscriber` to collapse 6× duplicated subscriber/broadcast boilerplate (also fixes missing `shellService.unsubscribeSessionList` on disconnect).
