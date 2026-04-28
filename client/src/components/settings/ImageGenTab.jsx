@@ -124,10 +124,18 @@ export function ImageGenTab() {
     };
     try {
       await updateSettings(patch);
+      // Store trimmed values to match what was persisted — otherwise
+      // trailing whitespace in the inputs leaves isDirty stuck true even
+      // after a successful save (state has " codex " but `saved` was
+      // updated with the trimmed "codex").
       setSaved({
         mode, sdapiUrl: url || '', pythonPath, exposeA1111,
-        codexEnabled, codexPath, codexModel,
+        codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '',
       });
+      // Reflect the normalization back into the inputs so what the user
+      // sees matches what was saved.
+      if (cxPath !== codexPath) setCodexPath(cxPath || '');
+      if (cxModel !== codexModel) setCodexModel(cxModel || '');
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -190,9 +198,13 @@ export function ImageGenTab() {
     setRendering(true);
     setRenderResult(null);
     try {
-      // Use the saved mode for the test render. Codex is async like local
-      // (returns a job descriptor immediately) so the SSE branch handles it.
-      const result = await generateImage({ prompt: testPrompt.trim(), mode });
+      // Use saved.mode (not the live `mode` state) so the test render
+      // always reflects what's actually persisted server-side. The
+      // disabled={isDirty} guard already prevents this branch from running
+      // with unsaved changes, but reading from `saved` makes the contract
+      // explicit. Codex is async like local (returns a job descriptor
+      // immediately) so the SSE branch handles it.
+      const result = await generateImage({ prompt: testPrompt.trim(), mode: saved.mode });
       // Local + Codex modes return immediately after spawning the child —
       // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
       // mark the render complete on the `complete` event (or fail on

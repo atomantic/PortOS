@@ -211,9 +211,10 @@ export default function ImageGen() {
 
   const startLocalGeneration = async () => {
     setLocalProgress({ progress: 0 });
-    // Codex shares the SSE-driven async pipeline with local but ignores
-    // local-only knobs (model, LoRAs, quantize, guidance) — the dispatcher
-    // strips them on its way to the codex provider.
+    // Codex shares the SSE-driven async pipeline with local. The codex
+    // payload below intentionally omits local-only knobs (model, LoRAs,
+    // quantize, guidance, steps, seed) — the codex provider only consumes
+    // prompt/negative/width/height, so we don't bother sending the rest.
     const payload = isCodexMode ? {
       prompt: prompt.trim(),
       negativePrompt: negativePrompt.trim() || undefined,

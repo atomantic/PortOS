@@ -106,9 +106,13 @@ export const attachSseClient = (jobId, res) => {
 };
 
 export const cancel = () => {
-  const cancelled = local.cancel();
-  if (cancelled) return true;
-  return codex.cancel();
+  // Each provider enforces its own single-job invariant independently, so
+  // both can have a job in flight simultaneously. Cancel them all and
+  // return whether anything was actually cancelled — short-circuiting on
+  // the first hit would orphan a codex job whenever local is active.
+  const localCancelled = local.cancel();
+  const codexCancelled = codex.cancel();
+  return localCancelled || codexCancelled;
 };
 
 // Re-exports so routes can hit a specific backend directly when the request
