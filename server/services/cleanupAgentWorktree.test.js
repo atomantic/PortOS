@@ -135,10 +135,8 @@ vi.mock('./thinkingLevels.js', () => ({
 
 vi.mock('./executionLanes.js', () => ({
   determineLane: vi.fn(),
-  acquire: vi.fn(),
-  release: vi.fn(),
-  hasCapacity: vi.fn(() => true),
-  waitForLane: vi.fn()
+  acquire: vi.fn(() => ({ success: true })),
+  release: vi.fn()
 }));
 
 vi.mock('./taskConflict.js', () => ({

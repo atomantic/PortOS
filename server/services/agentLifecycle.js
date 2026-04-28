@@ -20,7 +20,7 @@ import { isInternalTaskId } from '../lib/taskParser.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
-import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
+import { determineLane, acquire, release } from './executionLanes.js';
 import { detectConflicts } from './taskConflict.js';
 import { createWorktree, removeWorktree } from './worktreeManager.js';
 import * as jiraService from './jira.js';
@@ -135,24 +135,14 @@ export async function spawnAgentForTask(task) {
 
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
-  // Determine execution lane and acquire slot
+  // Tag agent with execution lane (priority/observability only — concurrency
+  // is gated upstream by maxConcurrentAgents + maxConcurrentAgentsPerProject).
   const laneName = determineLane(task);
-  if (!hasCapacity(laneName)) {
-    // Wait for lane availability (max 30 seconds)
-    const laneResult = await waitForLane(laneName, agentId, { timeoutMs: 30000, metadata: { taskId: task.id } });
-    if (!laneResult.success) {
-      spawningTasks.delete(task.id);
-      emitLog('warn', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
-      cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'lane-capacity', lane: laneName });
-      return null;
-    }
-  } else {
-    const laneResult = acquire(laneName, agentId, { taskId: task.id });
-    if (!laneResult.success) {
-      spawningTasks.delete(task.id);
-      emitLog('warn', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
-      return null;
-    }
+  const laneResult = acquire(laneName, agentId, { taskId: task.id });
+  if (!laneResult.success) {
+    spawningTasks.delete(task.id);
+    emitLog('warn', `Failed to tag lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
+    return null;
   }
 
   // Create tool execution for state tracking
