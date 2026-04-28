@@ -8,6 +8,7 @@ import * as api from '../../services/api';
 const SLASHDO_COMMANDS = [
   { id: 'push', label: '/do:push', description: 'Commit and push all work', classes: 'bg-port-success/20 text-port-success hover:bg-port-success/30 border-port-success/30' },
   { id: 'review', label: '/do:review', description: 'Deep code review', classes: 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30 border-port-accent/30' },
+  { id: 'replan', label: '/do:replan', description: 'Audit and prune PLAN.md, archive done items to DONE.md', classes: 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border-cyan-500/30' },
   { id: 'release', label: '/do:release', description: 'Create a release PR', classes: 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border-purple-500/30' },
   { id: 'better', label: '/do:better', description: 'DevSecOps audit', classes: 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border-port-warning/30', hideForSwift: true },
   { id: 'better-swift', label: '/do:better-swift', description: 'SwiftUI DevSecOps audit', classes: 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border-port-warning/30', swiftOnly: true }

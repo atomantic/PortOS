@@ -12,6 +12,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 const SLASHDO_COMMANDS = {
   push:           { label: 'Push', description: 'Commit and push all work with changelog' },
   review:         { label: 'Review', description: 'Deep code review of changed files' },
+  replan:         { label: 'Replan', description: 'Audit PLAN.md, archive completed items, prune stale work' },
   release:        { label: 'Release', description: 'Create a release PR' },
   better:         { label: 'Better', description: 'Unified DevSecOps audit and remediation' },
   'better-swift': { label: 'Better Swift', description: 'SwiftUI DevSecOps audit and remediation' }
