@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff } from 'lucide-react';
 import {
@@ -10,13 +10,19 @@ import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
 import { useVoiceUiSync, pushUiIndexAfterAction } from '../../hooks/useVoiceUiSync';
 import { doClick, doFill, doSelect, doSetCheckbox } from '../../services/uiInteract';
+import {
+  VISIBILITY_EVENT,
+  ENGAGE_EVENT,
+  DISENGAGE_EVENT,
+  readVoiceHidden,
+  writeVoiceHidden,
+  isVoiceHiddenStorageEvent,
+} from '../../services/voiceVisibility';
 
 // Peak below this (0..1) is usually whisper's [BLANK_AUDIO] territory.
 const QUIET_MIC_THRESHOLD = 0.02;
 
 const HANDS_FREE_KEY = 'portos.voice.handsFree';
-const HIDDEN_KEY = 'portos.voice.hidden';
-const VISIBILITY_EVENT = 'portos:voice:visibility';
 
 const STAGE = {
   idle: { icon: Mic, label: '', tone: 'text-gray-300' },
@@ -52,20 +58,30 @@ export default function VoiceWidget() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [dictationActive, setDictationActive] = useState(false);
-  // Refs held by the voice:dictation listener so it can call the latest
-  // handleStart/handleStop closures without re-binding socket listeners on
-  // every prop change. Populated in the effect that defines the handlers.
+  // Refs held by the voice:dictation listener and the sidebar engage/disengage
+  // listeners so they can call the latest handleStart/handleStop/handleCancel
+  // closures without re-binding socket listeners on every prop change.
+  // Populated in the layout effect that defines the handlers.
   const handleStartRef = useRef(null);
   const handleStopRef = useRef(null);
+  const handleCancelRef = useRef(null);
+  // VoiceToggleButton fetches voice config independently, so it can show and
+  // dispatch ENGAGE_EVENT before this widget's own getVoiceConfig() resolves
+  // and `enabled` flips true. handleStart short-circuits while disabled, which
+  // would otherwise make the first sidebar click a no-op. Queue the engage
+  // here and replay it when `enabled` becomes true.
+  const pendingEngageRef = useRef(false);
+  // Tracks the in-flight handleCancel() promise so a rapid disengage→engage
+  // can await teardown before starting a new capture. voiceClient holds
+  // module-level stream/recorder, so without this serialization the in-flight
+  // stop can tear down tracks from the freshly-started capture.
+  const cancelInFlightRef = useRef(null);
   const [handsFree, setHandsFree] = useState(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem(HANDS_FREE_KEY);
     return stored === null ? true : stored === '1';
   });
-  const [hidden, setHidden] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem(HIDDEN_KEY) === '1';
-  });
+  const [hidden, setHidden] = useState(readVoiceHidden);
   const [level, setLevel] = useState(0);
   const scrollRef = useRef(null);
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
@@ -288,11 +304,34 @@ export default function VoiceWidget() {
     warnIfQuiet(r.peak);
   }, [handsFree, useWebSpeech]);
 
-  // Keep the refs the dictation listener uses pointed at the latest closures.
-  // Rebinding the listener itself would tear down/rebuild the socket
-  // subscription on every prop change, which is wasteful.
-  useEffect(() => { handleStartRef.current = handleStart; }, [handleStart]);
-  useEffect(() => { handleStopRef.current = handleStop; }, [handleStop]);
+  // Cancel any in-flight capture without submitting — used by the sidebar
+  // disengage path so hiding the widget mid-utterance doesn't accidentally
+  // ship a partial PTT recording to the LLM. Also drops queued TTS so the
+  // bot stops speaking when the user explicitly disengages.
+  // Async + awaited teardown: voiceClient holds module-level stream/recorder
+  // state, so a synchronous cancel followed by a quick re-engage can have
+  // the in-flight stop tear down the *new* capture's tracks. Awaiting the
+  // teardown serializes engage/disengage and prevents that race.
+  const handleCancel = useCallback(async () => {
+    if (useWebSpeech) {
+      if (isWebSpeechCapturing()) stopWebSpeechCapture();
+      setInterimTranscript('');
+    } else {
+      if (isContinuous()) await stopContinuous().catch(() => {});
+      if (isCapturing()) await stopCapture({ submit: false }).catch(() => {});
+    }
+    interrupt();
+    setStage('idle');
+  }, [useWebSpeech]);
+
+  // Keep the refs the dictation/engage/disengage listeners use pointed at the
+  // latest closures. useLayoutEffect (not useEffect) so the refs are updated
+  // synchronously after commit — without this, a window event firing in the
+  // same tick as `enabled` flipping true could read a stale closure where
+  // `enabled` was still false, making the first engage a no-op.
+  useLayoutEffect(() => { handleStartRef.current = handleStart; }, [handleStart]);
+  useLayoutEffect(() => { handleStopRef.current = handleStop; }, [handleStop]);
+  useLayoutEffect(() => { handleCancelRef.current = handleCancel; }, [handleCancel]);
 
   const handleClear = () => {
     resetConversation();
@@ -362,51 +401,104 @@ export default function VoiceWidget() {
   // Settings → Voice can toggle widget visibility without a reload. Listen for
   // the custom event and the storage event (covers other tabs).
   useEffect(() => {
-    const sync = () => {
-      setHidden(window.localStorage.getItem(HIDDEN_KEY) === '1');
-    };
+    const sync = () => setHidden(readVoiceHidden());
+    const onStorage = (e) => { if (isVoiceHiddenStorageEvent(e)) sync(); };
     window.addEventListener(VISIBILITY_EVENT, sync);
-    window.addEventListener('storage', sync);
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener(VISIBILITY_EVENT, sync);
-      window.removeEventListener('storage', sync);
+      window.removeEventListener('storage', onStorage);
     };
   }, []);
 
-  const hideWidget = useCallback(() => {
-    if (isWebSpeechCapturing()) stopWebSpeechCapture();
-    if (isContinuous()) stopContinuous();
-    if (isCapturing()) stopCapture({ submit: false });
-    interrupt();
-    window.localStorage.setItem(HIDDEN_KEY, '1');
-    window.dispatchEvent(new Event(VISIBILITY_EVENT));
+  // Sidebar Voice toggle dispatches engage/disengage so engaging the widget
+  // also starts listening (and disengaging stops the mic) — without this the
+  // user would have to click the toggle, then click mic separately.
+  // Disengage routes through handleCancel (not handleStop) so a PTT user who
+  // hides the widget mid-recording doesn't have a partial utterance shipped
+  // to the LLM by stopCapture's default `{ submit: true }` behavior.
+  // Engage uses a pending-flag fallback: if the click lands before this
+  // widget's own config fetch resolves (handleStart short-circuits while
+  // !enabled), we replay the engage in the effect below once enabled flips.
+  // Engage also awaits any in-flight cancel — voiceClient's module-level
+  // stream/recorder means a rapid disengage→engage can otherwise let the
+  // pending teardown stop tracks from the new capture.
+  useEffect(() => {
+    const onEngage = async () => {
+      if (cancelInFlightRef.current) await cancelInFlightRef.current;
+      if (!enabled) {
+        pendingEngageRef.current = true;
+        return;
+      }
+      handleStartRef.current?.();
+    };
+    const onDisengage = () => {
+      pendingEngageRef.current = false;
+      const p = handleCancelRef.current?.();
+      if (p && typeof p.then === 'function') {
+        cancelInFlightRef.current = p;
+        p.finally(() => {
+          if (cancelInFlightRef.current === p) cancelInFlightRef.current = null;
+        });
+      }
+    };
+    window.addEventListener(ENGAGE_EVENT, onEngage);
+    window.addEventListener(DISENGAGE_EVENT, onDisengage);
+    return () => {
+      window.removeEventListener(ENGAGE_EVENT, onEngage);
+      window.removeEventListener(DISENGAGE_EVENT, onDisengage);
+    };
+  }, [enabled]);
+
+  // Drain a queued engage once config has loaded and voice is actually on.
+  // Without this, a click on the sidebar toggle that beats getVoiceConfig()
+  // resolving would show the widget but leave the mic dormant. Await any
+  // in-flight cancel first to keep engage/disengage serialized.
+  useEffect(() => {
+    if (!enabled || !pendingEngageRef.current) return;
+    pendingEngageRef.current = false;
+    (async () => {
+      if (cancelInFlightRef.current) await cancelInFlightRef.current;
+      handleStartRef.current?.();
+    })();
+  }, [enabled]);
+
+  // Reuse handleCancel for teardown so we don't duplicate the awaited stop
+  // logic — same race-with-re-engage concern applies if the user hides then
+  // immediately re-engages from the sidebar.
+  const hideWidget = useCallback(async () => {
+    await handleCancel();
+    writeVoiceHidden(true);
     setHidden(true);
-    toast('Voice widget hidden. Re-enable in Settings → Voice.');
-  }, []);
+    toast('Voice widget hidden. Re-enable from the sidebar mic or Settings → Voice.');
+  }, [handleCancel]);
 
   if (!enabled || hidden) return null;
 
   const { icon: Icon, label, tone } = STAGE[stage] || STAGE.idle;
   const capturing = ACTIVE_STAGES.has(stage) || isWebSpeechCapturing();
+  // Distinct violet ring + soft glow so the floating widget reads as
+  // "voice agent layer" instead of blending into whatever card it's covering.
+  const fabSurface = 'border-violet-500/50 shadow-[0_0_24px_-4px_rgba(168,85,247,0.55)]';
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
       {!expanded && (
         <div className="md:hidden flex items-center gap-2">
-          {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border border-port-border rounded-full px-2 py-1`}>{label}</span>}
+          {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border rounded-full px-2 py-1 ${fabSurface}`}>{label}</span>}
           <button
             onClick={hideWidget}
-            title="Hide voice widget (restore in Settings → Voice)"
-            className="p-2 rounded-full bg-port-card border border-port-border text-gray-400 hover:text-white shadow-lg"
+            title="Hide voice widget (restore from the sidebar or Settings → Voice)"
+            className={`p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
           >
             <EyeOff size={14} />
           </button>
           <button
             onClick={() => { setExpanded(true); toggleCapture(); }}
-            className={`p-3 rounded-full shadow-lg transition-colors ${
+            className={`p-3 rounded-full border transition-colors ${fabSurface} ${
               capturing
-                ? 'bg-port-accent text-white animate-pulse'
-                : 'bg-port-card border border-port-border text-white'
+                ? 'bg-violet-500 text-white animate-pulse'
+                : 'bg-port-card text-white'
             }`}
             title="Open voice controls"
           >
@@ -416,7 +508,7 @@ export default function VoiceWidget() {
       )}
       <div className={`${expanded ? 'flex' : 'hidden'} md:flex flex-col items-end gap-2 w-96 max-w-[calc(100vw-2rem)]`}>
         {!collapsed && history.length > 0 && (
-          <div className="bg-port-card/95 backdrop-blur border border-port-border rounded-xl shadow-lg w-full flex flex-col">
+          <div className={`bg-port-card/95 backdrop-blur border rounded-xl w-full flex flex-col ${fabSurface}`}>
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-port-border/50">
               <span className="text-xs text-gray-400">Conversation</span>
               <button
@@ -447,7 +539,7 @@ export default function VoiceWidget() {
         )}
         <form
           onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-          className="flex items-center gap-1 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-4 pr-1 py-1 shadow-lg w-full"
+          className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-4 pr-1 py-1 w-full ${fabSurface}`}
         >
           <input
             type="text"
@@ -471,7 +563,7 @@ export default function VoiceWidget() {
             Dictating to Daily Log — say &quot;stop dictation&quot; to end
           </div>
         )}
-        <div className="flex items-center gap-2 bg-port-card/95 backdrop-blur border border-port-border rounded-full pl-3 pr-1 py-1 shadow-lg">
+        <div className={`flex items-center gap-2 bg-port-card/95 backdrop-blur border rounded-full pl-3 pr-1 py-1 ${fabSurface}`}>
           <span className={`text-xs ${tone}`}>{label}</span>
           {!useWebSpeech && handsFree && isContinuous() && (
             <span
@@ -516,8 +608,8 @@ export default function VoiceWidget() {
             onClick={toggleCapture}
             className={`p-3 rounded-full transition-colors ${
               capturing
-                ? 'bg-port-accent text-white animate-pulse'
-                : 'bg-port-border hover:bg-port-border/70 text-white'
+                ? 'bg-violet-500 text-white animate-pulse'
+                : 'bg-violet-500/20 hover:bg-violet-500/40 text-violet-200'
             }`}
             title={(() => {
               if (handsFree) {
@@ -541,7 +633,7 @@ export default function VoiceWidget() {
           </button>
           <button
             onClick={hideWidget}
-            title="Hide voice widget (restore in Settings → Voice)"
+            title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <EyeOff size={14} />

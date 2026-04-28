@@ -85,7 +85,7 @@ import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import NotificationDropdown from './NotificationDropdown';
-import ThemeSwitcher from './ThemeSwitcher';
+import VoiceToggleButton from './voice/VoiceToggleButton';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
 import VoiceWidget from './voice/VoiceWidget';
@@ -687,7 +687,7 @@ export default function Layout() {
               >
                 <Monitor size={18} />
               </NavLink>
-              <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
+              <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
               <NotificationDropdown
                 notifications={notifications}
                 unreadCount={unreadCount}
@@ -729,7 +729,7 @@ export default function Layout() {
             >
               <Monitor size={16} />
             </NavLink>
-            <ThemeSwitcher position="below" />
+            <VoiceToggleButton />
             <NotificationDropdown
               notifications={notifications}
               unreadCount={unreadCount}
