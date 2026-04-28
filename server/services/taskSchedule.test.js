@@ -54,12 +54,15 @@ vi.mock('./eventScheduler.js', () => ({
   parseCronToNextRun: vi.fn()
 }))
 
-vi.mock('./cosState.js', () => ({
-  loadState: vi.fn().mockResolvedValue({ config: { improvementEnabled: true } }),
-  isImprovementEnabled: vi.fn((state) =>
-    state.config.improvementEnabled ?? (state.config.selfImprovementEnabled || state.config.appImprovementEnabled)
-  )
-}))
+// Use the real isImprovementEnabled implementation; only stub loadState.
+// Mocking the helper would let regressions in production logic slip through.
+vi.mock('./cosState.js', async () => {
+  const actual = await vi.importActual('./cosState.js')
+  return {
+    ...actual,
+    loadState: vi.fn().mockResolvedValue({ config: { improvementEnabled: true } })
+  }
+})
 
 import {
   INTERVAL_TYPES,
