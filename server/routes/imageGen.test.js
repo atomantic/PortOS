@@ -63,6 +63,17 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: undefined });
     });
+
+    // Express turns ?mode=a&mode=b into an array — without the
+    // typeof === 'string' guard, that array would either match
+    // IMAGE_GEN_MODES.includes() falsely or propagate as a non-string
+    // mode to the dispatcher.
+    it('ignores a duplicated-key ?mode= array', async () => {
+      imageGen.checkConnection.mockResolvedValue({ connected: true, mode: 'external' });
+      const response = await request(app).get('/api/image-gen/status?mode=local&mode=codex');
+      expect(response.status).toBe(200);
+      expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: undefined });
+    });
   });
 
   describe('POST /api/image-gen/generate', () => {

@@ -56,8 +56,12 @@ const avatarSchema = z.object({
 router.get('/status', asyncHandler(async (req, res) => {
   // Optional ?mode= override lets the Image Gen page probe a specific
   // backend (e.g. when the user flips the per-render chip to Codex but
-  // hasn't saved Codex as the default yet).
-  const mode = IMAGE_GEN_MODES.includes(req.query.mode) ? req.query.mode : undefined;
+  // hasn't saved Codex as the default yet). Express's default query
+  // parser turns duplicated keys (?mode=local&mode=codex) into arrays,
+  // so guard on string type before forwarding so `mode` always reaches
+  // the dispatcher as `string | undefined`.
+  const rawMode = req.query.mode;
+  const mode = typeof rawMode === 'string' && IMAGE_GEN_MODES.includes(rawMode) ? rawMode : undefined;
   res.json(await imageGen.checkConnection({ mode }));
 }));
 

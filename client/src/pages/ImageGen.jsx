@@ -249,14 +249,23 @@ export default function ImageGen() {
           setStatusMsg(msg.message);
         }
         if (msg.type === 'complete') {
+          // Codex's built-in image_gen tool decides steps/guidance/seed
+          // internally and ignores whatever we pass — so don't backfill
+          // local-mode model defaults onto a codex render's metadata.
+          // The gallery / sidecar would otherwise show steps=20,
+          // guidance=3.5 (Flux 1 Dev defaults) on every codex image,
+          // misleading the user about what actually produced it.
+          const localOnlyMeta = isCodexMode ? {} : {
+            steps: payload.steps ?? currentModel?.steps,
+            guidance: payload.guidance ?? currentModel?.guidance,
+          };
           setResult({
             ...data,
             ...msg.result,
             prompt: payload.prompt,
             negativePrompt: payload.negativePrompt,
             width, height,
-            steps: payload.steps ?? currentModel?.steps,
-            guidance: payload.guidance ?? currentModel?.guidance,
+            ...localOnlyMeta,
           });
           es.close();
           resolve(msg.result);
