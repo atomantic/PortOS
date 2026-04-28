@@ -524,6 +524,20 @@ describe("image_generate", () => {
     expect(args.height).toBe(768);
   });
 
+  it("rejects prompt longer than 2000 characters (matches route schema)", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2001) });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/prompt must be 2000 characters or fewer/);
+    expect(generateImageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts prompt at exactly 2000 characters", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2000) });
+    expect(r.ok).toBe(true);
+  });
+
   it("rejects out-of-bounds width", async () => {
     generateImageMock.mockClear();
     const r = await dispatchTool("image_generate", { prompt: "a fox", width: 50000 });

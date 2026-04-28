@@ -1091,6 +1091,14 @@ const TOOLS = [
       if (typeof prompt !== 'string' || !prompt.trim()) {
         return { ok: false, summary: 'prompt is required' };
       }
+      // Match the /api/image-gen/generate Zod schema (max 2000 chars).
+      // Voice tool calls bypass the route entirely, so without this an
+      // oversized prompt would propagate to providers and fail with a
+      // less helpful error (codex CLI in particular hits OS ARG_MAX
+      // limits before the model even sees the prompt).
+      if (prompt.length > 2000) {
+        return { ok: false, summary: 'prompt must be 2000 characters or fewer' };
+      }
       const requestedMode = (provider && provider !== 'auto') ? provider : undefined;
       // Codex is gated separately — it costs against the user's Codex plan,
       // and not every plan exposes image_gen. The dispatcher would also
