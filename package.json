@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "1.45.0",
+  "version": "1.46.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -29,6 +29,7 @@
     "setup:hooks": "bash scripts/setup-git-hooks.sh",
     "update": "node -e \"const{spawnSync:s}=require('child_process');const w=process.platform==='win32';const r=s(w?'powershell':'bash',w?['-NoProfile','-ExecutionPolicy','Bypass','-File','update.ps1']:['update.sh'],{stdio:'inherit'});process.exit(r.status??1)\"",
     "test": "npm test --prefix server",
+    "theme:check": "node scripts/check-themes.js",
     "smoke": "node scripts/smoke-boot.js"
   },
   "devDependencies": {

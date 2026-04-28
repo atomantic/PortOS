@@ -192,8 +192,8 @@ export default function BodyTab() {
             <p className="text-gray-500 text-sm">No eye exam data. Import your health spreadsheet or add exams manually.</p>
           </div>
         ) : (
-          <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-port-card border border-port-border rounded-xl overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
               <thead>
                 <tr className="text-xs text-gray-500 uppercase border-b border-port-border">
                   <th className="text-left py-2 px-3">Date</th>

@@ -3,15 +3,16 @@ import { join } from 'path';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
-import { loadConfig } from './browserService.js';
+import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
+
+// Compat re-exports — older consumers and test mocks import these from here
+export { findOrOpenPage, isAuthPage, evaluateOnPage };
+export const getPages = listCdpPages;
 
 const SELECTORS_FILE = join(PATHS.messages, 'selectors.json');
 
 const OUTLOOK_URL = 'https://outlook.office.com/mail/';
 const TEAMS_URL = 'https://teams.microsoft.com/';
-
-// Auth detection patterns in page titles/URLs
-const AUTH_PATTERNS = ['login.microsoftonline.com', 'okta.com', 'login.live.com', 'Sign in'];
 
 function makeExternalId(date, sender, subject) {
   const hash = crypto.createHash('md5')
@@ -19,77 +20,6 @@ function makeExternalId(date, sender, subject) {
     .digest('hex')
     .slice(0, 12);
   return `pw-${hash}`;
-}
-
-// TODO: Extract shared CDP helpers (getCdpConnectHost, cdpFetch, getPages, findOrOpenPage)
-// into browserService.js to avoid duplication with existing CDP logic there
-async function getCdpConnectHost() {
-  const config = await loadConfig();
-  const host = (config.cdpHost === '0.0.0.0' || config.cdpHost === '::') ? '127.0.0.1' : config.cdpHost;
-  return { host, port: config.cdpPort };
-}
-
-async function cdpFetch(path, options = {}) {
-  const { host, port } = await getCdpConnectHost();
-  const url = `http://${host}:${port}${path}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeout || 10000);
-  const response = await fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeout));
-  return response;
-}
-
-export async function getPages() {
-  const response = await cdpFetch('/json/list');
-  if (!response.ok) return [];
-  return response.json();
-}
-
-export async function findOrOpenPage(targetUrl) {
-  const pages = await getPages();
-  // Find existing tab matching the target
-  const existing = pages.find(p => p.url?.includes(new URL(targetUrl).hostname));
-  if (existing) return existing;
-  // Open new tab
-  const response = await cdpFetch(`/json/new?${encodeURIComponent(targetUrl)}`, { method: 'PUT' });
-  if (!response.ok) return null;
-  return response.json();
-}
-
-export function isAuthPage(page) {
-  const url = page.url || '';
-  const title = page.title || '';
-  return AUTH_PATTERNS.some(p => url.includes(p) || title.includes(p));
-}
-
-export async function evaluateOnPage(page, expression) {
-  const wsUrl = page.webSocketDebuggerUrl;
-  if (!wsUrl) return null;
-
-  const { default: WebSocket } = await import('ws');
-
-  return new Promise((resolve) => {
-    const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => { ws.close(); resolve(null); }, 60000);
-
-    ws.on('open', () => {
-      ws.send(JSON.stringify({
-        id: 1,
-        method: 'Runtime.evaluate',
-        params: { expression, returnByValue: true, awaitPromise: true }
-      }));
-    });
-
-    ws.on('message', (data) => {
-      const msg = safeJSONParse(data.toString(), null, { context: 'cdp-ws' });
-      if (!msg || msg.id !== 1) return;
-      clearTimeout(timer);
-      ws.close();
-      if (msg.error || msg.result?.exceptionDetails) return resolve(null);
-      resolve(msg.result?.result?.value ?? null);
-    });
-
-    ws.on('error', () => { clearTimeout(timer); ws.close(); resolve(null); });
-  });
 }
 
 export async function getSelectors() {

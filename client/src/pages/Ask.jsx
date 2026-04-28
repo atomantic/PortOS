@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, BookOpen, FileText, ExternalLink } from 'lucide-react';
+import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, BookOpen, FileText, ExternalLink, ListTodo, CheckCircle2 } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 
@@ -107,11 +107,154 @@ function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading, st
   );
 }
 
+// Promotion bar for assistant turns: 1-click save to Brain inbox, create a
+// CoS task, or attach a progress note to a Goal. Local state tracks which
+// targets have already been promoted so the UI doesn't let the user fire the
+// same promotion twice (and so the success label persists across re-renders).
+function PromoteBar({ conversationId, turn, goals, onPromoted }) {
+  const [pending, setPending] = useState(null);
+  const [saved, setSaved] = useState({ brain: null, task: null, goal: null });
+  const [pickingGoal, setPickingGoal] = useState(false);
+
+  const promote = useCallback(async (payload) => {
+    setPending(payload.target);
+    const data = await api.promoteAskTurn(conversationId, turn.id, payload).catch((err) => {
+      toast.error(err?.message || 'Promote failed');
+      return null;
+    });
+    setPending(null);
+    if (!data?.ok) return;
+    setSaved((prev) => ({ ...prev, [payload.target]: data.ref }));
+    setPickingGoal(false);
+    onPromoted?.(data);
+    if (payload.target === 'brain') toast.success('Saved to Brain inbox');
+    else if (payload.target === 'task') toast.success('Created CoS task');
+    else if (payload.target === 'goal') toast.success('Attached to goal');
+  }, [conversationId, turn.id, onPromoted]);
+
+  // Pin saved state once goals are loaded so a goal-target chip can label
+  // "Attached to <goal title>" instead of just "Attached".
+  const savedGoal = saved.goal && goals?.find((g) => g.id === saved.goal.id);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-port-border flex flex-wrap items-center gap-1.5">
+      <PromoteButton
+        label="Save to Brain"
+        savedLabel="Saved to Brain"
+        icon={Brain}
+        savedRef={saved.brain}
+        pending={pending === 'brain'}
+        disabled={!!pending}
+        onClick={() => promote({ target: 'brain' })}
+        href={saved.brain ? '/brain/inbox' : null}
+      />
+      <PromoteButton
+        label="Create task"
+        savedLabel="Task created"
+        icon={ListTodo}
+        savedRef={saved.task}
+        pending={pending === 'task'}
+        disabled={!!pending}
+        onClick={() => promote({ target: 'task' })}
+        href={saved.task ? '/cos' : null}
+      />
+      {saved.goal ? (
+        <PromoteButton
+          label="Attach to goal"
+          savedLabel={savedGoal ? `Attached: ${savedGoal.title}` : 'Attached to goal'}
+          icon={Target}
+          savedRef={saved.goal}
+          pending={false}
+          disabled
+          onClick={() => {}}
+          href={`/digital-twin/goals?id=${encodeURIComponent(saved.goal.id)}`}
+        />
+      ) : (
+        <GoalPicker
+          goals={goals}
+          pending={pending === 'goal'}
+          disabled={!!pending}
+          open={pickingGoal}
+          onToggle={() => setPickingGoal((v) => !v)}
+          onPick={(goalId) => promote({ target: 'goal', goalId })}
+        />
+      )}
+    </div>
+  );
+}
+
+function PromoteButton({ label, savedLabel, icon: Icon, savedRef, pending, disabled, onClick, href }) {
+  const navigate = useNavigate();
+  const isSaved = !!savedRef;
+  const text = isSaved ? savedLabel : label;
+  const cls = `inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${
+    isSaved
+      ? 'bg-port-success/15 border-port-success/40 text-port-success hover:bg-port-success/20'
+      : 'bg-port-bg border-port-border text-gray-300 hover:border-port-accent/60 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed'
+  }`;
+  const handleClick = () => {
+    if (isSaved && href) navigate(href);
+    else if (!disabled && !isSaved) onClick();
+  };
+  return (
+    <button type="button" onClick={handleClick} disabled={disabled && !isSaved} className={cls} title={text}>
+      {pending ? <Loader2 size={12} className="animate-spin" /> : isSaved ? <CheckCircle2 size={12} /> : <Icon size={12} />}
+      <span className="truncate max-w-[200px]">{text}</span>
+    </button>
+  );
+}
+
+function GoalPicker({ goals, pending, disabled, open, onToggle, onPick }) {
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium bg-port-bg border border-port-border text-gray-300 hover:border-port-accent/60 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {pending ? <Loader2 size={12} className="animate-spin" /> : <Target size={12} />}
+        <span>Attach to goal…</span>
+      </button>
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          const id = e.target.value;
+          if (id) onPick(id);
+        }}
+        disabled={pending}
+        className="px-2 py-1 rounded-md text-xs bg-port-bg border border-port-border text-gray-300 focus:outline-none focus:border-port-accent/60"
+      >
+        <option value="" disabled>Pick a goal…</option>
+        {(goals || []).map((g) => (
+          <option key={g.id} value={g.id}>{g.title}</option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="text-xs text-gray-500 hover:text-white"
+        aria-label="Cancel goal picker"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 // Memoized so previously-rendered turns don't re-render on every streaming
 // delta — only the actively-streaming Turn at the bottom flips on each chunk.
-const Turn = memo(function Turn({ turn, sources }) {
+const Turn = memo(function Turn({ turn, sources, conversationId, goals, canPromote, onPromoted }) {
   const isUser = turn.role === 'user';
   const turnSources = turn.sources || sources || [];
+  // Local-only partial turns (set when a stream errors mid-flight) carry no
+  // server-side id, so promotion would 404 — gate the bar on a real persisted
+  // id rather than hide it for every assistant turn.
+  const showPromote = !isUser && canPromote && turn.content && turn.id && !String(turn.id).startsWith('partial-') && !String(turn.id).startsWith('streaming') && !String(turn.id).startsWith('optimistic-');
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[85%] rounded-lg px-4 py-3 ${isUser ? 'bg-port-accent/15 border border-port-accent/30' : 'bg-port-card border border-port-border'}`}>
@@ -120,6 +263,9 @@ const Turn = memo(function Turn({ turn, sources }) {
           <div className="mt-3 pt-3 border-t border-port-border flex flex-wrap gap-1.5">
             {turnSources.map((s, i) => <SourceChip key={s.id} source={s} index={i} />)}
           </div>
+        )}
+        {showPromote && (
+          <PromoteBar conversationId={conversationId} turn={turn} goals={goals} onPromoted={onPromoted} />
         )}
       </div>
     </div>
@@ -134,6 +280,7 @@ export default function Ask() {
   const [loadingList, setLoadingList] = useState(true);
   const [activeConv, setActiveConv] = useState(null);
   const [loadingConv, setLoadingConv] = useState(false);
+  const [goals, setGoals] = useState([]);
   // streamingTurn === null means "not streaming". Storing the partial content
   // and sources in a single object is enough to drive both the UI and the
   // disabled-while-streaming guards.
@@ -157,6 +304,33 @@ export default function Ask() {
   }, []);
 
   useEffect(() => { refreshList(); }, [refreshList]);
+
+  // Goals load lazily and only need a flat list for the picker dropdown — no
+  // need to refetch on every conversation change. A failure leaves the
+  // picker empty (the user just won't see options) so we don't toast here.
+  useEffect(() => {
+    let cancelled = false;
+    api.getGoals().then((data) => {
+      if (cancelled) return;
+      const list = Array.isArray(data?.goals) ? data.goals : [];
+      // Pre-sort so the dropdown is alphabetical without forcing PromoteBar
+      // to sort on every render.
+      const sorted = [...list].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+      setGoals(sorted);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Fired by PromoteBar after a successful promotion: the server already pins
+  // the conversation, so reflect that locally without a refetch.
+  const handlePromoted = useCallback((data) => {
+    if (data?.conversation) {
+      setActiveConv((prev) => prev ? { ...prev, promoted: !!data.conversation.promoted } : prev);
+      setConversations((prev) => prev.map((c) => c.id === data.conversation.id
+        ? { ...c, promoted: !!data.conversation.promoted }
+        : c));
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -495,7 +669,14 @@ export default function Ask() {
             </div>
           )}
           {turns.map((t) => (
-            <Turn key={t.id} turn={t} />
+            <Turn
+              key={t.id}
+              turn={t}
+              conversationId={activeConv?.id}
+              goals={goals}
+              canPromote={!streaming && activeConv?.id && activeConv.id !== 'pending'}
+              onPromoted={handlePromoted}
+            />
           ))}
           {streaming && streamingTurn && (
             <Turn turn={{ id: 'streaming', role: 'assistant', content: streamingTurn.content }} sources={streamingTurn.sources} />

@@ -10,6 +10,7 @@ import { getConfig } from './cos.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { emitLog } from './cosEvents.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
+import { isRecoveryTask } from './recoveryTasks.js';
 
 /**
  * Process post-completion tasks: memory extraction and app cooldown.
@@ -36,6 +37,15 @@ export async function processAgentCompletion(agentId, task, success, outputBuffe
   // Handle app cooldown
   const appId = task.metadata?.app;
   if (appId) {
+    // Recovery tasks are administrative — they retry a failed merge/PR for an
+    // already-reviewed agent run. Bumping the cooldown for them pushes sibling
+    // improvement tasks for the same app another full window into the future,
+    // which is exactly the queue-stalling we're trying to prevent.
+    if (isRecoveryTask(task)) {
+      emitLog('info', `Skipping cooldown bump for recovery task on app ${appId}`, { appId, taskId: task.id });
+      return;
+    }
+
     const config = await getConfig();
     const cooldownMs = config.appReviewCooldownMs || 3600000;
 

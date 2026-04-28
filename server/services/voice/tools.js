@@ -8,10 +8,11 @@ import { logNicotine, getNicotineSummary } from '../meatspaceNicotine.js';
 import { addBodyEntry } from '../meatspaceHealth.js';
 import { getGoals, updateGoalProgress, addProgressEntry } from '../identity.js';
 import { listProcesses, restartApp } from '../pm2.js';
-import { getItems, getFeeds } from '../feeds.js';
+import { getItems, getFeeds, markItemRead, markAllRead } from '../feeds.js';
 import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
+import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
 
@@ -54,6 +55,7 @@ const TOOL_GROUPS = {
   pm2_status: 'system',
   pm2_restart: 'system',
   feeds_digest: 'feeds',
+  feeds_mark_read: 'feeds',
   daily_log_open: 'dailylog',
   daily_log_start_dictation: 'dailylog',
   daily_log_stop_dictation: 'dailylog',
@@ -63,6 +65,7 @@ const TOOL_GROUPS = {
   ui_fill: 'ui',
   ui_select: 'ui',
   ui_check: 'ui',
+  ui_ask: 'ask',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -89,8 +92,22 @@ const GROUP_INTENT = {
   meatspace: /\b(drink|drank|beer|wine|whiskey|shot|cocktail|cigarette|vape|pouch|nicotine|weigh|pound|kilo|kg|smoke|smoking|how am I|summary today|log (?:a|my) (?:drink|weight|nicotine))\b/i,
   goals: /\b(goals?|progress|objective)\b/i,
   system: /\b(restart|crash(?:ed)?|pm2|process|service|is.*(?:running|down|up)|status)\b/i,
-  feeds: /\b(feeds?|news|unread|article|rss|digest)\b/i,
-  dailylog: /\b(daily ?log|journal|dictat|log entry|log something|to my log|read (?:back )?my log)\b/i,
+  // "mark.*read" / "mark.*unread" pairs feeds_mark_read with feeds_digest:
+  // after "what's in my feeds?" the user says "mark that one read" or "mark
+  // them all as read" — the bare word "read" alone is too broad (collides
+  // with "read my log"), so we require it follow "mark".
+  feeds: /\b(feeds?|news|unread|articles?|rss|digest|headlines?|mark\b[^.!?\n]{0,40}\bread)\b/i,
+  // `daily ?logi?n?s?` absorbs whisper/Web-Speech transcription drift on
+  // "daily log": variants like "daily logs" (plural), "daily login" (heard as
+  // a familiar word), "daily logins" all gate the daily-log toolset on. The
+  // \b anchors keep it from matching inside unrelated words like "logging".
+  dailylog: /\b(daily ?logi?n?s?|journal|dictat|log entry|log something|to my log|read (?:back )?my log)\b/i,
+  // RAG questions answered by askService — phrasings that need cross-domain
+  // recall (Brain + Memory + Goals + Calendar + Autobiography). Tight on
+  // purpose: the tool is large (consumes a full LLM stream) and we don't
+  // want it stealing turns the cheaper tools handle. Catches "advise me",
+  // "draft a/an X", "what did I decide", "what's on my plate", "ask myself".
+  ask: /\b(?:ask my ?self|advise me|coach me|draft (?:a|an|my|me|something)|what(?:'s| is) on my plate|what (?:did|do|should) i (?:decide|think|believe|say|want|do)|why did i|when did i|recall (?:my|that|when))\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -624,6 +641,84 @@ const TOOLS = [
   },
 
   {
+    name: 'feeds_mark_read',
+    description:
+      'Mark RSS feed items as read. Use when the user says "mark that one read", "mark this read", "I read the second one", or "mark them all read". ' +
+      'Pass `query` with a distinctive phrase from the item\'s title (the LLM should reuse a title it just spoke from feeds_digest). ' +
+      'Pass `all: true` to mark every unread item read; combine with `feedQuery` to scope to a single feed (e.g. "mark all of Hacker News as read").',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Distinctive phrase from the article title to fuzzy-match against currently unread items.',
+        },
+        all: {
+          type: 'boolean',
+          description: 'Mark every unread item as read. When true, `query` is ignored.',
+        },
+        feedQuery: {
+          type: 'string',
+          description: 'Optional: when `all` is true, restrict to a single feed by fuzzy-matching its title.',
+        },
+      },
+    },
+    execute: async ({ query, all = false, feedQuery } = {}) => {
+      if (!all && (typeof query !== 'string' || !query.trim())) {
+        return { ok: false, summary: 'Tell me which item — say "mark all read" or quote a phrase from the title.' };
+      }
+
+      if (all) {
+        let feedId;
+        let feedTitle;
+        if (feedQuery && typeof feedQuery === 'string' && feedQuery.trim()) {
+          const feeds = await getFeeds();
+          const fq = feedQuery.trim().toLowerCase();
+          const feed = feeds.find((f) => (f.title || '').toLowerCase() === fq)
+            || feeds.find((f) => (f.title || '').toLowerCase().includes(fq));
+          if (!feed) {
+            return { ok: false, summary: `No feed matched "${feedQuery}".` };
+          }
+          feedId = feed.id;
+          feedTitle = feed.title;
+        }
+        const result = await markAllRead(feedId);
+        const scope = feedTitle ? ` from ${feedTitle}` : '';
+        return {
+          ok: true,
+          marked: result.marked,
+          summary: result.marked
+            ? `Marked ${result.marked} item${result.marked === 1 ? '' : 's'}${scope} as read.`
+            : `Nothing unread${scope}.`,
+        };
+      }
+
+      // Fuzzy-match a single item by title against currently unread.
+      const q = query.trim().toLowerCase();
+      const unread = await getItems({ unreadOnly: true, limit: 200 });
+      const exact = unread.find((i) => (i.title || '').toLowerCase() === q);
+      const match = exact
+        || unread.find((i) => (i.title || '').toLowerCase().includes(q))
+        || unread.find((i) => {
+          const tokens = q.split(/\s+/).filter((t) => t.length >= 3);
+          return tokens.length && tokens.every((t) => (i.title || '').toLowerCase().includes(t));
+        });
+      if (!match) {
+        return { ok: false, summary: `No unread item matched "${query}".` };
+      }
+      const result = await markItemRead(match.id);
+      if (result?.error) {
+        return { ok: false, summary: `Couldn't mark "${match.title}" — ${result.error}.` };
+      }
+      return {
+        ok: true,
+        title: match.title,
+        summary: `Marked "${match.title}" as read.`,
+      };
+    },
+  },
+
+  {
     name: 'daily_log_open',
     description:
       'Open the Daily Log page AND (typically) start dictation. ONLY use when the user explicitly mentions "daily log", "log entry", "journal", or dictation — NEVER use this as a generic "take me to a page" tool; for any other destination call ui_navigate instead. ' +
@@ -745,9 +840,10 @@ const TOOLS = [
   {
     name: 'ui_navigate',
     description:
-      'Navigate the UI to a page. Use for "take me to X" / "open X" / "go to X" EXCEPT Daily Log (use daily_log_open). ' +
-      'Pass `page` as a short name the user would say: tasks, agents, gsd, briefing, calendar, goals, brain, meatspace, memory, messages, settings, shell, instances, wiki, character, health, body, alcohol, etc. ' +
-      'Server resolves fuzzy — "chief of staff tasks", "cos tasks", "task page" all map to tasks. If no match, the error lists valid names.',
+      'Navigate the UI to a page. Use for "take me to X" / "open X" / "go to X" — including the Daily Log when the user just wants to VIEW it without writing. ' +
+      'Pass `page` as a short name the user would say: tasks, agents, gsd, briefing, calendar, goals, brain, meatspace, memory, messages, settings, shell, instances, wiki, character, health, body, alcohol, daily log, journal, etc. ' +
+      'Server resolves fuzzy — "chief of staff tasks", "cos tasks", "task page" all map to tasks. If no match, the error lists valid names. ' +
+      'Only prefer daily_log_open over this tool when the user clearly wants to write/dictate ("start", "new", "entry", "make", "dictate"); plain "open my daily log" or "go to the daily log" should use ui_navigate.',
     parameters: {
       type: 'object',
       properties: {
@@ -886,6 +982,79 @@ const TOOLS = [
   },
 
   {
+    name: 'ui_ask',
+    description:
+      'Ask the user\'s digital twin a question that needs retrieval-augmented recall across their Brain (notes, ideas, projects, inbox), Memory (semantic + BM25), Goals, Calendar, and Autobiography. Use for cross-domain questions the cheaper tools cannot answer: ' +
+      '"what did I decide about X?", "advise me on Y given my goals", "draft a status update as me", "what\'s on my plate this afternoon?", "why did I prioritize Z?". ' +
+      'NOT for one-shot lookups (use brain_search / goal_list / feeds_digest / time_now); NOT for capture verbs (use brain_capture / daily_log_append). ' +
+      'The tool returns the answer in `content` — speak `content` directly without summarizing or rephrasing it. Skip citation markers like [1] [2] when reading aloud (they reference source chips on the Ask page).',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The user\'s question, in their own words. Pass through the substantive question — strip leading filler like "hey, can you" but keep the actual content.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['ask', 'advise', 'draft'],
+          description: '"ask" answers as the user (default). "advise" answers as a coach who knows the user. "draft" produces text in the user\'s voice for an external recipient (use for "draft a Slack message", "write an email as me").',
+        },
+      },
+      required: ['question'],
+    },
+    execute: async ({ question, mode = 'ask' } = {}, ctx = {}) => {
+      if (typeof question !== 'string' || !question.trim()) {
+        throw new Error('question is required');
+      }
+      const trimmed = question.trim();
+      const validMode = ASK_VALID_MODES.has(mode) ? mode : 'ask';
+      const deltas = [];
+      let doneAnswer = null;
+      let sources = [];
+      let providerId = null;
+      let model = null;
+      let errorMsg = null;
+      // runAsk yields { sources, delta, done, error }. Collect deltas into an array
+      // (avoids O(n²) string reallocation on long answers); the terminal `done` event
+      // delivers the canonical full answer + reranked sources and supersedes deltas.
+      for await (const evt of runAsk({ question: trimmed, mode: validMode, signal: ctx.signal })) {
+        if (evt.type === 'sources') sources = evt.sources;
+        else if (evt.type === 'delta') deltas.push(evt.text);
+        else if (evt.type === 'error') { errorMsg = evt.error; break; }
+        else if (evt.type === 'done') {
+          doneAnswer = evt.answer;
+          sources = evt.sources;
+          providerId = evt.providerId;
+          model = evt.model;
+        }
+      }
+      if (errorMsg) {
+        return { ok: false, error: errorMsg, summary: `I couldn't answer that — ${errorMsg}` };
+      }
+      // Barge-in: runAsk exits early on signal.aborted without emitting a `done`
+      // event, so the loop ends with only partial deltas. Surface that as a
+      // cancellation rather than a successful partial answer.
+      if (ctx.signal?.aborted) {
+        return { ok: false, error: 'aborted', summary: 'Cancelled before I could finish answering.' };
+      }
+      const finalAnswer = (doneAnswer ?? deltas.join('')).trim();
+      if (!finalAnswer) {
+        return { ok: false, summary: 'I came up empty on that question.' };
+      }
+      return {
+        ok: true,
+        content: finalAnswer,
+        sourceCount: sources.length,
+        sources: sources.map((s) => ({ kind: s.kind, title: s.title })),
+        providerId,
+        model,
+        summary: `Answered "${trimmed.slice(0, 60)}${trimmed.length > 60 ? '…' : ''}" using ${sources.length} source${sources.length === 1 ? '' : 's'}.`,
+      };
+    },
+  },
+
+  {
     name: 'time_now',
     description:
       'Report the current local date, time, and day of week. Use when the user asks "what time is it?", "what day is today?", "what\'s the date?". LLMs don\'t know the current time on their own — always call this tool rather than guessing.',
@@ -915,6 +1084,11 @@ const toSpec = (t) => ({
 });
 
 export const getToolSpecs = () => TOOLS.map(toSpec);
+
+// Canonical list of tool names, used by pipeline.js to detect the
+// "narrate-instead-of-call" failure where the LLM emits a literal tool name
+// in its prose. Exported so the regex can't drift when tools are added.
+export const getAllToolNames = () => TOOLS.map((t) => t.name);
 
 // Plain-format metadata for non-LLM consumers (the command palette) so routes
 // don't need to reach through OpenAI-shaped function specs to get to the same

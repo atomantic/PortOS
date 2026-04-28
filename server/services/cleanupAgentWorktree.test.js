@@ -135,10 +135,8 @@ vi.mock('./thinkingLevels.js', () => ({
 
 vi.mock('./executionLanes.js', () => ({
   determineLane: vi.fn(),
-  acquire: vi.fn(),
-  release: vi.fn(),
-  hasCapacity: vi.fn(() => true),
-  waitForLane: vi.fn()
+  acquire: vi.fn(() => ({ success: true })),
+  release: vi.fn()
 }));
 
 vi.mock('./taskConflict.js', () => ({
@@ -160,7 +158,8 @@ vi.mock('./git.js', () => ({
   getRepoBranches: vi.fn(),
   createPR: vi.fn(),
   generatePRDescription: vi.fn(),
-  deleteBranch: vi.fn().mockResolvedValue(undefined)
+  deleteBranch: vi.fn().mockResolvedValue(undefined),
+  resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null })
 }));
 
 vi.mock('./runner.js', () => ({
@@ -512,5 +511,21 @@ describe('spawnMergeRecoveryTask', () => {
     await spawnMergeRecoveryTask(warnings, 'agent-1', {}, 'TestApp', null);
 
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('emits glab/MR commands when the source workspace is a GitLab repo', async () => {
+    git.resolveForgeForRepo.mockResolvedValueOnce({ cli: 'glab', env: process.env, host: 'gitlab.com', owner: 'mygroup', account: null });
+
+    const warnings = ['PR creation failed for branch feature/x: glab error. Worktree preserved for manual PR creation.'];
+    const task = { id: 'task-gl', description: 'Add thing', metadata: { app: 'gl-app' } };
+
+    await spawnMergeRecoveryTask(warnings, 'agent-gl', task, 'GitLabApp', '/mock/gl-workspace');
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const call = addTask.mock.calls[0][0];
+    expect(call.description).toContain('MR');
+    expect(call.context).toContain('glab mr list --source-branch feature/x');
+    expect(call.context).toContain('glab mr create --source-branch feature/x --target-branch main');
+    expect(call.context).not.toContain('gh pr ');
   });
 });

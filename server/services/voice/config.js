@@ -122,3 +122,6 @@ export const updateVoiceConfig = async (patch) => {
 
 export const voiceHome = () => VOICE_HOME;
 export const piperVoiceTildePath = (id) => `~/.portos/voice/voices/${id}.onnx`;
+
+export const IS_WIN = process.platform === 'win32';
+export const PIPER_BIN_NAME = IS_WIN ? 'piper.exe' : 'piper';

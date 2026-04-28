@@ -10,7 +10,8 @@ import { transcribe } from './stt.js';
 import { synthesize } from './tts.js';
 import { streamChat } from './llm.js';
 import { getVoiceConfig } from './config.js';
-import { getToolSpecsForIntent, classifyIntent, dispatchTool, UI_KINDS } from './tools.js';
+import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
+import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 
 // Compact per-page UI summary the LLM uses to drive ui_* tools. Keep it
@@ -117,7 +118,7 @@ const buildSystemPrompt = (cfg) => {
       'You MUST call the matching tool whenever the user requests an action — ' +
       'never describe the action in words instead of calling the tool. ' +
       'Trigger phrases that REQUIRE a tool call: ' +
-      '"open"/"go to"/"take me to"/"show me"/"navigate to" X → call ui_navigate with page=X (NOT daily_log_open — that tool is ONLY for the Daily Log / dictation). "Take me to tasks" → ui_navigate page="tasks". "Chief of staff agents" → ui_navigate page="agents". "Open calendar" → ui_navigate page="calendar". Only pick daily_log_open when the user explicitly says "daily log", "log entry", or "journal". ' +
+      '"open"/"go to"/"take me to"/"show me"/"navigate to" X → call ui_navigate with page=X. "Take me to tasks" → ui_navigate page="tasks". "Chief of staff agents" → ui_navigate page="agents". "Open calendar" → ui_navigate page="calendar". "Take me to the daily log" → ui_navigate page="daily log". Pick daily_log_open INSTEAD of ui_navigate only when the user clearly wants to WRITE/DICTATE — phrases like "start a new daily log", "let\'s make a log entry", "new daily log", "let me dictate to my log". Plain navigation to the daily log goes through ui_navigate. ' +
       '"Select X tab"/"switch to the X tab"/"click X"/"press the X button"/"pick Y from the Z dropdown"/"fill X with Y"/"check/uncheck X" — the LLM receives a compact "Current UI state" summary at the start of UI-driving turns listing Tabs, Buttons, Links, Inputs, Selects, Checkboxes. Use ui_click for tabs/buttons/links, ui_fill for text inputs, ui_select for dropdowns, ui_check for checkboxes. Pass the EXACT label shown in the UI summary. Prefer the `kind` argument when you have it (tab vs button). If the label isn\'t in the current UI summary, call ui_list_interactables OR ui_navigate first — do NOT guess. Active tab is marked with * in the summary; don\'t click it again. ' +
       'FORM FILL vs CAPTURE — CRITICAL: When the user directs content INTO a visible field ("fill description with X", "type X in the name field", "put X in the body", "enter X into title", "set the subject to X"), the target is the FIELD and X is the new value. ALWAYS call ui_fill with label=<field> and value=<X>. NEVER call brain_capture or daily_log_append for these turns — even when X contains words like "remember", "note", "save", or "jot", those are field content, not a request to capture to the inbox. Only use brain_capture when the user captures without referring to a page field ("remember to buy milk", "add this to my brain inbox", "save that for later"). ' +
       'CHAINED UI FLOWS: after a ui_navigate / ui_click / ui_fill / ui_select / ui_check succeeds, its tool result includes a `ui` field with the FRESH page state (a new page has loaded, a modal may have opened, a tab may have switched, new fields may be visible). Always re-read this `ui` field before choosing the next action — don\'t rely on the original per-turn UI summary after an action has fired. For multi-step flows like "create a task called Foo with description Bar": ui_click New Task → read result.ui → ui_fill Name=Foo → read result.ui → ui_fill Description=Bar → ui_click Save. Do it all in ONE turn, not one action per turn. Same for cross-page flows like "go to tasks and add a task called Foo": ui_navigate page="tasks" → read result.ui → ui_click New Task → read result.ui → ui_fill Name=Foo → ui_click Save, all in ONE turn. ' +
@@ -192,8 +193,18 @@ const STOP_DICTATION_RE = /^(stop|end|exit|cancel|pause)\s+(dictation|dictating|
 // file last year") don't false-positive. Exported for unit testing.
 const ACTION_CLAIM_RE = /\b(?:I(?:'ve| have| just| already)?\s+(?:open(?:ed|ing)?|navigat(?:ed|ing)|sav(?:ed|ing)|add(?:ed|ing)|not(?:ed|ing)|captur(?:ed|ing)|remember(?:ed|ing)?|fill(?:ed|ing)|click(?:ed|ing)|select(?:ed|ing)|switch(?:ed|ing)|set|filed|logg(?:ed|ing))|(?:opening|navigating|saving|adding|noting|capturing|filing|logging|filling|clicking|selecting|switching)\s+(?:to\s+|your|the|that|this|it))\b/i;
 
+// Catches the second narrate-without-call failure mode: the model emits the
+// literal tool name as plain text ("ui_navigate page=\"daily_log\"",
+// "I'll call daily_log_open"). Different shape from ACTION_CLAIM_RE — the
+// model isn't claiming the action happened, it's writing the tool call out
+// loud as if dictating to itself. Only fires when no tool actually ran.
+//
+// Built from the canonical tool list so it can't drift behind new tools.
+const TOOL_NAME_AS_TEXT_RE = new RegExp(`\\b(?:${getAllToolNames().join('|')})\\b`, 'i');
+
 export const detectNarrationWithoutCall = ({ finalText, toolRuns }) =>
-  toolRuns?.length === 0 && !!finalText?.trim() && ACTION_CLAIM_RE.test(finalText);
+  toolRuns?.length === 0 && !!finalText?.trim()
+  && (ACTION_CLAIM_RE.test(finalText) || TOOL_NAME_AS_TEXT_RE.test(finalText));
 
 // Short correlation id so overlapping turns in the logs can be told apart
 // (user interrupts, late-arriving retries). 5 chars of base36 randomness is
@@ -242,6 +253,22 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     return { transcript: '', reply: '' };
   }
   if (signal?.aborted) return { transcript: userText, reply: '' };
+
+  // Echo gate: if the transcript looks like the bot's own TTS being picked
+  // up by a laptop mic (built-in mic + speakers, no headphones), drop the
+  // turn rather than feeding it to the LLM. Without this gate the bot
+  // replies to its own voice and runs in a feedback loop.
+  //
+  // Only applies to spoken input — typed text never echoes. The detector is
+  // length-gated (< 4 words always passes) so short barge-ins like "wait"
+  // and "stop" still interrupt even if those words appear in TTS.
+  if (state?.recentTts?.length && (!text || source === 'voice')) {
+    if (isEchoOfRecentTts(userText, state.recentTts)) {
+      console.warn(`🔇 [${turnId}] dropping TTS echo "${userText.slice(0, 80)}"`);
+      emit('voice:idle', { reason: 'echo-suppressed' });
+      return { transcript: userText, reply: '' };
+    }
+  }
 
   // Dictation mode short-circuits the LLM: the user's speech goes straight
   // into the daily-log entry unless they say the stop phrase, which ends
@@ -336,6 +363,10 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     if (signal?.aborted) return;
     ttsTimings.push(latencyMs);
     tlog(`tts.done  #${i} ${latencyMs}ms synth+queue=${Date.now() - t0}ms`);
+    // Track what we just said so the next inbound transcript can be checked
+    // for echo. Done before emit so an immediately-arriving STT result on
+    // the next event-loop tick already sees this sentence in the buffer.
+    if (state?.recentTts) rememberTtsSentence(state.recentTts, sentence);
     emit('voice:tts:audio', { sentence, wav, latencyMs });
   };
 
@@ -421,7 +452,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       const t0 = Date.now();
       let result;
       let args = {};
-      const ctx = { sideEffects: [], state };
+      const ctx = { sideEffects: [], state, signal };
       try {
         args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
         const argSummary = Object.keys(args).length ? Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`).join(' ') : '—';

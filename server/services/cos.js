@@ -31,11 +31,12 @@ import { ensureDir, formatDuration, safeJSONParse, PATHS } from '../lib/fileUtil
 import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
+import { isRecoveryTask } from './recoveryTasks.js';
 import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '../lib/timezone.js';
 import { PORTOS_UI_URL } from '../lib/ports.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, ensureDirectories, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
 // Events and logging (canonical source: cosEvents.js)
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -649,17 +650,22 @@ export async function evaluateTasks() {
 
   // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
   const taskSchedule = await import('./taskSchedule.js');
-  const onDemandRequests = await taskSchedule.getOnDemandRequests();
+  const liveSchedule = await taskSchedule.loadSchedule();
+  const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
 
   if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {
       if (tasksToSpawn.length >= availableSlots) break;
 
-      // Unified on-demand handling (no category split)
-      const improvementEnabled = state.config.improvementEnabled ??
-        (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
+      if (!isImprovementEnabled(state)) {
+        emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
+        await taskSchedule.clearOnDemandRequest(request.id);
+        continue;
+      }
 
-      if (!improvementEnabled) {
+      // Skip if the task type was disabled or removed after queuing — parity with dequeueNextTask.
+      if (!liveSchedule.tasks[request.taskType]?.enabled) {
+        emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
         await taskSchedule.clearOnDemandRequest(request.id);
         continue;
       }
@@ -912,11 +918,7 @@ export async function evaluateTasks() {
  * @returns {Object|null} Generated task or null if nothing to do
  */
 async function generateIdleReviewTask(state) {
-  // Check if improvement tasks are enabled (unified flag, with backward compat)
-  const improvementEnabled = state.config.improvementEnabled ??
-    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-
-  if (!improvementEnabled) {
+  if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
     return null;
   }
@@ -957,15 +959,16 @@ async function generateIdleReviewTask(state) {
 async function queueEligibleImprovementTasks(state, cosTaskData) {
   const { getDueTasks, shouldRunTask, getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
-  // Check unified improvement flag (with backward compat)
-  const improvementEnabled = state.config.improvementEnabled ??
-    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-  if (!improvementEnabled) return;
+  if (!isImprovementEnabled(state)) return;
 
   // Get existing pending/in_progress system tasks to avoid duplicates
   // Also skip task types where a user-terminated blocked task exists (user intentionally killed it)
   const existingTasks = cosTaskData.tasks || [];
   const existingTaskTypes = new Set();
+  // Apps that already have *any* pending/in_progress improvement task. We cap each
+  // app at one queued improvement at a time to avoid a fan-out where multiple
+  // improvement types pile up faster than the per-app cooldown can drain them.
+  const appsWithPendingImprovement = new Set();
 
   for (const task of existingTasks) {
     const isActive = task.status === 'pending' || task.status === 'in_progress';
@@ -979,6 +982,9 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
         existingTaskTypes.add(appId ? `app:${appId}:${analysisType}` : analysisType);
       }
     }
+    if (isActive && task.metadata?.app && !isRecoveryTask(task)) {
+      appsWithPendingImprovement.add(task.metadata.app);
+    }
   }
 
   let queued = 0;
@@ -986,6 +992,14 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
   // Queue eligible improvement tasks for all managed apps (including PortOS)
   const apps = await getActiveApps().catch(() => []);
   for (const app of apps) {
+    // One pending improvement per app at a time — sibling types must wait
+    // until the current task drains, otherwise they queue faster than they
+    // can run (per-project concurrency limit + cooldown after each completion).
+    if (appsWithPendingImprovement.has(app.id)) {
+      emitLog('debug', `App ${app.name} already has a pending improvement task — skipping queue`);
+      continue;
+    }
+
     // Check if app is on cooldown
     const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
     if (onCooldown) continue;
@@ -1019,6 +1033,7 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
     emitLog('info', `Queued improvement task: ${nextType} for ${app.name}`, { taskId: newTask.id, appId: app.id });
     existingTaskTypes.add(taskKey);
+    appsWithPendingImprovement.add(app.id);
     queued++;
 
     // Only queue one task per app per evaluation to avoid flooding
@@ -1051,7 +1066,8 @@ function getTaskDescription(taskType, appName) {
       'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
       'release-check': `Verify release readiness for ${appName}`,
       'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
-      'jira-status-report': `Generate JIRA weekly status report for ${appName}`
+      'jira-status-report': `Generate JIRA weekly status report for ${appName}`,
+      'do-replan': `Replan: audit PLAN.md for ${appName}, archive done items, prune stale work (worktree+PR)`
     };
     return descriptions[taskType] ?? null;
   }
@@ -1071,7 +1087,8 @@ function getTaskDescription(taskType, appName) {
     'typing': 'Add or fix TypeScript/JSDoc type annotations',
     'release-check': 'Verify release readiness (changelog, version, tests)',
     'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
-    'jira-status-report': 'Generate JIRA weekly status report'
+    'jira-status-report': 'Generate JIRA weekly status report',
+    'do-replan': 'Replan: audit PLAN.md, archive done items, prune stale work (worktree+PR)'
   };
   return descriptions[taskType] ?? null;
 }
@@ -2142,6 +2159,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     if (taskData.model) metadata.model = taskData.model;
     if (taskData.provider) metadata.provider = taskData.provider;
     if (taskData.app) metadata.app = taskData.app;
+    if (taskData.isRecovery === true) metadata.isRecovery = true;
     if (taskData.createJiraTicket) metadata.createJiraTicket = true;
     // Boolean flags: persist both true and false so users can explicitly override defaults.
     // The string round-trip ('false' from TASKS.md) is handled by isTruthyMeta/isFalsyMeta.
@@ -2281,10 +2299,8 @@ async function dequeueNextTask() {
   for (const request of onDemandRequests) {
     if (spawned >= availableSlots) break;
 
-    // Unified on-demand handling (no category split)
-    const improvEnabled = state.config.improvementEnabled ??
-      (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-    if (!improvEnabled) {
+    if (!isImprovementEnabled(state)) {
+      emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;
     }

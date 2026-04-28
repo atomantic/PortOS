@@ -20,6 +20,7 @@ import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
+import { aiStatusEvents } from './aiStatusEvents.js';
 import * as shellService from './shell.js';
 import {
   validateSocketData,
@@ -544,6 +545,18 @@ export function initSocket(io) {
 
   // Set up image generation event forwarding
   setupMediaGenEventForwarding();
+
+  // Set up AI status event forwarding (broadcast to all clients)
+  setupAIStatusEventForwarding();
+}
+
+let aiStatusForwardingSetup = false;
+function setupAIStatusEventForwarding() {
+  if (aiStatusForwardingSetup) return;
+  aiStatusForwardingSetup = true;
+  aiStatusEvents.on('status', (data) => {
+    if (ioInstance) ioInstance.emit('ai:status', data);
+  });
 }
 
 function cleanupStream(socketId) {

@@ -20,11 +20,12 @@ import { isInternalTaskId } from '../lib/taskParser.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { getAppById } from './apps.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
-import { determineLane, acquire, release, hasCapacity, waitForLane } from './executionLanes.js';
+import { determineLane, acquire, release } from './executionLanes.js';
 import { detectConflicts } from './taskConflict.js';
 import { createWorktree, removeWorktree } from './worktreeManager.js';
 import * as jiraService from './jira.js';
 import * as git from './git.js';
+import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
@@ -134,24 +135,14 @@ export async function spawnAgentForTask(task) {
 
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
-  // Determine execution lane and acquire slot
+  // Tag agent with execution lane (priority/observability only — concurrency
+  // is gated upstream by maxConcurrentAgents + maxConcurrentAgentsPerProject).
   const laneName = determineLane(task);
-  if (!hasCapacity(laneName)) {
-    // Wait for lane availability (max 30 seconds)
-    const laneResult = await waitForLane(laneName, agentId, { timeoutMs: 30000, metadata: { taskId: task.id } });
-    if (!laneResult.success) {
-      spawningTasks.delete(task.id);
-      emitLog('warn', `Lane ${laneName} unavailable for task ${task.id}, deferring`, { taskId: task.id, lane: laneName });
-      cosEvents.emit('agent:deferred', { taskId: task.id, reason: 'lane-capacity', lane: laneName });
-      return null;
-    }
-  } else {
-    const laneResult = acquire(laneName, agentId, { taskId: task.id });
-    if (!laneResult.success) {
-      spawningTasks.delete(task.id);
-      emitLog('warn', `Failed to acquire lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
-      return null;
-    }
+  const laneResult = acquire(laneName, agentId, { taskId: task.id });
+  if (!laneResult.success) {
+    spawningTasks.delete(task.id);
+    emitLog('warn', `Failed to tag lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
+    return null;
   }
 
   // Create tool execution for state tracking
@@ -1181,12 +1172,19 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
           return warnings;
         }
 
-        emitLog('error', `🌳 PR creation failed for ${worktreeBranch}: ${reason}`, { agentId, branchName: worktreeBranch });
+        const cliName = prResult?.cli || 'gh';
+        const authHint = prResult?.account
+          ? ` (${cliName} authed as ${prResult.account} for ${prResult.owner})`
+          : prResult?.owner
+            ? ` (${cliName} on ${prResult.host || prResult.owner} — no account auto-pinned)`
+            : '';
+        emitLog('error', `🌳 PR creation failed for ${worktreeBranch}${authHint}: ${reason}`, { agentId, branchName: worktreeBranch, cli: prResult?.cli, account: prResult?.account, owner: prResult?.owner, host: prResult?.host });
         warnings.push(`PR creation failed for branch ${worktreeBranch}: ${reason}. Worktree preserved for manual PR creation.`);
         return warnings;
       }
 
-      emitLog('success', `🌳 Created PR: ${prResult.url}`, { agentId, branchName: worktreeBranch });
+      const cliName = prResult.cli || 'gh';
+      emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
 
       const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
         emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
@@ -1237,9 +1235,10 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
 
   if (isMergeFail) {
     addTask({
-      description: `[Recovery] Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
+      description: `${RECOVERY_TASK_PREFIX} Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
+      isRecovery: true,
       context: `An agent failed to auto-merge branch "${staleBranch}" back to main in ${sourceWorkspace}. `
         + `Resolve this by: (1) checking if the branch's changes are already on main (superseded by other commits), `
         + `and if so, delete the branch with "git branch -D ${staleBranch}"; `
@@ -1252,20 +1251,33 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
     });
     emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
   } else {
-    // PR creation failed — spawn an agent to investigate and retry
+    // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
+    // glab based on the repo's forge so the recovery agent gets commands that
+    // actually work against this remote.
+    const { cli } = await git.resolveForgeForRepo(sourceWorkspace).catch(() => ({ cli: 'gh' }));
+    const isGitLab = cli === 'glab';
+    const reqWord = isGitLab ? 'MR' : 'PR';
+    const listCmd = isGitLab
+      ? `glab mr list --source-branch ${staleBranch}`
+      : `gh pr list --head ${staleBranch}`;
+    const createCmd = isGitLab
+      ? `glab mr create --source-branch ${staleBranch} --target-branch main --title '...' --description '...'`
+      : `gh pr create --head ${staleBranch} --base main --title '...' --body '...'`;
+
     addTask({
-      description: `[Recovery] Investigate and retry failed PR for branch ${staleBranch} in ${appName}`,
+      description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
-      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated PR creation failed. `
-        + `Investigate by: (1) checking if a PR already exists for this branch: "gh pr list --head ${staleBranch}"; `
-        + `(2) if no PR exists, review the branch changes and create one: "gh pr create --head ${staleBranch} --base main --title '...' --body '...'"; `
+      isRecovery: true,
+      context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated ${reqWord} creation failed. `
+        + `Investigate by: (1) checking if a ${reqWord} already exists for this branch: "${listCmd}"; `
+        + `(2) if no ${reqWord} exists, review the branch changes and create one: "${createCmd}"; `
         + `(3) if the branch is stale or changes are already on main, delete the remote branch: "git push origin --delete ${staleBranch}". `
         + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
       useWorktree: false,
     }, 'user').catch(err => {
-      emitLog('warn', `Failed to create PR recovery task: ${err.message}`, { agentId, staleBranch });
+      emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
     });
-    emitLog('info', `🔧 Auto-created PR recovery task for branch ${staleBranch}`, { agentId, appName });
+    emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
   }
 }

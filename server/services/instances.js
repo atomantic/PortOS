@@ -167,6 +167,11 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host })
       id: crypto.randomUUID(),
       address,
       host: normalizedHost || null,
+      // Set to true once the user explicitly chooses a host (set/clear via UI).
+      // Once true, handleAnnounce never auto-overwrites — it's the only way to
+      // honor "the user explicitly cleared this; stay on IP" against a peer
+      // that keeps announcing its DNS name.
+      hostManual: !!normalizedHost,
       port,
       name: validName(name, normalizedHost || address),
       instanceId: null,
@@ -217,6 +222,10 @@ export async function updatePeer(id, updates) {
       const normalized = validHost(updates.host);
       if (normalized !== undefined && normalized !== peer.host) {
         peer.host = normalized; // null clears, string sets
+        // Latch manual mode so handleAnnounce stops auto-learning (esp.
+        // important for clears — without this the next inbound announce
+        // re-adopts the DNS name and the user can't revert to IP).
+        peer.hostManual = true;
         hostChanged = true;
         console.log(`🌐 Peer host ${peer.host ? `set to ${peer.host}` : 'cleared'}: ${peer.name}`);
       }
@@ -390,9 +399,11 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       if (sanitized && isIPAddress(existing.name)) {
         existing.name = sanitized;
       }
-      // Adopt host from inbound announce only when we don't already have one —
-      // never overwrite a user-set value, never blank one on a noisy announce.
-      if (normalizedHost && !existing.host) {
+      // Adopt host from inbound announce only when we don't already have one
+      // AND the user hasn't manually intervened. The hostManual flag covers
+      // the "user explicitly cleared this — stay on IP" case that the
+      // existing.host check alone can't distinguish from "never set".
+      if (normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
         console.log(`🌐 Peer host learned via announce: ${existing.name} → ${normalizedHost}`);
       }
@@ -409,6 +420,9 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       id: crypto.randomUUID(),
       address,
       host: normalizedHost || null,
+      // The host came from the peer's announce, not from a user — leave
+      // hostManual false so subsequent updates from the peer can still refine.
+      hostManual: false,
       port,
       name: validName(name, normalizedHost || address),
       instanceId,

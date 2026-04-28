@@ -9,8 +9,10 @@
  */
 
 import { checkRateLimit, recordAction, syncFromExternal } from './rateLimits.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 const API_BASE = 'https://moltworld.io';
+const MOLTWORLD_TIMEOUT_MS = 10000;
 
 /**
  * Infer the rate-limited action type from a Moltworld API endpoint
@@ -38,9 +40,7 @@ async function request(endpoint, options = {}) {
 
   console.log(`🌍 Moltworld API: ${options.method || 'GET'} ${endpoint}`);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-  const fetchResult = await fetch(url, { ...config, signal: controller.signal }).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e })).finally(() => clearTimeout(timeoutId));
+  const fetchResult = await fetchWithTimeout(url, config, MOLTWORLD_TIMEOUT_MS).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e }));
 
   if (!fetchResult.ok) {
     console.error(`❌ Moltworld API unreachable: ${fetchResult.error.message}`);

@@ -4,6 +4,28 @@ Archive of completed work. For active roadmap, see [PLAN.md](./PLAN.md). For pro
 
 ---
 
+## 2026-04-28
+
+- **Better Audit follow-up — bugs/perf/test quality** — Added `AbortSignal.timeout` to remaining fetch sites (`aiDetect.js`, `meatspacePostLlm.js`, `memoryEmbeddings.js` ×3, `telegramBridge.js`); fixed `httpClient.js` abort-listener leak via cleanup + `{ once: true }`; fixed `MessageDetail.jsx` iframe `load` listener leak via `{ once: true }`; parallelized `feeds.js` refresh with `Promise.allSettled` over `fetchAndParseFeed`; replaced vacuous `usage.test.js` typeof checks with real streak-calculation assertions; `cosRunnerClient.test.js` now uses `.rejects.toThrow` for capacity/spawn/kill/terminate paths; `subAgentSpawner.test.js` imports the real `selectModelForTask` instead of re-implementing it; added `loops.test.js`.
+- **Ask Yourself — slice (b)** — Voice (`ui_ask`) + per-turn promotions ("Save as Brain note" / "Create CoS task" / "Attach to Goal…") with auto-pin to survive 30-day expiry; palette whitelist for `⌘K` → `Ask Yourself`; ask-intent classifier gates the voice tool to RAG-shaped phrasing only; barge-in cancels upstream `askService` stream via `AbortSignal`. 17 new tests; suite 2785/2785 green.
+
+## 2026-04-24
+
+- **Global Command Palette (`⌘K` / `Ctrl+K`)** — `client/src/components/CmdKSearch.jsx` + `server/lib/navManifest.js` (single source of truth) + `server/routes/palette.js` (manifest + action dispatch). Shared backbone with voice agent's `ui_navigate` so navigation, palette, and voice all resolve through one map. See CLAUDE.md "Command Palette & Voice Nav" for the entry shape every new page must register.
+- **Customizable Dashboard with Saved Layouts** — Widget registry (`client/src/components/dashboard/widgetRegistry.jsx`, 15 widgets, 3 data-gated) + named layouts persisted to `data/dashboard-layouts.json` via `GET/PUT/DELETE /api/dashboard/layouts`. Built-in layouts: `default` / `focus` / `morning-review` / `ops`. Keyboard-accessible editor with reorder + add/delete + rename + save-as-new. Palette integration: `⌘K` → any layout name switches instantly. See CLAUDE.md "Dashboard Widgets & Layouts" for the widget contract.
+- **Ask Yourself — slice (a)** — `/ask` and `/ask/:conversationId` live. `server/services/askService.js` orchestrates parallel retrieval across memory (hybrid) + brain notes + autobiography + goals + calendar with kind-weighted reranking. Three modes (`ask` / `advise` / `draft`). API providers stream SSE; CLI providers single-shot. Conversations persist to `data/ask-conversations/` with 30-day auto-expiry. 40 new tests; suite stayed green.
+- **God file decomposition** — `routes/cos.js` (28-line index + 6 modular route files), `routes/scaffold.js`, `client/api.js` (split into 19 focused api*.js modules), `services/digital-twin.js` (split into 10 focused modules), `services/subAgentSpawner.js` (slimmed from monolithic to 192 lines, logic extracted across helper modules).
+
+## 2026-04-21
+
+- **Better Audit remediation — security & overrides** — Added root-package `overrides` for `path-to-regexp` (^8.4.2), `lodash` (^4.18.1), `basic-ftp` (^5.3.0), `follow-redirects` (^1.16.0), `brace-expansion` (^5.0.5), `socket.io-parser` (^4.2.6); upgraded `react-router-dom` to 7.5.2.
+- **Better Audit remediation — code/DRY/bugs** — `pgQuoteIdentifier` helper in `routes/database.js`; `escapeJql` in `services/jira.js`; `atomicWrite` extracted to `lib/fileUtils.js`; `dataManager.js` uses `PATHS.data`; `brain.js` setTimeout cleared on close/error; `telegramClient.js` polling retry with 5s backoff; `clinvar.js` 5-minute AbortSignal; `loops.js` floating promise caught + logged; `systemHealth.js` wrapped in `asyncHandler`; SIGTERM/SIGINT graceful shutdown in `server/index.js`; `agents.test.js` and `socket.test.js` rewritten against real exports; autofixer log statements gained emoji prefixes.
+- **Test coverage** — `cosRunnerClient.test.js` (37 tests, 497 lines), `agentActionExecutor.test.js` (27 tests), CoS routes (170 tests across 6 test files, 83-100% route coverage).
+
+## 2026-03-31
+
+- **Depfree audit (heavy mode)** — Removed 13 of 15 targeted packages (`uuid`, `cors`, `axios`, `multer`, `unzipper`, `node-telegram-bot-api`, `supertest`, `geist`, `globals`, `fflate`, `react-markdown`, `react-diff-viewer-continued`, `react-hot-toast`). ~1,100 lines of owned replacement code across 9 new files (`server/lib/uuid.js`, `httpClient.js`, `multipart.js`, `zipStream.js`, `telegramClient.js`, `testHelper.js`; `client/src/components/ui/Toast.jsx`; etc.). `@dnd-kit/*` and `recharts` deferred — replacement effort exceeds 300-line heavy-mode ceiling.
+
 ## 2026-03-20
 
 - **Keyboard Shortcuts Help Modal** — Press `?` to show all keyboard shortcuts; global overlay with section grouping, accessible dialog

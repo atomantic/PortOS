@@ -6,6 +6,7 @@
  */
 
 import { cosEvents } from './cosEvents.js'
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 
 const AVAILABILITY_CACHE_TTL_MS = 30_000
 
@@ -38,17 +39,15 @@ const status = {
  */
 async function lmStudioRequest(endpoint, options = {}) {
   const url = `${config.baseUrl}${endpoint}`
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout || config.timeout)
+  const { timeout, headers, ...rest } = options
 
-  const response = await fetch(url, {
-    ...options,
-    signal: controller.signal,
+  const response = await fetchWithTimeout(url, {
+    ...rest,
     headers: {
       'Content-Type': 'application/json',
-      ...options.headers
+      ...headers
     }
-  }).finally(() => clearTimeout(timeoutId))
+  }, timeout || config.timeout)
 
   if (!response.ok) {
     throw new Error(`LM Studio API error: ${response.status} ${response.statusText}`)

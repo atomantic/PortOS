@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import MarkdownOutput from '../../cos/MarkdownOutput';
 
 const SECTION_ICONS = {
   movies: Film,
@@ -45,6 +46,9 @@ const SECTION_COLORS = {
   fashion: 'pink',
   digital: 'cyan'
 };
+
+const NO_API_PROVIDER_TOAST = 'No API provider configured — open AI Providers to add one (e.g. LM Studio, OpenAI).';
+const NO_API_PROVIDER_TITLE = 'Configure an AI provider to enable';
 
 export default function TasteTab({ onRefresh }) {
   const [profile, setProfile] = useState(null);
@@ -85,10 +89,13 @@ export default function TasteTab({ onRefresh }) {
 
   const loadProviders = useCallback(async () => {
     const data = await api.getProviders().catch(() => ({ providers: [] }));
-    const enabled = (data.providers || []).filter(p => p.enabled);
-    setProviders(enabled);
-    if (enabled.length > 0) {
-      setSelectedProvider({ providerId: enabled[0].id, model: enabled[0].defaultModel });
+    // Taste summaries / personalized questions need a chat-completions endpoint —
+    // CLI providers (Claude Code, Codex, Gemini CLI) can't run them. Filter the
+    // picker so the user can't accidentally select an incompatible default.
+    const apiProviders = (data.providers || []).filter(p => p.enabled && p.type === 'api');
+    setProviders(apiProviders);
+    if (apiProviders.length > 0) {
+      setSelectedProvider({ providerId: apiProviders[0].id, model: apiProviders[0].defaultModel });
     }
   }, []);
 
@@ -148,7 +155,7 @@ export default function TasteTab({ onRefresh }) {
 
   const handleGoDeeper = async () => {
     if (!selectedProvider) {
-      toast.error('Select a provider first');
+      toast.error(NO_API_PROVIDER_TOAST);
       return;
     }
     setLoadingPersonalized(true);
@@ -198,19 +205,19 @@ export default function TasteTab({ onRefresh }) {
 
   const handleGenerateSummary = async (sectionId) => {
     if (!selectedProvider) {
-      toast.error('Select a provider first');
+      toast.error(NO_API_PROVIDER_TOAST);
       return;
     }
     setGeneratingSummary(true);
+    // apiCore.request already shows a toast on non-OK responses, so swallow
+    // the rejection here instead of re-toasting the same error.
     const result = await api.generateTasteSummary(
       selectedProvider.providerId,
       selectedProvider.model,
       sectionId
-    ).catch(e => ({ error: e.message }));
+    ).catch(() => null);
 
-    if (result.error) {
-      toast.error(result.error);
-    } else {
+    if (result) {
       toast.success('Summary generated');
       await loadProfile();
     }
@@ -234,18 +241,16 @@ export default function TasteTab({ onRefresh }) {
 
   const handleGenerateOverallSummary = async () => {
     if (!selectedProvider) {
-      toast.error('Select a provider first');
+      toast.error(NO_API_PROVIDER_TOAST);
       return;
     }
     setGeneratingSummary(true);
     const result = await api.generateTasteSummary(
       selectedProvider.providerId,
       selectedProvider.model
-    ).catch(e => ({ error: e.message }));
+    ).catch(() => null);
 
-    if (result.error) {
-      toast.error(result.error);
-    } else {
+    if (result) {
       toast.success('Taste profile generated');
       await loadProfile();
     }
@@ -314,7 +319,7 @@ export default function TasteTab({ onRefresh }) {
                   <Sparkles size={14} />
                   AI Summary
                 </h3>
-                <div className="text-gray-300 text-sm whitespace-pre-wrap mb-3">{section.summary}</div>
+                <div className="text-sm mb-3"><MarkdownOutput content={section.summary} /></div>
 
                 {/* Behavioral Feedback */}
                 <div className="pt-3 border-t border-port-border">
@@ -396,11 +401,30 @@ export default function TasteTab({ onRefresh }) {
               <span className="text-green-400">All questions for this section are complete.</span>
             </div>
           </div>
+          {section?.summary && (
+            <div className="bg-port-card rounded-lg border border-violet-500/30 p-4 mb-4">
+              <h3 className="text-sm font-medium text-violet-400 mb-2 flex items-center gap-2">
+                <Sparkles size={14} />
+                AI Summary
+              </h3>
+              <div className="text-sm"><MarkdownOutput content={section.summary} /></div>
+            </div>
+          )}
+          {!selectedProvider && (
+            <div className="p-4 bg-port-warning/10 border border-port-warning/30 rounded-lg mb-4 text-sm text-port-warning">
+              No API-based provider configured — Go Deeper and Generate Summary need one.{' '}
+              <a href="/ai" className="underline hover:text-yellow-300">
+                Open AI Providers
+              </a>{' '}
+              and add LM Studio, OpenAI, or Anthropic to enable these.
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               onClick={handleGoDeeper}
               disabled={loadingPersonalized || !selectedProvider}
               className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 disabled:opacity-50"
+              title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
               {loadingPersonalized ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Telescope size={16} />}
               Go Deeper
@@ -414,8 +438,9 @@ export default function TasteTab({ onRefresh }) {
             </button>
             <button
               onClick={() => handleGenerateSummary(activeSection)}
-              disabled={generatingSummary}
+              disabled={generatingSummary || !selectedProvider}
               className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50"
+              title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
               {generatingSummary ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles size={16} />}
               Generate Summary
@@ -667,8 +692,8 @@ export default function TasteTab({ onRefresh }) {
                     {expandedSummary === section.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                   </button>
                   {expandedSummary === section.id && (
-                    <div className="mt-2 p-3 bg-port-bg rounded-lg text-xs text-gray-300 whitespace-pre-wrap max-h-48 overflow-auto">
-                      {section.summary}
+                    <div className="mt-2 p-3 bg-port-bg rounded-lg max-h-72 overflow-auto">
+                      <MarkdownOutput content={section.summary} />
                     </div>
                   )}
                 </div>
@@ -685,7 +710,7 @@ export default function TasteTab({ onRefresh }) {
             <Sparkles className="w-5 h-5 text-violet-400" />
             Unified Taste Profile
           </h3>
-          <div className="text-gray-300 text-sm whitespace-pre-wrap">{profile.profileSummary}</div>
+          <div className="text-sm"><MarkdownOutput content={profile.profileSummary} /></div>
         </div>
       )}
 

@@ -1,14 +1,16 @@
 // Piper TTS backend — spawn-per-request CLI: text on stdin, WAV on stdout.
 
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { randomUUID } from 'crypto';
+import { existsSync, readFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
-import { expandPath, piperVoiceTildePath, voiceHome } from './config.js';
+import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
 import { PIPER_VOICES, findPiperVoice } from './piper-voices.js';
 
 const PIPER_TIMEOUT_MS = 30_000;
 const VOICES_DIR = join(voiceHome(), 'voices');
-const PIPER_BIN = join(voiceHome(), 'piper', 'piper');
+const PIPER_BIN = join(voiceHome(), 'piper', PIPER_BIN_NAME);
 
 const voicePathFor = (id) => join(VOICES_DIR, `${id}.onnx`);
 
@@ -21,7 +23,10 @@ export const synthesizePiper = (text, cfg, signal) => {
 
   const rate = Math.max(0.25, Math.min(4, cfg.rate ?? 1.0));
   const lengthScale = String(1 / rate);
-  const args = ['--model', voicePath, '--length_scale', lengthScale, '--output_file', '-'];
+  // On Windows, piper.exe writes stdout in text mode which corrupts binary WAV
+  // (CR+LF expansion). Use a temp file and read it back instead.
+  const tmpFile = IS_WIN ? join(tmpdir(), `piper-${process.pid}-${randomUUID()}.wav`) : null;
+  const args = ['--model', voicePath, '--length_scale', lengthScale, '--output_file', tmpFile ?? '-'];
 
   // Multi-speaker voices (VCTK) need a speaker index. Prefer the per-session
   // override from config, fall back to the catalog default.
@@ -60,7 +65,12 @@ export const synthesizePiper = (text, cfg, signal) => {
       fn(arg);
     };
     const doResolve = settle(resolve);
-    const doReject = settle(reject);
+    const _reject = settle(reject);
+    // Clean up temp file on every rejection path (timeout, abort, error, non-zero exit).
+    const doReject = (err) => {
+      if (tmpFile) try { unlinkSync(tmpFile); } catch { /* best effort */ }
+      _reject(err);
+    };
 
     const killTimer = setTimeout(() => {
       killed = true;
@@ -87,7 +97,13 @@ export const synthesizePiper = (text, cfg, signal) => {
     child.on('close', (code) => {
       if (killed) return doReject(new Error('piper synthesis aborted'));
       if (code !== 0) return doReject(new Error(`piper exited ${code}: ${errBuf.slice(0, 400)}`));
-      doResolve({ wav: Buffer.concat(chunks), latencyMs: Date.now() - started });
+      if (tmpFile) {
+        try { doResolve({ wav: readFileSync(tmpFile), latencyMs: Date.now() - started }); }
+        catch (err) { doReject(err); }
+        finally { try { unlinkSync(tmpFile); } catch { /* already gone */ } }
+      } else {
+        doResolve({ wav: Buffer.concat(chunks), latencyMs: Date.now() - started });
+      }
     });
 
     child.stdin.end(text);

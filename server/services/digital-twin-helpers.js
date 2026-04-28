@@ -1,6 +1,9 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { existsSync } from 'fs';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+const DEFAULT_AI_TIMEOUT_MS = 300000;
 
 export const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 
@@ -51,31 +54,22 @@ export async function ensureSoulDir() {
  * Call any AI provider (API or CLI) with a prompt and return the response text.
  */
 export async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_tokens = 4000 } = {}) {
-  const timeout = provider.timeout || 300000;
+  const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
 
   if (provider.type === 'api') {
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
+    const response = await fetchWithTimeout(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers,
-      signal: controller.signal,
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
         temperature,
         max_tokens
       })
-    }).catch((err) => {
-      clearTimeout(timer);
-      return { ok: false, _fetchError: err.name === 'AbortError' ? 'AI request timed out' : err.message };
-    });
-
-    clearTimeout(timer);
+    }, timeout).catch((err) => ({ ok: false, _fetchError: err.name === 'AbortError' ? 'AI request timed out' : err.message }));
 
     if (response._fetchError) {
       return { error: response._fetchError };

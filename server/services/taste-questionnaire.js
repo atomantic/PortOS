@@ -11,12 +11,13 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { resolveAPIProvider, callProviderAISimple } from '../lib/aiProvider.js';
 import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 const TASTE_PROFILE_FILE = join(DIGITAL_TWIN_DIR, 'taste-profile.json');
+const NO_API_PROVIDER_HINT = 'No API-based AI provider is configured. Open AI Providers (e.g. LM Studio, OpenAI, Anthropic) and add one — CLI providers like Claude Code can\'t run this analysis.';
 
 function now() {
   return new Date().toISOString();
@@ -630,11 +631,8 @@ export async function generateSectionSummary(sectionId, providerId, model) {
     throw new Error(`No responses to summarize for section: ${sectionId}`);
   }
 
-  const provider = providerId
-    ? await getProviderById(providerId)
-    : await getActiveProvider();
-
-  if (!provider) throw new Error('No AI provider available');
+  const provider = await resolveAPIProvider(providerId);
+  if (!provider) throw new Error(NO_API_PROVIDER_HINT);
 
   const modelId = model || provider.defaultModel;
 
@@ -670,7 +668,12 @@ Respond with a concise profile in this exact structure:
 **In Their Words:**
 - [1-2 direct quotes that capture their taste]`;
 
-  const result = await callProviderAISimple(provider, modelId, prompt, { temperature: 0.3, max_tokens: 1000 });
+  const result = await callProviderAISimple(provider, modelId, prompt, {
+    temperature: 0.3,
+    max_tokens: 1000,
+    op: `taste-summary:${sectionId}`,
+    opLabel: `Generating ${config.label} taste summary`
+  });
 
   if (result.error) throw new Error(`AI analysis failed: ${result.error}`);
 
@@ -699,11 +702,8 @@ export async function generateOverallSummary(providerId, model) {
     throw new Error('No taste responses to summarize. Complete at least one section first.');
   }
 
-  const provider = providerId
-    ? await getProviderById(providerId)
-    : await getActiveProvider();
-
-  if (!provider) throw new Error('No AI provider available');
+  const provider = await resolveAPIProvider(providerId);
+  if (!provider) throw new Error(NO_API_PROVIDER_HINT);
 
   const modelId = model || provider.defaultModel;
 
@@ -741,7 +741,12 @@ ${allTranscripts}
 **Summary Tags:**
 [5-8 descriptive tags like: "brutalist minimalist", "atmospheric storyteller", "texture-obsessed", etc.]`;
 
-  const result = await callProviderAISimple(provider, modelId, prompt, { temperature: 0.3, max_tokens: 1500 });
+  const result = await callProviderAISimple(provider, modelId, prompt, {
+    temperature: 0.3,
+    max_tokens: 1500,
+    op: 'taste-summary:overall',
+    opLabel: 'Generating unified taste profile'
+  });
 
   if (result.error) throw new Error(`AI analysis failed: ${result.error}`);
 
@@ -876,10 +881,7 @@ export async function generatePersonalizedTasteQuestion(sectionId, providerId, m
   const { context, sourcesUsed } = await aggregateIdentityContext(sectionId);
   if (!context) return null;
 
-  const provider = providerId
-    ? await getProviderById(providerId)
-    : await getActiveProvider();
-
+  const provider = await resolveAPIProvider(providerId);
   if (!provider) return null;
 
   const modelId = model || provider.defaultModel;
@@ -908,7 +910,12 @@ ${transcript || '(No responses yet for this section)'}
 ## Instructions
 Generate exactly ONE question. Do not include any preamble, numbering, or explanation. Just the question text itself. Keep it under 150 words. Make it feel like a question from someone who genuinely knows and is curious about this person.`;
 
-  const result = await callProviderAISimple(provider, modelId, prompt, { temperature: 0.8, max_tokens: 200 });
+  const result = await callProviderAISimple(provider, modelId, prompt, {
+    temperature: 0.8,
+    max_tokens: 200,
+    op: `taste-deep-question:${sectionId}`,
+    opLabel: `Crafting a deeper ${config.label} question`
+  });
 
   if (result.error || !result.text?.trim()) {
     console.log(`🎨 Personalized question generation failed for ${sectionId}: ${result.error || 'empty response'}`);
@@ -943,43 +950,6 @@ function findQuestionDef(sectionId, questionId) {
     }
   }
   return null;
-}
-
-async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
-  const timeout = provider.timeout || 300000;
-
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature,
-        max_tokens
-      })
-    });
-
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      return { error: `Provider returned ${response.status}: ${errorText}` };
-    }
-
-    const data = await response.json();
-    return { text: data.choices?.[0]?.message?.content || '' };
-  }
-
-  // CLI providers not supported for summary generation — require API
-  return { error: 'Taste profile summary requires an API-based provider' };
 }
 
 async function appendToAestheticsDoc(sectionId, config, questionId, answer) {

@@ -223,6 +223,26 @@ describe('instances.js', () => {
 
       expect(peer.port).toBe(8080);
     });
+
+    it('should default hostManual to false when no host provided (allow auto-learn)', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      fetch.mockRejectedValue(new Error('not reachable'));
+
+      const peer = await addPeer({ address: '10.0.0.6' });
+
+      expect(peer.host).toBeNull();
+      expect(peer.hostManual).toBe(false);
+    });
+
+    it('should latch hostManual when host is provided at add time', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      fetch.mockRejectedValue(new Error('not reachable'));
+
+      const peer = await addPeer({ address: '10.0.0.7', host: 'machine.taile8179.ts.net' });
+
+      expect(peer.host).toBe('machine.taile8179.ts.net');
+      expect(peer.hostManual).toBe(true);
+    });
   });
 
   describe('removePeer', () => {
@@ -313,6 +333,26 @@ describe('instances.js', () => {
       const result = await updatePeer('peer-1', { host: '' });
 
       expect(result.host).toBeNull();
+    });
+
+    it('should latch hostManual when user explicitly sets host', async () => {
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, host: null, hostManual: false }];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+
+      const result = await updatePeer('peer-1', { host: 'machine.taile8179.ts.net' });
+
+      expect(result.host).toBe('machine.taile8179.ts.net');
+      expect(result.hostManual).toBe(true);
+    });
+
+    it('should latch hostManual when user explicitly clears host (the un-revert bug)', async () => {
+      const peers = [{ id: 'peer-1', name: 'host', enabled: true, host: 'machine.taile8179.ts.net', hostManual: false }];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+
+      const result = await updatePeer('peer-1', { host: '' });
+
+      expect(result.host).toBeNull();
+      expect(result.hostManual).toBe(true);
     });
 
     it('should ignore invalid host (leave unchanged)', async () => {
@@ -749,6 +789,61 @@ describe('instances.js', () => {
       });
 
       expect(result.peer.host).toBe('manual.example.ts.net');
+    });
+
+    it('should not re-adopt host on cleared peer when hostManual is true', async () => {
+      // Reproduces the original "can't undo Tailnet DNS" bug: user cleared
+      // peer.host, but the next inbound announce silently re-adopted the DNS
+      // name because the only safeguard was "is existing.host empty?".
+      const existing = {
+        id: 'p1',
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: null,
+        hostManual: true,
+        status: 'offline',
+        directions: ['outbound']
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
+
+      const result = await handleAnnounce({
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'null.taile8179.ts.net'
+      });
+
+      expect(result.peer.host).toBeNull();
+      expect(result.peer.hostManual).toBe(true);
+    });
+
+    it('should still learn host on a fresh peer when hostManual is unset', async () => {
+      // Auto-learn must remain the default for never-touched peers — only
+      // explicit user intervention should latch hostManual.
+      const existing = {
+        id: 'p1',
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: null,
+        status: 'offline',
+        directions: ['outbound']
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
+
+      const result = await handleAnnounce({
+        address: '100.111.11.146',
+        port: 5555,
+        instanceId: 'remote-instance',
+        name: 'null',
+        host: 'null.taile8179.ts.net'
+      });
+
+      expect(result.peer.host).toBe('null.taile8179.ts.net');
     });
 
     it('should drop invalid host strings via validHost', async () => {

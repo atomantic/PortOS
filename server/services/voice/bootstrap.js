@@ -8,23 +8,29 @@ import { basename, join } from 'path';
 import { createServer } from 'net';
 import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
-import { expandPath, piperVoiceTildePath } from './config.js';
+import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
 import { isToolCapable, isReasoningModel } from './llm.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 export const pexec = promisify(execFile);
 
 export const WHISPER_APP = 'portos-whisper';
 
 export const which = async (bin) => {
-  const res = await pexec('which', [bin]).catch(() => null);
-  return res?.stdout.trim() || null;
+  const res = await pexec(IS_WIN ? 'where' : 'which', [bin]).catch(() => null);
+  return res?.stdout?.split(/\r?\n/)[0]?.trim() || null;
 };
 
 export const verifyBinaries = async (cfg) => {
-  const [whisper, piper] = await Promise.all([which('whisper-server'), which('piper')]);
-  // Only require piper when active engine actually uses it.
+  const piperLocal = join(voiceHome(), 'piper', PIPER_BIN_NAME);
+  const piperResolved = existsSync(piperLocal) ? piperLocal : null;
+  // Only search PATH when piper isn't locally installed — spawning `where`/`which` is expensive.
+  const [whisper, piperOnPath] = await Promise.all([
+    which('whisper-server'),
+    piperResolved ? Promise.resolve(null) : which('piper'),
+  ]);
   const piperRequired = cfg?.tts?.engine === 'piper';
-  return { whisper, piper, piperRequired };
+  return { whisper, piper: piperResolved ?? piperOnPath, piperRequired };
 };
 
 export const verifyModels = (cfg) => {
@@ -49,7 +55,6 @@ export const verifyModels = (cfg) => {
 const parseVoiceName = (voicePath) => basename(voicePath).replace(/\.onnx$/, '');
 
 export const runSetupScript = async (cfg) => {
-  const scriptPath = join(PATHS.root, 'scripts', 'setup-voice.sh');
   const modelName = basename(expandPath(cfg.stt.modelPath));
   const voiceName = cfg.tts.engine === 'piper' ? parseVoiceName(expandPath(cfg.tts.piper.voicePath)) : '';
   const sttEngine = cfg.stt?.engine || 'whisper';
@@ -57,17 +62,27 @@ export const runSetupScript = async (cfg) => {
     ...process.env,
     MODEL_NAME: modelName,
     VOICE_NAME: voiceName,
-    // Pass STT_ENGINE so the script can skip whisper install + model download
-    // when the user picked Web Speech (browser-native) — they'd otherwise pay
-    // the Homebrew + GGUF model cost for a feature they don't use.
     STT_ENGINE: sttEngine,
     TTS_ENGINE: cfg.tts.engine || 'kokoro',
     INSTALL_COREML: cfg.stt.coreml ? '1' : '0',
   };
-  console.log(`🔧 voice: setup-voice.sh (stt=${sttEngine}/${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
+  console.log(`🔧 voice: setup-voice (stt=${sttEngine}/${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
   // 10-minute cap — large models + slow network can legitimately take several
   // minutes, but a hung curl must not pin the HTTP request that triggered us.
-  const { stdout, stderr } = await pexec('bash', [scriptPath], {
+  // On Windows prefer pwsh (PowerShell 7+) but fall back to the always-present
+  // Windows PowerShell when pwsh isn't installed.
+  let cmd;
+  let args;
+  if (IS_WIN) {
+    const psBin = (await which('pwsh')) ? 'pwsh' : 'powershell';
+    cmd = psBin;
+    args = ['-ExecutionPolicy', 'Bypass', '-File', 'scripts\\setup-voice.ps1'];
+  } else {
+    cmd = 'bash';
+    args = ['scripts/setup-voice.sh'];
+  }
+  const { stdout, stderr } = await pexec(cmd, args, {
+    cwd: PATHS.root,
     env,
     maxBuffer: 64 * 1024 * 1024,
     timeout: 10 * 60 * 1000,
@@ -130,12 +145,9 @@ const waitForWhisper = async (host, port, timeoutMs = 8000) => {
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now();
     const probeTimeout = Math.max(1, Math.min(1000, remaining));
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), probeTimeout);
-    const ok = await fetch(url, { method: 'GET', signal: ctrl.signal })
+    const ok = await fetchWithTimeout(url, { method: 'GET' }, probeTimeout)
       .then(() => true)
-      .catch(() => false)
-      .finally(() => clearTimeout(t));
+      .catch(() => false);
     if (ok) return true;
     const sleep = Math.min(250, Math.max(0, deadline - Date.now()));
     if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));

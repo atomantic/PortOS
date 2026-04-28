@@ -116,8 +116,8 @@ function BackupsSection({ backups, loading, onDelete }) {
         <h2 className="text-sm font-semibold text-white">Backup Archives</h2>
         <span className="text-xs text-gray-500">{backups.length} archives</span>
       </div>
-      <div className="border border-port-border rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
+      <div className="border border-port-border rounded-lg overflow-hidden overflow-x-auto">
+        <table className="w-full text-xs min-w-[480px]">
           <thead>
             <tr className="text-gray-500 border-b border-port-border/30 bg-port-card/30">
               <th className="text-left p-2 pl-3 font-medium">Archive</th>

@@ -112,7 +112,8 @@ function createStreamJsonParser() {
   let currentTextSection = '';
   const activeTools = new Map();
 
-  // Flush accumulated text into a section boundary (tool call start, result event, or stream end)
+  // Commit accumulated text as a section (called at result events and stream end).
+  // The committed section represents an agent turn's final wrap-up.
   const commitSection = () => {
     const section = currentTextSection.trim();
     if (section) {
@@ -120,6 +121,11 @@ function createStreamJsonParser() {
       currentTextSection = '';
     }
   };
+
+  // At a tool-call boundary the accumulated text is interim narration ("Now let me…")
+  // that gets superseded by whatever the agent says after the tool returns. Discard it
+  // so only the final post-last-tool wrap-up survives into textSections.
+  const discardSection = () => { currentTextSection = ''; };
 
   const processChunk = (rawData) => {
     const lines = [];
@@ -161,7 +167,7 @@ function createStreamJsonParser() {
           const idx = event.index;
           activeTools.set(idx, { name: toolName, inputJson: '' });
           lines.push(`🔧 Using ${toolName}...`);
-          commitSection();
+          discardSection();
         }
         // Emit detailed summary when tool input is complete
         if (event?.type === 'content_block_stop') {

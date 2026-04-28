@@ -29,6 +29,25 @@ vi.mock('../pm2.js', () => ({
 vi.mock('../feeds.js', () => ({
   getItems: vi.fn(async () => []),
   getFeeds: vi.fn(async () => []),
+  markItemRead: vi.fn(async () => ({ updated: true })),
+  markAllRead: vi.fn(async () => ({ marked: 0 })),
+}));
+// askService.runAsk is an async generator. Default mock yields a small
+// synthetic stream so ui_ask tests don't need to spin up real providers.
+vi.mock('../askService.js', () => ({
+  VALID_MODES: new Set(['ask', 'advise', 'draft']),
+  runAsk: vi.fn(async function* () {
+    yield { type: 'sources', sources: [{ kind: 'memory', title: 'A note' }] };
+    yield { type: 'delta', text: 'Hello ' };
+    yield { type: 'delta', text: 'world.' };
+    yield {
+      type: 'done',
+      answer: 'Hello world.',
+      sources: [{ kind: 'memory', title: 'A note' }],
+      providerId: 'p1',
+      model: 'm1',
+    };
+  }),
 }));
 
 const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
@@ -197,5 +216,208 @@ describe('classifyIntent — brain regex expansions', () => {
   });
   it('does not match plain UI turns', () => {
     expect(classifyIntent('click the save button').has('brain')).toBe(false);
+  });
+});
+
+describe('classifyIntent — feeds regex covers mark-read phrasings', () => {
+  it('matches "what\'s in my feeds"', () => {
+    expect(classifyIntent("what's in my feeds today").has('feeds')).toBe(true);
+  });
+  it('matches "mark that one read"', () => {
+    expect(classifyIntent('mark that one read').has('feeds')).toBe(true);
+  });
+  it('matches "mark them all as read"', () => {
+    expect(classifyIntent('mark them all as read').has('feeds')).toBe(true);
+  });
+  it('does NOT match "read my daily log" (read alone is too broad)', () => {
+    expect(classifyIntent('read my daily log').has('feeds')).toBe(false);
+  });
+});
+
+describe('feeds_mark_read', () => {
+  it('returns ok:false when neither query nor all is provided', async () => {
+    const r = await dispatchTool('feeds_mark_read', {});
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/which item|mark all/i);
+  });
+
+  it('marks all unread when all=true', async () => {
+    const feeds = await import('../feeds.js');
+    feeds.markAllRead.mockResolvedValueOnce({ marked: 7 });
+    const r = await dispatchTool('feeds_mark_read', { all: true });
+    expect(r.ok).toBe(true);
+    expect(r.marked).toBe(7);
+    expect(r.summary).toMatch(/Marked 7 items? as read/);
+    expect(feeds.markAllRead).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('reports nothing-unread when markAll returns 0', async () => {
+    const feeds = await import('../feeds.js');
+    feeds.markAllRead.mockResolvedValueOnce({ marked: 0 });
+    const r = await dispatchTool('feeds_mark_read', { all: true });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toMatch(/Nothing unread/);
+  });
+
+  it('scopes all=true to a feed when feedQuery matches', async () => {
+    const feeds = await import('../feeds.js');
+    feeds.getFeeds.mockResolvedValueOnce([
+      { id: 'f1', title: 'Hacker News' },
+      { id: 'f2', title: 'Daring Fireball' },
+    ]);
+    feeds.markAllRead.mockResolvedValueOnce({ marked: 3 });
+    const r = await dispatchTool('feeds_mark_read', { all: true, feedQuery: 'hacker' });
+    expect(r.ok).toBe(true);
+    expect(r.marked).toBe(3);
+    expect(feeds.markAllRead).toHaveBeenLastCalledWith('f1');
+    expect(r.summary).toMatch(/from Hacker News/);
+  });
+
+  it('returns ok:false when feedQuery does not match any feed', async () => {
+    const feeds = await import('../feeds.js');
+    feeds.getFeeds.mockResolvedValueOnce([{ id: 'f1', title: 'Hacker News' }]);
+    const r = await dispatchTool('feeds_mark_read', { all: true, feedQuery: 'nothing-like-that' });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/No feed matched/);
+  });
+
+  it('fuzzy-matches an unread item by title substring and marks it read', async () => {
+    const feeds = await import('../feeds.js');
+    feeds.getItems.mockResolvedValueOnce([
+      { id: 'i1', title: 'Why React is fast', read: false },
+      { id: 'i2', title: 'Tailwind v5 ships', read: false },
+    ]);
+    const r = await dispatchTool('feeds_mark_read', { query: 'tailwind' });
+    expect(r.ok).toBe(true);
+    expect(r.title).toBe('Tailwind v5 ships');
+    expect(feeds.markItemRead).toHaveBeenLastCalledWith('i2');
+  });
+
+  it('returns ok:false when no unread item matches query', async () => {
+    const feeds = await import('../feeds.js');
+    feeds.getItems.mockResolvedValueOnce([{ id: 'i1', title: 'Something else', read: false }]);
+    const r = await dispatchTool('feeds_mark_read', { query: 'nothing-like-that' });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/No unread item matched/);
+  });
+
+  it('rejects whitespace-only query without all', async () => {
+    const r = await dispatchTool('feeds_mark_read', { query: '   ' });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('ui_ask', () => {
+  it('rejects missing question', async () => {
+    await expect(dispatchTool('ui_ask', {})).rejects.toThrow(/question is required/);
+  });
+
+  it('rejects whitespace-only question', async () => {
+    await expect(dispatchTool('ui_ask', { question: '   ' })).rejects.toThrow(/question is required/);
+  });
+
+  it('streams runAsk events into a content + sources result', async () => {
+    const r = await dispatchTool('ui_ask', { question: 'what did I decide about exercise?' });
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe('Hello world.');
+    expect(r.sourceCount).toBe(1);
+    expect(r.sources[0]).toEqual({ kind: 'memory', title: 'A note' });
+    expect(r.providerId).toBe('p1');
+    expect(r.model).toBe('m1');
+    expect(r.summary).toMatch(/Answered "what did I decide about exercise/);
+  });
+
+  it('passes mode + signal through to runAsk', async () => {
+    const askService = await import('../askService.js');
+    const ctrl = new AbortController();
+    await dispatchTool('ui_ask', { question: 'draft a status update', mode: 'draft' }, { signal: ctrl.signal });
+    expect(askService.runAsk).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        question: 'draft a status update',
+        mode: 'draft',
+        signal: ctrl.signal,
+      }),
+    );
+  });
+
+  it('falls back to "ask" mode when given an invalid mode', async () => {
+    const askService = await import('../askService.js');
+    await dispatchTool('ui_ask', { question: 'hello', mode: 'rant' });
+    expect(askService.runAsk).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mode: 'ask' }),
+    );
+  });
+
+  it('returns ok:false when runAsk yields an error event', async () => {
+    const askService = await import('../askService.js');
+    askService.runAsk.mockImplementationOnce(async function* () {
+      yield { type: 'error', error: 'No AI provider available' };
+    });
+    const r = await dispatchTool('ui_ask', { question: 'hello' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('No AI provider available');
+    expect(r.summary).toMatch(/No AI provider available/);
+  });
+
+  it('returns ok:false when the stream produces no answer text', async () => {
+    const askService = await import('../askService.js');
+    askService.runAsk.mockImplementationOnce(async function* () {
+      yield { type: 'sources', sources: [] };
+      yield { type: 'done', answer: '', sources: [], providerId: 'p1', model: 'm1' };
+    });
+    const r = await dispatchTool('ui_ask', { question: 'silent' });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/empty/i);
+  });
+
+  it('returns ok:false on barge-in abort even with partial deltas', async () => {
+    const askService = await import('../askService.js');
+    askService.runAsk.mockImplementationOnce(async function* () {
+      yield { type: 'delta', text: 'partial answer' };
+      // runAsk exits early on abort without emitting `done`
+    });
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const r = await dispatchTool('ui_ask', { question: 'cancel mid-stream' }, { signal: ctrl.signal });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('aborted');
+    expect(r.summary).toMatch(/cancelled/i);
+  });
+});
+
+describe('classifyIntent — ask group', () => {
+  it('matches "advise me" phrasings', () => {
+    expect(classifyIntent('advise me on the next step').has('ask')).toBe(true);
+  });
+  it('matches "what did I decide" phrasings', () => {
+    expect(classifyIntent('what did I decide about my exercise routine').has('ask')).toBe(true);
+  });
+  it('matches "draft a Slack message"', () => {
+    expect(classifyIntent('draft a slack message to my team as me').has('ask')).toBe(true);
+  });
+  it('does NOT match plain UI turns', () => {
+    expect(classifyIntent('click the save button').has('ask')).toBe(false);
+  });
+  it('does NOT match plain capture turns', () => {
+    expect(classifyIntent('remember to buy milk').has('ask')).toBe(false);
+  });
+});
+
+describe('getToolSpecsForIntent — ui_ask gating', () => {
+  const names = (specs) => specs.map((s) => s.function.name);
+
+  it('exposes ui_ask on RAG-style turns', () => {
+    const { specs } = getToolSpecsForIntent('what did I decide about my exercise routine?');
+    expect(names(specs)).toContain('ui_ask');
+  });
+
+  it('hides ui_ask on plain UI-driving turns', () => {
+    const { specs } = getToolSpecsForIntent('click the save button');
+    expect(names(specs)).not.toContain('ui_ask');
+  });
+
+  it('hides ui_ask on plain capture turns', () => {
+    const { specs } = getToolSpecsForIntent('remember to buy milk');
+    expect(names(specs)).not.toContain('ui_ask');
   });
 });

@@ -6,6 +6,7 @@ import { join } from 'path';
 import { getVoiceConfig, expandPath, voiceHome } from './config.js';
 import { readyState as kokoroReadyState } from './tts-kokoro.js';
 import { which } from './bootstrap.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 3000;
@@ -13,10 +14,8 @@ let cache = null;
 
 const probe = async (url) => {
   const started = Date.now();
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { method: 'GET', signal: controller.signal });
+    const res = await fetchWithTimeout(url, { method: 'GET' }, PROBE_TIMEOUT_MS);
     const latencyMs = Date.now() - started;
     if (!res.ok) return { ok: false, state: 'bad_status', status: res.status, latencyMs };
     return { ok: true, status: res.status, latencyMs };
@@ -26,8 +25,6 @@ const probe = async (url) => {
     if (name === 'AbortError') return { ok: false, state: 'timeout', latencyMs: Date.now() - started };
     if (code === 'ECONNREFUSED') return { ok: false, state: 'down', error: code };
     return { ok: false, state: 'error', error: err?.message || String(err) };
-  } finally {
-    clearTimeout(t);
   }
 };
 

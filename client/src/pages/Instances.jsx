@@ -6,7 +6,8 @@ import {
   ArrowUpRight, ArrowDownLeft, ArrowLeftRight,
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, RefreshCcwDot, Timer,
-  Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight
+  Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
+  Lock, Globe, Info
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -79,7 +80,68 @@ function HealthSummary({ health, version }) {
   );
 }
 
-function SelfCard({ self, onUpdate, syncStatus }) {
+function TailnetHelpBanner({ tailnetInfo }) {
+  const [collapsed, setCollapsed] = useState(() => {
+    return localStorage.getItem('portos-tailnet-help-collapsed') === '1';
+  });
+  const toggle = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    localStorage.setItem('portos-tailnet-help-collapsed', next ? '1' : '0');
+  };
+
+  const status = tailnetInfo === null
+    ? { label: 'Tailscale DNS not detected', tone: 'warn', detail: 'Install Tailscale and enable MagicDNS in your tailnet admin to auto-suggest peer DNS names.' }
+    : tailnetInfo?.suffix
+      ? { label: `MagicDNS: ${tailnetInfo.suffix}`, tone: 'ok', detail: tailnetInfo.self ? `This instance: ${tailnetInfo.self}` : null }
+      : { label: 'Tailscale running but MagicDNS suffix not found', tone: 'warn', detail: 'Enable MagicDNS in your tailnet admin console (login.tailscale.com/admin/dns).' };
+
+  const ToneIcon = status.tone === 'ok' ? CheckCircle2 : AlertCircle;
+  const toneClass = status.tone === 'ok' ? 'text-port-success' : 'text-port-warning';
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-xl">
+      <button
+        onClick={toggle}
+        className="w-full flex items-center gap-2 p-4 text-left"
+      >
+        <Lock size={16} className="text-port-accent shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-white">Tailnet DNS &amp; trusted HTTPS</span>
+            <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${toneClass} bg-port-bg`}>
+              <ToneIcon size={10} /> {status.label}
+            </span>
+          </div>
+        </div>
+        {collapsed ? <ChevronRight size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
+      </button>
+
+      {!collapsed && (
+        <div className="px-4 pb-4 -mt-1 text-xs text-gray-400 space-y-2">
+          {status.detail && (
+            <div className="flex items-start gap-1.5">
+              <Info size={11} className="mt-0.5 text-gray-500 shrink-0" />
+              <span className="font-mono">{status.detail}</span>
+            </div>
+          )}
+          <p>
+            By default, federation traffic uses <span className="font-mono text-gray-300">http://{`<ip>`}:5555</span>. Setting a Tailscale MagicDNS host on a peer
+            switches that hop to <span className="font-mono text-gray-300">https://{`<host>`}.{tailnetInfo?.suffix || `<tailnet>`}.ts.net</span> with a
+            browser-trusted Let&apos;s Encrypt cert provisioned by Tailscale.
+          </p>
+          <ol className="list-decimal list-inside space-y-1 text-gray-500">
+            <li>On each instance, enable MagicDNS + HTTPS Certificates in your tailnet admin (<span className="font-mono">login.tailscale.com/admin/dns</span>).</li>
+            <li>Run <span className="font-mono text-gray-300">npm run setup:cert</span> on each instance to fetch the cert.</li>
+            <li>Below, click <span className="text-port-accent">use {`<host>`}</span> on each peer to switch the link to HTTPS. Or click <span className="text-gray-400">use IP only</span> to revert.</li>
+          </ol>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
 
@@ -133,6 +195,19 @@ function SelfCard({ self, onUpdate, syncStatus }) {
           )}
         </div>
         <p className="text-xs text-gray-500 font-mono">{self.instanceId}</p>
+        {tailnetInfo?.self ? (
+          <div className="flex items-center gap-1.5 text-[11px] mt-1" title="This instance's Tailscale MagicDNS name — peers can reach you over HTTPS at this name">
+            <Globe size={11} className="text-port-accent" />
+            <span className="font-mono text-port-accent">{tailnetInfo.self}</span>
+            <span className="text-gray-600">·</span>
+            <span className="text-gray-500">tailnet DNS</span>
+          </div>
+        ) : tailnetInfo === null ? null : (
+          <div className="flex items-center gap-1.5 text-[11px] mt-1 text-gray-500" title="No MagicDNS name detected for this instance">
+            <Globe size={11} />
+            <span>No tailnet DNS — peers will reach you by IP</span>
+          </div>
+        )}
         {syncStatus?.local && (
           <div className="mt-2 pt-2 border-t border-port-border/50 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
             <span className="flex items-center gap-1.5">
@@ -551,6 +626,15 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
     );
   }
 
+  const clearHost = async () => {
+    setSaving(true);
+    const result = await updatePeer(peer.id, { host: null }).catch(() => null);
+    setSaving(false);
+    if (!result) return;
+    onRefresh();
+    toast.success('Reverted to IP — federation hop will use http://<ip>');
+  };
+
   return (
     <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
       {peer.host ? (
@@ -569,6 +653,16 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
       >
         {peer.host ? 'edit' : (suggestion ? `use ${suggestion}` : 'set DNS')}
       </button>
+      {peer.host && (
+        <button
+          onClick={clearHost}
+          disabled={saving}
+          className="text-[10px] text-gray-500 hover:text-white underline disabled:opacity-50"
+          title="Switch this hop back to http://<ip>"
+        >
+          use IP only
+        </button>
+      )}
     </div>
   );
 }
@@ -779,8 +873,10 @@ export default function Instances() {
         <span className="text-sm text-gray-500">PortOS Federation</span>
       </div>
 
+      <TailnetHelpBanner tailnetInfo={tailnetInfo} />
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} />
+        <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo} />
         <AddPeerForm onAdd={fetchData} />
       </div>
 

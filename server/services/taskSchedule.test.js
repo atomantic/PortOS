@@ -5,18 +5,26 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
 }))
 
+// fileUtils mock: include every named export consumed by ./cosState.js too,
+// so vi.importActual('./cosState.js') below resolves cleanly.
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(),
+  ensureDirs: vi.fn().mockResolvedValue(),
   readJSONFile: vi.fn(),
   loadSlashdoFile: vi.fn().mockResolvedValue(''),
-  PATHS: { cos: '/mock/data/cos' },
+  safeJSONParse: (content, fallback) => { try { return JSON.parse(content); } catch { return fallback; } },
+  atomicWrite: vi.fn().mockResolvedValue(),
+  PATHS: { cos: '/mock/data/cos', root: '/mock', reports: '/mock/reports', scripts: '/mock/scripts' },
   HOUR: 60 * 60 * 1000,
   DAY: 24 * 60 * 60 * 1000,
   safeDate: (d) => d ? new Date(d).getTime() : 0
 }))
 
 vi.mock('fs/promises', () => ({
-  writeFile: vi.fn().mockResolvedValue()
+  writeFile: vi.fn().mockResolvedValue(),
+  readFile: vi.fn().mockRejectedValue(new Error('readFile not mocked')),
+  readdir: vi.fn().mockResolvedValue([]),
+  rm: vi.fn().mockResolvedValue()
 }))
 
 vi.mock('fs', () => ({
@@ -54,6 +62,16 @@ vi.mock('./eventScheduler.js', () => ({
   parseCronToNextRun: vi.fn()
 }))
 
+// Use the real isImprovementEnabled implementation; only stub loadState.
+// Mocking the helper would let regressions in production logic slip through.
+vi.mock('./cosState.js', async () => {
+  const actual = await vi.importActual('./cosState.js')
+  return {
+    ...actual,
+    loadState: vi.fn().mockResolvedValue({ config: { improvementEnabled: true } })
+  }
+})
+
 import {
   INTERVAL_TYPES,
   SELF_IMPROVEMENT_TASK_TYPES,
@@ -70,8 +88,12 @@ import {
   deleteTemplateTask,
   getDefaultPrompt,
   getTaskPrompt,
-  resetExecutionHistory
+  resetExecutionHistory,
+  triggerOnDemandTask,
+  getScheduleStatus
 } from './taskSchedule.js'
+
+import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval } from './apps.js'
@@ -116,6 +138,26 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('test-coverage')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
+    })
+  })
+
+  describe('do-replan task type', () => {
+    it('should default to weekly, disabled, with worktree+PR metadata', async () => {
+      const interval = await getTaskInterval('do-replan')
+      expect(interval.type).toBe('weekly')
+      expect(interval.enabled).toBe(false)
+      expect(interval.taskMetadata?.useWorktree).toBe(true)
+      expect(interval.taskMetadata?.openPR).toBe(true)
+    })
+
+    it('should expose a default prompt that delegates to the slashdo command', () => {
+      const prompt = getDefaultPrompt('do-replan')
+      expect(prompt).toBeDefined()
+      expect(prompt).toContain('Replan')
+      expect(prompt).toContain('{appName}')
+      expect(prompt).toContain('{repoPath}')
+      expect(prompt).toContain('{slashdoReplan}')
     })
   })
 
@@ -465,6 +507,15 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('unknown-type')
       expect(prompt).toContain('{repoPath}')
     })
+
+    it('should substitute {slashdoReplan} with the bundled replan command body', async () => {
+      const { loadSlashdoFile } = await import('../lib/fileUtils.js')
+      loadSlashdoFile.mockResolvedValueOnce('# Replan Command\n\nSentinel body for substitution test.')
+      const prompt = await getTaskPrompt('do-replan')
+      expect(prompt).not.toContain('{slashdoReplan}')
+      expect(prompt).toContain('Sentinel body for substitution test.')
+      expect(loadSlashdoFile).toHaveBeenCalledWith('replan', { stripFrontmatter: true })
+    })
   })
 
   describe('resetExecutionHistory', () => {
@@ -487,6 +538,98 @@ describe('taskSchedule', () => {
       })
       const result = await resetExecutionHistory('reset-app-test', 'app-1')
       expect(result.success).toBe(true)
+    })
+  })
+
+  describe('triggerOnDemandTask', () => {
+    beforeEach(() => {
+      loadState.mockResolvedValue({ config: { improvementEnabled: true } })
+    })
+
+    it('should reject and not persist when master Improve is disabled', async () => {
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
+      })
+      loadState.mockResolvedValue({ config: { improvementEnabled: false } })
+
+      const result = await triggerOnDemandTask('feature-ideas', 'critical-mass')
+
+      expect(result.error).toMatch(/improvement is disabled/i)
+      // Read schedule back: no on-demand request should have been written.
+      const schedule = await loadSchedule()
+      expect(schedule.onDemandRequests || []).toHaveLength(0)
+    })
+
+    it('should reject when the task type is disabled (cheaper check runs first)', async () => {
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'weekly', enabled: false } }
+      })
+
+      const result = await triggerOnDemandTask('feature-ideas', 'critical-mass')
+
+      expect(result.error).toMatch(/'feature-ideas' is disabled/i)
+      // loadState should not have been called — task-type check short-circuits before loadState.
+      expect(loadState).not.toHaveBeenCalled()
+    })
+
+    it('should reject unknown task types instead of silently queuing them', async () => {
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('not-a-real-type', 'critical-mass')
+
+      expect(result.error).toMatch(/unknown task type 'not-a-real-type'/i)
+      expect(loadState).not.toHaveBeenCalled()
+    })
+
+    it('should fall back to legacy split flags when improvementEnabled is undefined', async () => {
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
+      })
+      loadState.mockResolvedValue({
+        config: { selfImprovementEnabled: false, appImprovementEnabled: false }
+      })
+
+      const result = await triggerOnDemandTask('feature-ideas', 'critical-mass')
+
+      expect(result.error).toMatch(/improvement is disabled/i)
+    })
+
+    it('should persist the request and emit event when improvement is enabled', async () => {
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('feature-ideas', 'critical-mass')
+
+      expect(result.error).toBeUndefined()
+      expect(result.taskType).toBe('feature-ideas')
+      expect(result.appId).toBe('critical-mass')
+      expect(result.id).toMatch(/^demand-/)
+    })
+  })
+
+  describe('getScheduleStatus', () => {
+    beforeEach(() => {
+      loadState.mockResolvedValue({ config: { improvementEnabled: true } })
+    })
+
+    it('should include improvementEnabled: true when master flag is on', async () => {
+      mockSchedule({ tasks: { 'security': { type: 'weekly', enabled: true } } })
+
+      const status = await getScheduleStatus()
+
+      expect(status.improvementEnabled).toBe(true)
+    })
+
+    it('should include improvementEnabled: false when master flag is off', async () => {
+      mockSchedule({ tasks: { 'security': { type: 'weekly', enabled: true } } })
+      loadState.mockResolvedValue({ config: { improvementEnabled: false } })
+
+      const status = await getScheduleStatus()
+
+      expect(status.improvementEnabled).toBe(false)
     })
   })
 })

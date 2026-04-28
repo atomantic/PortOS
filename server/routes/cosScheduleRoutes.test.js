@@ -176,6 +176,17 @@ describe('CoS Schedule Routes', () => {
 
       expect(response.status).toBe(400);
     });
+
+    it('should return 409 when triggerOnDemandTask returns an error', async () => {
+      taskSchedule.triggerOnDemandTask.mockResolvedValue({ error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' });
+
+      const response = await request(app)
+        .post('/api/cos/schedule/trigger')
+        .send({ taskType: 'feature-ideas', appId: 'critical-mass' });
+
+      expect(response.status).toBe(409);
+      expect(response.body.error || response.body.message || '').toMatch(/disabled/i);
+    });
   });
 
   describe('GET /api/cos/schedule/on-demand', () => {

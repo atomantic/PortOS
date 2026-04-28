@@ -36,6 +36,10 @@ export const registerVoiceHandlers = (socket) => {
     // ui:click, wait for the client's fresh index before the next tool
     // runs so the LLM can see the modal/new content it just opened.
     uiWaiters: [],
+    // Ring of recently-spoken TTS sentences (with cached trigrams). The
+    // pipeline uses this to detect the bot's own voice being echoed back
+    // through the user's mic when laptop speakers are in play.
+    recentTts: [],
   };
 
   const pushHistory = (role, content) => {

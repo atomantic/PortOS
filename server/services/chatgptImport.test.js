@@ -3,22 +3,11 @@ import { mkdtemp, rm, readdir, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-// Redirect PATHS.brain to a temp dir BEFORE importing the service so that
-// IMPORT_ROOT (computed at module load) lands inside the temp tree.
+// Each test gets its own temp dir; the actual mocks are installed via
+// vi.doMock + vi.resetModules in beforeEach so PATHS.brain points at a
+// fresh per-test TMP before chatgptImport.js is (re-)loaded.
 let TMP;
 let createMemoryEntryMock;
-
-vi.mock('../lib/fileUtils.js', async () => {
-  const actual = await vi.importActual('../lib/fileUtils.js');
-  return {
-    ...actual,
-    PATHS: { ...actual.PATHS, brain: TMP }
-  };
-});
-
-vi.mock('./brainStorage.js', () => ({
-  createMemoryEntry: vi.fn(async (data) => ({ id: `mem-${Math.random().toString(36).slice(2, 8)}`, ...data }))
-}));
 
 let parseExport;
 let importConversations;

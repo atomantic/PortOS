@@ -108,8 +108,8 @@ export default function PostHistory({ onBack }) {
       )}
 
       {/* Session List */}
-      <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-port-card border border-port-border rounded-lg overflow-hidden overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px]">
           <thead>
             <tr className="border-b border-port-border text-gray-500 text-left">
               <th className="px-4 py-2 font-medium w-8"></th>

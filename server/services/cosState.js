@@ -103,6 +103,13 @@ function isValidJSON(str) {
 // All mutations go through withStateLock, so the cache stays consistent.
 let stateCache = null;
 
+// Master "Improve" flag with backward compat for the legacy split self/app flags.
+// Falls through only when improvementEnabled is null/undefined — explicit `false` wins.
+export function isImprovementEnabled(state) {
+  return state.config.improvementEnabled ??
+    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
+}
+
 export async function loadState() {
   if (stateCache) return stateCache;
 
@@ -143,11 +150,19 @@ export async function loadState() {
     return stateCache;
   }
 
-  // Merge with defaults to ensure all fields exist
+  // Migrate legacy split flags before merging defaults — DEFAULT_CONFIG.improvementEnabled = true
+  // would otherwise shadow a v1 file that only set selfImprovementEnabled/appImprovementEnabled.
+  const persistedConfig = state.config || {};
+  if (persistedConfig.improvementEnabled === undefined &&
+      (persistedConfig.selfImprovementEnabled !== undefined || persistedConfig.appImprovementEnabled !== undefined)) {
+    persistedConfig.improvementEnabled =
+      persistedConfig.selfImprovementEnabled || persistedConfig.appImprovementEnabled;
+  }
+
   stateCache = {
     ...DEFAULT_STATE,
     ...state,
-    config: { ...DEFAULT_CONFIG, ...state.config },
+    config: { ...DEFAULT_CONFIG, ...persistedConfig },
     stats: { ...DEFAULT_STATE.stats, ...state.stats },
     agents: state.agents ?? {}
   };

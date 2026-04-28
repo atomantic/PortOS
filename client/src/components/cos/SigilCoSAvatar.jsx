@@ -3,6 +3,8 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Float, MeshDistortMaterial, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
+import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
+import CoSAvatarFrame from './CoSAvatarFrame';
 
 function SigilCore({ color, state, speaking }) {
   const coreRef = useRef();
@@ -273,13 +275,15 @@ function Scene({ state, speaking }) {
         speed={sparkleSpeed}
         color={color}
       />
+
+      <CoSAvatarOrbitControls />
     </>
   );
 }
 
 export default function SigilCoSAvatar({ state, speaking }) {
   return (
-    <div className="relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]">
+    <CoSAvatarFrame label="Sigil 3D avatar. Drag to rotate.">
       <Canvas
         camera={{ position: [0, 0.1, 3.7], fov: 45 }}
         style={{ background: 'transparent' }}
@@ -287,7 +291,7 @@ export default function SigilCoSAvatar({ state, speaking }) {
       >
         <Scene state={state} speaking={speaking} />
       </Canvas>
-    </div>
+    </CoSAvatarFrame>
   );
 }
 

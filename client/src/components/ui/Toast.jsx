@@ -14,10 +14,38 @@ function notify() {
 }
 
 const DEFAULT_DURATION = 4000;
+const DEDUP_WINDOW_MS = 1500;
+
+// Fingerprint → expiry timestamp. Same content+type within DEDUP_WINDOW_MS is
+// silently dropped so a single user action that flows through multiple error
+// channels (API client toast + socket error:occurred + error:notified) doesn't
+// stack 3-4 identical red toasts. Render-prop content (functions) is never
+// deduped — those are intentional custom UIs and the caller controls identity.
+const recentFingerprints = new Map();
+const fingerprintFor = (content, type) =>
+  typeof content === 'string' ? `${type}::${content}` : null;
 
 function add(content, opts = {}, type = 'default') {
   const id = opts.id || crypto.randomUUID();
   const duration = opts.duration !== undefined ? opts.duration : (type === 'loading' ? Infinity : DEFAULT_DURATION);
+
+  // Skip if an identical toast was just shown — but only when the caller
+  // didn't supply an explicit id (explicit id = caller is intentionally
+  // updating the same toast, e.g. a loading-then-success swap).
+  if (!opts.id) {
+    const fp = fingerprintFor(content, type);
+    if (fp) {
+      const now = Date.now();
+      // Sweep expired entries opportunistically.
+      for (const [k, exp] of recentFingerprints) {
+        if (exp <= now) recentFingerprints.delete(k);
+      }
+      const expiry = recentFingerprints.get(fp);
+      if (expiry && expiry > now) return id;
+      recentFingerprints.set(fp, now + DEDUP_WINDOW_MS);
+    }
+  }
+
   const entry = { id, type, content, icon: opts.icon, duration, style: opts.style };
 
   const idx = toasts.findIndex(t => t.id === id);

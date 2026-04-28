@@ -40,7 +40,7 @@ export const VIDEO_MODELS = IS_WIN ? MODELS_WINDOWS : MODELS_MACOS;
 export const listVideoModels = () =>
   Object.entries(VIDEO_MODELS).map(([id, m]) => ({ id, ...m }));
 
-export const defaultVideoModelId = () => IS_WIN ? 'ltx_video' : 'ltx2_unified';
+export const defaultVideoModelId = () => IS_WIN ? 'ltx_video' : 'ltx23_distilled_q4';
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
 

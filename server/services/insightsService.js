@@ -21,6 +21,9 @@ import { getTasteProfile } from './taste-questionnaire.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
 import { stripCodeFences, parseLLMJSON } from '../lib/aiProvider.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+const DEFAULT_AI_TIMEOUT_MS = 300000;
 
 const MARKER_BY_RSID = new Map(CURATED_MARKERS.map(m => [m.rsid, m]));
 
@@ -163,28 +166,22 @@ function getLatestBloodValues(tests) {
  * API-type providers only. Returns { text } on success, { error } on failure.
  */
 async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
-  const timeout = provider.timeout || 300000;
+  const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
 
   if (provider.type === 'api') {
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
+    const response = await fetchWithTimeout(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers,
-      signal: controller.signal,
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
         temperature,
         max_tokens
       })
-    });
-
-    clearTimeout(timer);
+    }, timeout);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');

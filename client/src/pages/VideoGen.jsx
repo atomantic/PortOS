@@ -47,6 +47,8 @@ const TILING_OPTIONS = [
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const incomingSourceImage = searchParams.get('sourceImageFile');
+  const incomingPrompt = searchParams.get('prompt');
+  const incomingNegativePrompt = searchParams.get('negativePrompt');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
@@ -55,8 +57,8 @@ export default function VideoGen() {
   const [statusLoading, setStatusLoading] = useState(true);
   const [models, setModels] = useState([]);
 
-  const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState('');
+  const [prompt, setPrompt] = useState(incomingPrompt || '');
+  const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(768);
   const [height, setHeight] = useState(512);
@@ -78,6 +80,12 @@ export default function VideoGen() {
       setSourceImageUpload(null);
     }
   }, [incomingSourceImage]);
+  useEffect(() => {
+    if (incomingPrompt) setPrompt(incomingPrompt);
+  }, [incomingPrompt]);
+  useEffect(() => {
+    if (incomingNegativePrompt) setNegativePrompt(incomingNegativePrompt);
+  }, [incomingNegativePrompt]);
   const [history, setHistory] = useState([]);
   const [preview, setPreview] = useState(null);
   const navigate = useNavigate();

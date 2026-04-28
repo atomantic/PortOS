@@ -2,28 +2,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   LANES,
   determineLane,
-  hasCapacity,
   getLaneStatus,
   acquire,
   release,
-  waitForLane,
   promote,
   getStats,
   getAgentLane,
-  clearLane,
-  updateLaneConfig
+  clearLane
 } from './executionLanes.js';
 
-// Mock the cosEvents
-vi.mock('./cos.js', () => ({
-  cosEvents: {
-    emit: vi.fn()
-  }
+vi.mock('./cosEvents.js', () => ({
+  cosEvents: { emit: vi.fn() }
 }));
 
 describe('Execution Lanes Service', () => {
   beforeEach(() => {
-    // Clear all lanes before each test
     clearLane('critical');
     clearLane('standard');
     clearLane('background');
@@ -36,15 +29,15 @@ describe('Execution Lanes Service', () => {
       expect(LANES.background).toBeDefined();
     });
 
-    it('should have correct max concurrent values', () => {
-      expect(LANES.critical.maxConcurrent).toBe(1);
-      expect(LANES.standard.maxConcurrent).toBe(2);
-      expect(LANES.background.maxConcurrent).toBe(3);
-    });
-
-    it('should have priority ordering', () => {
+    it('should have priority ordering (critical < standard < background)', () => {
       expect(LANES.critical.priority).toBeLessThan(LANES.standard.priority);
       expect(LANES.standard.priority).toBeLessThan(LANES.background.priority);
+    });
+
+    it('should not expose maxConcurrent — lanes are tags, not gates', () => {
+      expect(LANES.critical.maxConcurrent).toBeUndefined();
+      expect(LANES.standard.maxConcurrent).toBeUndefined();
+      expect(LANES.background.maxConcurrent).toBeUndefined();
     });
   });
 
@@ -81,36 +74,13 @@ describe('Execution Lanes Service', () => {
     });
   });
 
-  describe('hasCapacity', () => {
-    it('should return true for empty lanes', () => {
-      expect(hasCapacity('critical')).toBe(true);
-      expect(hasCapacity('standard')).toBe(true);
-      expect(hasCapacity('background')).toBe(true);
-    });
-
-    it('should return false for unknown lane', () => {
-      expect(hasCapacity('unknown')).toBe(false);
-    });
-
-    it('should return false when lane is at capacity', () => {
-      acquire('critical', 'agent-1');
-      expect(hasCapacity('critical')).toBe(false);
-    });
-
-    it('should return true when lane has capacity', () => {
-      acquire('standard', 'agent-1');
-      expect(hasCapacity('standard')).toBe(true); // Can hold 2
-    });
-  });
-
   describe('getLaneStatus', () => {
     it('should return lane status', () => {
       const status = getLaneStatus('standard');
 
       expect(status.name).toBe('standard');
-      expect(status.maxConcurrent).toBe(2);
+      expect(status.priority).toBe(LANES.standard.priority);
       expect(status.currentOccupancy).toBe(0);
-      expect(status.available).toBe(2);
     });
 
     it('should return null for unknown lane', () => {
@@ -128,7 +98,7 @@ describe('Execution Lanes Service', () => {
   });
 
   describe('acquire', () => {
-    it('should acquire a lane slot', () => {
+    it('should tag an agent with a lane', () => {
       const result = acquire('standard', 'agent-1', { taskId: 'task-1' });
 
       expect(result.success).toBe(true);
@@ -142,12 +112,14 @@ describe('Execution Lanes Service', () => {
       expect(result.error).toContain('Unknown lane');
     });
 
-    it('should fail when lane is at capacity', () => {
-      acquire('critical', 'agent-1');
-      const result = acquire('critical', 'agent-2');
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Lane at capacity');
+    it('should NOT gate on capacity — many agents can share a lane', () => {
+      // Concurrency gating moved upstream (maxConcurrentAgents in cos.js).
+      // The lane subsystem must accept any number of agents in a lane.
+      for (let i = 1; i <= 10; i++) {
+        const result = acquire('standard', `agent-${i}`);
+        expect(result.success).toBe(true);
+      }
+      expect(getLaneStatus('standard').currentOccupancy).toBe(10);
     });
 
     it('should return success if already acquired', () => {
@@ -160,7 +132,7 @@ describe('Execution Lanes Service', () => {
   });
 
   describe('release', () => {
-    it('should release a lane slot', () => {
+    it('should release a lane tag', () => {
       acquire('standard', 'agent-1');
       const result = release('agent-1');
 
@@ -174,51 +146,6 @@ describe('Execution Lanes Service', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Agent not in any lane');
-    });
-
-    it('should free up capacity', () => {
-      acquire('critical', 'agent-1');
-      expect(hasCapacity('critical')).toBe(false);
-
-      release('agent-1');
-      expect(hasCapacity('critical')).toBe(true);
-    });
-  });
-
-  describe('waitForLane', () => {
-    it('should acquire immediately if capacity available', async () => {
-      const result = await waitForLane('standard', 'agent-1', {
-        metadata: { taskId: 'task-1' }
-      });
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should timeout when lane stays at capacity', async () => {
-      acquire('critical', 'agent-1');
-
-      const result = await waitForLane('critical', 'agent-2', {
-        timeoutMs: 100
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Lane wait timeout');
-    });
-
-    it('should acquire when slot becomes available', async () => {
-      acquire('critical', 'agent-1');
-
-      // Start waiting
-      const waitPromise = waitForLane('critical', 'agent-2', {
-        timeoutMs: 1000
-      });
-
-      // Release after short delay
-      setTimeout(() => release('agent-1'), 50);
-
-      const result = await waitPromise;
-      expect(result.success).toBe(true);
-      expect(result.waitedMs).toBeGreaterThan(0);
     });
   });
 
@@ -254,13 +181,15 @@ describe('Execution Lanes Service', () => {
       expect(result.error).toBe('Target lane is not higher priority');
     });
 
-    it('should fail if target lane at capacity', () => {
+    it('should NOT gate on target lane capacity', () => {
+      // Promote no longer cares about capacity — lanes are tags.
       acquire('critical', 'agent-1');
       acquire('standard', 'agent-2');
       const result = promote('agent-2', 'critical');
 
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Target lane at capacity');
+      expect(result.success).toBe(true);
+      expect(result.toLane).toBe('critical');
+      expect(getLaneStatus('critical').currentOccupancy).toBe(2);
     });
   });
 
@@ -272,7 +201,6 @@ describe('Execution Lanes Service', () => {
       const stats = getStats();
 
       expect(stats.totalOccupancy).toBe(2);
-      expect(stats.totalCapacity).toBe(6); // 1 + 2 + 3
       expect(stats.lanes.standard.currentOccupancy).toBe(1);
       expect(stats.lanes.background.currentOccupancy).toBe(1);
     });
@@ -306,28 +234,11 @@ describe('Execution Lanes Service', () => {
       const count = clearLane('standard');
 
       expect(count).toBe(2);
-      expect(hasCapacity('standard')).toBe(true);
       expect(getLaneStatus('standard').currentOccupancy).toBe(0);
     });
 
     it('should return 0 for unknown lane', () => {
       expect(clearLane('unknown')).toBe(0);
-    });
-  });
-
-  describe('updateLaneConfig', () => {
-    it('should update lane max concurrent', () => {
-      const originalMax = LANES.standard.maxConcurrent;
-      updateLaneConfig('standard', { maxConcurrent: 5 });
-
-      expect(LANES.standard.maxConcurrent).toBe(5);
-
-      // Restore
-      updateLaneConfig('standard', { maxConcurrent: originalMax });
-    });
-
-    it('should return null for unknown lane', () => {
-      expect(updateLaneConfig('unknown', {})).toBeNull();
     });
   });
 });

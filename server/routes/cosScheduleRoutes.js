@@ -105,6 +105,9 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
   }
 
   const request = await taskSchedule.triggerOnDemandTask(taskType, appId);
+  if (request?.error) {
+    throw new ServerError(request.error, { status: 409, code: 'TRIGGER_REJECTED' });
+  }
   res.json({ success: true, request });
 }));
 

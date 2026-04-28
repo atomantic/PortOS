@@ -6,6 +6,7 @@ import {
   getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, testTts, fetchPiperVoice,
 } from '../../services/apiVoice';
 import { playWav, webSpeechSupported } from '../../services/voiceClient';
+import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
 
 const SERVICE_LABELS = {
   whisper: 'Whisper (STT)',
@@ -33,9 +34,6 @@ const KOKORO_DTYPES = [
 ];
 
 const ACCENT_LABELS = { 'en-US': 'American', 'en-GB': 'British' };
-
-const HIDDEN_KEY = 'portos.voice.hidden';
-const VISIBILITY_EVENT = 'portos:voice:visibility';
 
 const formatVoiceLabel = (v, engine) => {
   if (engine === 'piper') {
@@ -98,15 +96,10 @@ export function VoiceTab() {
   const [testing, setTesting] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState(null);
   const [downloadingVoice, setDownloadingVoice] = useState(null);
-  const [widgetHidden, setWidgetHidden] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem(HIDDEN_KEY) === '1';
-  });
+  const [widgetHidden, setWidgetHidden] = useState(readVoiceHidden);
 
   const toggleWidgetHidden = (next) => {
-    if (next) window.localStorage.setItem(HIDDEN_KEY, '1');
-    else window.localStorage.removeItem(HIDDEN_KEY);
-    window.dispatchEvent(new Event(VISIBILITY_EVENT));
+    writeVoiceHidden(next);
     setWidgetHidden(next);
   };
 

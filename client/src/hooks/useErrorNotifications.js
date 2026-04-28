@@ -13,12 +13,13 @@ export function useErrorNotifications() {
   }, []);
 
   useEffect(() => {
-    // Subscribe to error events
+    // Subscribe to targeted error broadcasts. We listen to ONLY `error:notified`
+    // (subscriber-scoped) and skip `error:occurred` (broadcast-to-all) — the
+    // server emits both for every error, so listening to both doubled every
+    // toast. The Toast layer also dedupes by content as a defense in depth.
     socket.emit('errors:subscribe');
 
-    // Handle error notifications from server
     const handleError = (error) => {
-      // Platform unavailability is a warning, not an error
       if (error.code === 'PLATFORM_UNAVAILABLE') {
         toast(error.message, { duration: 5000, icon: '⚠️' });
         console.warn(`[${error.code}] ${error.message}`, error.context);
@@ -30,18 +31,14 @@ export function useErrorNotifications() {
         icon: error.severity === 'critical' ? '💥' : '❌'
       };
 
-      // Format message based on severity
       const message = error.severity === 'critical'
         ? `Critical: ${error.message}`
         : error.message;
 
       toast.error(message, toastOptions);
-
-      // Log to console for debugging
       console.error(`[${error.code}] ${error.message}`, error.context);
     };
 
-    // Handle critical system errors
     const handleCriticalError = (error) => {
       toast.error(`System Critical: ${error.message}`, {
         duration: 15000,
@@ -49,7 +46,6 @@ export function useErrorNotifications() {
       });
     };
 
-    // Handle auto-fix task creation notifications
     const handleRecoveryRequested = (data) => {
       toast.success(`Auto-fix task created: ${data.taskId}`, {
         duration: 5000,
@@ -57,15 +53,12 @@ export function useErrorNotifications() {
       });
     };
 
-    // Register handlers
-    socket.on('error:occurred', handleError);
     socket.on('error:notified', handleError);
     socket.on('system:critical-error', handleCriticalError);
     socket.on('error:recover:requested', handleRecoveryRequested);
 
     return () => {
       socket.emit('errors:unsubscribe');
-      socket.off('error:occurred', handleError);
       socket.off('error:notified', handleError);
       socket.off('system:critical-error', handleCriticalError);
       socket.off('error:recover:requested', handleRecoveryRequested);

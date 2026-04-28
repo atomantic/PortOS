@@ -40,6 +40,10 @@ const BADGE_COLORS = {
 
 const badge = (variant) => `text-xs font-medium px-2.5 py-1 rounded-full border ${BADGE_COLORS[variant] || BADGE_COLORS.gray}`;
 
+const IMPROVEMENT_DISABLED_TITLE = 'Improvement is disabled — enable it in CoS → Config';
+const triggerButtonClass = (disabled) =>
+  `flex items-center gap-1 px-3 py-1.5 text-sm rounded transition-colors ${disabled ? 'bg-port-border/30 text-gray-500 cursor-not-allowed' : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'}`;
+
 const INTERVAL_BADGE_VARIANT = {
   daily: 'accent',
   weekly: 'purple',
@@ -245,7 +249,7 @@ function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, 
   );
 }
 
-function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes }) {
+function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes, improvementDisabled }) {
   const [selectedType, setSelectedType] = useState(config.type);
   const [selectedProviderId, setSelectedProviderId] = useState(config.providerId || '');
   const [selectedModel, setSelectedModel] = useState(config.model || '');
@@ -274,6 +278,11 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showAppSelector]);
+
+  // Without this, an open dropdown survives a flip to disabled and pops back open when the master flag re-enables.
+  useEffect(() => {
+    if (improvementDisabled) setShowAppSelector(false);
+  }, [improvementDisabled]);
 
   const activeApps = apps?.filter(app => !app.archived) || [];
 
@@ -520,16 +529,20 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
       <div className="flex gap-2">
         {activeApps.length > 0 ? (
           <div className="relative" ref={appSelectorRef}>
-            <button
-              onClick={() => setShowAppSelector(!showAppSelector)}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors"
-              title="Run this task on a specific app"
-            >
-              <Play size={14} />
-              Run on App
-              <ChevronDown size={12} className={`transition-transform ${showAppSelector ? 'rotate-180' : ''}`} />
-            </button>
-            {showAppSelector && (
+            {/* Tooltip on the wrapper, not the button: most browsers skip hover events on disabled controls. */}
+            <span title={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : 'Run this task on a specific app'} className="inline-block">
+              <button
+                onClick={() => !improvementDisabled && setShowAppSelector(!showAppSelector)}
+                disabled={improvementDisabled}
+                aria-disabled={improvementDisabled || undefined}
+                className={triggerButtonClass(improvementDisabled)}
+              >
+                <Play size={14} />
+                Run on App
+                <ChevronDown size={12} className={`transition-transform ${showAppSelector ? 'rotate-180' : ''}`} />
+              </button>
+            </span>
+            {showAppSelector && !improvementDisabled && (
               <div className="absolute bottom-full left-0 mb-1 z-50 w-64 max-w-[calc(100vw-2rem)] max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
                 <div className="p-2 border-b border-port-border">
                   <span className="text-xs text-gray-400">Select an app to run {taskType} on:</span>
@@ -553,14 +566,17 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
             )}
           </div>
         ) : (
-          <button
-            onClick={() => onTrigger(taskType)}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors"
-            title="Run this task immediately (bypasses schedule)"
-          >
-            <Play size={14} />
-            Run Now
-          </button>
+          <span title={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : 'Run this task immediately (bypasses schedule)'} className="inline-block">
+            <button
+              onClick={() => onTrigger(taskType)}
+              disabled={improvementDisabled}
+              aria-disabled={improvementDisabled || undefined}
+              className={triggerButtonClass(improvementDisabled)}
+            >
+              <Play size={14} />
+              Run Now
+            </button>
+          </span>
         )}
         {config.type === 'once' && status.reason === 'once-completed' && (
           <button
@@ -759,7 +775,7 @@ function PerAppOverrideList({ taskType, config, apps, onUpdateOverride, onBulkTo
   );
 }
 
-function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, allTaskTypes }) {
+function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, allTaskTypes, improvementDisabled }) {
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
 
@@ -848,6 +864,7 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
               updating={updating}
               setUpdating={setUpdating}
               allTaskTypes={allTaskTypes}
+              improvementDisabled={improvementDisabled}
             />
           </div>
 
@@ -864,7 +881,7 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
   );
 }
 
-function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride }) {
+function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, improvementDisabled }) {
   const taskEntries = Object.entries(tasks || {});
   if (taskEntries.length === 0) return null;
 
@@ -896,6 +913,7 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
             onUpdateOverride={onUpdateOverride}
             onBulkToggleOverride={onBulkToggleOverride}
             allTaskTypes={allTaskTypes}
+            improvementDisabled={improvementDisabled}
           />
         ))}
       </div>
@@ -1002,6 +1020,8 @@ export default function ScheduleTab({ apps }) {
     );
   }
 
+  const improvementDisabled = schedule.improvementEnabled === false;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1020,6 +1040,19 @@ export default function ScheduleTab({ apps }) {
           Refresh
         </button>
       </div>
+
+      {improvementDisabled && (
+        <div className="flex items-start gap-2 px-4 py-3 bg-port-warning/10 border border-port-warning/30 rounded-lg text-sm text-port-warning">
+          <AlertCircle size={16} className="shrink-0 mt-0.5" />
+          <div>
+            <div className="font-medium">Improvement is disabled</div>
+            <div className="text-xs text-port-warning/80 mt-1">
+              No scheduled or on-demand improvement tasks will run. Enable the <span className="font-mono">Improve</span> toggle in
+              {' '}<a href="/cos/config" className="underline hover:text-port-warning">CoS → Config</a> to use this page.
+            </div>
+          </div>
+        </div>
+      )}
 
       {schedule.onDemandRequests?.length > 0 && (
         <div className="bg-port-accent/10 border border-port-accent/30 rounded-lg p-4">
@@ -1043,6 +1076,7 @@ export default function ScheduleTab({ apps }) {
         apps={apps}
         onUpdateOverride={handleUpdateAppOverride}
         onBulkToggleOverride={handleBulkToggleOverride}
+        improvementDisabled={improvementDisabled}
       />
 
       {schedule.lastUpdated && (

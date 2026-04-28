@@ -1,5 +1,13 @@
 import { createContext, useContext } from 'react';
 import useTheme from '../hooks/useTheme';
+import { DEFAULT_THEME_ID, THEMES, THEME_LIST } from '../themes/portosThemes';
+
+const FALLBACK_CONTEXT = {
+  themeId: DEFAULT_THEME_ID,
+  theme: THEMES[DEFAULT_THEME_ID],
+  themeList: THEME_LIST,
+  setTheme: () => {},
+};
 
 const ThemeContext = createContext(null);
 
@@ -14,7 +22,5 @@ export function ThemeProvider({ children }) {
 }
 
 export function useThemeContext() {
-  const ctx = useContext(ThemeContext);
-  if (!ctx) return { themeId: 'midnight', theme: null, themes: {}, setTheme: () => {} };
-  return ctx;
+  return useContext(ThemeContext) ?? FALLBACK_CONTEXT;
 }

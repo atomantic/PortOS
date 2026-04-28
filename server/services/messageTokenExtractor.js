@@ -10,6 +10,9 @@
 
 import { getPages, evaluateOnPage } from './messagePlaywrightSync.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+const TOKEN_VALIDATION_TIMEOUT_MS = 15000;
 
 // Per-provider token cache: { token, decoded, cachedAt }
 const tokenCache = new Map();
@@ -94,38 +97,14 @@ async function extractTokenFromNetwork(page, networkPatterns, timeoutMs = 20000)
   });
 }
 
+const TRIGGER_TIMEOUT_MS = 5000;
+
 /**
  * Trigger network activity on a tab so the web app makes an API call we can intercept.
+ * The result is ignored — we only care that the script ran.
  */
 async function triggerPageRequest(page, script) {
-  const wsUrl = page.webSocketDebuggerUrl;
-  if (!wsUrl) return;
-
-  const { default: WebSocket } = await import('ws');
-
-  return new Promise((resolve) => {
-    const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => { ws.close(); resolve(); }, 5000);
-
-    ws.on('open', () => {
-      ws.send(JSON.stringify({
-        id: 1,
-        method: 'Runtime.evaluate',
-        params: { expression: script, returnByValue: true, awaitPromise: true }
-      }));
-    });
-
-    ws.on('message', (data) => {
-      const msg = safeJSONParse(data.toString(), null, { context: 'cdp-trigger-ws' });
-      if (msg?.id === 1) {
-        clearTimeout(timer);
-        ws.close();
-        resolve();
-      }
-    });
-
-    ws.on('error', () => { clearTimeout(timer); ws.close(); resolve(); });
-  });
+  await evaluateOnPage(page, script, { timeout: TRIGGER_TIMEOUT_MS });
 }
 
 /**
@@ -264,13 +243,9 @@ export async function testApi(provider, token, top = 5) {
   const url = urls[provider];
   if (!url) return { success: false, error: `No API URL for provider: ${provider}` };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: controller.signal
-  }).finally(() => clearTimeout(timeout));
+  const response = await fetchWithTimeout(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  }, TOKEN_VALIDATION_TIMEOUT_MS);
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
