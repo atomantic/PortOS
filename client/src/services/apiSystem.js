@@ -111,6 +111,7 @@ export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { m
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
 export const getTailnetInfo = () => request('/instances/tailnet-suffix');
+export const provisionTailnetCert = () => request('/instances/provision-cert', { method: 'POST' });
 
 // Image Generation
 export const getImageGenStatus = () => request('/image-gen/status');

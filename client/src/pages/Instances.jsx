@@ -13,7 +13,7 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
-  removePeer, connectPeer, probePeer, getTailnetInfo
+  removePeer, connectPeer, probePeer, getTailnetInfo, provisionTailnetCert
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -84,10 +84,24 @@ function TailnetHelpBanner({ tailnetInfo }) {
   const [collapsed, setCollapsed] = useState(() => {
     return localStorage.getItem('portos-tailnet-help-collapsed') === '1';
   });
+  const [provisioning, setProvisioning] = useState(false);
+  const [provisionResult, setProvisionResult] = useState(null);
+
   const toggle = () => {
     const next = !collapsed;
     setCollapsed(next);
     localStorage.setItem('portos-tailnet-help-collapsed', next ? '1' : '0');
+  };
+
+  const provision = async (e) => {
+    e.stopPropagation();
+    setProvisioning(true);
+    setProvisionResult(null);
+    const result = await provisionTailnetCert().catch(() => null);
+    setProvisioning(false);
+    if (!result?.ok) return; // request() already toasted the error
+    setProvisionResult(result);
+    toast.success(result.message);
   };
 
   const status = tailnetInfo === null
@@ -98,6 +112,11 @@ function TailnetHelpBanner({ tailnetInfo }) {
 
   const ToneIcon = status.tone === 'ok' ? CheckCircle2 : AlertCircle;
   const toneClass = status.tone === 'ok' ? 'text-port-success' : 'text-port-warning';
+
+  // Only offer the one-click provision button when Tailscale is actually
+  // detected and we have a MagicDNS hostname for this instance — otherwise
+  // the API call will fail with the same "enable MagicDNS first" guidance.
+  const canProvision = !!tailnetInfo?.self;
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl">
@@ -132,9 +151,33 @@ function TailnetHelpBanner({ tailnetInfo }) {
           </p>
           <ol className="list-decimal list-inside space-y-1 text-gray-500">
             <li>On each instance, enable MagicDNS + HTTPS Certificates in your tailnet admin (<span className="font-mono">login.tailscale.com/admin/dns</span>).</li>
-            <li>Run <span className="font-mono text-gray-300">npm run setup:cert</span> on each instance to fetch the cert.</li>
+            <li>
+              Click <span className="text-port-accent">Enable HTTPS</span> below to fetch the cert via Tailscale
+              (or run <span className="font-mono text-gray-300">npm run setup:cert</span> from a shell).
+            </li>
             <li>Below, click <span className="text-port-accent">use {`<host>`}</span> on each peer to switch the link to HTTPS. Or click <span className="text-gray-400">use IP only</span> to revert.</li>
           </ol>
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <button
+              onClick={provision}
+              disabled={provisioning || !canProvision}
+              title={canProvision
+                ? `Run \`tailscale cert\` for ${tailnetInfo.self} and write data/certs/{cert,key}.pem`
+                : 'Enable MagicDNS in your tailnet admin first, then reload this page'}
+              className="inline-flex items-center gap-1.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-xs font-medium transition-colors min-h-[40px] sm:min-h-0"
+            >
+              <Lock size={12} />
+              {provisioning ? 'Provisioning…' : 'Enable HTTPS'}
+            </button>
+            {provisionResult?.ok && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-port-success">
+                <CheckCircle2 size={11} />
+                {provisionResult.requiresRestart
+                  ? 'Cert installed — restart PortOS to activate HTTPS'
+                  : 'Cert installed and live'}
+              </span>
+            )}
+          </div>
         </div>
       )}
     </div>
