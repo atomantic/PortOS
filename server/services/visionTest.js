@@ -10,8 +10,11 @@ import { existsSync } from 'fs';
 import { join, extname } from 'path';
 import { getProviderById } from './providers.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const SCREENSHOTS_DIR = PATHS.screenshots;
+const DEFAULT_VISION_TIMEOUT_MS = 60000;
+const VISION_HEALTH_TIMEOUT_MS = 5000;
 
 /**
  * Get MIME type from file extension
@@ -58,11 +61,8 @@ async function loadImageAsBase64(imagePath) {
  * @param {number} options.timeout - Request timeout in ms
  * @returns {Promise<Object>} - API response
  */
-async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, timeout = 60000 }) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-  const response = await fetch(`${endpoint}/chat/completions`, {
+async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, timeout = DEFAULT_VISION_TIMEOUT_MS }) {
+  const response = await fetchWithTimeout(`${endpoint}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -89,9 +89,8 @@ async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, ti
       ],
       max_tokens: 500,
       temperature: 0.1
-    }),
-    signal: controller.signal
-  }).finally(() => clearTimeout(timeoutId));
+    })
+  }, timeout);
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unknown error');
@@ -164,7 +163,7 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
     model: testModel,
     imageDataUrl,
     prompt,
-    timeout: provider.timeout || 60000
+    timeout: provider.timeout || DEFAULT_VISION_TIMEOUT_MS
   });
 
   const responseContent = apiResponse.choices?.[0]?.message?.content || '';
@@ -288,13 +287,9 @@ export async function checkVisionHealth(providerId = 'lmstudio') {
   }
 
   // Check if endpoint is reachable
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-  const response = await fetch(`${provider.endpoint}/models`, {
-    headers: provider.apiKey ? { 'Authorization': `Bearer ${provider.apiKey}` } : {},
-    signal: controller.signal
-  }).catch(() => null).finally(() => clearTimeout(timeoutId));
+  const response = await fetchWithTimeout(`${provider.endpoint}/models`, {
+    headers: provider.apiKey ? { 'Authorization': `Bearer ${provider.apiKey}` } : {}
+  }, VISION_HEALTH_TIMEOUT_MS).catch(() => null);
 
   if (!response?.ok) {
     return { available: false, error: 'API endpoint not reachable' };

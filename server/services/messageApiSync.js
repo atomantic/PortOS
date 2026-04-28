@@ -6,7 +6,10 @@
 
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
-import { getToken } from './messageTokenExtractor.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { getToken, clearTokenCache } from './messageTokenExtractor.js';
+
+const GRAPH_API_TIMEOUT_MS = 30000;
 
 function makeExternalId(prefix, id) {
   // For API sync, use a stable ID from the API response
@@ -53,20 +56,15 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
     page++;
     io?.emit('messages:sync:progress', { accountId: account.id, current: messages.length, total: maxMessages, page });
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="Text"' },
-      signal: controller.signal
-    }).finally(() => clearTimeout(timeout));
+    const response = await fetchWithTimeout(url, {
+      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="Text"' }
+    }, GRAPH_API_TIMEOUT_MS);
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       console.log(`📧 API sync failed (${response.status}): ${text.slice(0, 200)}`);
       if (response.status === 401) {
         // Token expired — clear cache so next sync re-extracts
-        const { clearTokenCache } = await import('./messageTokenExtractor.js');
         clearTokenCache('outlook');
         return null; // Fall back to Playwright
       }

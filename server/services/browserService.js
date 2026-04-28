@@ -5,9 +5,19 @@
  */
 
 import { readFile, writeFile, readdir, stat } from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+const execFileAsync = promisify(execFile);
+const PM2_SHELL = process.platform === 'win32';
+const PM2_SETTLE_MS = 1500;
+const HEALTH_TIMEOUT_MS = 3000;
+const NAVIGATE_TIMEOUT_MS = 10000;
+const LOGS_TIMEOUT_MS = 5000;
 
 const CONFIG_FILE = join(PATHS.data, 'browser-config.json');
 const ECOSYSTEM_FILE = join(PATHS.root, 'ecosystem.config.cjs');
@@ -66,11 +76,7 @@ export async function getHealthStatus() {
     : config.cdpHost;
   const healthUrl = `http://${connectHost}:${config.healthPort}/health`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
-
-  const response = await fetch(healthUrl, { signal: controller.signal }).catch(() => null);
-  clearTimeout(timeout);
+  const response = await fetchWithTimeout(healthUrl, {}, HEALTH_TIMEOUT_MS).catch(() => null);
 
   if (!response || !response.ok) {
     return {
@@ -100,16 +106,12 @@ export async function getHealthStatus() {
 // ---------- PM2 process management ----------
 
 async function pm2Action(action, args) {
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const execFileAsync = promisify(execFile);
-
   console.log(`🌐 Browser PM2 ${action}: portos-browser`);
-  await execFileAsync('pm2', [action, ...args], { shell: process.platform === 'win32' });
+  await execFileAsync('pm2', [action, ...args], { shell: PM2_SHELL });
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await new Promise(resolve => setTimeout(resolve, PM2_SETTLE_MS));
 
   const status = await getHealthStatus();
   browserEvents.emit('status:changed', status);
@@ -132,11 +134,7 @@ export async function restartBrowser() {
 // ---------- PM2 status (process-level) ----------
 
 export async function getProcessStatus() {
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const execFileAsync = promisify(execFile);
-
-  const { stdout } = await execFileAsync('pm2', ['jlist'], { shell: process.platform === 'win32' });
+  const { stdout } = await execFileAsync('pm2', ['jlist'], { shell: PM2_SHELL });
   const processes = safeJSONParse(stdout, [], { allowArray: true });
   const browserProc = processes.find(p => p.name === 'portos-browser');
 
@@ -160,13 +158,9 @@ export async function getProcessStatus() {
 // ---------- Logs ----------
 
 export async function getRecentLogs(lines = 50) {
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const execFileAsync = promisify(execFile);
-
   const { stdout, stderr } = await execFileAsync('pm2', ['logs', 'portos-browser', '--nostream', '--lines', String(lines)], {
-    timeout: 5000,
-    shell: process.platform === 'win32'
+    timeout: LOGS_TIMEOUT_MS,
+    shell: PM2_SHELL
   }).catch(() => ({ stdout: '', stderr: '' }));
 
   return { stdout: stdout || '', stderr: stderr || '' };
@@ -178,11 +172,7 @@ export async function navigateToUrl(url) {
   const config = await loadConfig();
   const newTabUrl = `http://${config.cdpHost}:${config.cdpPort}/json/new?${encodeURIComponent(url)}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-
-  const response = await fetch(newTabUrl, { method: 'PUT', signal: controller.signal });
-  clearTimeout(timeout);
+  const response = await fetchWithTimeout(newTabUrl, { method: 'PUT' }, NAVIGATE_TIMEOUT_MS);
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -200,11 +190,7 @@ export async function getOpenPages() {
   const config = await loadConfig();
   const listUrl = `http://${config.cdpHost}:${config.cdpPort}/json/list`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
-
-  const response = await fetch(listUrl, { signal: controller.signal }).catch(() => null);
-  clearTimeout(timeout);
+  const response = await fetchWithTimeout(listUrl, {}, HEALTH_TIMEOUT_MS).catch(() => null);
 
   if (!response || !response.ok) {
     return [];
@@ -225,11 +211,7 @@ export async function getCdpVersion() {
   const config = await loadConfig();
   const versionUrl = `http://${config.cdpHost}:${config.cdpPort}/json/version`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
-
-  const response = await fetch(versionUrl, { signal: controller.signal }).catch(() => null);
-  clearTimeout(timeout);
+  const response = await fetchWithTimeout(versionUrl, {}, HEALTH_TIMEOUT_MS).catch(() => null);
 
   if (!response || !response.ok) return null;
   return response.json();

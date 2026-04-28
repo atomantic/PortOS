@@ -18,6 +18,7 @@ import * as brainSyncLog from './brainSyncLog.js';
 import * as memorySync from './memorySync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -59,16 +60,12 @@ async function withCursors(fn) {
 
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) return null;
     return await res.json();
   } catch {
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -88,10 +85,8 @@ async function syncImageFromPeer(peer, avatarPath) {
   if (exists) return;
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) return;
     const buffer = Buffer.from(await res.arrayBuffer());
     await ensureDir(PATHS.images);
@@ -99,8 +94,6 @@ async function syncImageFromPeer(peer, avatarPath) {
     console.log(`🔄 Synced avatar image: ${filename}`);
   } catch {
     // Non-critical — avatar will sync on next cycle
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

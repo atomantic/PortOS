@@ -10,7 +10,12 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getMemories } from './memoryBackend.js';
+
+const MODEL_LIST_TIMEOUT_MS = 5000;
+const MODEL_LOAD_TIMEOUT_MS = 120000;
+const HEALTH_CHECK_TIMEOUT_MS = 5000;
 
 const MEMORY_CONFIG_FILE = join(PATHS.data, 'memory-classifier-config.json');
 
@@ -185,12 +190,9 @@ function getBaseUrl(endpoint) {
 async function ensureLLMModelLoaded(config) {
   const baseUrl = getBaseUrl(config.endpoint);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-  const listResponse = await fetch(`${baseUrl}/api/v0/models`, {
-    method: 'GET',
-    signal: controller.signal
-  }).catch(() => null).finally(() => clearTimeout(timeoutId));
+  const listResponse = await fetchWithTimeout(`${baseUrl}/api/v0/models`, {
+    method: 'GET'
+  }, MODEL_LIST_TIMEOUT_MS).catch(() => null);
 
   if (!listResponse?.ok) return null;
 
@@ -216,14 +218,11 @@ async function ensureLLMModelLoaded(config) {
 
   console.log(`📦 Auto-loading LLM model: ${preferred.id}`);
 
-  const loadController = new AbortController();
-  const loadTimeout = setTimeout(() => loadController.abort(), 120000);
-  const loadResponse = await fetch(`${baseUrl}/api/v1/models/load`, {
+  const loadResponse = await fetchWithTimeout(`${baseUrl}/api/v1/models/load`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: preferred.id }),
-    signal: loadController.signal
-  }).catch(err => ({ ok: false, _err: err.message })).finally(() => clearTimeout(loadTimeout));
+    body: JSON.stringify({ model: preferred.id })
+  }, MODEL_LOAD_TIMEOUT_MS).catch(err => ({ ok: false, _err: err.message }));
 
   if (!loadResponse.ok) {
     const errText = loadResponse._err || await loadResponse.text?.().catch(() => 'unknown error') || 'unknown error';
@@ -244,10 +243,7 @@ async function callLLM(prompt, config) {
   const loadedModel = await ensureLLMModelLoaded(config);
   const modelToUse = loadedModel || config.model;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), config.timeout);
-
-  const response = await fetch(config.endpoint, {
+  const response = await fetchWithTimeout(config.endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -267,9 +263,8 @@ async function callLLM(prompt, config) {
       ],
       temperature: 0.1,
       max_tokens: 2000
-    }),
-    signal: controller.signal
-  }).finally(() => clearTimeout(timeoutId));
+    })
+  }, config.timeout);
 
   if (!response.ok) {
     const error = await response.text().catch(() => 'Unknown error');
@@ -412,13 +407,11 @@ export async function isAvailable() {
   if (!config.enabled) return false;
 
   // Quick health check
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-  const response = await fetch(config.endpoint.replace('/chat/completions', '/models'), {
-    method: 'GET',
-    signal: controller.signal
-  }).catch(() => null).finally(() => clearTimeout(timeoutId));
+  const response = await fetchWithTimeout(
+    config.endpoint.replace('/chat/completions', '/models'),
+    { method: 'GET' },
+    HEALTH_CHECK_TIMEOUT_MS
+  ).catch(() => null);
 
   return response?.ok === true;
 }

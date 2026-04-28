@@ -3,7 +3,10 @@ import { join } from 'path';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { loadConfig } from './browserService.js';
+
+const DEFAULT_CDP_TIMEOUT_MS = 10000;
 
 const SELECTORS_FILE = join(PATHS.messages, 'selectors.json');
 
@@ -32,10 +35,8 @@ async function getCdpConnectHost() {
 async function cdpFetch(path, options = {}) {
   const { host, port } = await getCdpConnectHost();
   const url = `http://${host}:${port}${path}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeout || 10000);
-  const response = await fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeout));
-  return response;
+  const { timeout, ...rest } = options;
+  return fetchWithTimeout(url, rest, timeout || DEFAULT_CDP_TIMEOUT_MS);
 }
 
 export async function getPages() {

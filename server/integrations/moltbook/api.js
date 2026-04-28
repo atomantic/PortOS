@@ -9,8 +9,10 @@
 
 import { checkRateLimit, recordAction, syncFromExternal } from './rateLimits.js';
 import { solveChallenge } from './challengeSolver.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 const API_BASE = 'https://www.moltbook.com/api/v1';
+const MOLTBOOK_TIMEOUT_MS = 10000;
 
 /**
  * Infer the rate-limited action type from a Moltbook API endpoint
@@ -44,17 +46,14 @@ async function handleVerification(data, apiKey, aiConfig) {
 
   console.log(`🔐 Submitting verification: code=${code} answer=${answer}`);
 
-  const verifyController = new AbortController();
-  const verifyTimeoutId = setTimeout(() => verifyController.abort(), 10000);
-  const resp = await fetch(`${API_BASE}/verify`, {
+  const resp = await fetchWithTimeout(`${API_BASE}/verify`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
-    body: JSON.stringify({ verification_code: code, answer }),
-    signal: verifyController.signal
-  }).finally(() => clearTimeout(verifyTimeoutId));
+    body: JSON.stringify({ verification_code: code, answer })
+  }, MOLTBOOK_TIMEOUT_MS);
 
   const result = await resp.json().catch(() => ({}));
   if (resp.ok && result.success !== false) {
@@ -84,9 +83,7 @@ async function request(endpoint, options = {}, aiConfig) {
   console.log(`📚 Moltbook API: ${options.method || 'GET'} ${endpoint}`);
 
   let response;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-  const fetchResult = await fetch(url, { ...config, signal: controller.signal }).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e })).finally(() => clearTimeout(timeoutId));
+  const fetchResult = await fetchWithTimeout(url, config, MOLTBOOK_TIMEOUT_MS).then(r => ({ ok: true, response: r }), e => ({ ok: false, error: e }));
 
   if (!fetchResult.ok) {
     console.error(`❌ Moltbook API unreachable: ${fetchResult.error.message}`);

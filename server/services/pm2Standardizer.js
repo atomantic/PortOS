@@ -6,8 +6,10 @@ import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const execAsync = promisify(exec);
+const DEFAULT_PM2_AI_TIMEOUT_MS = 180000;
 
 /**
  * Gather all config files for standardization analysis
@@ -222,20 +224,17 @@ async function executeApiAnalysis(provider, prompt) {
     headers['Authorization'] = `Bearer ${provider.apiKey}`;
   }
 
-  const timeoutMs = provider.timeout || 180000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutMs = provider.timeout || DEFAULT_PM2_AI_TIMEOUT_MS;
 
-  const response = await fetch(`${provider.endpoint}/chat/completions`, {
+  const response = await fetchWithTimeout(`${provider.endpoint}/chat/completions`, {
     method: 'POST',
     headers,
-    signal: controller.signal,
     body: JSON.stringify({
       model: provider.defaultModel,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1
     })
-  }).finally(() => clearTimeout(timer));
+  }, timeoutMs);
 
   if (!response.ok) {
     throw new Error(`API error: ${response.status}`);

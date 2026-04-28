@@ -13,6 +13,7 @@ import { join } from 'path';
 import dns from 'dns/promises';
 import net from 'net';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const FEEDS_FILE = join(PATHS.data, 'feeds.json');
 const MAX_ITEMS_PER_FEED = 100;
@@ -387,14 +388,12 @@ async function fetchFeedXml(url) {
   // Resolve DNS and block private/loopback/link-local IPs (prevents rebinding attacks)
   if (!await isHostSafe(parsed.hostname)) return null;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  const res = await fetch(url, {
-    signal: controller.signal,
+  const feedHeaders = { 'User-Agent': 'PortOS Feed Reader/1.0', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' };
+
+  const res = await fetchWithTimeout(url, {
     redirect: 'manual',
-    headers: { 'User-Agent': 'PortOS Feed Reader/1.0', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' }
-  }).catch(() => null);
-  clearTimeout(timeout);
+    headers: feedHeaders
+  }, FETCH_TIMEOUT_MS).catch(() => null);
 
   // Handle redirects manually to validate each redirect target
   if (res?.status >= 300 && res?.status < 400) {
@@ -404,14 +403,10 @@ async function fetchFeedXml(url) {
     if (!['http:', 'https:'].includes(redirectUrl.protocol)) return null;
     if (!await isHostSafe(redirectUrl.hostname)) return null;
     // Follow the validated redirect
-    const controller2 = new AbortController();
-    const timeout2 = setTimeout(() => controller2.abort(), FETCH_TIMEOUT_MS);
-    const res2 = await fetch(redirectUrl.href, {
-      signal: controller2.signal,
+    const res2 = await fetchWithTimeout(redirectUrl.href, {
       redirect: 'error',
-      headers: { 'User-Agent': 'PortOS Feed Reader/1.0', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' }
-    }).catch(() => null);
-    clearTimeout(timeout2);
+      headers: feedHeaders
+    }, FETCH_TIMEOUT_MS).catch(() => null);
     if (!res2?.ok) return null;
     return res2.text();
   }

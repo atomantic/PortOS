@@ -2,6 +2,7 @@
 // Docs: https://github.com/ggerganov/whisper.cpp/tree/master/examples/server
 
 import { getVoiceConfig } from './config.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 const STT_TIMEOUT_MS = 30_000;
 
@@ -39,23 +40,16 @@ export const transcribe = async (audio, opts = {}) => {
   form.append('prompt', cfg.stt.vocabularyPrompt || DEFAULT_STT_PROMPT);
 
   const started = Date.now();
-  // Combine the internal timeout with the caller's abort signal so barge-in
-  // can tear down an in-flight whisper request. If the caller's signal is
-  // already aborted, short-circuit without hitting the network.
+  // fetchWithTimeout composes our timeout with the caller's abort signal so
+  // barge-in can tear down an in-flight whisper request. If the caller's
+  // signal is already aborted, short-circuit without hitting the network.
   if (opts.signal?.aborted) throw new Error('transcribe aborted');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), STT_TIMEOUT_MS);
-  const onCallerAbort = () => controller.abort();
-  opts.signal?.addEventListener?.('abort', onCallerAbort, { once: true });
 
-  const res = await fetch(`${endpoint}/inference`, {
+  const res = await fetchWithTimeout(`${endpoint}/inference`, {
     method: 'POST',
     body: form,
-    signal: controller.signal,
-  }).finally(() => {
-    clearTimeout(timer);
-    opts.signal?.removeEventListener?.('abort', onCallerAbort);
-  });
+    signal: opts.signal,
+  }, STT_TIMEOUT_MS);
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');

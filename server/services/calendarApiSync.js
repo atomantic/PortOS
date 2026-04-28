@@ -1,6 +1,9 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getToken, clearTokenCache } from './messageTokenExtractor.js';
+
+const GRAPH_API_TIMEOUT_MS = 30000;
 
 function makeExternalId(id) {
   const hash = crypto.createHash('md5').update(id).digest('hex').slice(0, 12);
@@ -76,13 +79,9 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
     page++;
     io?.emit('calendar:sync:event', { accountId: account.id, current: events.length, page });
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="Text"' },
-      signal: controller.signal
-    }).finally(() => clearTimeout(timeout));
+    const response = await fetchWithTimeout(url, {
+      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="Text"' }
+    }, GRAPH_API_TIMEOUT_MS);
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');

@@ -10,6 +10,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
 import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
 import { isToolCapable, isReasoningModel } from './llm.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 
 export const pexec = promisify(execFile);
 
@@ -135,12 +136,9 @@ const waitForWhisper = async (host, port, timeoutMs = 8000) => {
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now();
     const probeTimeout = Math.max(1, Math.min(1000, remaining));
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), probeTimeout);
-    const ok = await fetch(url, { method: 'GET', signal: ctrl.signal })
+    const ok = await fetchWithTimeout(url, { method: 'GET' }, probeTimeout)
       .then(() => true)
-      .catch(() => false)
-      .finally(() => clearTimeout(t));
+      .catch(() => false);
     if (ok) return true;
     const sleep = Math.min(250, Math.max(0, deadline - Date.now()));
     if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));

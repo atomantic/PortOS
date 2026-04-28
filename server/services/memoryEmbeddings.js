@@ -8,6 +8,10 @@
 import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { getProviderById } from './providers.js';
 import { getConfig as getCosConfig } from './cos.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+const MODEL_LIST_TIMEOUT_MS = 10000;
+const MODEL_LOAD_TIMEOUT_MS = 60000;
 
 // Cache for embedding config (loaded from CoS config)
 let embeddingConfig = null;
@@ -29,14 +33,9 @@ async function ensureEmbeddingModelLoaded(config) {
   if (modelEnsured) return;
 
   const baseUrl = getBaseUrl(config);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
 
   // Query LM Studio's native API for all downloaded models
-  const response = await fetch(`${baseUrl}/api/v0/models`, {
-    signal: controller.signal
-  });
-  clearTimeout(timeout);
+  const response = await fetchWithTimeout(`${baseUrl}/api/v0/models`, {}, MODEL_LIST_TIMEOUT_MS);
 
   if (!response.ok) return;
 
@@ -67,15 +66,11 @@ async function ensureEmbeddingModelLoaded(config) {
   const modelToLoad = candidates[0];
   console.log(`📦 Auto-loading embedding model: ${modelToLoad.id}`);
 
-  const loadController = new AbortController();
-  const loadTimeout = setTimeout(() => loadController.abort(), 60000);
-  const loadResponse = await fetch(`${baseUrl}/api/v1/models/load`, {
+  const loadResponse = await fetchWithTimeout(`${baseUrl}/api/v1/models/load`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: modelToLoad.id }),
-    signal: loadController.signal
-  });
-  clearTimeout(loadTimeout);
+    body: JSON.stringify({ model: modelToLoad.id })
+  }, MODEL_LOAD_TIMEOUT_MS);
 
   if (loadResponse.ok) {
     config.embeddingModel = modelToLoad.id;
