@@ -649,8 +649,8 @@ export async function evaluateTasks() {
 
   // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
   const taskSchedule = await import('./taskSchedule.js');
-  const onDemandRequests = await taskSchedule.getOnDemandRequests();
-  const liveSchedule = onDemandRequests.length > 0 ? await taskSchedule.loadSchedule() : null;
+  const liveSchedule = await taskSchedule.loadSchedule();
+  const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
 
   if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {

@@ -5,18 +5,26 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
 }))
 
+// fileUtils mock: include every named export consumed by ./cosState.js too,
+// so vi.importActual('./cosState.js') below resolves cleanly.
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(),
+  ensureDirs: vi.fn().mockResolvedValue(),
   readJSONFile: vi.fn(),
   loadSlashdoFile: vi.fn().mockResolvedValue(''),
-  PATHS: { cos: '/mock/data/cos' },
+  safeJSONParse: (content, fallback) => { try { return JSON.parse(content); } catch { return fallback; } },
+  atomicWrite: vi.fn().mockResolvedValue(),
+  PATHS: { cos: '/mock/data/cos', root: '/mock', reports: '/mock/reports', scripts: '/mock/scripts' },
   HOUR: 60 * 60 * 1000,
   DAY: 24 * 60 * 60 * 1000,
   safeDate: (d) => d ? new Date(d).getTime() : 0
 }))
 
 vi.mock('fs/promises', () => ({
-  writeFile: vi.fn().mockResolvedValue()
+  writeFile: vi.fn().mockResolvedValue(),
+  readFile: vi.fn().mockRejectedValue(new Error('readFile not mocked')),
+  readdir: vi.fn().mockResolvedValue([]),
+  rm: vi.fn().mockResolvedValue()
 }))
 
 vi.mock('fs', () => ({
