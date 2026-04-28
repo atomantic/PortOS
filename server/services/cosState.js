@@ -103,6 +103,13 @@ function isValidJSON(str) {
 // All mutations go through withStateLock, so the cache stays consistent.
 let stateCache = null;
 
+// Master "Improve" flag with backward compat for the legacy split self/app flags.
+// Falls through only when improvementEnabled is null/undefined — explicit `false` wins.
+export function isImprovementEnabled(state) {
+  return state.config.improvementEnabled ??
+    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
+}
+
 export async function loadState() {
   if (stateCache) return stateCache;
 

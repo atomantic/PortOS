@@ -35,7 +35,7 @@ import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '
 import { PORTOS_UI_URL } from '../lib/ports.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, ensureDirectories, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
 // Events and logging (canonical source: cosEvents.js)
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -655,11 +655,8 @@ export async function evaluateTasks() {
     for (const request of onDemandRequests) {
       if (tasksToSpawn.length >= availableSlots) break;
 
-      // Unified on-demand handling (no category split)
-      const improvementEnabled = state.config.improvementEnabled ??
-        (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-
-      if (!improvementEnabled) {
+      if (!isImprovementEnabled(state)) {
+        emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
         await taskSchedule.clearOnDemandRequest(request.id);
         continue;
       }
@@ -912,11 +909,7 @@ export async function evaluateTasks() {
  * @returns {Object|null} Generated task or null if nothing to do
  */
 async function generateIdleReviewTask(state) {
-  // Check if improvement tasks are enabled (unified flag, with backward compat)
-  const improvementEnabled = state.config.improvementEnabled ??
-    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-
-  if (!improvementEnabled) {
+  if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
     return null;
   }
@@ -957,10 +950,7 @@ async function generateIdleReviewTask(state) {
 async function queueEligibleImprovementTasks(state, cosTaskData) {
   const { getDueTasks, shouldRunTask, getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
-  // Check unified improvement flag (with backward compat)
-  const improvementEnabled = state.config.improvementEnabled ??
-    (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-  if (!improvementEnabled) return;
+  if (!isImprovementEnabled(state)) return;
 
   // Get existing pending/in_progress system tasks to avoid duplicates
   // Also skip task types where a user-terminated blocked task exists (user intentionally killed it)
@@ -2281,10 +2271,8 @@ async function dequeueNextTask() {
   for (const request of onDemandRequests) {
     if (spawned >= availableSlots) break;
 
-    // Unified on-demand handling (no category split)
-    const improvEnabled = state.config.improvementEnabled ??
-      (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
-    if (!improvEnabled) {
+    if (!isImprovementEnabled(state)) {
+      emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;
     }

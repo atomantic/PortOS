@@ -20,6 +20,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, ensureDir, HOUR, loadSlashdoFile, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';
+import { loadState, isImprovementEnabled } from './cosState.js';
 import { PORTOS_UI_URL, PORTOS_API_URL } from '../lib/ports.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { parseCronToNextRun } from './eventScheduler.js';
@@ -1892,10 +1893,16 @@ export async function deleteTemplateTask(templateId) {
 export async function triggerOnDemandTask(taskType, appId = null) {
   const schedule = await loadSchedule();
 
-  // Reject if the task type is disabled
+  // Cheap per-task-type check first; the master-flag check pays a state.json read.
   const interval = schedule.tasks[taskType];
   if (interval && !interval.enabled) {
     return { error: `Task type '${taskType}' is disabled` };
+  }
+
+  // Reject if the master Improve toggle is off — request would be silently dropped downstream
+  const state = await loadState();
+  if (!isImprovementEnabled(state)) {
+    return { error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' };
   }
 
   if (!schedule.onDemandRequests) {
@@ -1942,9 +1949,12 @@ export async function clearOnDemandRequest(requestId) {
 // ============================================================
 
 export async function getScheduleStatus() {
-  const schedule = await loadSchedule();
+  // Surface the master Improve toggle so the UI can disable Run Now affordances
+  const [schedule, state] = await Promise.all([loadSchedule(), loadState()]);
+
   const status = {
     lastUpdated: schedule.lastUpdated,
+    improvementEnabled: isImprovementEnabled(state),
     tasks: {},
     templates: schedule.templates,
     onDemandRequests: schedule.onDemandRequests || [],
