@@ -10,6 +10,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as instances from '../services/instances.js';
 import { getSyncStatus } from '../services/syncOrchestrator.js';
+import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { findTailscale } from '../lib/tailscale.js';
@@ -109,6 +110,18 @@ router.get('/tailnet-suffix', asyncHandler(async (req, res) => {
     ips: p.TailscaleIPs ?? []
   }));
   res.json({ suffix, self: (status?.Self?.DNSName ?? '').replace(/\.$/, '') || null, peers });
+}));
+
+// POST /api/instances/provision-cert — runtime equivalent of `npm run setup:cert`.
+// Fetches a Let's Encrypt cert via `tailscale cert` for the local MagicDNS
+// hostname so the user can enable trusted HTTPS without dropping to a shell.
+router.post('/provision-cert', asyncHandler(async (req, res) => {
+  const result = await provisionTailscaleCert();
+  if (!result.ok) {
+    // Map to apiCore.js error envelope so the client auto-toasts the message.
+    return res.status(400).json({ error: result.message, code: result.reason });
+  }
+  res.json(result);
 }));
 
 // GET /api/instances/self — get this instance's identity
