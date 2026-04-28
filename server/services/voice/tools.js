@@ -12,6 +12,7 @@ import { getItems, getFeeds, markItemRead, markAllRead } from '../feeds.js';
 import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timezone.js';
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
+import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
 
@@ -64,6 +65,7 @@ const TOOL_GROUPS = {
   ui_fill: 'ui',
   ui_select: 'ui',
   ui_check: 'ui',
+  ui_ask: 'ask',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -100,6 +102,12 @@ const GROUP_INTENT = {
   // a familiar word), "daily logins" all gate the daily-log toolset on. The
   // \b anchors keep it from matching inside unrelated words like "logging".
   dailylog: /\b(daily ?logi?n?s?|journal|dictat|log entry|log something|to my log|read (?:back )?my log)\b/i,
+  // RAG questions answered by askService — phrasings that need cross-domain
+  // recall (Brain + Memory + Goals + Calendar + Autobiography). Tight on
+  // purpose: the tool is large (consumes a full LLM stream) and we don't
+  // want it stealing turns the cheaper tools handle. Catches "advise me",
+  // "draft a/an X", "what did I decide", "what's on my plate", "ask myself".
+  ask: /\b(?:ask my ?self|advise me|coach me|draft (?:a|an|my|me|something)|what(?:'s| is) on my plate|what (?:did|do|should) i (?:decide|think|believe|say|want|do)|why did i|when did i|recall (?:my|that|when))\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -970,6 +978,72 @@ const TOOLS = [
       if (!hit.entry) return hit.err;
       ctx.sideEffects?.push({ type: 'ui:check', target: { ref: hit.entry.ref, label: hit.entry.label }, checked: !!checked });
       return { ok: true, label: hit.entry.label, checked: !!checked, summary: `${checked ? 'Checked' : 'Unchecked'} ${hit.entry.label}.` };
+    },
+  },
+
+  {
+    name: 'ui_ask',
+    description:
+      'Ask the user\'s digital twin a question that needs retrieval-augmented recall across their Brain (notes, ideas, projects, inbox), Memory (semantic + BM25), Goals, Calendar, and Autobiography. Use for cross-domain questions the cheaper tools cannot answer: ' +
+      '"what did I decide about X?", "advise me on Y given my goals", "draft a status update as me", "what\'s on my plate this afternoon?", "why did I prioritize Z?". ' +
+      'NOT for one-shot lookups (use brain_search / goal_list / feeds_digest / time_now); NOT for capture verbs (use brain_capture / daily_log_append). ' +
+      'The tool returns the answer in `content` — speak `content` verbatim, do NOT summarize or rephrase. Citation markers like [1] [2] in the content should be omitted when reading aloud (they reference source chips on the Ask page).',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The user\'s question, in their own words. Pass through the substantive question — strip leading filler like "hey, can you" but keep the actual content.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['ask', 'advise', 'draft'],
+          description: '"ask" answers as the user (default). "advise" answers as a coach who knows the user. "draft" produces text in the user\'s voice for an external recipient (use for "draft a Slack message", "write an email as me").',
+        },
+      },
+      required: ['question'],
+    },
+    execute: async ({ question, mode = 'ask' } = {}, ctx = {}) => {
+      if (typeof question !== 'string' || !question.trim()) {
+        throw new Error('question is required');
+      }
+      const trimmed = question.trim();
+      const validMode = ASK_VALID_MODES.has(mode) ? mode : 'ask';
+      let answer = '';
+      let sources = [];
+      let providerId = null;
+      let model = null;
+      let errorMsg = null;
+      // runAsk yields { sources, delta, done, error }. Accumulate deltas in
+      // case the provider streams; the terminal `done` event delivers the
+      // canonical full answer + reranked sources, so prefer that when present.
+      for await (const evt of runAsk({ question: trimmed, mode: validMode, signal: ctx.signal })) {
+        if (evt.type === 'sources') sources = evt.sources;
+        else if (evt.type === 'delta') answer += evt.text;
+        else if (evt.type === 'error') { errorMsg = evt.error; break; }
+        else if (evt.type === 'done') {
+          answer = evt.answer;
+          sources = evt.sources;
+          providerId = evt.providerId;
+          model = evt.model;
+        }
+      }
+      if (errorMsg) {
+        return { ok: false, error: errorMsg, summary: `I couldn't answer that — ${errorMsg}` };
+      }
+      const finalAnswer = answer.trim();
+      if (!finalAnswer) {
+        return { ok: false, summary: 'I came up empty on that question.' };
+      }
+      return {
+        ok: true,
+        content: finalAnswer,
+        sourceCount: sources.length,
+        sources: sources.map((s) => ({ kind: s.kind, title: s.title })),
+        providerId,
+        model,
+        summary: `Answered "${trimmed.slice(0, 60)}${trimmed.length > 60 ? '…' : ''}" using ${sources.length} source${sources.length === 1 ? '' : 's'}.`,
+      };
     },
   },
 
