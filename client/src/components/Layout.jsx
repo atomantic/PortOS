@@ -763,9 +763,11 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/city') ||
             /^\/apps\/[^/]+/.test(location.pathname);
+          // Dashboard's grid widgets flex across the full content area; skip the max-w-7xl cap so wide monitors don't show huge side margins.
+          const isFluid = location.pathname === '/';
           return (
             <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
-              {isFullWidth ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
+              {isFullWidth || isFluid ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
             </main>
           );
         })()}
