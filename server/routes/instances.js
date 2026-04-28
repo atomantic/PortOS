@@ -112,9 +112,11 @@ router.get('/tailnet-suffix', asyncHandler(async (req, res) => {
   res.json({ suffix, self: (status?.Self?.DNSName ?? '').replace(/\.$/, '') || null, peers });
 }));
 
-// POST /api/instances/provision-cert — runtime equivalent of `npm run setup:cert`.
-// Fetches a Let's Encrypt cert via `tailscale cert` for the local MagicDNS
-// hostname so the user can enable trusted HTTPS without dropping to a shell.
+// POST /api/instances/provision-cert — runtime helper for the Tailscale/MagicDNS
+// certificate path from `npm run setup:cert` (not the script's self-signed fallback
+// or regeneration logic). Fetches a Let's Encrypt cert via `tailscale cert` for
+// the local MagicDNS hostname so the user can enable trusted HTTPS without dropping
+// to a shell.
 router.post('/provision-cert', asyncHandler(async (req, res) => {
   const result = await provisionTailscaleCert();
   if (!result.ok) {

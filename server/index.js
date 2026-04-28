@@ -91,6 +91,7 @@ import { initSocket } from './services/socket.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler } from './lib/errorHandler.js';
 import { initAutoFixer } from './services/autoFixer.js';
 import { initCertRenewer } from './services/certRenewer.js';
+import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { initTaskLearning } from './services/taskLearning.js';
 import { recordSession, recordMessages } from './services/usage.js';
 import { errorEvents } from './lib/errorHandler.js';
@@ -127,6 +128,7 @@ const CERT_DIR = join(PATHS.data, 'certs');
 const { server: httpServer, mirror: localHttpServer, httpsEnabled } =
   createTailscaleServers(app, { certDir: CERT_DIR });
 const scheme = httpsEnabled ? 'https' : 'http';
+setHttpsEnabledAtBoot(httpsEnabled);
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {

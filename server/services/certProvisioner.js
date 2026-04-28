@@ -1,21 +1,29 @@
 /**
- * Cert provisioner — runtime equivalent of `npm run setup:cert`.
+ * Cert provisioner — runtime equivalent of the Tailscale `setup:cert` path.
  *
  * Invokes `tailscale cert` to fetch a Let's Encrypt cert for this instance's
  * MagicDNS hostname, writes it to data/certs/{cert,key}.pem, and updates
  * meta.json. Returns a structured result the API can surface to the UI.
  *
+ * This service only handles Tailscale-backed certificate provisioning. It
+ * does not generate self-signed certs or implement the regeneration/expiry
+ * logic that exists in scripts/setup-cert.js.
+ *
  * The HTTPS listener type is decided at server boot (lib/tailscale-https.js).
- * If PortOS booted in HTTP mode (no cert present), the new cert only takes
- * effect after a restart — the response sets requiresRestart=true so the UI
- * can prompt the user.
+ * If PortOS booted in HTTP mode, the new cert only takes effect after a
+ * restart — the response sets requiresRestart=true so the UI can prompt the
+ * user. This is keyed off the boot-time HTTPS state (httpsState.js), not
+ * cert file presence, because cert files can exist on disk while the running
+ * process is still serving HTTP (e.g. provision was run twice without a
+ * restart in between).
  */
 import { execFile } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs';
+import { existsSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { promisify } from 'util';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { findTailscale } from '../lib/tailscale.js';
+import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,11 +79,6 @@ export async function provisionTailscaleCert() {
     };
   }
 
-  // If cert files don't exist yet, PortOS booted in HTTP mode — restart is
-  // required to actually serve HTTPS. If they already exist, certRenewer's
-  // hot-swap path will pick up the new cert on its next tick.
-  const httpAtBoot = !existsSync(CERT_PATH) || !existsSync(KEY_PATH);
-
   mkdirSync(CERT_DIR, { recursive: true });
 
   const beforeMtime = existsSync(CERT_PATH) ? statSync(CERT_PATH).mtimeMs : 0;
@@ -110,17 +113,24 @@ export async function provisionTailscaleCert() {
   const afterMtime = statSync(CERT_PATH).mtimeMs;
   const wroteNew = afterMtime > beforeMtime;
 
-  writeFileSync(META_PATH, JSON.stringify({
+  await atomicWrite(META_PATH, {
     mode: 'tailscale',
     hostname,
     issuedAt: new Date().toISOString(),
     certMtime: afterMtime
-  }, null, 2));
+  });
 
-  console.log(`🔒 Provisioned Tailscale cert for ${hostname} (new=${wroteNew}, restart=${httpAtBoot})`);
+  // requiresRestart is keyed off the boot-time HTTPS state, not cert file
+  // presence. The listener type was frozen at boot — if PortOS started in
+  // HTTP mode, no amount of subsequent provisioning can flip it without a
+  // restart, even when the cert files now exist on disk.
+  const httpsState = getHttpsEnabledAtBoot();
+  const requiresRestart = !httpsState.value;
 
-  const restartHint = httpAtBoot
-    ? ' Restart PortOS (npm start) to enable HTTPS on :5555.'
+  console.log(`🔒 Provisioned Tailscale cert for ${hostname} (new=${wroteNew}, restart=${requiresRestart})`);
+
+  const restartHint = requiresRestart
+    ? ' Restart PortOS to enable HTTPS on :5555.'
     : '';
 
   return {
@@ -128,7 +138,7 @@ export async function provisionTailscaleCert() {
     mode: 'tailscale',
     hostname,
     wroteNew,
-    requiresRestart: httpAtBoot,
+    requiresRestart,
     message: `Cert installed for ${hostname}.${restartHint}`
   };
 }
