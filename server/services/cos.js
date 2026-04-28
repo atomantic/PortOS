@@ -650,6 +650,7 @@ export async function evaluateTasks() {
   // Priority 0: On-demand task requests (highest priority - user explicitly requested these)
   const taskSchedule = await import('./taskSchedule.js');
   const onDemandRequests = await taskSchedule.getOnDemandRequests();
+  const liveSchedule = onDemandRequests.length > 0 ? await taskSchedule.loadSchedule() : null;
 
   if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {
@@ -657,6 +658,13 @@ export async function evaluateTasks() {
 
       if (!isImprovementEnabled(state)) {
         emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
+        await taskSchedule.clearOnDemandRequest(request.id);
+        continue;
+      }
+
+      // Skip if the task type was disabled or removed after queuing — parity with dequeueNextTask.
+      if (!liveSchedule.tasks[request.taskType]?.enabled) {
+        emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
         await taskSchedule.clearOnDemandRequest(request.id);
         continue;
       }

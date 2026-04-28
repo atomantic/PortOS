@@ -1894,8 +1894,11 @@ export async function triggerOnDemandTask(taskType, appId = null) {
   const schedule = await loadSchedule();
 
   // Cheap per-task-type check first; the master-flag check pays a state.json read.
-  const interval = schedule.tasks[taskType];
-  if (interval && !interval.enabled) {
+  const tasks = schedule.tasks || {};
+  if (!Object.prototype.hasOwnProperty.call(tasks, taskType)) {
+    return { error: `Unknown task type '${taskType}'` };
+  }
+  if (!tasks[taskType].enabled) {
     return { error: `Task type '${taskType}' is disabled` };
   }
 

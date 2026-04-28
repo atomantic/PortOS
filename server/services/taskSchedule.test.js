@@ -535,6 +535,17 @@ describe('taskSchedule', () => {
       expect(loadState).not.toHaveBeenCalled()
     })
 
+    it('should reject unknown task types instead of silently queuing them', async () => {
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('not-a-real-type', 'critical-mass')
+
+      expect(result.error).toMatch(/unknown task type 'not-a-real-type'/i)
+      expect(loadState).not.toHaveBeenCalled()
+    })
+
     it('should fall back to legacy split flags when improvementEnabled is undefined', async () => {
       mockSchedule({
         tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
