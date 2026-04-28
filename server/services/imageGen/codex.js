@@ -185,35 +185,43 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta) {
   proc.on('close', async (code, signal) => {
     clearTimeout(timeoutTimer);
     activeProcess = null;
-    if (code !== 0) {
-      const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
-      const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
-      return finalizeError(job, jobId, `Codex generation failed: ${reason}\n${tail}`);
+    // EventEmitter doesn't await async listeners — without this try/catch,
+    // a throw from harvestLatestImage / copyFile would surface as an
+    // unhandled rejection (process-killing on Node ≥15) and the job would
+    // be stuck in 'running' forever with no SSE error to the client.
+    try {
+      if (code !== 0) {
+        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+        const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+        return finalizeError(job, jobId, `Codex generation failed: ${reason}\n${tail}`);
+      }
+      if (!sessionId) {
+        return finalizeError(job, jobId, 'Codex returned no session id — output format may have changed');
+      }
+      // Codex writes the PNG asynchronously while it's wrapping up the turn.
+      // Empirically the file is on disk by the time `codex exec` exits, but
+      // poll for a few seconds in case there's a flush lag on slow disks.
+      const harvested = await harvestLatestImage(sessionId, 5000);
+      if (!harvested) {
+        return finalizeError(
+          job, jobId,
+          'Codex returned no image — your Codex account may not allow image_gen, or the model declined. Check Settings → Image Gen → Enable Codex Imagegen.',
+        );
+      }
+      await copyFile(harvested, outputPath);
+      // Sidecar metadata so the gallery can recover prompt/seed/etc.
+      const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
+      await writeFile(sidecar, JSON.stringify(meta, null, 2)).catch(() => {});
+      job.status = 'complete';
+      activeJob = null;
+      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
+      const result = { filename, path: `/data/images/${filename}` };
+      broadcastSse(job, { type: 'complete', result });
+      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
+      closeJobAfterDelay(jobs, jobId);
+    } catch (err) {
+      finalizeError(job, jobId, `Codex post-exit handler failed: ${err?.message || err}`);
     }
-    if (!sessionId) {
-      return finalizeError(job, jobId, 'Codex returned no session id — output format may have changed');
-    }
-    // Codex writes the PNG asynchronously while it's wrapping up the turn.
-    // Empirically the file is on disk by the time `codex exec` exits, but
-    // poll for a few seconds in case there's a flush lag on slow disks.
-    const harvested = await harvestLatestImage(sessionId, 5000);
-    if (!harvested) {
-      return finalizeError(
-        job, jobId,
-        'Codex returned no image — your Codex account may not allow image_gen, or the model declined. Check Settings → Image Gen → Enable Codex Imagegen.',
-      );
-    }
-    await copyFile(harvested, outputPath);
-    // Sidecar metadata so the gallery can recover prompt/seed/etc.
-    const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-    await writeFile(sidecar, JSON.stringify(meta, null, 2)).catch(() => {});
-    job.status = 'complete';
-    activeJob = null;
-    console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
-    const result = { filename, path: `/data/images/${filename}` };
-    broadcastSse(job, { type: 'complete', result });
-    imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
-    closeJobAfterDelay(jobs, jobId);
   });
 }
 

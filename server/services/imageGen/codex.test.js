@@ -225,6 +225,49 @@ describe('codex provider — image harvest', () => {
     await flush();
   });
 
+  it('routes async errors in the close handler through finalizeError (no unhandled rejections)', async () => {
+    // Simulate copyFile throwing — happens in the wild when data/images is
+    // read-only, the disk is full, or the harvested PNG is unreadable.
+    // Without the try/catch the async EventEmitter listener would surface
+    // an unhandled rejection and leave the job stuck in 'running'.
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+    await mkdir(codexDir, { recursive: true });
+    await writeFile(join(codexDir, 'ig_a.png'), Buffer.from('x'));
+
+    const failedListener = vi.fn();
+    imageGenEvents.on('failed', failedListener);
+
+    // Force copyFile to throw by removing write access on FAKE_IMAGES_DIR
+    // — easier than mocking fs/promises which is already partially mocked.
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    const { chmod } = await import('fs/promises');
+    await chmod(FAKE_IMAGES_DIR, 0o555);
+
+    let unhandled = null;
+    const onUnhandled = (reason) => { unhandled = reason; };
+    process.on('unhandledRejection', onUnhandled);
+
+    await codex.generateImage({ prompt: 'a fox' });
+    const child = spawnCalls[0].child;
+    child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && failedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // Restore write perms so afterEach cleanup can rm the tree.
+    await chmod(FAKE_IMAGES_DIR, 0o755);
+    process.off('unhandledRejection', onUnhandled);
+
+    expect(failedListener).toHaveBeenCalledTimes(1);
+    expect(failedListener.mock.calls[0][0].error).toMatch(/post-exit handler failed/i);
+    expect(unhandled).toBeNull();
+  }, 8000);
+
   it('emits a failed event when codex exits non-zero', async () => {
     const failedListener = vi.fn();
     imageGenEvents.on('failed', failedListener);
