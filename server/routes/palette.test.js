@@ -81,12 +81,13 @@ describe('GET /api/palette/manifest', () => {
     expect(brainCapture.parameters?.properties?.text).toBeTruthy();
   });
 
-  it('excludes ui_* tools (only runnable inside voice DOM context)', async () => {
+  it('excludes DOM-driving ui_* tools (ui_click / ui_fill / ui_navigate need a live voice DOM); ui_ask is the explicit exception', async () => {
     const res = await request(makeApp()).get('/api/palette/manifest');
     const ids = res.body.actions.map((a) => a.id);
     expect(ids).not.toContain('ui_click');
     expect(ids).not.toContain('ui_fill');
     expect(ids).not.toContain('ui_navigate');
+    expect(ids).toContain('ui_ask');
   });
 });
 

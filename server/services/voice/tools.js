@@ -987,7 +987,7 @@ const TOOLS = [
       'Ask the user\'s digital twin a question that needs retrieval-augmented recall across their Brain (notes, ideas, projects, inbox), Memory (semantic + BM25), Goals, Calendar, and Autobiography. Use for cross-domain questions the cheaper tools cannot answer: ' +
       '"what did I decide about X?", "advise me on Y given my goals", "draft a status update as me", "what\'s on my plate this afternoon?", "why did I prioritize Z?". ' +
       'NOT for one-shot lookups (use brain_search / goal_list / feeds_digest / time_now); NOT for capture verbs (use brain_capture / daily_log_append). ' +
-      'The tool returns the answer in `content` — speak `content` verbatim, do NOT summarize or rephrase. Citation markers like [1] [2] in the content should be omitted when reading aloud (they reference source chips on the Ask page).',
+      'The tool returns the answer in `content` — speak `content` directly without summarizing or rephrasing it. Skip citation markers like [1] [2] when reading aloud (they reference source chips on the Ask page).',
     parameters: {
       type: 'object',
       properties: {
@@ -1009,20 +1009,21 @@ const TOOLS = [
       }
       const trimmed = question.trim();
       const validMode = ASK_VALID_MODES.has(mode) ? mode : 'ask';
-      let answer = '';
+      const deltas = [];
+      let doneAnswer = null;
       let sources = [];
       let providerId = null;
       let model = null;
       let errorMsg = null;
-      // runAsk yields { sources, delta, done, error }. Accumulate deltas in
-      // case the provider streams; the terminal `done` event delivers the
-      // canonical full answer + reranked sources, so prefer that when present.
+      // runAsk yields { sources, delta, done, error }. Collect deltas into an array
+      // (avoids O(n²) string reallocation on long answers); the terminal `done` event
+      // delivers the canonical full answer + reranked sources and supersedes deltas.
       for await (const evt of runAsk({ question: trimmed, mode: validMode, signal: ctx.signal })) {
         if (evt.type === 'sources') sources = evt.sources;
-        else if (evt.type === 'delta') answer += evt.text;
+        else if (evt.type === 'delta') deltas.push(evt.text);
         else if (evt.type === 'error') { errorMsg = evt.error; break; }
         else if (evt.type === 'done') {
-          answer = evt.answer;
+          doneAnswer = evt.answer;
           sources = evt.sources;
           providerId = evt.providerId;
           model = evt.model;
@@ -1031,7 +1032,7 @@ const TOOLS = [
       if (errorMsg) {
         return { ok: false, error: errorMsg, summary: `I couldn't answer that — ${errorMsg}` };
       }
-      const finalAnswer = answer.trim();
+      const finalAnswer = (doneAnswer ?? deltas.join('')).trim();
       if (!finalAnswer) {
         return { ok: false, summary: 'I came up empty on that question.' };
       }

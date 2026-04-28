@@ -19,10 +19,12 @@ import { dispatchTool, getToolMetadata } from '../services/voice/tools.js';
 
 const router = Router();
 
-// Palette-safe subset of voice tools. Excluded: ui_* (need a live voice DOM
-// context), dictation toggles (voice-widget state), daily_log_open (pushes a
-// sideEffect HTTP callers can't consume). pm2_restart is flagged destructive
-// so the client can confirm.
+// Palette-safe subset of voice tools. Excluded: DOM-driving ui_* tools
+// (ui_click/ui_fill/ui_navigate need a live voice DOM context), dictation
+// toggles (voice-widget state), daily_log_open (pushes a sideEffect HTTP
+// callers can't consume). ui_ask is the explicit exception — it has no DOM
+// dependency and runs the same askService pipeline a non-voice caller wants.
+// pm2_restart is flagged destructive so the client can confirm.
 const PALETTE_ACTIONS = [
   { id: 'brain_capture',           label: 'Capture to Brain',        section: 'Brain' },
   { id: 'brain_search',            label: 'Search Brain',            section: 'Brain' },
