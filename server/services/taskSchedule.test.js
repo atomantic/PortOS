@@ -138,6 +138,26 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('test-coverage')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
+    })
+  })
+
+  describe('do-replan task type', () => {
+    it('should default to weekly, disabled, with worktree+PR metadata', async () => {
+      const interval = await getTaskInterval('do-replan')
+      expect(interval.type).toBe('weekly')
+      expect(interval.enabled).toBe(false)
+      expect(interval.taskMetadata?.useWorktree).toBe(true)
+      expect(interval.taskMetadata?.openPR).toBe(true)
+    })
+
+    it('should expose a default prompt that delegates to the slashdo command', () => {
+      const prompt = getDefaultPrompt('do-replan')
+      expect(prompt).toBeDefined()
+      expect(prompt).toContain('Replan')
+      expect(prompt).toContain('{appName}')
+      expect(prompt).toContain('{repoPath}')
+      expect(prompt).toContain('{slashdoReplan}')
     })
   })
 
@@ -486,6 +506,15 @@ describe('taskSchedule', () => {
       const prompt = await getTaskPrompt('unknown-type')
       expect(prompt).toContain('unknown-type')
       expect(prompt).toContain('{repoPath}')
+    })
+
+    it('should substitute {slashdoReplan} with the bundled replan command body', async () => {
+      const { loadSlashdoFile } = await import('../lib/fileUtils.js')
+      loadSlashdoFile.mockResolvedValueOnce('# Replan Command\n\nSentinel body for substitution test.')
+      const prompt = await getTaskPrompt('do-replan')
+      expect(prompt).not.toContain('{slashdoReplan}')
+      expect(prompt).toContain('Sentinel body for substitution test.')
+      expect(loadSlashdoFile).toHaveBeenCalledWith('replan', { stripFrontmatter: true })
     })
   })
 

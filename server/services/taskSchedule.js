@@ -706,6 +706,20 @@ Do NOT comment on JIRA tickets directly — all action items go to the Review Hu
 
 9. Generate a summary report covering triage actions taken and implementation work completed`,
 
+  'do-replan': `[Improvement: {appName}] Replan — Audit PLAN.md
+
+Run the project's \`/do:replan\` slashdo command for {appName} in autonomous (non-interactive) mode.
+
+Repository: {repoPath}
+
+The full \`/do:replan\` command body follows. Apply it to {repoPath} exactly as written, then commit any changes. Default mode is autonomous — do NOT prompt the user; run \`--interactive\` only if the user has explicitly asked for it (they have not).
+
+Scope: this task operates against the managed app's repository, NOT PortOS. All edits must land in {repoPath} (PLAN.md, DONE.md, GOALS.md, docs/) — never write to PortOS itself.
+
+---
+
+{slashdoReplan}`,
+
   'jira-status-report': `[Task: {appName}] JIRA Weekly Status Report
 
 Generate a JIRA status report for {appName} (App ID: {appId}).
@@ -1260,13 +1274,13 @@ Before reviewing code quality, scan each PR for malicious content:
   ]
 };
 
-// Unified default interval settings for all 19 task types
+// Unified default interval settings for all task types
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
-  'jira-sprint-manager', 'jira-status-report'
+  'jira-sprint-manager', 'jira-status-report', 'do-replan'
 ];
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
@@ -1292,7 +1306,8 @@ const DEFAULT_TASK_INTERVALS = {
   'code-reviewer-a':     { ...CODE_REVIEWER_INTERVAL },
   'code-reviewer-b':     { ...CODE_REVIEWER_INTERVAL },
   'jira-sprint-manager': { type: INTERVAL_TYPES.DAILY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
-  'jira-status-report':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true } }
+  'jira-status-report':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true } },
+  'do-replan':           { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true } }
 };
 
 /**
@@ -2065,18 +2080,22 @@ export function getDefaultPrompt(taskType) {
   return DEFAULT_TASK_PROMPTS[taskType] || null;
 }
 
-// Cache the review checklist content (loaded from bundled slashdo submodule)
-let _reviewChecklistCache = null;
-async function loadReviewChecklist() {
-  if (_reviewChecklistCache) return _reviewChecklistCache;
-  _reviewChecklistCache = await loadSlashdoFile('review', { stripFrontmatter: true }) || '';
-  return _reviewChecklistCache;
+// Cache slashdo command bodies loaded from the bundled submodule
+const _slashdoCache = {};
+async function loadSlashdoCommandBody(commandName) {
+  if (_slashdoCache[commandName]) return _slashdoCache[commandName];
+  _slashdoCache[commandName] = await loadSlashdoFile(commandName, { stripFrontmatter: true }) || '';
+  return _slashdoCache[commandName];
 }
 
 async function resolvePromptPlaceholders(prompt) {
   if (prompt.includes('{reviewChecklist}')) {
-    const checklist = await loadReviewChecklist().catch(() => '');
+    const checklist = await loadSlashdoCommandBody('review').catch(() => '');
     prompt = prompt.replace(/\{reviewChecklist\}/g, checklist);
+  }
+  if (prompt.includes('{slashdoReplan}')) {
+    const replan = await loadSlashdoCommandBody('replan').catch(() => '');
+    prompt = prompt.replace(/\{slashdoReplan\}/g, replan);
   }
   return prompt;
 }

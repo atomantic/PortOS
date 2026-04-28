@@ -769,17 +769,24 @@ describe('CoS Routes', () => {
   });
 
   describe('POST /api/cos/tasks/slashdo', () => {
-    it('should create a task from a slashdo command', async () => {
+    it.each([
+      'push',
+      'review',
+      'replan',
+      'release',
+      'better',
+      'better-swift'
+    ])('should create a task from slashdo command %s', async (command) => {
       loadSlashdoCommand.mockResolvedValue('command content');
-      cos.addTask.mockResolvedValue({ id: 'task-sd1', status: 'pending' });
+      cos.addTask.mockResolvedValue({ id: `task-sd-${command}`, status: 'pending' });
 
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
-        .send({ command: 'push', app: 'my-app' });
+        .send({ command, app: 'my-app' });
 
       expect(response.status).toBe(200);
-      expect(response.body.id).toBe('task-sd1');
-      expect(loadSlashdoCommand).toHaveBeenCalledWith('push');
+      expect(response.body.id).toBe(`task-sd-${command}`);
+      expect(loadSlashdoCommand).toHaveBeenCalledWith(command);
     });
 
     it('should return 400 for invalid command', async () => {
