@@ -218,7 +218,7 @@ Existing events the city should hook into more deeply:
 - `cos:status`, `cos:log` (already used)
 - `tasks:cos:created` / `changed` / `completed` (Phase 2.2)
 - `ai:status` (Phase 2.1)
-- `app:deploy:start/step/complete/error` (Phase 1.13, 2.10)
+- `app:deploy:start/step/complete/error` (Phase 1.10, 2.10)
 - `backup:started` / `completed` (Phase 2.3)
 - `voice:idle` / `dictation` / `error` (Phase 2.4)
 - `system:critical-error` / `health:check` / `health:critical` (Phase 1.4, 1.7)
