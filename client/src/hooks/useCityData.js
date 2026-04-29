@@ -54,8 +54,15 @@ export const useCityData = () => {
     setLoading(false);
   }, []);
 
+  const healthInFlightRef = useRef(false);
   const fetchHealth = useCallback(async () => {
+    // In-flight guard: a slow /system/health/details (>15s) would otherwise
+    // let the next interval tick fire a concurrent request. Drop the new tick
+    // when one is already pending; the next interval picks up fresh state.
+    if (healthInFlightRef.current) return;
+    healthInFlightRef.current = true;
     const health = await api.getSystemHealth({ silent: true }).catch(() => null);
+    healthInFlightRef.current = false;
     if (!health) return;
     setSystemHealth(prev => {
       if (prev && healthSignature(prev) === healthSignature(health)) return prev;
