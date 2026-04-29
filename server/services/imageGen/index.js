@@ -61,6 +61,13 @@ export async function generateImage(params) {
   }
   // Strip the dispatcher-only `mode` field — providers don't expect it.
   delete normalized.mode;
+  // i2i is only supported by the local mflux backend. If the caller passed an
+  // init image for external/codex, drop it silently rather than failing the
+  // whole render — the prompt still produces a useful txt2img result.
+  if (mode !== 'local' && (normalized.initImagePath || normalized.initImageStrength != null)) {
+    delete normalized.initImagePath;
+    delete normalized.initImageStrength;
+  }
   if (mode === 'codex') {
     const c = codexCfg(s);
     if (!c.enabled) {

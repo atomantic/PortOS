@@ -70,7 +70,7 @@ export const cancel = () => {
   return true;
 };
 
-const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir }) => {
+const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
   if (IS_WIN) {
     const scriptPath = join(PATHS.root, 'scripts', 'imagine_win.py');
     return {
@@ -80,6 +80,8 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
         ...(negativePrompt ? ['--negative-prompt', negativePrompt] : []),
         ...(loraPaths.length ? ['--lora-paths', ...loraPaths] : []),
         ...(loraScales.length ? ['--lora-scales', ...loraScales.map(String)] : []),
+        ...(initImagePath ? ['--image-path', initImagePath] : []),
+        ...(initImagePath && initImageStrength != null ? ['--image-strength', String(initImageStrength)] : []),
       ],
     };
   }
@@ -90,6 +92,8 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (loraPaths.length) args.push('--lora-paths', ...loraPaths);
   if (loraScales.length) args.push('--lora-scales', ...loraScales.map(String));
+  if (initImagePath) args.push('--image-path', initImagePath);
+  if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
   // mflux writes one PNG per step here as it diffuses; we watch the dir and
   // stream the latest frame back to the client as `currentImage` for the
   // live-preview area.
@@ -97,7 +101,7 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [] }) {
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Enforce the single-activeProcess invariant the rest of this module relies
@@ -136,7 +140,21 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // what the new client API uses for remix. Keep `loraPaths` populated too
   // so older code paths reading the sidecar don't break.
   const validLoraFilenames = validLoras.map((p) => basename(p));
-  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, createdAt: new Date().toISOString() };
+  // i2i: validate the init image path stays under PATHS.images so a malicious
+  // payload (or a stale absolute path from an old sidecar) can't make mflux
+  // read arbitrary files. If the caller passes a basename, the route layer
+  // already resolved it to PATHS.images/<basename>; this is a defense-in-depth
+  // check here too.
+  let validInitImagePath = null;
+  if (initImagePath && typeof initImagePath === 'string') {
+    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+    const resolved = resolvePath(initImagePath);
+    if (resolved.startsWith(imagesRoot) && existsSync(resolved)) validInitImagePath = resolved;
+  }
+  const validInitImageStrength = validInitImagePath && initImageStrength != null
+    ? Math.max(0, Math.min(1, Number(initImageStrength)))
+    : null;
+  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, createdAt: new Date().toISOString() };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
@@ -144,7 +162,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // per inference step here; we watch and stream the latest as `currentImage`.
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
 
-  const { bin, args } = buildArgs({ pythonPath, modelId, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir });
+  const { bin, args } = buildArgs({ pythonPath, modelId, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength });
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
@@ -311,6 +329,20 @@ export async function deleteImage(filename) {
   await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
   return { ok: true };
+}
+
+export async function setImageHidden(filename, hidden) {
+  if (!filename.endsWith('.png') || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
+  const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
+  const sidecarPath = existsSync(portosSidecar) ? portosSidecar : (existsSync(altSidecar) ? altSidecar : portosSidecar);
+  const raw = await readFile(sidecarPath, 'utf-8').catch(() => null);
+  const meta = raw ? safeJSONParse(raw, {}) : {};
+  meta.hidden = !!hidden;
+  await writeFile(sidecarPath, JSON.stringify(meta, null, 2));
+  return { ok: true, hidden: meta.hidden };
 }
 
 // Returns just `{ filename, name }` — clients send `filename` back in the

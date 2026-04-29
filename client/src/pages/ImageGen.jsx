@@ -8,7 +8,7 @@
  * "Enable Codex Imagegen" toggle in Settings; otherwise its chip is hidden.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -24,7 +24,8 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
 import {
   getImageGenStatus, generateImage, listImageModels, listLoras, listImageGallery,
-  cancelImageGen, deleteImage, getActiveImageJob, getSettings,
+  cancelImageGen, deleteImage, setImageHidden, getActiveImageJob, getSettings,
+  buildFormData,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
@@ -54,6 +55,7 @@ export default function ImageGen() {
   const [availableLoras, setAvailableLoras] = useState([]);
   const [gallery, setGallery] = useState([]);
   const [preview, setPreview] = useState(null);
+  const [showHidden, setShowHidden] = useState(false);
 
   const [selectedMode, setSelectedMode] = useState(null);
   const [availableBackends, setAvailableBackends] = useState([]);
@@ -69,6 +71,12 @@ export default function ImageGen() {
   const [quantize, setQuantize] = useState('8');
   const [seed, setSeed] = useState('');
   const [selectedLoras, setSelectedLoras] = useState([]);
+
+  // i2i (Flux, local mflux only). source='upload' carries `file`; source='gallery'
+  // carries `name` (basename from URL param). Coupled lifetime — always replace
+  // the whole object so previewUrl can never out-live its file/name.
+  const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
+  const [initImageStrength, setInitImageStrength] = useState(0.4);
 
   const [generating, setGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
@@ -187,6 +195,32 @@ export default function ImageGen() {
     refreshStatus(effectiveMode);
   }, [effectiveMode, refreshStatus]);
 
+  // ?initImageFile=foo.png pre-fills from a gallery basename — supports a
+  // future "Send to Image (i2i)" gallery action.
+  useEffect(() => {
+    const fromUrl = searchParams.get('initImageFile');
+    if (fromUrl && initImage.source == null) {
+      setInitImage({ source: 'gallery', file: null, name: fromUrl, previewUrl: `/data/images/${fromUrl}` });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const handlePickInitImage = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
+    setInitImage({ source: 'upload', file, name: file.name, previewUrl: URL.createObjectURL(file) });
+  };
+  const handleClearInitImage = () => {
+    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
+    setInitImage({ source: null, file: null, name: null, previewUrl: null });
+  };
+  // Object URL cleanup on unmount.
+  useEffect(() => () => {
+    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // When the user closes the Settings drawer, settings may have changed
   // (e.g. they enabled Codex or configured a new external URL). Reload so
   // the chip strip matches the new state without a page refresh.
@@ -201,6 +235,10 @@ export default function ImageGen() {
   const currentModel = models.find((m) => m.id === modelId);
   const matchedResolution = RESOLUTIONS.find((r) => r.w === width && r.h === height);
   const resolutionLabel = matchedResolution?.label || `${width}×${height}`;
+  const { visibleGallery, hiddenGallery } = useMemo(() => ({
+    visibleGallery: gallery.filter((img) => !img.hidden),
+    hiddenGallery: gallery.filter((img) => img.hidden),
+  }), [gallery]);
 
   const handleResolutionChange = (e) => {
     const r = RESOLUTIONS.find((r) => r.label === e.target.value);
@@ -233,7 +271,26 @@ export default function ImageGen() {
       loraScales: selectedLoras.map((l) => l.scale),
       mode: 'local',
     };
-    const data = await generateImage(payload);
+    // i2i (local Flux): switch to multipart so the init image travels with
+    // the prompt payload. The route's optional-multipart middleware accepts
+    // both shapes against the same endpoint.
+    const hasInitImage = isLocalMode && initImage.source != null;
+    let data;
+    if (hasInitImage) {
+      const fd = buildFormData({
+        ...payload,
+        ...(initImage.source === 'upload' ? { initImage: initImage.file } : { initImageFile: initImage.name }),
+        initImageStrength,
+      });
+      const res = await fetch('/api/image-gen/generate', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      data = await res.json();
+    } else {
+      data = await generateImage(payload);
+    }
 
     return new Promise((resolve, reject) => {
       const jobId = data.jobId || data.generationId;
@@ -332,6 +389,17 @@ export default function ImageGen() {
   const handleDelete = async (filename) => {
     await deleteImage(filename).catch(() => {});
     setGallery((g) => g.filter((img) => img.filename !== filename));
+  };
+
+  const handleToggleHidden = async (img) => {
+    const nextHidden = !img.hidden;
+    setGallery((g) => g.map((x) => (x.filename === img.filename ? { ...x, hidden: nextHidden } : x)));
+    const result = await setImageHidden(img.filename, nextHidden).catch((err) => {
+      toast.error(err.message || 'Failed to update visibility');
+      setGallery((g) => g.map((x) => (x.filename === img.filename ? { ...x, hidden: !nextHidden } : x)));
+      return null;
+    });
+    if (result) toast.success(nextHidden ? 'Image hidden' : 'Image unhidden');
   };
 
   const sendToVideo = (img) => {
@@ -616,6 +684,55 @@ export default function ImageGen() {
             </div>
           )}
 
+          {isLocalMode && (
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Init image <span className="text-xs text-gray-500 font-normal">(image-to-image — Flux only)</span>
+              </label>
+              {initImage.previewUrl ? (
+                <div className="flex items-start gap-3">
+                  <div className="relative">
+                    <img
+                      src={initImage.previewUrl}
+                      alt="Init"
+                      className="w-24 h-24 object-cover rounded-lg border border-port-border bg-port-bg"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleClearInitImage}
+                      disabled={generating}
+                      className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+                      title="Remove init image"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <div className="text-xs text-gray-400 truncate" title={initImage.name}>
+                      {initImage.name}
+                    </div>
+                    <label className="block text-xs text-gray-400">
+                      Strength ({initImageStrength.toFixed(2)}) — lower = closer to source, higher = freer remix
+                    </label>
+                    <input
+                      type="range" min={0} max={1} step={0.05}
+                      value={initImageStrength}
+                      disabled={generating}
+                      onChange={(e) => setInitImageStrength(Number(e.target.value))}
+                      className="w-full accent-port-accent"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <label className="flex items-center justify-center gap-2 w-full px-3 py-3 border border-dashed border-port-border rounded-lg text-xs text-gray-400 hover:text-white hover:border-port-accent cursor-pointer transition-colors">
+                  <ImageIcon className="w-4 h-4" />
+                  Upload an image to remix (PNG, JPG, WebP, ≤20MB)
+                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handlePickInitImage} disabled={generating} />
+                </label>
+              )}
+            </div>
+          )}
+
           <div className="flex items-center gap-2 pt-2">
             {generating ? (
               <button
@@ -695,16 +812,16 @@ export default function ImageGen() {
         </div>
       </form>
 
-      {gallery.length > 0 && (
+      {visibleGallery.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-gray-300">Recent renders ({Math.min(gallery.length, 6)} of {gallery.length})</h2>
-            {gallery.length > 6 && (
+            <h2 className="text-sm font-medium text-gray-300">Recent renders ({Math.min(visibleGallery.length, 6)} of {visibleGallery.length})</h2>
+            {visibleGallery.length > 6 && (
               <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
             )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            {gallery.slice(0, 6).map((img) => {
+            {visibleGallery.slice(0, 6).map((img) => {
               const item = normalizeImage(img);
               return (
                 <MediaCard
@@ -714,10 +831,42 @@ export default function ImageGen() {
                   onRemix={() => handleRemix(img)}
                   onSendToVideo={() => sendToVideo(img)}
                   onDelete={() => handleDelete(img.filename)}
+                  onToggleHidden={() => handleToggleHidden(item)}
                 />
               );
             })}
           </div>
+        </div>
+      )}
+
+      {hiddenGallery.length > 0 && (
+        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
+          <button
+            type="button"
+            onClick={() => setShowHidden((s) => !s)}
+            className="flex items-center justify-between w-full text-sm font-medium text-gray-300 hover:text-white"
+          >
+            <span>{showHidden ? 'Hide' : 'Show'} hidden ({hiddenGallery.length})</span>
+            <span className="text-xs text-gray-500">{showHidden ? '▾' : '▸'}</span>
+          </button>
+          {showHidden && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {hiddenGallery.map((img) => {
+                const item = normalizeImage(img);
+                return (
+                  <MediaCard
+                    key={item.key}
+                    item={item}
+                    onPreview={() => setPreview(img)}
+                    onRemix={() => handleRemix(img)}
+                    onSendToVideo={() => sendToVideo(img)}
+                    onDelete={() => handleDelete(img.filename)}
+                    onToggleHidden={() => handleToggleHidden(item)}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

@@ -39,6 +39,18 @@ export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
   };
 }
 
+// Wrap uploadSingle so the parser only kicks in for multipart bodies — JSON
+// callers fall through untouched. Useful when an existing JSON endpoint adds
+// optional file-upload support without breaking back-compat.
+export function optionalUpload(fieldName, opts) {
+  const uploader = uploadSingle(fieldName, opts);
+  return (req, res, next) => {
+    const ct = req.headers['content-type'] || '';
+    if (!ct.startsWith('multipart/form-data')) return next();
+    return uploader(req, res, next);
+  };
+}
+
 function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next) {
   const PART_DELIM = Buffer.from('\r\n--' + boundary);
   const FIRST_DELIM = Buffer.from('--' + boundary);

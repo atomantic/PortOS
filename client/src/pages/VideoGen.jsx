@@ -7,7 +7,7 @@
  * straight into video.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -22,7 +22,7 @@ import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
-  listVideoHistory, deleteVideoHistoryItem, extractLastFrame,
+  listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
@@ -88,6 +88,7 @@ export default function VideoGen() {
   }, [incomingNegativePrompt]);
   const [history, setHistory] = useState([]);
   const [preview, setPreview] = useState(null);
+  const [showHidden, setShowHidden] = useState(false);
   const navigate = useNavigate();
 
   const refreshHistory = useCallback(() => {
@@ -95,9 +96,24 @@ export default function VideoGen() {
   }, []);
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
 
+  const { visibleHistory, hiddenHistory } = useMemo(() => ({
+    visibleHistory: history.filter((v) => !v.hidden),
+    hiddenHistory: history.filter((v) => v.hidden),
+  }), [history]);
+
   const handleDeleteHistory = async (item) => {
     await deleteVideoHistoryItem(item.id).catch((err) => toast.error(err.message || 'Delete failed'));
     setHistory((h) => h.filter((v) => v.id !== item.id));
+  };
+  const handleToggleHistoryHidden = async (item) => {
+    const nextHidden = !item.hidden;
+    setHistory((h) => h.map((v) => (v.id === item.id ? { ...v, hidden: nextHidden } : v)));
+    const result = await setVideoHidden(item.id, nextHidden).catch((err) => {
+      toast.error(err.message || 'Failed to update visibility');
+      setHistory((h) => h.map((v) => (v.id === item.id ? { ...v, hidden: !nextHidden } : v)));
+      return null;
+    });
+    if (result) toast.success(nextHidden ? 'Video hidden' : 'Video unhidden');
   };
   const handleContinueHistory = async (item) => {
     try {
@@ -520,16 +536,16 @@ export default function VideoGen() {
         </div>
       </form>
 
-      {history.length > 0 && (
+      {visibleHistory.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-gray-300">Recent renders ({Math.min(history.length, 6)} of {history.length})</h2>
-            {history.length > 6 && (
+            <h2 className="text-sm font-medium text-gray-300">Recent renders ({Math.min(visibleHistory.length, 6)} of {visibleHistory.length})</h2>
+            {visibleHistory.length > 6 && (
               <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
             )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            {history.slice(0, 6).map((v) => {
+            {visibleHistory.slice(0, 6).map((v) => {
               const item = normalizeVideo(v);
               return (
                 <MediaCard
@@ -538,10 +554,41 @@ export default function VideoGen() {
                   onPreview={() => setPreview(item)}
                   onContinue={() => handleContinueHistory(v)}
                   onDelete={() => handleDeleteHistory(v)}
+                  onToggleHidden={() => handleToggleHistoryHidden(v)}
                 />
               );
             })}
           </div>
+        </div>
+      )}
+
+      {hiddenHistory.length > 0 && (
+        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
+          <button
+            type="button"
+            onClick={() => setShowHidden((s) => !s)}
+            className="flex items-center justify-between w-full text-sm font-medium text-gray-300 hover:text-white"
+          >
+            <span>{showHidden ? 'Hide' : 'Show'} hidden ({hiddenHistory.length})</span>
+            <span className="text-xs text-gray-500">{showHidden ? '▾' : '▸'}</span>
+          </button>
+          {showHidden && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {hiddenHistory.map((v) => {
+                const item = normalizeVideo(v);
+                return (
+                  <MediaCard
+                    key={item.key}
+                    item={item}
+                    onPreview={() => setPreview(item)}
+                    onContinue={() => handleContinueHistory(v)}
+                    onDelete={() => handleDeleteHistory(v)}
+                    onToggleHidden={() => handleToggleHistoryHidden(v)}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

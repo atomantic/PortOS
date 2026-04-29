@@ -11,16 +11,20 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { existsSync } from 'fs';
+import { copyFile, unlink } from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
 } from '../lib/pythonSetup.js';
-import { PATHS } from '../lib/fileUtils.js';
-import { join } from 'node:path';
+import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'node:path';
 
 const router = Router();
 
@@ -45,7 +49,30 @@ const generateSchema = z.object({
   loraFilenames: z.array(z.string().max(256).regex(/^[^/\\]+$/, 'lora filename must not contain path separators')).max(8).optional(),
   loraPaths: z.array(z.string().max(512)).max(8).optional(),
   loraScales: z.array(z.number().min(0).max(2)).max(8).optional(),
+  // i2i: pick an existing gallery image (basename) as the init image. If
+  // initImage was uploaded via multipart, this is ignored in favor of the
+  // upload. Strength: 0.0 = ignore source, 1.0 = max influence.
+  initImageFile: z.string().max(256).regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, 'init image must be a basename ending in png/jpg/jpeg/webp').optional(),
+  initImageStrength: z.number().min(0).max(1).optional(),
 });
+
+// JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
+// shape) skip the parser entirely; FormData callers get req.file + string
+// req.body that coerceFormFields() converts before Zod validation.
+const initImageUpload = optionalUpload('initImage', {
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+});
+
+// Numerics arrive as strings from FormData — coerce before Zod validation.
+function coerceFormFields(body) {
+  const numericFields = ['width', 'height', 'steps', 'cfgScale', 'guidance', 'seed', 'initImageStrength'];
+  for (const f of numericFields) {
+    if (typeof body[f] === 'string' && body[f] !== '') body[f] = Number(body[f]);
+  }
+  if (typeof body.quantize === 'string' && /^\d+$/.test(body.quantize)) body.quantize = Number(body.quantize);
+  return body;
+}
 
 const avatarSchema = z.object({
   name: z.string().max(100).optional(),
@@ -69,9 +96,37 @@ router.get('/active', asyncHandler(async (_req, res) => {
   res.json({ activeJob: await imageGen.getActiveJob() });
 }));
 
-router.post('/generate', asyncHandler(async (req, res) => {
-  const data = validateRequest(generateSchema, req.body);
-  res.json(await imageGen.generateImage(data));
+router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
+  const data = validateRequest(generateSchema, coerceFormFields(req.body));
+  // Resolve init image source: uploaded file > gallery filename. The local
+  // service double-checks that the path stays under PATHS.images.
+  let initImagePath = null;
+  let uploadedInitTempPath = null;
+  if (req.file) {
+    await ensureDir(PATHS.images);
+    const safeExt = (extname(req.file.originalname || '') || '.png').toLowerCase();
+    const ext = ['.png', '.jpg', '.jpeg', '.webp'].includes(safeExt) ? safeExt : '.png';
+    const initFilename = `init-${randomUUID()}${ext}`;
+    initImagePath = join(PATHS.images, initFilename);
+    await copyFile(req.file.path, initImagePath);
+    uploadedInitTempPath = req.file.path;
+  } else if (data.initImageFile) {
+    const candidate = join(PATHS.images, basename(data.initImageFile));
+    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+    const resolved = resolvePath(candidate);
+    if (!resolved.startsWith(imagesRoot) || !existsSync(resolved)) {
+      throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });
+    }
+    initImagePath = resolved;
+  }
+  // Strip the route-only `initImageFile` field — providers expect `initImagePath`.
+  delete data.initImageFile;
+  if (initImagePath) data.initImagePath = initImagePath;
+
+  const result = await imageGen.generateImage(data);
+  // Multer's tmp upload is no longer needed once we've copied it into PATHS.images.
+  if (uploadedInitTempPath) await unlink(uploadedInitTempPath).catch(() => {});
+  res.json(result);
 }));
 
 router.post('/avatar', asyncHandler(async (req, res) => {
@@ -106,6 +161,10 @@ router.post('/cancel', (_req, res) => {
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
   res.json(await local.deleteImage(req.params.filename));
+}));
+
+router.post('/:filename/visibility', asyncHandler(async (req, res) => {
+  res.json(await local.setImageHidden(req.params.filename, !!req.body?.hidden));
 }));
 
 // --- Local-mode setup automation ---

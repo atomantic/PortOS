@@ -23,6 +23,7 @@ import {
   cancel,
   loadHistory,
   deleteHistoryItem,
+  setHistoryItemHidden,
   extractLastFrame,
   stitchVideos,
 } from '../services/videoGen/local.js';
@@ -147,6 +148,10 @@ router.get('/history', asyncHandler(async (_req, res) => {
 
 router.delete('/history/:id', asyncHandler(async (req, res) => {
   res.json(await deleteHistoryItem(req.params.id));
+}));
+
+router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
+  res.json(await setHistoryItemHidden(req.params.id, !!req.body?.hidden));
 }));
 
 router.post('/last-frame/:id', asyncHandler(async (req, res) => {
