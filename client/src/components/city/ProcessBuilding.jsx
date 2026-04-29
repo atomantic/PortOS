@@ -11,13 +11,14 @@ const STATUS_COLORS = {
   error: '#ef4444',
 };
 
-export default function ProcessBuilding({ process, pm2Status, position, seed }) {
+export default function ProcessBuilding({ process, pm2Status, position, seed, dimmed = false }) {
   const blinkRef = useRef();
   const glowRef = useRef();
 
   const status = pm2Status?.status || 'not_found';
   const color = STATUS_COLORS[status] || STATUS_COLORS.not_found;
   const { width, depth } = PROCESS_BUILDING_PARAMS;
+  const dimMul = dimmed ? 0.25 : 1;
 
   // Height based on status + seed variation
   const height = useMemo(() => {
@@ -40,12 +41,13 @@ export default function ProcessBuilding({ process, pm2Status, position, seed }) 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if (blinkRef.current) {
-      blinkRef.current.material.opacity = (Math.sin(t * 3 + seed) > 0.3) ? 0.8 : 0.1;
+      blinkRef.current.material.opacity = ((Math.sin(t * 3 + seed) > 0.3) ? 0.8 : 0.1) * dimMul;
     }
     if (glowRef.current) {
-      glowRef.current.material.opacity = status === 'online'
+      const base = status === 'online'
         ? 0.15 + Math.sin(t * 1.5 + seed) * 0.08
         : 0.08;
+      glowRef.current.material.opacity = base * dimMul;
     }
   });
 
@@ -57,21 +59,21 @@ export default function ProcessBuilding({ process, pm2Status, position, seed }) 
         <meshStandardMaterial
           color={CITY_COLORS.buildingBody}
           emissive={color}
-          emissiveIntensity={status === 'online' ? 0.2 : 0.08}
+          emissiveIntensity={(status === 'online' ? 0.2 : 0.08) * dimMul}
           transparent
-          opacity={0.9}
+          opacity={0.9 * dimMul}
         />
       </mesh>
 
       {/* Neon wireframe edges */}
       <lineSegments position={[0, height / 2, 0]} geometry={edgesGeom}>
-        <lineBasicMaterial color={color} transparent opacity={0.8} />
+        <lineBasicMaterial color={color} transparent opacity={0.8 * dimMul} />
       </lineSegments>
 
       {/* Neon top cap */}
       <mesh position={[0, height + 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[width + 0.05, depth + 0.05]} />
-        <meshBasicMaterial color={color} transparent opacity={0.4} />
+        <meshBasicMaterial color={color} transparent opacity={0.4 * dimMul} />
       </mesh>
 
       {/* Process name on front face */}

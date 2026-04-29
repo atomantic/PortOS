@@ -198,16 +198,17 @@ function ActivityLogList({ logs }) {
       className="flex-1 overflow-y-auto px-3 py-1.5 space-y-1"
       style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(6,182,212,0.2) transparent' }}
     >
-      {logs.slice(-40).map((log, i) => {
+      {logs.slice(-40).map((log) => {
         const level = log.level || 'info';
         const colorClass = LEVEL_COLORS[level] || LEVEL_COLORS.info;
         const indicatorClass = LEVEL_INDICATORS[level] || LEVEL_INDICATORS.info;
         const time = log.timestamp ? formatClockTime(new Date(log.timestamp)) : '';
         const message = log.message || log.event || JSON.stringify(log);
+        const key = log._localId ?? `${log.timestamp}-${message}`;
 
         return (
           <div
-            key={i}
+            key={key}
             className="font-pixel text-[9px] leading-tight flex items-start gap-1.5 tracking-wide group hover:bg-cyan-500/5 rounded px-1 py-0.5 -mx-1 transition-colors"
             title={message}
           >

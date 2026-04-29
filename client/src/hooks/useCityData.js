@@ -20,6 +20,7 @@ export const useCityData = () => {
   const [loading, setLoading] = useState(true);
   const pollRef = useRef(null);
   const healthPollRef = useRef(null);
+  const logIdRef = useRef(0);
 
   const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
@@ -113,7 +114,8 @@ export const useCityData = () => {
     socket.on('cos:agent:completed', handleAgentCompleted);
 
     const handleCosLog = (data) => {
-      setEventLogs(prev => [...prev, { ...data, timestamp: data.timestamp || Date.now() }].slice(-50));
+      const entry = { ...data, timestamp: data.timestamp || Date.now(), _localId: ++logIdRef.current };
+      setEventLogs(prev => [...prev, entry].slice(-50));
     };
     socket.on('cos:log', handleCosLog);
 

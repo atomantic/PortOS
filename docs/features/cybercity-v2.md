@@ -126,7 +126,7 @@ what's healthy, what's not, find a specific app, and take action.
 | **1.5** | **Notification beacons** — extend `CitySignalBeacons` with notification backlog from `/api/notifications/counts`; brightness = unread count, color = type, click = navigate. | S |
 | **1.6** | **Brain inbox pulse** — central spire glow tracks `/api/brain/inbox` depth; new captures pulse the spire. | S |
 | **1.7** | **"Needs attention" pane** — replace the right-side `cos:log` stream with a structured list ranked by urgency: stopped/errored apps, high CPU/mem, pending reviews, stale backups, failed agent runs, federation sync failures, unread notifications. Every item clickable. Live log demoted to a tab. | S |
-| **1.8** | **Building search overlay** — press `/` to filter buildings by name/tag/status; non-matches dim, matches stay lit, Enter focuses camera. Reuses `resolveNavCommand` from `server/lib/navManifest.js`. | S |
+| **1.8** | **Building search overlay** — press `/` to filter buildings by name/tag/status; non-matches dim, matches stay lit, Enter focuses camera. Local substring match against name/id/tags in `client/src/utils/cityFilter.js`. | S |
 | **1.9** | **Status filter chips in HUD** — All / Online / Stopped / Errored / Has-Agent / Has-Pending-Review pill row above legend. Persists per-session. | S |
 | **1.10** | **Hover preview card with quick actions** — show status / uptime / CPU / MEM / err / recent log line, with **Logs / Restart / Deploy / Open** buttons. Restart and Deploy POST to existing endpoints with explicit confirmation. | M |
 | **1.11** | **Clickable HUD stats** — every count routes somewhere: PENDING REVIEWS → `/review`, AGENTS → `/cos`, NODES → `/instances`, etc. | XS |
@@ -187,7 +187,7 @@ Goal: the city feels alive, distinctive, and earned.
 - `client/src/components/city/CitySignalBeacons.jsx` — extend for notifications (1.5) + landmarks (2.x)
 - `client/src/components/city/CityBillboards.jsx` — richer content (1.12)
 - `client/src/hooks/useCityData.js` — data layer; extend with new endpoints
-- `server/lib/navManifest.js` — `resolveNavCommand` reused for search (1.8)
+- `client/src/utils/cityFilter.js` — pure status/search filter logic (1.8, 1.9)
 - `client/src/utils/formatters.js` — reuse formatters; do not duplicate
 
 ## Endpoints used / to use

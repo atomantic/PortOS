@@ -64,6 +64,7 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
           pm2Status={pm2Status[proc.name]}
           position={[position.x + x, 0, position.z + z, rotation]}
           seed={seed}
+          dimmed={dimmed}
         />
       ))}
 
