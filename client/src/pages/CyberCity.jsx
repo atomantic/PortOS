@@ -25,7 +25,12 @@ function CyberCityInner() {
       const raw = sessionStorage.getItem('cybercity.filter');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed.status === 'string') return parsed;
+        if (parsed && typeof parsed.status === 'string') {
+          return {
+            status: parsed.status,
+            search: typeof parsed.search === 'string' ? parsed.search : '',
+          };
+        }
       }
     } catch {
       // fall through to default
