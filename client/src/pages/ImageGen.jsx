@@ -105,12 +105,27 @@ export default function ImageGen() {
   // Status reflects the currently-selected backend, not the saved default —
   // chip changes re-probe via the optional ?mode= override so the badge and
   // notConnected gating stay aligned with what Generate would actually use.
+  //
+  // Token-guarded so a slow stale check (e.g. the initial `external` probe
+  // timing out against an unconfigured SD API URL) can't overwrite the
+  // newer `local` probe that already returned green. Without this the badge
+  // gets stuck on "SD API unreachable" even though Local is selected.
+  const statusRequestToken = useRef(0);
   const refreshStatus = useCallback((mode) => {
+    const myToken = ++statusRequestToken.current;
     setStatusLoading(true);
     getImageGenStatus(mode)
-      .then(setStatus)
-      .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
-      .finally(() => setStatusLoading(false));
+      .then((s) => {
+        if (myToken !== statusRequestToken.current) return;
+        setStatus(s);
+      })
+      .catch(() => {
+        if (myToken !== statusRequestToken.current) return;
+        setStatus({ connected: false, reason: 'Status check failed' });
+      })
+      .finally(() => {
+        if (myToken === statusRequestToken.current) setStatusLoading(false);
+      });
   }, []);
 
   const refreshGallery = useCallback(() => {

@@ -1,5 +1,9 @@
 # Next Release
 
+## Fixed
+
+- **Image Gen status badge stuck on "SD API unreachable" when Local mode is selected.** The page mounts before settings load, so the first `refreshStatus` call goes out with `mode=external` (the fallback in `effectiveMode = selectedMode || status?.mode || 'external'`). The local-mode probe that fires moments later (after settings populate `selectedMode='local'`) returns instantly because it just checks if the Python path is set — but the original external-mode probe is still in flight, blocking on a TCP timeout against the unconfigured SD API URL. When that slow response finally arrived, it overwrote the green "mflux/local" badge with the red "SD API unreachable — Settings" message, even though the Local chip was clearly selected. Token-guarded `refreshStatus` so each call records a monotonically incrementing token and only applies its `setStatus` if its token still matches the latest one — stale responses get silently dropped. File: `client/src/pages/ImageGen.jsx`.
+
 ## Changed
 
 - **Pin all `package.json` dependencies and overrides to exact versions.** Removed `^` ranges from every dep/override across root, `server/`, and `client/` `package.json` files (e.g. `kokoro-js: ^1.2.1` → `1.2.1`; overrides like `path-to-regexp`, `lodash`, `basic-ftp`, `follow-redirects`, `brace-expansion`, `socket.io-parser`, and the nested `minimatch@3 → brace-expansion`). Lockfiles refreshed with no resolved-version drift — a defensive pin so future installs can't pick up a freshly-published patch in the override graph without an explicit bump.
