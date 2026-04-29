@@ -3,6 +3,7 @@ import {
   Sword, Star, Moon, ScrollText, Shield, Heart,
   Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image
 } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
@@ -229,8 +230,7 @@ export default function CharacterSheet() {
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400">
-        <RefreshCw className="w-6 h-6 animate-spin mr-2" /> Loading character...
-      </div>
+        <BrailleSpinner text="Loading" /></div>
     );
   }
 
@@ -308,7 +308,7 @@ export default function CharacterSheet() {
                 </button>
                 {generatingAvatar && !diffusionProgress?.currentImage && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                    <RefreshCw className="w-5 h-5 text-white animate-spin" />
+                    <BrailleSpinner text="Loading" />
                   </div>
                 )}
               </div>

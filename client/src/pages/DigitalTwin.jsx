@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
-import { Heart, RefreshCw } from 'lucide-react';
+import { Heart } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
 
@@ -84,7 +85,7 @@ export default function DigitalTwin() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

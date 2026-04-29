@@ -3,6 +3,7 @@ import toast from '../../ui/Toast';
 import {
   Upload, Download, RefreshCw, Trash2, Search, Dna, AlertTriangle, Save
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 // Native ZIP parser — replaces fflate's unzipSync/strFromU8
 async function parseZipText(arrayBuffer, ext = '.txt') {
   const data = new Uint8Array(arrayBuffer);
@@ -344,7 +345,7 @@ export default function GenomeTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -370,7 +371,7 @@ export default function GenomeTab() {
         >
           {uploading ? (
             <div className="space-y-3">
-              <RefreshCw className="w-10 h-10 text-port-accent animate-spin mx-auto" />
+              <BrailleSpinner text="Loading" />
               <p className="text-gray-400">Parsing genome data...</p>
             </div>
           ) : (
@@ -539,7 +540,7 @@ export default function GenomeTab() {
           disabled={scanning}
           className="flex items-center gap-2 px-3 py-2 bg-port-accent/20 text-port-accent border border-port-accent/30 rounded hover:bg-port-accent/30 transition-colors disabled:opacity-50 text-sm"
         >
-          {scanning ? <RefreshCw size={14} className="animate-spin" /> : <Dna size={14} />}
+          {scanning ? <BrailleSpinner /> : <Dna size={14} />}
           {scanning ? 'Scanning...' : 'Scan Known Markers'}
         </button>
         <button
@@ -674,7 +675,7 @@ export default function GenomeTab() {
               disabled={clinvarSyncing}
               className="flex items-center gap-2 px-3 py-2 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded hover:bg-purple-500/30 transition-colors disabled:opacity-50 text-sm"
             >
-              {clinvarSyncing ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14} />}
+              {clinvarSyncing ? <BrailleSpinner /> : <Download size={14} />}
               {clinvarSyncing ? 'Syncing...' : 'Sync ClinVar Database'}
             </button>
           ) : (
@@ -688,7 +689,7 @@ export default function GenomeTab() {
                 disabled={clinvarScanning}
                 className="flex items-center gap-2 px-3 py-2 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded hover:bg-purple-500/30 transition-colors disabled:opacity-50 text-sm"
               >
-                {clinvarScanning ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}
+                {clinvarScanning ? <BrailleSpinner /> : <Search size={14} />}
                 {clinvarScanning ? 'Scanning...' : 'Scan Against ClinVar'}
               </button>
               <button
@@ -705,7 +706,7 @@ export default function GenomeTab() {
         {/* Sync progress */}
         {clinvarProgress && (
           <div className="flex items-center gap-2 p-3 rounded bg-purple-500/10 border border-purple-500/20 text-sm text-purple-300">
-            <RefreshCw size={14} className="animate-spin shrink-0" />
+            <BrailleSpinner text="Loading" />
             {clinvarProgress}
           </div>
         )}
@@ -862,7 +863,7 @@ export default function GenomeTab() {
             disabled={searching}
             className="flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded text-sm text-gray-300 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
           >
-            {searching ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}
+            {searching ? <BrailleSpinner /> : <Search size={14} />}
             Search
           </button>
         </div>
@@ -917,7 +918,7 @@ export default function GenomeTab() {
       {/* Saving indicator */}
       {savingNotes && (
         <div className="fixed bottom-4 right-4 px-3 py-2 bg-port-card border border-port-border rounded shadow-lg text-xs text-gray-400 flex items-center gap-2">
-          <RefreshCw size={12} className="animate-spin" />
+          <BrailleSpinner />
           Saving notes...
         </div>
       )}

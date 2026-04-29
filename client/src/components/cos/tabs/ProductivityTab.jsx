@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Award
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import DailyTrendsChart from '../DailyTrendsChart';
 
@@ -101,7 +102,7 @@ export default function ProductivityTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-6 h-6 animate-spin text-port-accent" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

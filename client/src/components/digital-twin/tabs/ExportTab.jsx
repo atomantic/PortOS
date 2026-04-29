@@ -11,6 +11,7 @@ import {
   Eye,
   BookOpen
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
@@ -125,7 +126,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -240,7 +241,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
         >
           {exporting ? (
             <>
-              <RefreshCw className="w-5 h-5 animate-spin" />
+              <BrailleSpinner />
               Exporting...
             </>
           ) : (

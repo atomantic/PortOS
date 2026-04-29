@@ -13,6 +13,7 @@ import {
   Clock,
   Loader2
 } from 'lucide-react';
+import BrailleSpinner from './BrailleSpinner';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -149,7 +150,7 @@ function RestorePanel({ snapshot, onClose }) {
         className="flex items-center gap-2 px-3 py-1.5 bg-port-border hover:bg-port-border/70 text-gray-300 rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[36px]"
       >
         {previewing ? (
-          <Loader2 size={14} className="animate-spin" />
+          <BrailleSpinner />
         ) : (
           <Eye size={14} />
         )}
@@ -182,7 +183,7 @@ function RestorePanel({ snapshot, onClose }) {
           className="flex items-center gap-2 px-3 py-1.5 bg-port-error hover:bg-port-error/80 text-white rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[36px]"
         >
           {restoring ? (
-            <Loader2 size={14} className="animate-spin" />
+            <BrailleSpinner />
           ) : (
             <RotateCcw size={14} />
           )}
@@ -209,9 +210,7 @@ function SnapshotList() {
   if (loading) {
     return (
       <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
-        <Loader2 size={12} className="animate-spin" />
-        Loading snapshots...
-      </div>
+        <BrailleSpinner text="Loading" /></div>
     );
   }
 
@@ -297,7 +296,7 @@ const BackupWidget = memo(function BackupWidget() {
               </span>
               {isRunning && (
                 <span className="text-gray-500 flex items-center gap-1">
-                  <Loader2 size={12} className="animate-spin" />
+                  <BrailleSpinner />
                   Running...
                 </span>
               )}
@@ -369,7 +368,7 @@ const BackupWidget = memo(function BackupWidget() {
           className="flex items-center gap-2 px-3 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[40px]"
         >
           {triggering ? (
-            <Loader2 size={14} className="animate-spin" />
+            <BrailleSpinner />
           ) : (
             <RefreshCw size={14} />
           )}

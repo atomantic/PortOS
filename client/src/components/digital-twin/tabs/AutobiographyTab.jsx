@@ -17,6 +17,7 @@ import {
   Link2,
   MessageCircle
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
@@ -199,7 +200,7 @@ export default function AutobiographyTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -320,7 +321,7 @@ export default function AutobiographyTab({ onRefresh }) {
               className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 text-amber-300 rounded text-sm hover:bg-amber-500/20 transition-colors disabled:opacity-50"
             >
               {generatingFollowUps
-                ? <RefreshCw size={14} className="animate-spin" />
+                ? <BrailleSpinner />
                 : <Sparkles size={14} />}
               {generatingFollowUps ? 'Generating...' : 'Generate follow-up questions'}
             </button>
@@ -380,7 +381,7 @@ export default function AutobiographyTab({ onRefresh }) {
                 disabled={saving || !storyContent.trim()}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded text-sm font-medium hover:bg-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {saving ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
+                {saving ? <BrailleSpinner /> : <Send size={14} />}
                 Save Story
               </button>
             </div>
@@ -519,7 +520,7 @@ export default function AutobiographyTab({ onRefresh }) {
                           disabled={generatingFollowUps}
                           className="flex items-center gap-1 px-2 py-1 text-xs text-amber-400/70 hover:text-amber-400 transition-colors disabled:opacity-50"
                         >
-                          {generatingFollowUps ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                          {generatingFollowUps ? <BrailleSpinner /> : <Sparkles size={12} />}
                           Follow-ups
                         </button>
                       )}

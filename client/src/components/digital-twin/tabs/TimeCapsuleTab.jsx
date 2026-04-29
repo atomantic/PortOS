@@ -16,6 +16,7 @@ import {
   ChevronUp,
   X
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import { formatBytes, formatDateTime, timeAgo } from '../../../utils/formatters';
@@ -106,7 +107,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -185,7 +186,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                 disabled={!label.trim() || creating}
                 className="flex items-center gap-2 px-4 py-2 min-h-[40px] bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {creating ? <RefreshCw size={14} className="animate-spin" /> : <Archive size={14} />}
+                {creating ? <BrailleSpinner /> : <Archive size={14} />}
                 {creating ? 'Creating...' : 'Create Snapshot'}
               </button>
             </div>
@@ -211,7 +212,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
               disabled={compareIds.length !== 2 || comparing}
               className="flex items-center gap-2 px-4 py-1.5 min-h-[36px] bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {comparing ? <RefreshCw size={14} className="animate-spin" /> : <GitCompare size={14} />}
+              {comparing ? <BrailleSpinner /> : <GitCompare size={14} />}
               Compare
             </button>
           </div>
@@ -347,7 +348,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                           title={isViewing ? 'Close details' : 'View details'}
                         >
                           {viewLoading && viewingSnapshot === null ? (
-                            <RefreshCw size={16} className="animate-spin" />
+                            <BrailleSpinner />
                           ) : isViewing ? (
                             <ChevronUp size={16} />
                           ) : (

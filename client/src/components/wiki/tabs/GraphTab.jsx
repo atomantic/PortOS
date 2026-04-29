@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as api from '../../../services/api';
 import { RefreshCw, Network, ZoomIn, ZoomOut } from 'lucide-react';
 import { WIKI_CATEGORIES } from '../constants.jsx';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function GraphTab({ vaultId }) {
   const navigate = useNavigate();
@@ -182,7 +183,7 @@ export default function GraphTab({ vaultId }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

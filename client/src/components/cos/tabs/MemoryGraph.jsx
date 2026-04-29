@@ -6,6 +6,7 @@ import { RefreshCw } from 'lucide-react';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
+import BrailleSpinner from '../../BrailleSpinner';
 
 const TYPE_HEX = {
   fact: '#3b82f6',
@@ -186,7 +187,7 @@ export default function MemoryGraph() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="animate-spin text-port-accent" size={24} />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

@@ -18,6 +18,7 @@ import {
   FileText,
   Settings
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 
@@ -218,7 +219,7 @@ export default function NotesTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -385,7 +386,7 @@ export default function NotesTab({ onRefresh }) {
         <div className="flex-1 overflow-auto">
           {scanning && notes.length === 0 ? (
             <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
-              <RefreshCw size={14} className="animate-spin mr-2" /> Scanning vault...
+              <BrailleSpinner /> Scanning vault...
             </div>
           ) : displayNotes.length === 0 ? (
             <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
@@ -434,7 +435,7 @@ export default function NotesTab({ onRefresh }) {
       <div className="flex-1 flex flex-col min-w-0">
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
           </div>
         ) : selectedNote ? (
           <>

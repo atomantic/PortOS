@@ -2,6 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Mail, RefreshCw, Settings } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 import InboxTab from '../components/messages/InboxTab';
 import ConfigTab from '../components/messages/ConfigTab';
@@ -55,7 +56,7 @@ export default function Messages() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

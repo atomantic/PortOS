@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, Activity, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import * as api from '../../services/api';
+import BrailleSpinner from '../BrailleSpinner';
 
 /**
  * DailyTrendsChart - Visualizes daily task completion trends
@@ -57,7 +58,7 @@ export default function DailyTrendsChart({ days = 30, initialExpanded = true }) 
     return (
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-center justify-center py-8">
-          <RefreshCw className="w-5 h-5 animate-spin text-port-accent" />
+          <BrailleSpinner text="Loading" />
         </div>
       </div>
     );

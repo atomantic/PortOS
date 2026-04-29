@@ -16,6 +16,7 @@ import {
   X,
   Brain
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 
 import {
@@ -226,7 +227,7 @@ export default function InboxTab({ onRefresh, settings }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -278,7 +279,7 @@ export default function InboxTab({ onRefresh, settings }) {
                 <div className="flex items-start justify-between gap-2">
                   <p className="text-white flex-1">{entry.capturedText}</p>
                   <div className="flex items-center gap-2">
-                    <RefreshCw className="w-4 h-4 text-port-accent animate-spin" />
+                    <BrailleSpinner text="Loading" />
                     <span className="text-xs text-gray-500 whitespace-nowrap">
                       {timeAgo(entry.capturedAt)}
                     </span>

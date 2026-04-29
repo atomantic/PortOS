@@ -6,6 +6,7 @@ import {
   Heart, DollarSign, Lightbulb, Users, Flame, Link2,
   AlertTriangle, CheckCircle, Info
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 
 const SECTION_CONFIG = {
@@ -109,7 +110,7 @@ export default function IdentityTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

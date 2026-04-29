@@ -7,6 +7,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
+import BrailleSpinner from '../../BrailleSpinner';
 
 const EDGE_COLORS = {
   similar: '#3b82f6',
@@ -232,7 +233,7 @@ export default function BrainGraph() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="animate-spin text-port-accent" size={24} />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -259,7 +260,7 @@ export default function BrainGraph() {
             disabled={syncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-warning/20 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/30 transition-colors disabled:opacity-50"
           >
-            {syncing ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} />}
+            {syncing ? <BrailleSpinner /> : <Zap size={14} />}
             {syncing ? 'Syncing...' : 'Sync Now'}
           </button>
         </div>
