@@ -220,9 +220,31 @@ export default function ImageGen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  const handlePickInitImage = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Strip EXIF orientation by re-encoding the image with rotation baked into
+  // the pixels. Browsers honor EXIF when rendering <img>, so the upload
+  // thumbnail looks right — but mflux/PIL reads raw pixels and ignores EXIF,
+  // so a portrait iPhone photo (Orientation=6 or 8) lands sideways in the
+  // generated output. createImageBitmap({ imageOrientation: 'from-image' })
+  // applies the EXIF rotation; canvas re-encode produces an EXIF-free file
+  // that any decoder will read in the same orientation as the browser shows.
+  const normalizeImageOrientation = async (file) => {
+    const bitmap = await window.createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => null);
+    if (!bitmap) return file;
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) return file;
+    const newName = file.name.replace(/\.[^.]+$/, '.png');
+    return new File([blob], newName, { type: 'image/png' });
+  };
+
+  const handlePickInitImage = async (e) => {
+    const raw = e.target.files?.[0];
+    if (!raw) return;
+    const file = await normalizeImageOrientation(raw);
     if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
     setInitImage({ source: 'upload', file, name: file.name, previewUrl: URL.createObjectURL(file) });
   };
