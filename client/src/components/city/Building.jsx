@@ -279,9 +279,6 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
   const isOnline = app.overallStatus === 'online' && !app.archived;
   const isStopped = app.overallStatus === 'stopped' && !app.archived;
   const { width, depth } = BUILDING_PARAMS;
-  // Single multiplier applied to every opacity in the building when the search
-  // / status filter doesn't match this app. Faded enough to recede visually
-  // without disappearing — the user keeps spatial context.
   const dimMul = dimmed ? 0.25 : 1;
 
   // Name hash for seeded randomness

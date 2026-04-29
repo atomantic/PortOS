@@ -1,52 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { STATUS_FILTERS } from '../../utils/cityFilter';
 
-const STATUS_FILTERS = [
-  { id: 'all', label: 'ALL', match: () => true },
-  { id: 'online', label: 'ONLINE', match: (app) => !app.archived && app.overallStatus === 'online' },
-  { id: 'stopped', label: 'STOPPED', match: (app) => !app.archived && app.overallStatus === 'stopped' },
-  {
-    id: 'errored',
-    label: 'ERRORED',
-    match: (app) => {
-      if (app.archived) return false;
-      const pm2 = app.pm2Status || {};
-      return Object.values(pm2).some(s => s?.status === 'errored');
-    },
-  },
-  {
-    id: 'agent',
-    label: 'AGENT',
-    match: (app, { agentMap }) => agentMap?.has?.(app.id),
-  },
-];
-
-// Compute the set of app IDs that should be dimmed in the 3D scene given the
-// current filter + search query. The complement (matching apps) renders at full
-// brightness; matches are also returned so a focus/jump action can use them.
-export function computeFilterResult({ apps, status, search, agentMap }) {
-  const matcher = STATUS_FILTERS.find(f => f.id === status) || STATUS_FILTERS[0];
-  const trimmed = (search || '').trim().toLowerCase();
-  const matches = [];
-  const dimmed = new Set();
-
-  (apps || []).forEach(app => {
-    const passesStatus = matcher.match(app, { agentMap });
-    const haystack = [app.name, app.id, ...(app.tags || [])]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    const passesSearch = trimmed.length === 0 || haystack.includes(trimmed);
-    if (passesStatus && passesSearch) {
-      matches.push(app);
-    } else {
-      dimmed.add(app.id);
-    }
-  });
-
-  return { matches, dimmed };
-}
-
-export default function CityFilterBar({ apps, agentMap, filter, onChange, matchCount, onJumpToFirst }) {
+export default function CityFilterBar({ filter, onChange, matchCount, onJumpToFirst }) {
   const inputRef = useRef(null);
   const [open, setOpen] = useState(Boolean(filter.search));
 

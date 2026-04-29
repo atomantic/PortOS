@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
+const healthSignature = (h) =>
+  `${h?.overallHealth}|${h?.system?.cpu?.usagePercent}|${h?.system?.memory?.usagePercent}|${h?.system?.disk?.usagePercent}|${h?.warnings?.length ?? 0}`;
+
 export const useCityData = () => {
   const [apps, setApps] = useState([]);
   const [cosAgents, setCosAgents] = useState([]);
@@ -47,7 +50,11 @@ export const useCityData = () => {
 
   const fetchHealth = useCallback(async () => {
     const health = await api.getSystemHealth().catch(() => null);
-    if (health) setSystemHealth(health);
+    if (!health) return;
+    setSystemHealth(prev => {
+      if (prev && healthSignature(prev) === healthSignature(health)) return prev;
+      return health;
+    });
   }, []);
 
   const agentMap = useMemo(() => {
@@ -110,8 +117,6 @@ export const useCityData = () => {
       setRunningAgents(agents);
     }, 10000);
 
-    // System health refresh: every 15s. CPU/memory shift fast enough to matter
-    // for the operational HUD but not so fast that we want a per-second poll.
     healthPollRef.current = setInterval(fetchHealth, 15000);
 
     return () => {

@@ -9,7 +9,7 @@ import CityHud from '../components/city/CityHud';
 import CityScanlines from '../components/city/CityScanlines';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
 import CitySettingsPanel from '../components/city/CitySettingsPanel';
-import { computeFilterResult } from '../components/city/CityFilterBar';
+import { computeFilterResult } from '../utils/cityFilter';
 
 function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, loading, connected } = useCityData();
@@ -52,8 +52,6 @@ function CyberCityInner() {
     }
   }, [navigate]);
 
-  // Submit (Enter) on the search bar jumps to the first match's app page —
-  // the closest thing to a focus-camera-on-match without rebuilding the layout.
   const handleJumpToFirst = useCallback(() => {
     const first = filterResult.matches[0];
     if (first?.id) navigate(`/apps/${first.id}`);

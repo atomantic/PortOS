@@ -1,5 +1,6 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { formatClockTime } from '../../utils/formatters';
 
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 const SEVERITY_COLORS = {
@@ -8,38 +9,33 @@ const SEVERITY_COLORS = {
   info: { dot: 'bg-cyan-400', text: 'text-cyan-300', border: 'border-cyan-500/25' },
 };
 
-// Build the prioritized list of things that need the user's attention right now.
-// Higher-priority (critical) items rise to the top; ties broken by category order.
 function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts }) {
   const items = [];
 
-  // 1. Errored / stopped apps — most urgent, the city's reason for being a dashboard
-  const stoppedApps = (apps || []).filter(a => !a.archived && a.overallStatus === 'stopped');
-  stoppedApps.forEach(app => {
-    items.push({
-      id: `app-stopped-${app.id}`,
-      severity: 'critical',
-      label: `${app.name || app.id}`,
-      detail: 'Stopped',
-      to: `/apps/${app.id}`,
-      category: 'app',
-    });
-  });
-
-  // PM2 process-level errors per app
   (apps || []).forEach(app => {
     if (app.archived) return;
-    const pm2 = app.pm2Status || {};
-    const erroredProcs = Object.entries(pm2).filter(([, s]) => s?.status === 'errored');
-    erroredProcs.forEach(([procName]) => {
+    if (app.overallStatus === 'stopped') {
       items.push({
-        id: `proc-err-${app.id}-${procName}`,
+        id: `app-stopped-${app.id}`,
         severity: 'critical',
-        label: `${app.name || app.id} · ${procName}`,
-        detail: 'Process errored',
+        label: `${app.name || app.id}`,
+        detail: 'Stopped',
         to: `/apps/${app.id}`,
         category: 'app',
       });
+    }
+    const pm2 = app.pm2Status || {};
+    Object.entries(pm2).forEach(([procName, s]) => {
+      if (s?.status === 'errored') {
+        items.push({
+          id: `proc-err-${app.id}-${procName}`,
+          severity: 'critical',
+          label: `${app.name || app.id} · ${procName}`,
+          detail: 'Process errored',
+          to: `/apps/${app.id}`,
+          category: 'app',
+        });
+      }
     });
   });
 
@@ -212,9 +208,7 @@ function ActivityLogList({ logs }) {
         const level = log.level || 'info';
         const colorClass = LEVEL_COLORS[level] || LEVEL_COLORS.info;
         const indicatorClass = LEVEL_INDICATORS[level] || LEVEL_INDICATORS.info;
-        const time = log.timestamp
-          ? new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-          : '';
+        const time = log.timestamp ? formatClockTime(new Date(log.timestamp)) : '';
         const message = log.message || log.event || JSON.stringify(log);
 
         return (
