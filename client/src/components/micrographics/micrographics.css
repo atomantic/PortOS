@@ -77,11 +77,15 @@
 .port-schematic-label--error { color: rgb(var(--port-error)); }
 .port-schematic-label--muted { color: rgb(var(--port-border)); opacity: 0.85; }
 
-/* Card-tab variant: when a label sits on a card's top border like a
-   blueprint tab. The host needs `position: relative`. */
+/* Card-tab variant: sits like a blueprint tab on the card's top border.
+   The host needs `position: relative` plus enough top padding/space that
+   the tab isn't clipped by an `overflow: hidden` ancestor (e.g. the
+   dashboard grid wraps each widget in a clipped container). The tab is
+   anchored INSIDE the host so it can't escape; the card's own border
+   line is masked by the tab's own background where they overlap. */
 .port-schematic-label--tab {
   position: absolute;
-  top: -0.45rem;
+  top: 0.35rem;
   left: 0.9rem;
   z-index: 1;
   padding: 0 0.45rem;

@@ -333,10 +333,11 @@ export default function Dashboard() {
               if (!meta) return null;
               const widget = <meta.Component dashboardState={dashboardState} />;
               if (!meta.module) return widget;
-              // Hide the schematic tab on narrow widths so it doesn't
-              // collide with mobile cards; reappears at sm:
+              // Tab sits inside the wrapper (DashboardGrid clips with
+              // overflow-hidden); sm:pt-4 reserves a header zone so
+              // the tab doesn't overlap widget header content.
               return (
-                <div className="relative">
+                <div className="relative sm:pt-4">
                   <span className="hidden sm:inline">
                     <SchematicLabel
                       module={meta.module.id}
