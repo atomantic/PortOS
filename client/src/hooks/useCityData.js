@@ -126,11 +126,12 @@ export const useCityData = () => {
       setNotificationCounts(prev => prev?.unread === count ? prev : { ...prev, unread: count });
     };
     const handleNotifChanged = () => fetchNotifs();
+    const handleNotifCleared = () => setNotificationCounts({ total: 0, unread: 0 });
     socket.on('notifications:count', handleNotifCount);
     socket.on('notifications:added', handleNotifChanged);
     socket.on('notifications:updated', handleNotifChanged);
     socket.on('notifications:removed', handleNotifChanged);
-    socket.on('notifications:cleared', () => setNotificationCounts({ total: 0, unread: 0 }));
+    socket.on('notifications:cleared', handleNotifCleared);
 
     pollRef.current = setInterval(async () => {
       const agents = await api.getRunningAgents().catch(() => []);
@@ -139,9 +140,12 @@ export const useCityData = () => {
 
     healthPollRef.current = setInterval(fetchHealth, 15000);
 
+    // Subscribe but do NOT unsubscribe on cleanup. The cos:* and notifications:*
+    // namespaces are shared (useNotifications in Layout, useAgentFeedbackToast).
+    // Server uses a per-socket Set, so unsubscribing here would yank the
+    // subscription out from under those always-mounted consumers. The socket
+    // disconnect handler cleans up Set membership when the tab closes.
     return () => {
-      socket.emit('cos:unsubscribe');
-      socket.emit('notifications:unsubscribe');
       socket.off('connect', subscribe);
       socket.off('apps:changed', handleAppsChanged);
       socket.off('cos:agent:spawned', handleAgentSpawned);
@@ -153,7 +157,7 @@ export const useCityData = () => {
       socket.off('notifications:added', handleNotifChanged);
       socket.off('notifications:updated', handleNotifChanged);
       socket.off('notifications:removed', handleNotifChanged);
-      socket.off('notifications:cleared');
+      socket.off('notifications:cleared', handleNotifCleared);
       clearInterval(pollRef.current);
       clearInterval(healthPollRef.current);
     };
