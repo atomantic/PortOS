@@ -18,6 +18,7 @@ import {
   writeVoiceHidden,
   isVoiceHiddenStorageEvent,
 } from '../../services/voiceVisibility';
+import { MicroGlyph } from '../micrographics';
 
 // Peak below this (0..1) is usually whisper's [BLANK_AUDIO] territory.
 const QUIET_MIC_THRESHOLD = 0.02;
@@ -573,10 +574,11 @@ export default function VoiceWidget() {
           <span className={`text-xs ${tone}`}>{label}</span>
           {!useWebSpeech && handsFree && isContinuous() && (
             <span
-              className="w-1.5 rounded-full bg-port-accent transition-all"
-              style={{ height: `${Math.min(20, 4 + level * 120)}px` }}
+              className="inline-flex items-center text-port-accent"
               title={`mic level ${level.toFixed(3)}`}
-            />
+            >
+              <MicroGlyph variant="signal" size={18} level={level} state="accent" />
+            </span>
           )}
           {!useWebSpeech && (
             <button

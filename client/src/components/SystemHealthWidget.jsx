@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, memo, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -14,6 +14,7 @@ import {
   Zap
 } from 'lucide-react';
 import * as api from '../services/api';
+import { MicroGlyph } from './micrographics';
 
 /**
  * SystemHealthWidget - Compact system health overview for the Dashboard
@@ -62,6 +63,40 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
   const healthStyle = getHealthStyle();
   const HealthIcon = healthStyle.icon;
 
+  // Map per-service load values into a 5×5 matrix of dot intensities. The
+  // first row carries the four load metrics (memory, CPU, processes, apps)
+  // and the optional disk reading; subsequent rows fade outward to give
+  // the eye an at-a-glance "core hot, edges cool" reading. The numbers
+  // are deliberately small — this is decorative chrome that *reflects*
+  // real state, not a chart in its own right.
+  const matrixIntensity = useMemo(() => {
+    const cells = new Array(25).fill(0.18);
+    const norm = (pct) => Math.max(0.18, Math.min(1, (pct ?? 0) / 100));
+    const memBoost = norm(system?.memory?.usagePercent);
+    const cpuBoost = norm(system?.cpu?.usagePercent);
+    const procBoost = processes?.total
+      ? Math.max(0.25, processes.online / processes.total)
+      : 0.25;
+    const appBoost = apps?.total
+      ? Math.max(0.25, apps.online / apps.total)
+      : 0.25;
+    const diskBoost = norm(system?.disk?.usagePercent);
+    // Top row = the five live channels at full brightness.
+    cells[0] = memBoost;
+    cells[1] = cpuBoost;
+    cells[2] = procBoost;
+    cells[3] = appBoost;
+    cells[4] = diskBoost;
+    // Subsequent rows fall off so the eye sees a top-row "readout".
+    for (let row = 1; row < 5; row++) {
+      const decay = 1 - row * 0.18;
+      for (let col = 0; col < 5; col++) {
+        cells[row * 5 + col] = Math.max(0.18, cells[col] * decay);
+      }
+    }
+    return cells;
+  }, [system, processes, apps]);
+
   // Get color for usage percentage
   const getUsageColor = (percent) => {
     if (percent >= 90) return 'text-port-error';
@@ -97,13 +132,21 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
             </div>
           </div>
         </div>
-        <Link
-          to="/apps"
-          className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
-        >
-          <span className="hidden sm:inline">Details</span>
-          <ChevronRight size={16} />
-        </Link>
+        <div className="flex items-center gap-3">
+          <span
+            className={`hidden md:inline-flex ${healthStyle.color}`}
+            title="Live load matrix — top row reflects memory/cpu/proc/apps/disk"
+          >
+            <MicroGlyph variant="matrix" size={28} intensity={matrixIntensity} />
+          </span>
+          <Link
+            to="/apps"
+            className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+          >
+            <span className="hidden sm:inline">Details</span>
+            <ChevronRight size={16} />
+          </Link>
+        </div>
       </div>
 
       {/* Warnings */}
