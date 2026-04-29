@@ -8,6 +8,8 @@ const STATUS_COLORS = {
   online: '#06b6d4',
   stopped: '#f59e0b',
   not_found: '#6366f1',
+  // PM2's canonical status string is "errored"; some legacy callers send "error".
+  errored: '#ef4444',
   error: '#ef4444',
 };
 

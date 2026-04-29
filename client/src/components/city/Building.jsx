@@ -167,7 +167,7 @@ const createWindowTexture = (accentColor, width, height, seed) => {
 };
 
 // Rooftop antenna component
-function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
+function RooftopAntenna({ height, color, accentColor, seed, width: _width, dimMul = 1 }) {
   const antennaRef = useRef();
   const blinkRef = useRef();
   const type = seed % 4;
@@ -176,7 +176,7 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
     const t = clock.getElapsedTime();
     if (blinkRef.current) {
       // Blinking light on antenna tip
-      blinkRef.current.material.opacity = (Math.sin(t * 4 + seed) > 0.3) ? 0.9 : 0.1;
+      blinkRef.current.material.opacity = ((Math.sin(t * 4 + seed) > 0.3) ? 0.9 : 0.1) * dimMul;
     }
     if (antennaRef.current && type === 2) {
       // Slow rotation for dish type
@@ -191,7 +191,7 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
       {/* Main antenna mast */}
       <mesh position={[0, antennaHeight / 2, 0]}>
         <cylinderGeometry args={[0.015, 0.025, antennaHeight, 4]} />
-        <meshBasicMaterial color={color} transparent opacity={0.7} />
+        <meshBasicMaterial color={color} transparent opacity={0.7 * dimMul} />
       </mesh>
 
       {/* Blinking tip light */}
@@ -200,13 +200,13 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
         <meshBasicMaterial
           color={seed % 2 === 0 ? '#ef4444' : accentColor}
           transparent
-          opacity={0.9}
+          opacity={0.9 * dimMul}
         />
       </mesh>
       <pointLight
         position={[0, antennaHeight + 0.05, 0]}
         color={seed % 2 === 0 ? '#ef4444' : accentColor}
-        intensity={0.15}
+        intensity={0.15 * dimMul}
         distance={3}
         decay={2}
       />
@@ -217,7 +217,7 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
         <group ref={antennaRef} position={[0, antennaHeight * 0.7, 0]}>
           <mesh rotation={[0.3, 0, 0]}>
             <ringGeometry args={[0.05, 0.18, 8]} />
-            <meshBasicMaterial color={accentColor} transparent opacity={0.4} side={THREE.DoubleSide} />
+            <meshBasicMaterial color={accentColor} transparent opacity={0.4 * dimMul} side={THREE.DoubleSide} />
           </mesh>
         </group>
       )}
@@ -227,7 +227,7 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
           {[0, 1, 2].map(i => (
             <mesh key={i} position={[0, i * 0.12, 0]} rotation={[Math.PI / 2, 0, (i * Math.PI) / 3]}>
               <planeGeometry args={[0.2, 0.03]} />
-              <meshBasicMaterial color={accentColor} transparent opacity={0.5} side={THREE.DoubleSide} />
+              <meshBasicMaterial color={accentColor} transparent opacity={0.5 * dimMul} side={THREE.DoubleSide} />
             </mesh>
           ))}
         </group>
@@ -237,11 +237,11 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
         <>
           <mesh position={[0, antennaHeight * 0.75, 0]}>
             <boxGeometry args={[0.3, 0.015, 0.015]} />
-            <meshBasicMaterial color={color} transparent opacity={0.6} />
+            <meshBasicMaterial color={color} transparent opacity={0.6 * dimMul} />
           </mesh>
           <mesh position={[0, antennaHeight * 0.55, 0]}>
             <boxGeometry args={[0.2, 0.015, 0.015]} />
-            <meshBasicMaterial color={color} transparent opacity={0.5} />
+            <meshBasicMaterial color={color} transparent opacity={0.5 * dimMul} />
           </mesh>
         </>
       )}
@@ -250,19 +250,19 @@ function RooftopAntenna({ height, color, accentColor, seed, width: _width }) {
 }
 
 // Vertical neon strip on building edge
-function NeonEdgeStrip({ position, height, color, delay }) {
+function NeonEdgeStrip({ position, height, color, delay, dimMul = 1 }) {
   const ref = useRef();
 
   useFrame(({ clock }) => {
     if (!ref.current) return;
     const t = clock.getElapsedTime();
-    ref.current.material.opacity = 0.5 + Math.sin(t * 1.2 + delay) * 0.25;
+    ref.current.material.opacity = (0.5 + Math.sin(t * 1.2 + delay) * 0.25) * dimMul;
   });
 
   return (
     <mesh ref={ref} position={position}>
       <boxGeometry args={[0.03, height, 0.03]} />
-      <meshBasicMaterial color={color} transparent opacity={0.6} />
+      <meshBasicMaterial color={color} transparent opacity={0.6 * dimMul} />
     </mesh>
   );
 }
@@ -369,13 +369,13 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
             roughness={0.1}
             metalness={0.8}
             transparent
-            opacity={0.7}
+            opacity={0.7 * dimMul}
           />
         ) : (
           <meshBasicMaterial
             color={edgeColor}
             transparent
-            opacity={app.archived ? 0.2 : 0.5}
+            opacity={(app.archived ? 0.2 : 0.5) * dimMul}
           />
         )}
       </mesh>
@@ -387,7 +387,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           <lineBasicMaterial
             color={accentColor}
             transparent
-            opacity={0.05}
+            opacity={0.05 * dimMul}
           />
         </lineSegments>
       )}
@@ -395,10 +395,10 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
       {/* Vertical neon edge strips on corners */}
       {!app.archived && (
         <>
-          <NeonEdgeStrip position={[width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={0} />
-          <NeonEdgeStrip position={[-width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={1} />
-          <NeonEdgeStrip position={[width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={2} />
-          <NeonEdgeStrip position={[-width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={3} />
+          <NeonEdgeStrip position={[width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={0} dimMul={dimMul} />
+          <NeonEdgeStrip position={[-width / 2, height / 2, depth / 2]} height={height} color={accentColor} delay={1} dimMul={dimMul} />
+          <NeonEdgeStrip position={[width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={2} dimMul={dimMul} />
+          <NeonEdgeStrip position={[-width / 2, height / 2, -depth / 2]} height={height} color={accentColor} delay={3} dimMul={dimMul} />
         </>
       )}
 
@@ -407,6 +407,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         position={[0, height * 0.88, depth / 2 + 0.02]}
         fontSize={0.2}
         color={edgeColor}
+        fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
         font={PIXEL_FONT_URL}
@@ -420,6 +421,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         position={[0, height * 0.88, -(depth / 2 + 0.02)]}
         fontSize={0.2}
         color={edgeColor}
+        fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
         rotation={[0, Math.PI, 0]}
@@ -434,6 +436,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         position={[-(width / 2 + 0.02), height * 0.88, 0]}
         fontSize={0.18}
         color={accentColor}
+        fillOpacity={dimMul}
         anchorX="center"
         anchorY="middle"
         rotation={[0, -Math.PI / 2, 0]}
@@ -449,7 +452,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         <meshBasicMaterial
           color={edgeColor}
           transparent
-          opacity={0.25}
+          opacity={0.25 * dimMul}
           side={THREE.DoubleSide}
         />
       </mesh>
@@ -459,11 +462,11 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         <>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, depth / 2 + 0.3]}>
             <planeGeometry args={[width + 0.5, 0.05]} />
-            <meshBasicMaterial color={accentColor} transparent opacity={0.5} />
+            <meshBasicMaterial color={accentColor} transparent opacity={0.5 * dimMul} />
           </mesh>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, -(depth / 2 + 0.3)]}>
             <planeGeometry args={[width + 0.5, 0.05]} />
-            <meshBasicMaterial color={accentColor} transparent opacity={0.5} />
+            <meshBasicMaterial color={accentColor} transparent opacity={0.5 * dimMul} />
           </mesh>
         </>
       )}
@@ -476,18 +479,22 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           accentColor={accentColor}
           seed={seed}
           width={width}
+          dimMul={dimMul}
         />
       )}
 
-      {/* Floating hologram above building */}
-      <BuildingHologram
-        position={[0, height + 0.8, 0]}
-        color={accentColor}
-        seed={seed}
-      />
+      {/* Floating hologram and label hide entirely when dimmed — they read as
+          "this app isn't your focus right now". Major sub-meshes above already
+          fade via dimMul; suppressing these keeps the dim effect unambiguous. */}
+      {!dimmed && (
+        <BuildingHologram
+          position={[0, height + 0.8, 0]}
+          color={accentColor}
+          seed={seed}
+        />
+      )}
 
-      {/* Holographic label */}
-      {(hovered || isOnline || app.archived || isProximity) && (
+      {!dimmed && (hovered || isOnline || app.archived || isProximity) && (
         <HolographicPanel
           app={app}
           agentCount={agentCount}
