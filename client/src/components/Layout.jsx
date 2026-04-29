@@ -629,18 +629,18 @@ export default function Layout() {
         <div className={`flex items-center p-4 border-b border-port-border ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
           {/* Expanded: logo + text */}
           <div className={`flex items-center gap-2 ${collapsed ? 'lg:hidden' : ''}`}>
-            <Logo size={24} className="text-port-accent" />
+            <Logo size={28} className="shrink-0" />
             <span className="text-port-accent font-semibold whitespace-nowrap">PortOS</span>
           </div>
           {/* Collapsed: just logo, clickable to expand */}
           {collapsed && (
             <button
               onClick={() => setCollapsed(false)}
-              className="hidden lg:block text-port-accent hover:text-port-accent/80 transition-colors"
+              className="hidden lg:block opacity-95 transition-opacity hover:opacity-80"
               title="Expand sidebar"
               aria-label="Expand sidebar"
             >
-              <Logo size={24} ariaLabel="PortOS logo - click to expand sidebar" />
+              <Logo size={28} ariaLabel="PortOS logo - click to expand sidebar" />
             </button>
           )}
           {/* Expanded: collapse button */}
@@ -715,7 +715,7 @@ export default function Layout() {
             <Menu size={20} aria-hidden="true" />
           </button>
           <div className="flex items-center gap-1.5">
-            <Logo size={18} className="text-port-accent" />
+            <Logo size={22} className="shrink-0" />
             <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
           <div className="flex items-center gap-1">

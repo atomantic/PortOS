@@ -2,19 +2,12 @@
 // Each icon follows the 24x24 viewBox pattern used by lucide-react
 
 import { useState } from 'react';
+import { PortOSMark } from './Logo';
 
 const icons = {
-  // PortOS - portal/gateway logo (from Logo.jsx)
+  // PortOS - command port monogram (from Logo.jsx)
   portos: ({ size, className }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className}>
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="4 2" opacity="0.5" />
-      <circle cx="12" cy="12" r="6" stroke="currentColor" strokeWidth="2" />
-      <circle cx="12" cy="12" r="2" fill="currentColor" />
-      <line x1="12" y1="6" x2="12" y2="2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <line x1="12" y1="18" x2="12" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <line x1="6" y1="12" x2="2" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <line x1="18" y1="12" x2="22" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
+    <PortOSMark size={size} className={className} />
   ),
 
   // Web/Browser app
