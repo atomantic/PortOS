@@ -45,10 +45,8 @@ const statusConfig = {
   },
 };
 
-// `glyph` is opt-in. Pass `glyph` (boolean true) for the state-appropriate
-// micrographic, or pass a variant string ('orbit', 'signal', etc.) to override.
-// Default behavior (no prop) is unchanged: existing callers keep their
-// pulsing dot.
+// `glyph`: false (default) keeps the legacy dot; true uses the per-status
+// micrographic; a string overrides the variant; an object overrides any field.
 export default function StatusBadge({ status, size = 'md', glyph = false }) {
   const config = statusConfig[status] || statusConfig.unknown;
 
@@ -60,9 +58,6 @@ export default function StatusBadge({ status, size = 'md', glyph = false }) {
 
   const glyphSize = size === 'lg' ? 14 : size === 'sm' ? 10 : 12;
 
-  // Resolve glyph spec — boolean true uses the per-status default; a
-  // string lets the caller pick a specific variant; an object takes
-  // precedence over everything for fine control.
   let glyphSpec = null;
   if (glyph === true) {
     glyphSpec = config.glyph;

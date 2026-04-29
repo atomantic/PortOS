@@ -31,6 +31,7 @@ export default function SchematicLabel({
   const toneClass = tone ? `port-schematic-label--${tone}` : '';
   const classes = [
     'port-schematic-label',
+    'font-pixel',
     variant === 'tab' ? 'port-schematic-label--tab' : '',
     toneClass,
     className,
@@ -54,7 +55,7 @@ export default function SchematicLabel({
           variant={glyph}
           size={11}
           animated={shouldAnimate}
-          state={tone === 'muted' ? undefined : tone}
+          state={tone}
         />
       )}
     </span>

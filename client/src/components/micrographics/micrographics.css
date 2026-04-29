@@ -1,6 +1,9 @@
 /* PortOS micrographics — small SVG glyphs + schematic HUD labels.
    All keyframes live inside the prefers-reduced-motion guard so users who
-   request reduced motion get a fully static set of glyphs. */
+   request reduced motion get a fully static set of glyphs.
+   `content-visibility: auto` lets the browser skip rendering + animating
+   off-screen instances, so a dashboard full of widgets doesn't burn CPU
+   on glyphs the user can't see. */
 
 .port-microglyph {
   display: inline-block;
@@ -8,13 +11,15 @@
   overflow: visible;
   color: currentColor;
   vertical-align: -0.15em;
+  content-visibility: auto;
+  contain-intrinsic-size: 16px 16px;
 }
 
 .port-microglyph--success { color: rgb(var(--port-success)); }
-.port-microglyph--warn,
-.port-microglyph--warning { color: rgb(var(--port-warning)); }
+.port-microglyph--warn { color: rgb(var(--port-warning)); }
 .port-microglyph--error { color: rgb(var(--port-error)); }
 .port-microglyph--accent { color: rgb(var(--port-accent)); }
+.port-microglyph--muted { color: rgb(var(--port-border)); opacity: 0.85; }
 
 .port-microglyph__line {
   fill: none;
@@ -37,23 +42,18 @@
   transform-origin: 32px 32px;
 }
 
-/* Schematic label — type-paired chrome, "MODULE.04 // ACTIVE ●". */
+/* SchematicLabel uses .font-pixel for typography (defined in index.css);
+   only layout + sizing live here. */
 .port-schematic-label {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  font-family: 'GeistPixelSquare', 'Courier New', monospace;
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgb(var(--port-accent));
   line-height: 1;
   white-space: nowrap;
-}
-
-.port-schematic-label__bracket {
-  opacity: 0.55;
-  font-weight: normal;
 }
 
 .port-schematic-label__module {
@@ -89,43 +89,14 @@
   pointer-events: none;
 }
 
-/* Microloader — context-aware loading shell. */
-.port-microloader {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  line-height: 1;
-  white-space: nowrap;
-  color: rgb(var(--port-accent));
-}
-
-.port-microloader__label {
-  font-family: 'GeistPixelSquare', 'Courier New', monospace;
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.85;
-}
-
-.port-microloader--block {
-  flex-direction: column;
-  gap: 0.55rem;
-  padding: 1.1rem 1.4rem;
-  border: 1px dashed rgb(var(--port-border));
-  border-radius: 0.75rem;
-  background: rgb(var(--port-card) / 0.5);
-}
-
-/* Animations — only run when motion is allowed. */
 @media (prefers-reduced-motion: no-preference) {
   .port-microglyph--animated .port-microglyph__orbit {
-    animation: port-micro-spin 4.8s linear infinite;
+    animation: spin 4.8s linear infinite;
     transform-origin: 32px 32px;
   }
 
   .port-microglyph--animated .port-microglyph__counter-orbit {
-    animation: port-micro-spin 7s linear infinite reverse;
+    animation: spin 7s linear infinite reverse;
     transform-origin: 32px 32px;
   }
 
@@ -170,10 +141,6 @@
     animation: port-micro-warn 1.2s steps(2, end) infinite;
     transform-origin: 32px 32px;
   }
-}
-
-@keyframes port-micro-spin {
-  to { transform: rotate(360deg); }
 }
 
 @keyframes port-micro-breathe {

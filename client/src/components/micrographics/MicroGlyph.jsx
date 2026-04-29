@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useId, memo } from 'react';
 import './micrographics.css';
 
 const polarDots = (count, radius) =>
@@ -14,6 +14,13 @@ const MATRIX_DOTS = Array.from({ length: 25 }, (_, i) => ({
   y: 16 + Math.floor(i / 5) * 8,
   index: i,
 }));
+
+const SIGNAL_BARS = [
+  { x: 19, baseY: 25, baseH: 14, mod: 1 },
+  { x: 26, baseY: 17, baseH: 30, mod: 2 },
+  { x: 33, baseY: 11, baseH: 42, mod: 3 },
+  { x: 40, baseY: 20, baseH: 24, mod: 4 },
+];
 
 function OrbitGlyph() {
   return (
@@ -33,21 +40,13 @@ function OrbitGlyph() {
   );
 }
 
-// `level` (0–1) drives bar heights when provided so the signal glyph can be
-// data-bound (e.g. live audio level) instead of always animating.
 function SignalGlyph({ level }) {
-  const bars = [
-    { x: 19, baseY: 25, baseH: 14, mod: 1 },
-    { x: 26, baseY: 17, baseH: 30, mod: 2 },
-    { x: 33, baseY: 11, baseH: 42, mod: 3 },
-    { x: 40, baseY: 20, baseH: 24, mod: 4 },
-  ];
   const driven = typeof level === 'number';
   return (
     <>
       <path className="port-microglyph__line port-microglyph__muted" d="M9 32h8m30 0h8" />
       <g>
-        {bars.map((b, i) => {
+        {SIGNAL_BARS.map((b, i) => {
           if (driven) {
             const k = Math.max(0, Math.min(1, level)) * (0.5 + (i % 3) * 0.25);
             const h = Math.max(4, b.baseH * (0.4 + k * 0.6));
@@ -108,8 +107,6 @@ function NodeGlyph() {
   );
 }
 
-// `intensity` is an array of per-cell opacities (0–1, length 25). Lets the
-// caller bind dot brightness to per-service health values.
 function MatrixGlyph({ intensity }) {
   return (
     <>
@@ -261,9 +258,9 @@ const GLYPHS = {
   'bracket-pair': BracketPairGlyph,
 };
 
-const VALID_STATES = new Set(['idle', 'active', 'success', 'warn', 'warning', 'error', 'accent']);
+const VALID_STATES = new Set(['idle', 'active', 'success', 'warn', 'error', 'accent', 'muted']);
 
-export default function MicroGlyph({
+function MicroGlyph({
   variant = 'orbit',
   size = 16,
   animated = false,
@@ -303,5 +300,7 @@ export default function MicroGlyph({
     </svg>
   );
 }
+
+export default memo(MicroGlyph);
 
 export const GLYPH_VARIANTS = Object.keys(GLYPHS);

@@ -272,7 +272,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {pendingSystemTasks.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-yellow-500">
+                  <span className="text-sm font-medium text-yellow-500 flex items-center gap-2">
+                    <SectionGlyph status="pending" />
                     Pending ({pendingSystemTasks.length})
                   </span>
                 </div>

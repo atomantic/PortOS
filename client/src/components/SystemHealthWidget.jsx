@@ -63,31 +63,24 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
   const healthStyle = getHealthStyle();
   const HealthIcon = healthStyle.icon;
 
-  // Map per-service load values into a 5×5 matrix of dot intensities. The
-  // first row carries the four load metrics (memory, CPU, processes, apps)
-  // and the optional disk reading; subsequent rows fade outward to give
-  // the eye an at-a-glance "core hot, edges cool" reading. The numbers
-  // are deliberately small — this is decorative chrome that *reflects*
-  // real state, not a chart in its own right.
+  // Decorative chrome that reflects real state — top row reads as a HUD
+  // readout (memory/cpu/proc/apps/disk), rows below fade so the eye
+  // doesn't read it as a chart.
+  const memPct = system?.memory?.usagePercent;
+  const cpuPct = system?.cpu?.usagePercent;
+  const diskPct = system?.disk?.usagePercent;
+  const procOnline = processes?.online;
+  const procTotal = processes?.total;
+  const appOnline = apps?.online;
+  const appTotal = apps?.total;
   const matrixIntensity = useMemo(() => {
     const cells = new Array(25).fill(0.18);
     const norm = (pct) => Math.max(0.18, Math.min(1, (pct ?? 0) / 100));
-    const memBoost = norm(system?.memory?.usagePercent);
-    const cpuBoost = norm(system?.cpu?.usagePercent);
-    const procBoost = processes?.total
-      ? Math.max(0.25, processes.online / processes.total)
-      : 0.25;
-    const appBoost = apps?.total
-      ? Math.max(0.25, apps.online / apps.total)
-      : 0.25;
-    const diskBoost = norm(system?.disk?.usagePercent);
-    // Top row = the five live channels at full brightness.
-    cells[0] = memBoost;
-    cells[1] = cpuBoost;
-    cells[2] = procBoost;
-    cells[3] = appBoost;
-    cells[4] = diskBoost;
-    // Subsequent rows fall off so the eye sees a top-row "readout".
+    cells[0] = norm(memPct);
+    cells[1] = norm(cpuPct);
+    cells[2] = procTotal ? Math.max(0.25, procOnline / procTotal) : 0.25;
+    cells[3] = appTotal ? Math.max(0.25, appOnline / appTotal) : 0.25;
+    cells[4] = norm(diskPct);
     for (let row = 1; row < 5; row++) {
       const decay = 1 - row * 0.18;
       for (let col = 0; col < 5; col++) {
@@ -95,7 +88,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
       }
     }
     return cells;
-  }, [system, processes, apps]);
+  }, [memPct, cpuPct, diskPct, procOnline, procTotal, appOnline, appTotal]);
 
   // Get color for usage percentage
   const getUsageColor = (percent) => {
