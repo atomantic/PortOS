@@ -192,13 +192,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // hard way that letting the model upscale a portrait reference makes
   // garbled output.
   //
-  // Skip the last-image resize when buildArgs would discard it anyway:
-  //  - On macOS/mlx_video the FFLF fallback only triggers when no source
-  //    image is also provided (single conditioning frame only).
-  //  - On Windows we always forward --last-image to generate_win.py so it can
-  //    log status, but the diffusers pipeline still consumes only --image —
-  //    the resize is needed there because the script reads the file.
-  const lastImageWillBeUsed = !!lastImagePath && (IS_WIN || !sourceImagePath);
+  // Skip the last-image resize when buildArgs / the Python child won't
+  // actually consume it:
+  //  - On macOS/mlx_video the FFLF fallback only triggers in `fflf` mode
+  //    AND when no source image is also provided (single conditioning frame
+  //    only). Anything else is a no-op, so resizing is wasted ffmpeg work.
+  //  - On Windows we forward --last-image to generate_win.py so it can log
+  //    status, but the diffusers pipeline only reads --image — the script
+  //    never opens the last-frame file, so no resize is needed there either.
+  const lastImageWillBeUsed = !!lastImagePath && !IS_WIN && mode === 'fflf' && !sourceImagePath;
   const ffmpeg = (sourceImagePath || lastImageWillBeUsed) ? await findFfmpeg() : null;
   const resizeImage = async (srcPath, tag) => {
     if (!srcPath || !ffmpeg) return { resolved: srcPath, tempPath: null };
