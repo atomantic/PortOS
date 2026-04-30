@@ -303,6 +303,11 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       if (wordTimerRef.current) clearTimeout(wordTimerRef.current);
       stopTone();
+      // If the user mode-switches mid-keydown, the matching keyup fires after
+      // the listener is gone — reset the press tracking so the next mode
+      // change doesn't leave beginPress permanently blocked by a stuck ref.
+      pressingRef.current = false;
+      setPressing(false);
     };
   }, [beginPress, endPress, stopTone, enabled]);
 
