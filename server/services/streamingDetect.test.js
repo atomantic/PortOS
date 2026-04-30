@@ -202,6 +202,59 @@ describe('parseEcosystemConfig', () => {
     expect(proc.ports.ipc).toBe(5601);
   });
 
+  it('correctly handles even-length backslash runs before a closing quote', () => {
+    // Content has a string ending in `\\\\` (4 literal backslashes) then `"`.
+    // A naive `prevChar === '\\'` check would flag the closing `"` as escaped,
+    // leave inString true, and run the brace-counter past the env-block close —
+    // dropping every port that follows. isEscaped() counts the backslash run
+    // (even = not escaped) and exits the string correctly.
+    const content = `
+      module.exports = {
+        apps: [
+          {
+            name: 'escape-app',
+            env: {
+              NOTE: "ends-with-backslashes\\\\\\\\",
+              PORT: 5640,
+            },
+          },
+        ],
+      };
+    `;
+
+    const { processes } = parseEcosystemConfig(content);
+    const proc = processes.find(p => p.name === 'escape-app');
+    expect(proc.ports.api).toBe(5640);
+  });
+
+  it('env_production overrides env when the same *_PORT key appears in both blocks', () => {
+    // PM2 picks the env block based on `--env`. For port reservation/display,
+    // env_production wins so the value PortOS surfaces matches the production
+    // deploy that runs against this config.
+    const content = `
+      module.exports = {
+        apps: [
+          {
+            name: 'multi-env',
+            env: {
+              PORT: 5620,
+              IPC_PORT: 5621,
+            },
+            env_production: {
+              PORT: 5630,
+              IPC_PORT: 5631,
+            },
+          },
+        ],
+      };
+    `;
+
+    const { processes } = parseEcosystemConfig(content);
+    const proc = processes.find(p => p.name === 'multi-env');
+    expect(proc.ports.api).toBe(5630);
+    expect(proc.ports.ipc).toBe(5631);
+  });
+
   it('still honors explicit ports: { ... } literal map (does not double-extract from env)', () => {
     const content = `
       module.exports = {

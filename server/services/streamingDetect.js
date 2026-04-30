@@ -13,6 +13,18 @@ export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'sw
 export const usesPm2 = (type) => !NON_PM2_TYPES.has(type);
 
 /**
+ * Count the run of consecutive backslashes immediately before `idx`.
+ * An odd count means the character at `idx` is escaped; even (including 0)
+ * means it isn't — `\"` is an escaped quote, but `\\"` is an escaped backslash
+ * followed by a real quote.
+ */
+function isEscaped(content, idx) {
+  let count = 0;
+  for (let i = idx - 1; i >= 0 && content[i] === '\\'; i--) count++;
+  return count % 2 === 1;
+}
+
+/**
  * Find the index of the `}` that matches the `{` at `openBraceIdx`, ignoring
  * braces inside strings (single/double/backtick) and JS comments. Returns -1
  * if no match. Backticks are treated as opaque so `${...}` interpolations
@@ -28,7 +40,6 @@ function findMatchingBrace(content, openBraceIdx) {
   for (let i = openBraceIdx; i < content.length; i++) {
     const char = content[i];
     const nextChar = i < content.length - 1 ? content[i + 1] : '';
-    const prevChar = i > 0 ? content[i - 1] : '';
 
     if (!inString && !inBlockComment && char === '/' && nextChar === '/') { inLineComment = true; continue; }
     if (inLineComment && char === '\n') { inLineComment = false; continue; }
@@ -36,7 +47,7 @@ function findMatchingBrace(content, openBraceIdx) {
     if (inBlockComment && char === '*' && nextChar === '/') { inBlockComment = false; i++; continue; }
     if (inLineComment || inBlockComment) continue;
 
-    if ((char === '"' || char === "'" || char === '`') && prevChar !== '\\') {
+    if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
       if (!inString) { inString = true; stringChar = char; }
       else if (char === stringChar) { inString = false; stringChar = null; }
     }
@@ -163,7 +174,6 @@ export function parseEcosystemConfig(content) {
     for (let i = startPos; i < content.length; i++) {
       const char = content[i];
       const nextChar = i < content.length - 1 ? content[i + 1] : '';
-      const prevChar = i > 0 ? content[i - 1] : '';
 
       // Handle line comments (// ...)
       if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
@@ -189,8 +199,10 @@ export function parseEcosystemConfig(content) {
       // Skip if in any comment
       if (inLineComment || inBlockComment) continue;
 
-      // Track string boundaries
-      if ((char === '"' || char === "'") && prevChar !== '\\') {
+      // Backticks count as string delimiters so `${...}` braces don't perturb
+      // the count. Use isEscaped() so an even-length backslash run before a
+      // quote (e.g. `\\"`) correctly reads as not-escaped.
+      if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
         if (!inString) {
           inString = true;
           stringChar = char;
@@ -259,23 +271,40 @@ export function parseEcosystemConfig(content) {
       // The `_PORT` suffix requirement avoids matching identifiers like REPORT.
       // Brace-counting (not `[^}]*`) so env values with nested objects/ternaries
       // don't truncate the scan at the first inner `}`.
-      const envPorts = {};
-      const envHeaderRegex = /(?:env|env_development|env_production)\s*:\s*\{/g;
+      // Iterate env blocks in PM2 precedence order (env < env_development <
+      // env_production) and let later writes overwrite — so when a port is
+      // redefined per-environment, the production value is the one we surface.
+      const envBlockPrecedence = { env: 0, env_development: 1, env_production: 2 };
+      const envHeaderRegex = /\b(env|env_development|env_production)\s*:\s*\{/g;
+      const envBlocks = [];
       let envHeaderMatch;
       while ((envHeaderMatch = envHeaderRegex.exec(appBlock)) !== null) {
+        const envName = envHeaderMatch[1];
         const openIdx = envHeaderMatch.index + envHeaderMatch[0].length - 1;
         const closeIdx = findMatchingBrace(appBlock, openIdx);
         if (closeIdx < 0) continue;
-        const envContent = appBlock.substring(openIdx + 1, closeIdx);
-        // `['"]?` lets quoted keys like `'PORT': 3000` or `"COINBASE_IPC_PORT": 5565`
-        // match — common in JSON-style ecosystem configs. `\b` still anchors the key.
-        const portKeyRegex = /['"]?\b(PORT|[A-Z][A-Z0-9_]*_PORT)\b['"]?\s*:\s*([^,}\n]+)/g;
+        envBlocks.push({
+          envName,
+          index: envHeaderMatch.index,
+          envContent: appBlock.substring(openIdx + 1, closeIdx),
+        });
+      }
+      envBlocks.sort((a, b) => {
+        const pd = envBlockPrecedence[a.envName] - envBlockPrecedence[b.envName];
+        return pd !== 0 ? pd : a.index - b.index;
+      });
+
+      const envPorts = {};
+      // `['"]?` lets quoted keys like `'PORT': 3000` or `"COINBASE_IPC_PORT": 5565`
+      // match — common in JSON-style ecosystem configs. `\b` still anchors the key.
+      const portKeyRegex = /['"]?\b(PORT|[A-Z][A-Z0-9_]*_PORT)\b['"]?\s*:\s*([^,}\n]+)/g;
+      for (const { envContent } of envBlocks) {
+        portKeyRegex.lastIndex = 0;
         let m;
         while ((m = portKeyRegex.exec(envContent)) !== null) {
           const key = m[1];
-          if (envPorts[key] !== undefined) continue;
           const resolved = resolvePortValue(m[2]);
-          if (resolved) envPorts[key] = resolved;
+          if (resolved) envPorts[key] = resolved; // last write wins
         }
       }
 
