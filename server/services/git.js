@@ -555,9 +555,18 @@ export async function requestCopilotReview(dir, prUrl) {
   const parsed = parsePullRequestUrl(prUrl);
   if (!parsed) return { success: false, error: `unparseable PR URL: ${prUrl}` };
 
+  // Decide forge from the PR URL itself — that's the authoritative signal of where
+  // the review request needs to go. Falling back to the repo's `origin` (via
+  // resolveForgeForRepo) is wrong when `dir` isn't a parseable repo, or when the
+  // repo origin disagrees with the PR URL (e.g. GitLab MR URL reached via a
+  // mirror/fork on github.com). Non-GitHub PR URLs short-circuit as a successful
+  // skip so cleanupAgentWorktree doesn't emit a warning for every GitLab MR.
+  if (detectForgeCli(parsed.host) !== 'gh') return { success: true, skipped: true };
+
   const { cli, env } = await resolveForgeForRepo(dir);
-  // Non-GitHub forges have no Copilot reviewer to request — treat as a successful skip
-  // so cleanupAgentWorktree doesn't emit a warning for every GitLab MR.
+  // Repo-side resolution might still come back non-gh (e.g. dir is empty/malformed
+  // and resolveForgeForRepo returned a glab host). Belt and suspenders: skip rather
+  // than try to talk to gh with the wrong env.
   if (cli !== 'gh') return { success: true, skipped: true };
 
   // Target the same GitHub instance the PR lives on. Without --hostname, gh uses

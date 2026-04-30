@@ -198,7 +198,7 @@ Use the findings from the previous stage to inform your work. If the previous st
   // section above.
   const simplifySection = isTruthyMetaFn(task.metadata?.simplify) ? `
 ## Simplify Step
-After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — the system will push and open the PR after you exit)' : 'commit and push using `/do:push`'}.
+After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
