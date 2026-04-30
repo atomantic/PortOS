@@ -464,7 +464,7 @@ function ReferenceWidget({ keying, mode }) {
           })}
         </div>
         <div className="p-4">
-          {view === 'tree' && <TreeView currentPath={currentPath} />}
+          {view === 'tree' && <TreeView currentPath={currentPath} mode={mode} />}
           {view === 'length' && <LengthView currentPath={currentPath} />}
           {view === 'list' && <ListView currentPath={currentPath} />}
         </div>
@@ -504,7 +504,7 @@ function TreeNode({ node, currentPath }) {
   );
 }
 
-function TreeView({ currentPath }) {
+function TreeView({ currentPath, mode }) {
   return (
     <div>
       <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-gray-500 mb-2">
@@ -518,7 +518,9 @@ function TreeView({ currentPath }) {
         </div>
       </div>
       <p className="text-[10px] text-gray-500 mt-3">
-        Tap or hold space to key. The path you're on lights up.
+        {mode === 'send'
+          ? "Tap or hold space to key. The path you're on lights up."
+          : 'Reference only — start a Send drill to see your live keying path.'}
       </p>
     </div>
   );
@@ -581,7 +583,7 @@ function KeyPad({ keying }) {
       <button
         onMouseDown={keying.beginPress}
         onMouseUp={keying.endPress}
-        onMouseLeave={() => keying.pressing && keying.endPress()}
+        onMouseLeave={keying.endPress}
         onTouchStart={(e) => { e.preventDefault(); keying.beginPress(); }}
         onTouchEnd={(e) => { e.preventDefault(); keying.endPress(); }}
         className={`w-full select-none py-6 rounded-lg border-2 font-mono text-base transition-colors ${
