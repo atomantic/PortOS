@@ -192,16 +192,21 @@ Read the previous stage's output from:
 Use the findings from the previous stage to inform your work. If the previous stage produced a JSON results block, parse it to determine which items to process.
 ` : '';
 
-  // Build simplify section if enabled
+  // Build simplify section if enabled. In the worktree-with-openPR flow the
+  // system pushes and opens the PR after the agent exits, so the agent must
+  // only commit (not push) — keep this wording aligned with the worktree
+  // section above.
   const simplifySection = isTruthyMetaFn(task.metadata?.simplify) ? `
 ## Simplify Step
-After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then commit and push using \`/do:push\`.
+After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — the system will push and open the PR after you exit)' : 'commit and push using `/do:push`'}.
 ` : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
   // or run /do:rpr — by the time the PR exists, the agent has already exited.
   // The system requests Copilot review automatically after PR creation.
-  const reviewLoopSection = willReviewLoop ? `
+  // Only meaningful when a PR will actually be created (willOpenPR), since the
+  // Copilot review request is a no-op without a PR URL.
+  const reviewLoopSection = willReviewLoop && willOpenPR ? `
 ## Code Review
 After your task completes, the system will request a Copilot code review on the PR automatically. You do not need to open the PR or trigger the review yourself — focus on producing high-quality, well-tested code so the review pass goes cleanly.
 ` : '';
@@ -322,7 +327,9 @@ ${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do 
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
-- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.
+${worktreeInfo && willOpenPR
+  ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run \`git push\` or \`/do:push\` yourself.`
+  : `- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.`}
 ${worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
 
 ## Working Directory

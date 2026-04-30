@@ -1075,7 +1075,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   if (!jiraBranch) {
     const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
     const taskReviewLoop = isTruthyMeta(agent.task?.metadata?.reviewLoop);
-    const cleanupWarnings = await cleanupAgentWorktree(agentId, success, { openPR: taskOpenPR && !taskReviewLoop, description: task?.description, agentOutput: outputBuffer });
+    const cleanupWarnings = await cleanupAgentWorktree(agentId, success, {
+      openPR: taskOpenPR,
+      requestCopilotReview: taskOpenPR && taskReviewLoop,
+      description: task?.description,
+      agentOutput: outputBuffer
+    });
 
     if (cleanupWarnings?.length > 0) {
       const { getAgent: getAgentForResult } = await import('./cos.js');

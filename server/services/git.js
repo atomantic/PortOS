@@ -483,14 +483,56 @@ export async function createPR(dir, { title, body, base, head }) {
 
 /**
  * Parse a PR / MR URL into { host, owner, repo, number }. Returns null on bad input.
- * Handles GitHub (`/pull/N`) and GitLab (`/-/merge_requests/N`) URLs.
+ * Handles GitHub (`/pull/N`) and GitLab (`/-/merge_requests/N`) URLs, including
+ * GitLab projects nested in subgroups (the entire group path becomes `owner`)
+ * and URLs with trailing segments such as `/files`, `/commits`, `?query`, `#hash`.
  */
 export function parsePullRequestUrl(url) {
   if (!url || typeof url !== 'string') return null;
-  const ghMatch = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (ghMatch) return { host: ghMatch[1], owner: ghMatch[2], repo: ghMatch[3], number: Number(ghMatch[4]) };
-  const glMatch = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/-\/merge_requests\/(\d+)/);
-  if (glMatch) return { host: glMatch[1], owner: glMatch[2], repo: glMatch[3], number: Number(glMatch[4]) };
+
+  let parsed;
+  // new URL throws on malformed input; we want a structured null instead so a try
+  // wrapper here is the right call (the project's "no try/catch" rule covers
+  // request handlers, not URL validation helpers).
+  try { parsed = new URL(url); } catch { return null; }
+
+  const host = parsed.host;
+  const segments = parsed.pathname.split('/').filter(Boolean);
+
+  // GitHub: /<owner>/<repo>/pull/<number>[/<more>]
+  // Find the last `pull/<n>` pair so trailing /files, /commits etc. are tolerated.
+  for (let i = segments.length - 2; i >= 1; i--) {
+    if (segments[i] === 'pull') {
+      const number = Number(segments[i + 1]);
+      if (Number.isInteger(number) && number > 0) {
+        const project = segments.slice(0, i);
+        if (project.length >= 2) {
+          return { host, owner: project[0], repo: project[project.length - 1], number };
+        }
+      }
+    }
+  }
+
+  // GitLab: /<group>[/<subgroup>...]/<project>/-/merge_requests/<number>[/<more>]
+  // Locate the `-/merge_requests/<n>` triple anchored at any depth.
+  for (let i = segments.length - 3; i >= 2; i--) {
+    if (segments[i] === '-' && segments[i + 1] === 'merge_requests') {
+      const number = Number(segments[i + 2]);
+      if (Number.isInteger(number) && number > 0) {
+        const project = segments.slice(0, i);
+        if (project.length >= 2) {
+          // owner = full group/subgroup path, repo = final project segment
+          return {
+            host,
+            owner: project.slice(0, -1).join('/'),
+            repo: project[project.length - 1],
+            number,
+          };
+        }
+      }
+    }
+  }
+
   return null;
 }
 

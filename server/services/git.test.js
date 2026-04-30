@@ -131,12 +131,38 @@ describe('parsePullRequestUrl', () => {
     });
   });
 
+  it('parses GitLab MR URLs with subgroups (owner = full group path)', () => {
+    expect(parsePullRequestUrl('https://gitlab.com/group/subgroup/project/-/merge_requests/7')).toEqual({
+      host: 'gitlab.com', owner: 'group/subgroup', repo: 'project', number: 7
+    });
+    expect(parsePullRequestUrl('https://gitlab.example.com/g1/g2/g3/proj/-/merge_requests/100')).toEqual({
+      host: 'gitlab.example.com', owner: 'g1/g2/g3', repo: 'proj', number: 100
+    });
+  });
+
+  it('tolerates trailing path segments and query/hash fragments', () => {
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/186/files')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 186
+    });
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/186/commits/abc')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 186
+    });
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/186?diff=split')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 186
+    });
+    expect(parsePullRequestUrl('https://gitlab.com/group/sub/proj/-/merge_requests/9/diffs')).toEqual({
+      host: 'gitlab.com', owner: 'group/sub', repo: 'proj', number: 9
+    });
+  });
+
   it('returns null for invalid input', () => {
     expect(parsePullRequestUrl(null)).toBeNull();
     expect(parsePullRequestUrl('')).toBeNull();
     expect(parsePullRequestUrl(undefined)).toBeNull();
     expect(parsePullRequestUrl('https://github.com/atomantic/PortOS')).toBeNull();
     expect(parsePullRequestUrl('not a url')).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/notanumber')).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/0')).toBeNull();
   });
 });
 
