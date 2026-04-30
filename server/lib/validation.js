@@ -144,10 +144,13 @@ export const automationScheduleUpdateSchema = automationScheduleSchema.partial()
 // EXISTING SCHEMAS
 // =============================================================================
 
-// Process definition schema (for PM2 processes with ports)
+// `ports` is an open-ended label→port map so app-specific keys derived from
+// *_PORT env vars (coinbaseIpc, geminiIpc, etc.) survive validation alongside
+// the well-known labels (api, ui, devUi, cdp, health).
 export const processSchema = z.object({
   name: z.string().min(1),
   port: z.number().int().min(1).max(65535).nullable().optional(),
+  ports: z.record(z.number().int().min(1).max(65535)).optional(),
   description: z.string().optional()
 });
 

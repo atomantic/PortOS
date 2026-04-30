@@ -13,6 +13,57 @@ export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'sw
 export const usesPm2 = (type) => !NON_PM2_TYPES.has(type);
 
 /**
+ * Count the run of consecutive backslashes immediately before `idx`.
+ * An odd count means the character at `idx` is escaped; even (including 0)
+ * means it isn't — `\"` is an escaped quote, but `\\"` is an escaped backslash
+ * followed by a real quote.
+ */
+function isEscaped(content, idx) {
+  let count = 0;
+  for (let i = idx - 1; i >= 0 && content[i] === '\\'; i--) count++;
+  return count % 2 === 1;
+}
+
+/**
+ * Find the index of the `}` that matches the `{` at `openBraceIdx`, ignoring
+ * braces inside strings (single/double/backtick) and JS comments. Returns -1
+ * if no match. Backticks are treated as opaque so `${...}` interpolations
+ * don't perturb the depth count of the surrounding object.
+ */
+function findMatchingBrace(content, openBraceIdx) {
+  let depth = 0;
+  let inString = false;
+  let stringChar = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = openBraceIdx; i < content.length; i++) {
+    const char = content[i];
+    const nextChar = i < content.length - 1 ? content[i + 1] : '';
+
+    if (!inString && !inBlockComment && char === '/' && nextChar === '/') { inLineComment = true; continue; }
+    if (inLineComment && char === '\n') { inLineComment = false; continue; }
+    if (!inString && !inLineComment && char === '/' && nextChar === '*') { inBlockComment = true; continue; }
+    if (inBlockComment && char === '*' && nextChar === '/') { inBlockComment = false; i++; continue; }
+    if (inLineComment || inBlockComment) continue;
+
+    if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
+      if (!inString) { inString = true; stringChar = char; }
+      else if (char === stringChar) { inString = false; stringChar = null; }
+    }
+
+    if (!inString) {
+      if (char === '{') depth++;
+      else if (char === '}') {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
  * Uses regex parsing since we can't safely execute arbitrary JS
  * @returns {{ processes: Array, pm2Home: string|null }}
@@ -123,7 +174,6 @@ export function parseEcosystemConfig(content) {
     for (let i = startPos; i < content.length; i++) {
       const char = content[i];
       const nextChar = i < content.length - 1 ? content[i + 1] : '';
-      const prevChar = i > 0 ? content[i - 1] : '';
 
       // Handle line comments (// ...)
       if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
@@ -149,8 +199,10 @@ export function parseEcosystemConfig(content) {
       // Skip if in any comment
       if (inLineComment || inBlockComment) continue;
 
-      // Track string boundaries
-      if ((char === '"' || char === "'") && prevChar !== '\\') {
+      // Backticks count as string delimiters so `${...}` braces don't perturb
+      // the count. Use isEscaped() so an even-length backslash run before a
+      // quote (e.g. `\\"`) correctly reads as not-escaped.
+      if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
         if (!inString) {
           inString = true;
           stringChar = char;
@@ -214,41 +266,71 @@ export function parseEcosystemConfig(content) {
         return null;
       };
 
-      // Extract CDP_PORT first (Chrome DevTools Protocol port for browser processes)
-      // Word boundary ensures we don't match VITE_CDP_PORT
-      // Capture full expression (up to , or }) to handle process.env.X || fallback
-      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bCDP_PORT\s*:\s*([^,}\n]+)/);
-      if (cdpPortMatch) {
-        const resolved = resolvePortValue(cdpPortMatch[1]);
-        if (resolved) ports.cdp = resolved;
+      // Collect every `<NAME>_PORT` env-var first, label after — so CDP_PORT
+      // can influence the smart label chosen for PORT regardless of source order.
+      // The `_PORT` suffix requirement avoids matching identifiers like REPORT.
+      // Brace-counting (not `[^}]*`) so env values with nested objects/ternaries
+      // don't truncate the scan at the first inner `}`.
+      // Iterate env blocks in PM2 precedence order (env < env_development <
+      // env_production) and let later writes overwrite — so when a port is
+      // redefined per-environment, the production value is the one we surface.
+      const envBlockPrecedence = { env: 0, env_development: 1, env_production: 2 };
+      const envHeaderRegex = /\b(env|env_development|env_production)\s*:\s*\{/g;
+      const envBlocks = [];
+      let envHeaderMatch;
+      while ((envHeaderMatch = envHeaderRegex.exec(appBlock)) !== null) {
+        const envName = envHeaderMatch[1];
+        const openIdx = envHeaderMatch.index + envHeaderMatch[0].length - 1;
+        const closeIdx = findMatchingBrace(appBlock, openIdx);
+        if (closeIdx < 0) continue;
+        envBlocks.push({
+          envName,
+          index: envHeaderMatch.index,
+          envContent: appBlock.substring(openIdx + 1, closeIdx),
+        });
       }
+      envBlocks.sort((a, b) => {
+        const pd = envBlockPrecedence[a.envName] - envBlockPrecedence[b.envName];
+        return pd !== 0 ? pd : a.index - b.index;
+      });
 
-      // Extract PORT from env (handles literals, variables, and process.env.X || fallback)
-      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*([^,}\n]+)/);
-      if (portMatch) {
-        const resolved = resolvePortValue(portMatch[1]);
-        if (resolved) {
-          // Smart labeling based on process name and context
-          const isUiProcess = /[-_](ui|client)$/i.test(processName);
-          const isBrowserProcess = /[-_]browser$/i.test(processName);
-          const hasCdpPort = ports.cdp !== undefined;
-
-          if (isUiProcess) {
-            ports.ui = resolved;
-          } else if (isBrowserProcess && hasCdpPort) {
-            // Browser processes with CDP_PORT use PORT for health checks
-            ports.health = resolved;
-          } else {
-            ports.api = resolved;
-          }
+      const envPorts = {};
+      // `['"]?` lets quoted keys like `'PORT': 3000` or `"COINBASE_IPC_PORT": 5565`
+      // match — common in JSON-style ecosystem configs. `\b` still anchors the key.
+      const portKeyRegex = /['"]?\b(PORT|[A-Z][A-Z0-9_]*_PORT)\b['"]?\s*:\s*([^,}\n]+)/g;
+      for (const { envContent } of envBlocks) {
+        portKeyRegex.lastIndex = 0;
+        let m;
+        while ((m = portKeyRegex.exec(envContent)) !== null) {
+          const key = m[1];
+          const resolved = resolvePortValue(m[2]);
+          if (resolved) envPorts[key] = resolved; // last write wins
         }
       }
 
-      // Extract VITE_PORT for Vite processes
-      const vitePortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*VITE_PORT\s*:\s*([^,}\n]+)/);
-      if (vitePortMatch) {
-        const resolved = resolvePortValue(vitePortMatch[1]);
-        if (resolved) ports.ui = resolved;
+      const isUiProcess = /[-_](ui|client)$/i.test(processName);
+      const isBrowserProcess = /[-_]browser$/i.test(processName);
+
+      if (envPorts.CDP_PORT !== undefined) ports.cdp = envPorts.CDP_PORT;
+      if (envPorts.PORT !== undefined) {
+        if (isUiProcess) {
+          ports.ui = envPorts.PORT;
+        } else if (isBrowserProcess && ports.cdp !== undefined) {
+          // Browser processes pair CDP_PORT (DevTools) with PORT (health endpoint).
+          ports.health = envPorts.PORT;
+        } else {
+          ports.api = envPorts.PORT;
+        }
+      }
+      if (envPorts.VITE_PORT !== undefined) ports.ui = envPorts.VITE_PORT;
+
+      // FOO_BAR_PORT → fooBar, capturing app-specific labels (coinbaseIpc, etc.).
+      for (const [key, value] of Object.entries(envPorts)) {
+        if (key === 'PORT' || key === 'VITE_PORT' || key === 'CDP_PORT') continue;
+        const stem = key.replace(/_?PORT$/, '');
+        if (!stem) continue;
+        const label = stem.toLowerCase().replace(/_(\w)/g, (_, c) => c.toUpperCase());
+        if (ports[label] === undefined) ports[label] = value;
       }
 
       // Also check for --port in args

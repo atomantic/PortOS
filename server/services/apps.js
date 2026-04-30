@@ -427,20 +427,41 @@ export async function toggleAllAppTaskTypes(id, enabled) {
 }
 
 /**
- * Get reserved ports from all registered apps
+ * Reserved ports across every app — top-level uiPort/devUiPort/apiPort/tlsPort
+ * plus every value in each process's `ports` map. Walking processes[] is what
+ * lets the scaffolder avoid colliding with non-public ports (engine IPC, CDP)
+ * that have no top-level field of their own.
  */
 export async function getReservedPorts() {
   const apps = await getAllApps();
   const ports = new Set();
 
+  const addPort = (p) => {
+    let n = null;
+    if (typeof p === 'number' && Number.isInteger(p)) n = p;
+    // Strict /^\d+$/ rather than parseInt — '5565abc' should not coerce to 5565.
+    else if (typeof p === 'string' && /^\d+$/.test(p)) n = Number(p);
+    if (n !== null && n >= 1 && n <= 65535) ports.add(n);
+  };
+
   for (const app of apps) {
-    if (app.uiPort) ports.add(app.uiPort);
-    if (app.apiPort) ports.add(app.apiPort);
+    addPort(app.uiPort);
+    addPort(app.devUiPort);
+    addPort(app.apiPort);
+    addPort(app.tlsPort);
+    if (Array.isArray(app.processes)) {
+      for (const proc of app.processes) {
+        if (proc?.port) addPort(proc.port);
+        if (proc?.ports && typeof proc.ports === 'object') {
+          for (const value of Object.values(proc.ports)) addPort(value);
+        }
+      }
+    }
   }
 
   // Also reserve PortOS ports
-  ports.add(PORTS.API);
-  ports.add(PORTS.UI);
+  addPort(PORTS.API);
+  addPort(PORTS.UI);
 
   return Array.from(ports).sort((a, b) => a - b);
 }
