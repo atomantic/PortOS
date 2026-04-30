@@ -62,6 +62,14 @@ const generateBodySchema = z.object({
   tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
   disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),
+  // FFLF mode end-frame target. Gallery-pick only (no upload field) so the
+  // multipart parser stays single-file. Users wanting a fresh end-frame
+  // image can generate or upload it via Image Gen first, then reference
+  // its basename here.
+  lastImageFile: z.string().max(512).optional(),
+  // UI mode hint — backend only uses it for logging/branching; absence
+  // falls back to inferring (sourceImage→i2v, no source→t2v).
+  mode: z.enum(['text', 'image', 'fflf', 'extend']).optional(),
 });
 
 router.get('/status', asyncHandler(async (_req, res) => {
@@ -78,6 +86,14 @@ router.get('/status', asyncHandler(async (_req, res) => {
 router.get('/models', (_req, res) => {
   res.json(listVideoModels());
 });
+
+// Path-traversal guard: basename() strips dirs, then resolve+prefix-check
+// against PATHS.images so a unicode trick can't escape data/images.
+const resolveGalleryImage = (name) => {
+  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+  const localPath = resolvePath(join(PATHS.images, basename(name)));
+  return localPath.startsWith(imagesRoot) && existsSync(localPath) ? localPath : null;
+};
 
 router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   const parsed = generateBodySchema.safeParse(req.body);
@@ -98,12 +114,11 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
     // (where the python child reads it directly and we can't unlink earlier).
     uploadedTempPath = req.file.path;
   } else if (body.sourceImageFile) {
-    // Path-traversal guard: basename() strips dirs, then resolve+prefix-check
-    // against PATHS.images so a unicode trick can't escape data/images.
-    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-    const localPath = resolvePath(join(PATHS.images, basename(body.sourceImageFile)));
-    if (localPath.startsWith(imagesRoot) && existsSync(localPath)) sourceImagePath = localPath;
+    sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
+
+  // FFLF end-frame: gallery-pick only. Same path-traversal guard.
+  const lastImagePath = body.lastImageFile ? resolveGalleryImage(body.lastImageFile) : null;
 
   try {
     const result = await generateVideo({
@@ -122,6 +137,8 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       disableAudio: body.disableAudio === true || body.disableAudio === 'true',
       sourceImagePath,
       uploadedTempPath,
+      lastImagePath,
+      mode: body.mode,
     });
     res.json(result);
   } catch (err) {

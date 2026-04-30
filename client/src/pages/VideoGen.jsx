@@ -5,6 +5,20 @@
  * Accepts a source image either via direct upload or via the
  * `?sourceImageFile=` query param so the Image Gen page can pipe a generation
  * straight into video.
+ *
+ * Modes (UI state, also forwarded to the backend as `mode`):
+ *   - text:   pure text-to-video
+ *   - image:  image-to-video (one source image, current I2V behavior)
+ *   - fflf:   first frame + last frame (two images — backend support is
+ *             experimental; mlx_video CLI consumes only the first today)
+ *   - extend: pick a previous render → its last frame becomes the source
+ *             image for a new image-to-video generation
+ *
+ * Batch queue: client-side serial executor. The form's "Add to queue" button
+ * appends a job to the queue (preserving the current params). When no job is
+ * actively generating, the head of the queue is dequeued and submitted via
+ * the same generate path as the inline button — so SSE progress, history
+ * refresh, and error handling are all reused.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -16,13 +30,15 @@ import MediaLightbox from '../components/media/MediaLightbox';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  Dice5, X, Upload
+  Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
+import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
+  listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
@@ -44,6 +60,18 @@ const TILING_OPTIONS = [
   { value: 'temporal', label: 'Temporal only' },
 ];
 
+const MODES = [
+  { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
+  { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
+  { id: 'fflf',   label: 'FFLF',   icon: GitBranch,  desc: 'First frame + last frame' },
+  { id: 'extend', label: 'Extend', icon: Film,       desc: 'Continue from a prior render' },
+];
+
+const newQueueId = () =>
+  (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const incomingSourceImage = searchParams.get('sourceImageFile');
@@ -57,6 +85,7 @@ export default function VideoGen() {
   const [statusLoading, setStatusLoading] = useState(true);
   const [models, setModels] = useState([]);
 
+  const [mode, setMode] = useState(incomingSourceImage ? 'image' : 'text');
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
   const [modelId, setModelId] = useState('');
@@ -71,13 +100,20 @@ export default function VideoGen() {
   const [disableAudio, setDisableAudio] = useState(false);
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
+  const [lastImageFile, setLastImageFile] = useState(null);
+  const [extendFromVideoId, setExtendFromVideoId] = useState('');
+  const [extendingFrame, setExtendingFrame] = useState(false);
+
+  // Image gallery for the FFLF end-frame picker (gallery only — no upload
+  // for the second image so the multipart parser stays single-file).
+  const [imageGallery, setImageGallery] = useState([]);
+
   // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
-  // React Router doesn't remount on query-string-only navigation, so the
-  // initial useState capture would otherwise stick.
   useEffect(() => {
     if (incomingSourceImage) {
       setSourceImageFile(incomingSourceImage);
       setSourceImageUpload(null);
+      setMode((m) => (m === 'text' ? 'image' : m));
     }
   }, [incomingSourceImage]);
   useEffect(() => {
@@ -86,6 +122,7 @@ export default function VideoGen() {
   useEffect(() => {
     if (incomingNegativePrompt) setNegativePrompt(incomingNegativePrompt);
   }, [incomingNegativePrompt]);
+
   const [history, setHistory] = useState([]);
   const [preview, setPreview] = useState(null);
   const [showHidden, setShowHidden] = useState(false);
@@ -95,6 +132,7 @@ export default function VideoGen() {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
   }, []);
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
+  useEffect(() => { listImageGallery().then(setImageGallery).catch(() => {}); }, []);
 
   const { visibleHistory, hiddenHistory } = useMemo(() => ({
     visibleHistory: history.filter((v) => !v.hidden),
@@ -116,12 +154,11 @@ export default function VideoGen() {
     if (result) toast.success(nextHidden ? 'Video hidden' : 'Video unhidden');
   };
   const handleContinueHistory = async (item) => {
-    try {
-      const { filename } = await extractLastFrame(item.id);
-      navigate(`/media/video?sourceImageFile=${encodeURIComponent(filename)}`);
-    } catch (err) {
+    const { filename } = await extractLastFrame(item.id).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
-    }
+      return {};
+    });
+    if (filename) navigate(`/media/video?sourceImageFile=${encodeURIComponent(filename)}`);
   };
 
   const [generating, setGenerating] = useState(false);
@@ -131,14 +168,19 @@ export default function VideoGen() {
   const [error, setError] = useState(null);
   const eventSourceRef = useRef(null);
 
+  // Batch queue. Each item snapshots the params at enqueue time so the user
+  // can keep editing the form while jobs are in flight without affecting the
+  // queued ones. The active generation is held in `generating`/`progress`;
+  // `runningQueueId` (if set) marks which queued item it represents.
+  const [queue, setQueue] = useState([]);
+  const [runningQueueId, setRunningQueueId] = useState(null);
+
   const refreshStatus = useCallback(() => {
     setStatusLoading(true);
     getVideoGenStatus()
       .then((s) => {
         setStatus(s);
         setModels(s.models || []);
-        // Functional update so a stale `modelId` closure can't reset the
-        // user's selected model on a refresh — only set when no choice yet.
         if (s.defaultModel) setModelId((prev) => prev || s.defaultModel);
       })
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
@@ -160,7 +202,6 @@ export default function VideoGen() {
     const r = RESOLUTIONS.find((r) => r.label === e.target.value);
     if (r) { setWidth(r.w); setHeight(r.h); }
   };
-
   const handleRandomSeed = () => setSeed(randomSeed());
 
   const clearSourceImage = () => {
@@ -172,33 +213,76 @@ export default function VideoGen() {
       setSearchParams(next, { replace: true });
     }
   };
+  const clearLastImage = () => setLastImageFile(null);
 
-  const handleGenerate = async (e) => {
-    e?.preventDefault?.();
-    if (!prompt.trim() || generating) return;
+  // Switching mode resets the now-irrelevant fields so a stale choice from
+  // a prior mode can't sneak into the next generation. (Prompt/seed/etc.
+  // carry over because they apply to all modes.)
+  const handleModeChange = (next) => {
+    setMode(next);
+    if (next === 'text') {
+      clearSourceImage();
+      setLastImageFile(null);
+      setExtendFromVideoId('');
+    } else if (next === 'image') {
+      setLastImageFile(null);
+      setExtendFromVideoId('');
+    } else if (next === 'fflf') {
+      setExtendFromVideoId('');
+    } else if (next === 'extend') {
+      setLastImageFile(null);
+    }
+  };
+
+  // Extend mode: the user picks a prior video; we extract its last frame
+  // (lazily — only when picked, since extraction shells out to ffmpeg) and
+  // use that as the source image for image-to-video.
+  const handleExtendPick = async (videoId) => {
+    setExtendFromVideoId(videoId);
+    if (!videoId) { clearSourceImage(); return; }
+    setExtendingFrame(true);
+    const res = await extractLastFrame(videoId).catch((err) => {
+      toast.error(err.message || 'Failed to extract last frame');
+      return null;
+    });
+    setExtendingFrame(false);
+    if (res?.filename) {
+      setSourceImageFile(res.filename);
+      setSourceImageUpload(null);
+    }
+  };
+
+  // Snapshot the current form into a generate-payload. Used both by the
+  // inline Generate button and by enqueue, so the two paths stay in lockstep.
+  const buildGeneratePayload = () => ({
+    prompt: prompt.trim(),
+    negativePrompt: negativePrompt.trim() || '',
+    modelId,
+    width, height,
+    numFrames,
+    fps,
+    steps: steps || '',
+    guidanceScale: guidanceScale || '',
+    seed: seed || '',
+    tiling,
+    disableAudio: disableAudio ? 'true' : 'false',
+    mode,
+    sourceImageFile: (mode === 'image' || mode === 'fflf' || mode === 'extend') ? (sourceImageFile || '') : '',
+    sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
+    lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
+  });
+
+  // Run a single payload through the SSE pipeline. Returns a promise that
+  // resolves when the job completes (or rejects on error). Shared by the
+  // inline submit and the queue worker.
+  const runGeneration = (payload) => new Promise((resolve, reject) => {
     setGenerating(true);
     setProgress({ progress: 0 });
     setStatusMsg('Starting...');
     setResult(null);
     setError(null);
 
-    try {
-      const data = await generateVideo({
-        prompt: prompt.trim(),
-        negativePrompt: negativePrompt.trim() || '',
-        modelId,
-        width, height,
-        numFrames,
-        fps,
-        steps: steps || '',
-        guidanceScale: guidanceScale || '',
-        seed: seed || '',
-        tiling,
-        disableAudio: disableAudio ? 'true' : 'false',
-        sourceImageFile: sourceImageFile || '',
-        sourceImage: sourceImageUpload || '',
-      });
-
+    generateVideo(payload).then((data) => {
       const jobId = data.jobId || data.generationId;
       const es = new EventSource(`/api/video-gen/${jobId}/events`);
       eventSourceRef.current = es;
@@ -219,34 +303,96 @@ export default function VideoGen() {
           es.close();
           toast.success('Video generated');
           refreshHistory();
+          resolve(msg.result);
         }
         if (msg.type === 'error') {
           setError(msg.error);
           setGenerating(false);
           es.close();
           toast.error(msg.error);
+          reject(new Error(msg.error));
         }
       };
       es.onerror = () => {
         setError('Lost connection to server');
         setGenerating(false);
         es.close();
+        reject(new Error('Lost connection to server'));
       };
-    } catch (err) {
+    }).catch((err) => {
       setError(err.message || 'Video generation failed');
       setGenerating(false);
       toast.error(err.message || 'Video generation failed');
-    }
+      reject(err);
+    });
+  });
+
+  const handleGenerate = async (e) => {
+    e?.preventDefault?.();
+    if (!prompt.trim() || generating) return;
+    await runGeneration(buildGeneratePayload()).catch(() => {});
   };
+
+  const handleEnqueue = () => {
+    if (!prompt.trim()) return;
+    const payload = buildGeneratePayload();
+    // Strip the File blob for snapshot — re-using a File across multiple
+    // queued submissions is fine, but we need a stable JSON-ish summary
+    // for the queue UI display. Hold the File in `_blob` separately.
+    const { sourceImage, ...summary } = payload;
+    setQueue((q) => [...q, {
+      id: newQueueId(),
+      status: 'pending',
+      params: summary,
+      _blob: sourceImage instanceof File ? sourceImage : null,
+      enqueuedAt: Date.now(),
+    }]);
+    toast.success('Added to queue');
+  };
+
+  const removeFromQueue = (id) => {
+    setQueue((q) => q.filter((item) => item.id !== id || item.status === 'running'));
+  };
+  const clearCompletedQueue = () => {
+    setQueue((q) => q.filter((item) => item.status !== 'complete' && item.status !== 'error'));
+  };
+
+  // Queue worker — pumps the head of the queue when nothing's running.
+  // Runs as an effect so it picks up any newly-enqueued item even while
+  // the user is interacting with the form.
+  useEffect(() => {
+    if (generating || runningQueueId) return;
+    const next = queue.find((item) => item.status === 'pending');
+    if (!next) return;
+    setRunningQueueId(next.id);
+    setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'running', startedAt: Date.now() } : item));
+    const payload = { ...next.params };
+    if (next._blob) payload.sourceImage = next._blob;
+    runGeneration(payload).then((res) => {
+      setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'complete', result: res } : item));
+    }).catch((err) => {
+      setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'error', error: err.message } : item));
+    }).finally(() => {
+      setRunningQueueId(null);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, generating, runningQueueId]);
 
   const handleCancel = async () => {
     eventSourceRef.current?.close();
     await cancelVideoGen().catch(() => {});
     setGenerating(false);
     setStatusMsg('Cancelled');
+    if (runningQueueId) {
+      setQueue((q) => q.map((item) => item.id === runningQueueId ? { ...item, status: 'error', error: 'Cancelled' } : item));
+      setRunningQueueId(null);
+    }
   };
 
   const notConnected = status && status.connected === false;
+  const canEnqueue = prompt.trim() && !notConnected;
+  const pendingCount = queue.filter((q) => q.status === 'pending').length;
+  const inFlightCount = pendingCount + (runningQueueId ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -290,6 +436,33 @@ export default function VideoGen() {
         </div>
       </div>
 
+      {/* Mode switch — segmented control above the form. Sets state that
+          both the form rendering and the submit payload react to. */}
+      <div className="bg-port-card border border-port-border rounded-xl p-1.5 flex flex-wrap gap-1" role="tablist" aria-label="Video generation mode">
+        {MODES.map(({ id, label, icon: Icon, desc }) => {
+          const active = mode === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => handleModeChange(id)}
+              disabled={generating}
+              className={`flex-1 min-w-[140px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                active
+                  ? 'bg-port-accent text-white shadow'
+                  : 'text-gray-400 hover:text-white hover:bg-port-border/40'
+              }`}
+              title={desc}
+            >
+              <Icon className="w-4 h-4" />
+              <span>{label}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[1fr,1.2fr] gap-6">
         <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
           <div>
@@ -316,34 +489,105 @@ export default function VideoGen() {
             />
           </div>
 
-          {/* Source image (image-to-video) */}
-          <div className="border border-port-border/50 rounded-lg p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-gray-400">Source Image (optional, image-to-video)</span>
-              {(sourceImageFile || sourceImageUpload) && (
-                <button type="button" onClick={clearSourceImage} className="text-xs text-port-error hover:underline">Clear</button>
+          {/* Mode-specific image / video pickers */}
+          {(mode === 'image' || mode === 'fflf') && (
+            <div className="border border-port-border/50 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-400">
+                  {mode === 'fflf' ? 'First frame (start image)' : 'Source image (image-to-video)'}
+                </span>
+                {(sourceImageFile || sourceImageUpload) && (
+                  <button type="button" onClick={clearSourceImage} className="text-xs text-port-error hover:underline">Clear</button>
+                )}
+              </div>
+              {sourceImageFile && (
+                <div className="flex items-center gap-2">
+                  <img src={`/data/images/${sourceImageFile}`} alt="Source" className="w-16 h-16 object-cover rounded border border-port-border" />
+                  <span className="text-xs text-gray-500 truncate">{sourceImageFile}</span>
+                </div>
+              )}
+              {!sourceImageFile && (
+                <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer hover:text-white">
+                  <Upload className="w-4 h-4" />
+                  <span>{sourceImageUpload ? sourceImageUpload.name : 'Upload an image'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={generating}
+                    onChange={(e) => setSourceImageUpload(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                </label>
               )}
             </div>
-            {sourceImageFile && (
-              <div className="flex items-center gap-2">
-                <img src={`/data/images/${sourceImageFile}`} alt="Source" className="w-16 h-16 object-cover rounded border border-port-border" />
-                <span className="text-xs text-gray-500 truncate">{sourceImageFile}</span>
+          )}
+
+          {mode === 'fflf' && (
+            <div className="border border-port-border/50 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-400">Last frame (end image)</span>
+                {lastImageFile && (
+                  <button type="button" onClick={clearLastImage} className="text-xs text-port-error hover:underline">Clear</button>
+                )}
               </div>
-            )}
-            {!sourceImageFile && (
-              <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer hover:text-white">
-                <Upload className="w-4 h-4" />
-                <span>{sourceImageUpload ? sourceImageUpload.name : 'Upload an image'}</span>
-                <input
-                  type="file"
-                  accept="image/*"
+              {lastImageFile ? (
+                <div className="flex items-center gap-2">
+                  <img src={`/data/images/${lastImageFile}`} alt="End frame" className="w-16 h-16 object-cover rounded border border-port-border" />
+                  <span className="text-xs text-gray-500 truncate">{lastImageFile}</span>
+                </div>
+              ) : (
+                <select
+                  value=""
                   disabled={generating}
-                  onChange={(e) => setSourceImageUpload(e.target.files?.[0] || null)}
-                  className="hidden"
-                />
-              </label>
-            )}
-          </div>
+                  onChange={(e) => setLastImageFile(e.target.value || null)}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                >
+                  <option value="">Pick an image from gallery…</option>
+                  {imageGallery.filter((img) => !img.hidden).slice(0, 50).map((img) => (
+                    <option key={img.filename} value={img.filename}>{img.filename}</option>
+                  ))}
+                </select>
+              )}
+              <p className="text-[11px] text-gray-500 leading-snug">
+                Note: FFLF (two-keyframe) backend support is experimental — current
+                LTX/mlx_video CLI consumes the start frame and treats the last frame
+                as advisory. Generate the end image first via Image Gen, then pick it here.
+              </p>
+            </div>
+          )}
+
+          {mode === 'extend' && (
+            <div className="border border-port-border/50 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-400">Continue from a prior render</span>
+                {extendFromVideoId && (
+                  <button type="button" onClick={() => handleExtendPick('')} className="text-xs text-port-error hover:underline">Clear</button>
+                )}
+              </div>
+              <select
+                value={extendFromVideoId}
+                disabled={generating || extendingFrame}
+                onChange={(e) => handleExtendPick(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+              >
+                <option value="">Pick a previous video…</option>
+                {visibleHistory.slice(0, 50).map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {(v.prompt || v.filename || v.id).slice(0, 80)}
+                  </option>
+                ))}
+              </select>
+              {extendingFrame && (
+                <span className="text-[11px] text-gray-500">Extracting last frame…</span>
+              )}
+              {sourceImageFile && extendFromVideoId && !extendingFrame && (
+                <div className="flex items-center gap-2">
+                  <img src={`/data/images/${sourceImageFile}`} alt="Last frame" className="w-16 h-16 object-cover rounded border border-port-border" />
+                  <span className="text-xs text-gray-500 truncate">Starts from: {sourceImageFile}</span>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             {models.length > 0 && (
@@ -471,7 +715,7 @@ export default function VideoGen() {
             </label>
           </div>
 
-          <div className="flex items-center gap-2 pt-2">
+          <div className="flex flex-wrap items-center gap-2 pt-2">
             {generating ? (
               <button
                 type="button"
@@ -489,6 +733,15 @@ export default function VideoGen() {
                 <Sparkles className="w-4 h-4" /> Generate
               </button>
             )}
+            <button
+              type="button"
+              onClick={handleEnqueue}
+              disabled={!canEnqueue}
+              className="flex items-center gap-2 px-4 py-2 border border-port-border text-gray-200 hover:text-white hover:bg-port-border/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium rounded-lg min-h-[40px]"
+              title="Add this configuration to the batch queue"
+            >
+              <ListPlus className="w-4 h-4" /> Add to queue
+            </button>
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
           </div>
 
@@ -535,6 +788,19 @@ export default function VideoGen() {
           )}
         </div>
       </form>
+
+      <BatchQueuePanel
+        queue={queue}
+        inFlightCount={inFlightCount}
+        onRemove={removeFromQueue}
+        onClear={clearCompletedQueue}
+        summarize={(item) => (
+          <>
+            <span className="uppercase mr-2">{item.params.mode}</span>
+            {item.params.width}×{item.params.height} · {item.params.numFrames}f
+          </>
+        )}
+      />
 
       {visibleHistory.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
@@ -604,3 +870,4 @@ export default function VideoGen() {
     </div>
   );
 }
+

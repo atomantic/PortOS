@@ -68,7 +68,14 @@ def main():
     p.add_argument('--seed',           type=int, default=None)
     p.add_argument('--output',         required=True)
     p.add_argument('--image',          default=None)
+    p.add_argument('--last-image',     default=None,
+                   help='Optional end-frame target (FFLF). Currently advisory — '
+                        'LTX-Video 0.9.5 diffusers pipeline does not natively '
+                        'consume two keyframes; flag is accepted for forward '
+                        'compatibility with multi-keyframe pipelines.')
     args = p.parse_args()
+    if args.last_image:
+        log(f'STATUS:Last-frame image supplied ({args.last_image}) — currently advisory; falling back to single-image I2V')
 
     dtype = torch.bfloat16
     generator = torch.Generator('cuda').manual_seed(args.seed) if args.seed is not None else None

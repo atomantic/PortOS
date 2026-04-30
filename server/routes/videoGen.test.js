@@ -113,6 +113,30 @@ describe('videoGen routes', () => {
         prompt: 'a cat',
       }));
     });
+
+    it('forwards lastImageFile + mode for FFLF', async () => {
+      videoGenService.generateVideo.mockResolvedValue({ jobId: 'j3', filename: 'j3.mp4' });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'morph between two scenes',
+        sourceImageFile: 'first.png',
+        lastImageFile: 'last.png',
+        mode: 'fflf',
+      });
+      expect(r.status).toBe(200);
+      expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+        prompt: 'morph between two scenes',
+        mode: 'fflf',
+      }));
+    });
+
+    it('rejects an unknown mode value', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a cat',
+        mode: 'bogus',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/mode/i);
+    });
   });
 
   describe('GET /:jobId/events', () => {
