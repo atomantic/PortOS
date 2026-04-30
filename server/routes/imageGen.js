@@ -123,10 +123,14 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   delete data.initImageFile;
   if (initImagePath) data.initImagePath = initImagePath;
 
-  const result = await imageGen.generateImage(data);
-  // Multer's tmp upload is no longer needed once we've copied it into PATHS.images.
-  if (uploadedInitTempPath) await unlink(uploadedInitTempPath).catch(() => {});
-  res.json(result);
+  // Multer's tmp upload is no longer needed once we've copied it into
+  // PATHS.images. Use res.on('close') so the temp file is cleaned up whether
+  // generateImage resolves, throws (handled by errorHandler middleware), or
+  // the client drops the connection mid-flight.
+  if (uploadedInitTempPath) {
+    res.on('close', () => { unlink(uploadedInitTempPath).catch(() => {}); });
+  }
+  res.json(await imageGen.generateImage(data));
 }));
 
 router.post('/avatar', asyncHandler(async (req, res) => {
