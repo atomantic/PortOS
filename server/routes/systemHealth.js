@@ -8,6 +8,7 @@ import { getSelf } from '../services/instances.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
 
 const router = Router();
 
@@ -34,20 +35,21 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, allApps, cosStatus, self, dbHealth, version, diskStats] = await Promise.all([
+  const [pm2Processes, allApps, cosStatus, self, dbHealth, version, diskStats, memStats] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAllApps({ includeArchived: false }).catch(() => []),
     cos.getStatus().catch(() => null),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
-    statfs('/').catch(() => null)
+    statfs('/').catch(() => null),
+    getMemoryStats()
   ]);
 
   // System metrics
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedMem = totalMem - freeMem;
+  const totalMem = memStats.total;
+  const freeMem = memStats.free;
+  const usedMem = memStats.used;
   const memUsagePercent = Math.round((usedMem / totalMem) * 100);
   const cpuLoad = os.loadavg()[0]; // 1-minute load average
   const cpuCount = os.cpus().length;

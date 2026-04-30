@@ -17,6 +17,7 @@ import { getGoals } from './identity.js';
 import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
 import { getUsage } from './usage.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
 
 const STALL_THRESHOLD_DAYS = 14;
 const SUCCESS_RATE_WARNING = 50;
@@ -84,10 +85,11 @@ async function checkSuccessRates() {
 async function checkSystemHealth() {
   const alerts = [];
 
-  // Memory check
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const memPct = Math.round(((totalMem - freeMem) / totalMem) * 100);
+  // Memory check — uses getMemoryStats() so the percentage matches Activity
+  // Monitor's "Memory Used" instead of (totalmem - freemem), which on macOS
+  // counts the reclaimable file cache as used and reads ~98% on every box.
+  const memStats = await getMemoryStats();
+  const memPct = Math.round((memStats.used / memStats.total) * 100);
 
   if (memPct >= MEMORY_WARNING_PCT) {
     const formatGB = (bytes) => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
@@ -95,7 +97,7 @@ async function checkSystemHealth() {
       type: 'system_resource',
       severity: memPct >= MEMORY_CRITICAL_PCT ? 'critical' : 'high',
       title: 'High memory usage',
-      detail: `${memPct}% — ${formatGB(totalMem - freeMem)} / ${formatGB(totalMem)}`,
+      detail: `${memPct}% — ${formatGB(memStats.used)} / ${formatGB(memStats.total)}`,
       link: '/apps',
       metadata: { resource: 'memory', percent: memPct }
     });
