@@ -214,41 +214,47 @@ export function parseEcosystemConfig(content) {
         return null;
       };
 
-      // Extract CDP_PORT first (Chrome DevTools Protocol port for browser processes)
-      // Word boundary ensures we don't match VITE_CDP_PORT
-      // Capture full expression (up to , or }) to handle process.env.X || fallback
-      const cdpPortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bCDP_PORT\s*:\s*([^,}\n]+)/);
-      if (cdpPortMatch) {
-        const resolved = resolvePortValue(cdpPortMatch[1]);
-        if (resolved) ports.cdp = resolved;
-      }
-
-      // Extract PORT from env (handles literals, variables, and process.env.X || fallback)
-      const portMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*\bPORT\s*:\s*([^,}\n]+)/);
-      if (portMatch) {
-        const resolved = resolvePortValue(portMatch[1]);
-        if (resolved) {
-          // Smart labeling based on process name and context
-          const isUiProcess = /[-_](ui|client)$/i.test(processName);
-          const isBrowserProcess = /[-_]browser$/i.test(processName);
-          const hasCdpPort = ports.cdp !== undefined;
-
-          if (isUiProcess) {
-            ports.ui = resolved;
-          } else if (isBrowserProcess && hasCdpPort) {
-            // Browser processes with CDP_PORT use PORT for health checks
-            ports.health = resolved;
-          } else {
-            ports.api = resolved;
-          }
+      // Collect every `<NAME>_PORT` env-var first, label after — so CDP_PORT
+      // can influence the smart label chosen for PORT regardless of source order.
+      // The `_PORT` suffix requirement avoids matching identifiers like REPORT.
+      const envPorts = {};
+      const envBlockRegex = /(?:env|env_development|env_production)\s*:\s*\{([^}]*)\}/g;
+      let envBlockMatch;
+      while ((envBlockMatch = envBlockRegex.exec(appBlock)) !== null) {
+        const envContent = envBlockMatch[1];
+        const portKeyRegex = /\b(PORT|[A-Z][A-Z0-9_]*_PORT)\b\s*:\s*([^,}\n]+)/g;
+        let m;
+        while ((m = portKeyRegex.exec(envContent)) !== null) {
+          const key = m[1];
+          if (envPorts[key] !== undefined) continue;
+          const resolved = resolvePortValue(m[2]);
+          if (resolved) envPorts[key] = resolved;
         }
       }
 
-      // Extract VITE_PORT for Vite processes
-      const vitePortMatch = appBlock.match(/(?:env|env_development|env_production)\s*:\s*\{[^}]*VITE_PORT\s*:\s*([^,}\n]+)/);
-      if (vitePortMatch) {
-        const resolved = resolvePortValue(vitePortMatch[1]);
-        if (resolved) ports.ui = resolved;
+      const isUiProcess = /[-_](ui|client)$/i.test(processName);
+      const isBrowserProcess = /[-_]browser$/i.test(processName);
+
+      if (envPorts.CDP_PORT !== undefined) ports.cdp = envPorts.CDP_PORT;
+      if (envPorts.PORT !== undefined) {
+        if (isUiProcess) {
+          ports.ui = envPorts.PORT;
+        } else if (isBrowserProcess && ports.cdp !== undefined) {
+          // Browser processes pair CDP_PORT (DevTools) with PORT (health endpoint).
+          ports.health = envPorts.PORT;
+        } else {
+          ports.api = envPorts.PORT;
+        }
+      }
+      if (envPorts.VITE_PORT !== undefined) ports.ui = envPorts.VITE_PORT;
+
+      // FOO_BAR_PORT → fooBar, capturing app-specific labels (coinbaseIpc, etc.).
+      for (const [key, value] of Object.entries(envPorts)) {
+        if (key === 'PORT' || key === 'VITE_PORT' || key === 'CDP_PORT') continue;
+        const stem = key.replace(/_?PORT$/, '');
+        if (!stem) continue;
+        const label = stem.toLowerCase().replace(/_(\w)/g, (_, c) => c.toUpperCase());
+        if (ports[label] === undefined) ports[label] = value;
       }
 
       // Also check for --port in args
