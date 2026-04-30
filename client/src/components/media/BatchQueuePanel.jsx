@@ -75,9 +75,10 @@ export default function BatchQueuePanel({ queue, onRemove, onClear, summarize })
                 onClick={() => onRemove(item.id)}
                 disabled={item.status === 'running'}
                 className="p-1 text-gray-500 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label={item.status === 'running' ? 'Cancel via the form button' : 'Remove from queue'}
                 title={item.status === 'running' ? 'Cancel via the form button' : 'Remove from queue'}
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 aria-hidden="true" className="w-3.5 h-3.5" />
               </button>
             </li>
           );

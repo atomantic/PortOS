@@ -278,14 +278,12 @@ export default function VideoGen() {
       toast.error(err.message || 'Failed to extract last frame');
       return null;
     });
-    // Stale completion: a newer pick (or clear) is now authoritative. Don't
-    // touch sourceImageFile, but DO clear the spinner if this stale request
-    // was the last one to set it — otherwise the user sees "Extracting…"
-    // forever after a quick clear.
-    if (token !== extendPickTokenRef.current) {
-      setExtendingFrame(false);
-      return;
-    }
+    // Stale completion: a newer pick (or clear) is now authoritative. Do
+    // nothing — the newer call already set/will set the spinner correctly,
+    // and the clear-path above resets it on empty pick. Touching it from
+    // the stale request could prematurely hide "Extracting…" while the
+    // current pick (B) is still in flight after a fast pick A → pick B.
+    if (token !== extendPickTokenRef.current) return;
     setExtendingFrame(false);
     if (res?.filename) {
       setSourceImageFile(res.filename);
