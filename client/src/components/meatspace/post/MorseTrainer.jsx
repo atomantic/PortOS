@@ -178,6 +178,11 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   const flushTimerRef = useRef(null);
   const wordTimerRef = useRef(null);
   const patternRef = useRef('');
+  // Mirror of `pressing` state read by beginPress/endPress so those callbacks
+  // stay referentially stable — the global keydown/keyup listener effect
+  // depends on them, and re-running per keystroke would tear down the
+  // just-scheduled flush timers and cut off the active tone mid-press.
+  const pressingRef = useRef(false);
 
   const [pattern, setPattern] = useState('');
   const [decoded, setDecoded] = useState('');
@@ -224,16 +229,18 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   }, []);
 
   const beginPress = useCallback(() => {
-    if (pressing) return;
+    if (pressingRef.current) return;
     if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
     if (wordTimerRef.current) { clearTimeout(wordTimerRef.current); wordTimerRef.current = null; }
+    pressingRef.current = true;
     setPressing(true);
     pressStartRef.current = performance.now();
     startTone();
-  }, [pressing, startTone]);
+  }, [startTone]);
 
   const endPress = useCallback(() => {
-    if (!pressing) return;
+    if (!pressingRef.current) return;
+    pressingRef.current = false;
     setPressing(false);
     stopTone();
     const now = performance.now();
@@ -244,7 +251,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     lastReleaseRef.current = now;
     flushTimerRef.current = setTimeout(flushLetter, 3 * unitMs);
     wordTimerRef.current = setTimeout(() => setDecoded((d) => d.endsWith(' ') ? d : d + ' '), 7 * unitMs);
-  }, [pressing, stopTone, unitMs, flushLetter]);
+  }, [stopTone, unitMs, flushLetter]);
 
   // Reset every piece of keying state — including in-flight press tracking and
   // the audible tone — so a missed keyup or a mid-keying mode switch can't leave
@@ -258,6 +265,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     pressStartRef.current = 0;
     lastReleaseRef.current = 0;
     stopTone();
+    pressingRef.current = false;
     setPressing(false);
     setPattern('');
     setDecoded('');
