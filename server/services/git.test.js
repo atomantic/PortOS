@@ -164,20 +164,20 @@ describe('parsePullRequestUrl', () => {
     expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/notanumber')).toBeNull();
     expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/0')).toBeNull();
   });
+
+  it('rejects GitHub URLs with extra path segments before /pull/ (no silent mis-parse)', () => {
+    // GitHub PR URLs are strictly /<owner>/<repo>/pull/<n>. Anything with extra
+    // segments before `pull` (e.g. /owner/repo/extra/pull/1) is invalid; we must
+    // return null rather than silently picking the wrong segment as `repo`.
+    expect(parsePullRequestUrl('https://github.com/owner/repo/extra/pull/1')).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/owner/repo/extra/more/pull/1')).toBeNull();
+  });
 });
 
 describe('requestCopilotReview', () => {
   it('returns structured failure for unparseable URL without invoking gh', async () => {
     const result = await requestCopilotReview('/nonexistent-path-for-test', 'not a url');
     expect(result).toEqual({ success: false, error: expect.stringContaining('unparseable PR URL') });
-  });
-
-  it('does not throw on a parseable URL when gh is unavailable (graceful failure)', async () => {
-    // We can't easily mock spawn here, but we can confirm the function returns
-    // a structured failure rather than throwing when invoked end-to-end.
-    const result = await requestCopilotReview('/nonexistent-path-for-test', 'https://github.com/test/repo/pull/1');
-    expect(result).toHaveProperty('success');
-    if (!result.success) expect(typeof result.error).toBe('string');
   });
 
   it('returns { success: true, skipped: true } when the PR URL host is a non-GitHub forge', async () => {
@@ -188,6 +188,14 @@ describe('requestCopilotReview', () => {
     const result = await requestCopilotReview('/nonexistent-path-for-test', 'https://gitlab.com/group/proj/-/merge_requests/1');
     expect(result).toEqual({ success: true, skipped: true });
   });
+
+  // The success/failure paths invoke spawn() against the real `gh` binary.
+  // Module-level mocking of `child_process` is fragile here: git.js captures
+  // `spawn` at load time and `resolveForgeForRepo` itself shells out to git
+  // and gh, making the mock surface bigger than the assertion is worth.
+  // The mocked-spawn coverage is provided in cleanupAgentWorktree.test.js,
+  // which mocks `./git.js` wholesale — here we just verify the parser/skip
+  // contract so the request never reaches a real network call.
 });
 
 describe('extractAgentSummary', () => {

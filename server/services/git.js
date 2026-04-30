@@ -503,16 +503,13 @@ export function parsePullRequestUrl(url) {
   const segments = parsed.pathname.split('/').filter(Boolean);
 
   // GitHub: /<owner>/<repo>/pull/<number>[/<more>]
-  // Find the last `pull/<n>` pair so trailing /files, /commits etc. are tolerated.
-  for (let i = segments.length - 2; i >= 1; i--) {
-    if (segments[i] === 'pull') {
-      const number = Number(segments[i + 1]);
-      if (Number.isInteger(number) && number > 0) {
-        const project = segments.slice(0, i);
-        if (project.length >= 2) {
-          return { host, owner: project[0], repo: project[project.length - 1], number };
-        }
-      }
+  // GitHub PR URLs are STRICTLY two segments before `pull` — anything else
+  // (e.g. /owner/repo/extra/pull/1) is invalid and would silently mis-parse
+  // if we just took the last segment as `repo`. Require segments[2] === 'pull'.
+  if (segments.length >= 4 && segments[2] === 'pull') {
+    const number = Number(segments[3]);
+    if (Number.isInteger(number) && number > 0) {
+      return { host, owner: segments[0], repo: segments[1], number };
     }
   }
 
