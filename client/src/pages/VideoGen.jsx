@@ -394,19 +394,27 @@ export default function VideoGen() {
     });
   });
 
+  // In Extend mode the source image is populated asynchronously after the
+  // user picks a prior video — until that extraction lands, sourceImageFile
+  // is empty and the request would silently fall back to T2V while still
+  // sending mode='extend'. Block submit/enqueue until the extend frame is
+  // actually ready (and unblocks the disabled state on the buttons too).
+  const extendModeBlocked = mode === 'extend'
+    && (extendingFrame || !extendFromVideoId || !sourceImageFile);
+
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
     // Mirror the inline submit-button's disabled rules: blank prompt,
-    // already generating, or backend disconnected. Without the disconnected
-    // guard the user could press Enter in the prompt textarea and fire a
-    // request that's guaranteed to fail (and the disabled button would
-    // otherwise have prevented).
-    if (!prompt.trim() || generating || (status && status.connected === false)) return;
+    // already generating, backend disconnected, or extend mode not ready.
+    // Without these guards the user could press Enter in the prompt
+    // textarea and fire a request the disabled button would otherwise
+    // have prevented.
+    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
   const handleEnqueue = () => {
-    if (!prompt.trim() || (status && status.connected === false)) return;
+    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked) return;
     const payload = buildGeneratePayload();
     // Strip the File blob for snapshot — re-using a File across multiple
     // queued submissions is fine, but we need a stable JSON-ish summary
@@ -449,6 +457,7 @@ export default function VideoGen() {
     const payload = { ...next.params };
     if (next._blob) payload.sourceImage = next._blob;
     let busyRetry = false;
+    let busyRetryTimer = null;
     runGeneration(payload).then((res) => {
       setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'complete', result: res } : item));
     }).catch((err) => {
@@ -458,7 +467,7 @@ export default function VideoGen() {
         // re-tries once the server's previous child has finished cleaning up.
         busyRetry = true;
         setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'pending', startedAt: undefined } : item));
-        setTimeout(() => setRunningQueueId((curr) => (curr === next.id ? null : curr)), 1500);
+        busyRetryTimer = setTimeout(() => setRunningQueueId((curr) => (curr === next.id ? null : curr)), 1500);
         return;
       }
       setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'error', error: err.message } : item));
@@ -468,6 +477,11 @@ export default function VideoGen() {
       // same 409 before the server's old child has exited.
       if (!busyRetry) setRunningQueueId(null);
     });
+    // Effect cleanup: cancel a pending BUSY-retry setTimeout when the
+    // component unmounts (or before this effect re-runs). Without this, an
+    // unmount during the 1.5s BUSY backoff would fire setRunningQueueId on
+    // a torn-down component (React warning + leaked state).
+    return () => { if (busyRetryTimer) clearTimeout(busyRetryTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, generating, runningQueueId]);
 
@@ -495,7 +509,7 @@ export default function VideoGen() {
   };
 
   const notConnected = status && status.connected === false;
-  const canEnqueue = prompt.trim() && !notConnected;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked;
 
   return (
     <div className="space-y-6">
@@ -832,8 +846,9 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
+                title={extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating' : undefined}
               >
                 <Sparkles className="w-4 h-4" /> Generate
               </button>
