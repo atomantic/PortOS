@@ -13,6 +13,44 @@ export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'sw
 export const usesPm2 = (type) => !NON_PM2_TYPES.has(type);
 
 /**
+ * Find the index of the `}` that matches the `{` at `openBraceIdx`, ignoring
+ * braces inside strings and comments. Returns -1 if no match.
+ */
+function findMatchingBrace(content, openBraceIdx) {
+  let depth = 0;
+  let inString = false;
+  let stringChar = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = openBraceIdx; i < content.length; i++) {
+    const char = content[i];
+    const nextChar = i < content.length - 1 ? content[i + 1] : '';
+    const prevChar = i > 0 ? content[i - 1] : '';
+
+    if (!inString && !inBlockComment && char === '/' && nextChar === '/') { inLineComment = true; continue; }
+    if (inLineComment && char === '\n') { inLineComment = false; continue; }
+    if (!inString && !inLineComment && char === '/' && nextChar === '*') { inBlockComment = true; continue; }
+    if (inBlockComment && char === '*' && nextChar === '/') { inBlockComment = false; i++; continue; }
+    if (inLineComment || inBlockComment) continue;
+
+    if ((char === '"' || char === "'") && prevChar !== '\\') {
+      if (!inString) { inString = true; stringChar = char; }
+      else if (char === stringChar) { inString = false; stringChar = null; }
+    }
+
+    if (!inString) {
+      if (char === '{') depth++;
+      else if (char === '}') {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
  * Uses regex parsing since we can't safely execute arbitrary JS
  * @returns {{ processes: Array, pm2Home: string|null }}
@@ -217,11 +255,16 @@ export function parseEcosystemConfig(content) {
       // Collect every `<NAME>_PORT` env-var first, label after — so CDP_PORT
       // can influence the smart label chosen for PORT regardless of source order.
       // The `_PORT` suffix requirement avoids matching identifiers like REPORT.
+      // Brace-counting (not `[^}]*`) so env values with nested objects/ternaries
+      // don't truncate the scan at the first inner `}`.
       const envPorts = {};
-      const envBlockRegex = /(?:env|env_development|env_production)\s*:\s*\{([^}]*)\}/g;
-      let envBlockMatch;
-      while ((envBlockMatch = envBlockRegex.exec(appBlock)) !== null) {
-        const envContent = envBlockMatch[1];
+      const envHeaderRegex = /(?:env|env_development|env_production)\s*:\s*\{/g;
+      let envHeaderMatch;
+      while ((envHeaderMatch = envHeaderRegex.exec(appBlock)) !== null) {
+        const openIdx = envHeaderMatch.index + envHeaderMatch[0].length - 1;
+        const closeIdx = findMatchingBrace(appBlock, openIdx);
+        if (closeIdx < 0) continue;
+        const envContent = appBlock.substring(openIdx + 1, closeIdx);
         const portKeyRegex = /\b(PORT|[A-Z][A-Z0-9_]*_PORT)\b\s*:\s*([^,}\n]+)/g;
         let m;
         while ((m = portKeyRegex.exec(envContent)) !== null) {

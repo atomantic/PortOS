@@ -129,6 +129,31 @@ describe('parseEcosystemConfig', () => {
     expect(proc.ports).toEqual({ api: 5580 });
   });
 
+  it('captures *_PORT keys after a nested brace inside the env block', () => {
+    // Env values can contain object spreads/ternaries that introduce nested `}`.
+    // A naive `\\{[^}]*\\}` env-block regex would truncate at the inner `}` and
+    // miss any *_PORT key that follows. Brace-counting handles this correctly.
+    const content = `
+      module.exports = {
+        apps: [
+          {
+            name: 'nested-env-app',
+            env: {
+              ...(process.env.FEATURE_FLAG ? { ENABLED: 'true' } : { ENABLED: 'false' }),
+              PORT: 5600,
+              IPC_PORT: 5601,
+            },
+          },
+        ],
+      };
+    `;
+
+    const { processes } = parseEcosystemConfig(content);
+    const proc = processes.find(p => p.name === 'nested-env-app');
+    expect(proc.ports.api).toBe(5600);
+    expect(proc.ports.ipc).toBe(5601);
+  });
+
   it('still honors explicit ports: { ... } literal map (does not double-extract from env)', () => {
     const content = `
       module.exports = {
