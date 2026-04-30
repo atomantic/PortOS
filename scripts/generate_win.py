@@ -79,16 +79,21 @@ def main():
     # STATUS log to the actual branch the script will take based on whether
     # --image was also provided, so users/logs aren't misled into thinking we
     # ran an I2V flow when we're really running T2V.
+    #
+    # STATUS lines are forwarded over SSE to the browser, so log just the
+    # basename rather than the absolute server path to avoid leaking
+    # filesystem layout to the client.
     if args.last_image:
+        last_image_name = os.path.basename(args.last_image)
         if args.image:
             log(
-                f'STATUS:Last-frame image supplied ({args.last_image}) — '
+                f'STATUS:Last-frame image supplied ({last_image_name}) — '
                 'currently advisory; using single-image I2V with --image as '
                 'the only conditioning frame'
             )
         else:
             log(
-                f'STATUS:Last-frame image supplied ({args.last_image}) without --image — '
+                f'STATUS:Last-frame image supplied ({last_image_name}) without --image — '
                 'currently advisory and ignored for mode selection; continuing with T2V'
             )
 

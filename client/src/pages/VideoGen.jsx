@@ -10,7 +10,8 @@
  *   - text:   pure text-to-video
  *   - image:  image-to-video (one source image, current I2V behavior)
  *   - fflf:   first frame + last frame (two images — backend support is
- *             experimental; mlx_video CLI consumes only the first today)
+ *             experimental; mlx_video only supports a single conditioning
+ *             frame, so when both are provided the last is ignored)
  *   - extend: pick a previous render → its last frame becomes the source
  *             image for a new image-to-video generation
  *
@@ -411,8 +412,6 @@ export default function VideoGen() {
 
   const notConnected = status && status.connected === false;
   const canEnqueue = prompt.trim() && !notConnected;
-  const pendingCount = queue.filter((q) => q.status === 'pending').length;
-  const inFlightCount = pendingCount + (runningQueueId ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -457,16 +456,18 @@ export default function VideoGen() {
       </div>
 
       {/* Mode switch — segmented control above the form. Sets state that
-          both the form rendering and the submit payload react to. */}
-      <div className="bg-port-card border border-port-border rounded-xl p-1.5 flex flex-wrap gap-1" role="tablist" aria-label="Video generation mode">
+          both the form rendering and the submit payload react to.
+          Implemented as plain toggle buttons with `aria-pressed` rather than
+          WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
+          tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
+      <div className="bg-port-card border border-port-border rounded-xl p-1.5 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
         {MODES.map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
               key={id}
               type="button"
-              role="tab"
-              aria-selected={active}
+              aria-pressed={active}
               onClick={() => handleModeChange(id)}
               disabled={generating}
               className={`flex-1 min-w-[140px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
@@ -811,7 +812,6 @@ export default function VideoGen() {
 
       <BatchQueuePanel
         queue={queue}
-        inFlightCount={inFlightCount}
         onRemove={removeFromQueue}
         onClear={clearCompletedQueue}
         summarize={(item) => (

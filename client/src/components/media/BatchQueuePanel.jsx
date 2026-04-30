@@ -17,17 +17,29 @@ const STATUS_ICON = {
   error: { Icon: AlertCircle, color: 'text-port-error' },
 };
 
-export default function BatchQueuePanel({ queue, inFlightCount, onRemove, onClear, summarize }) {
+export default function BatchQueuePanel({ queue, onRemove, onClear, summarize }) {
   if (!queue.length) return null;
+  // Compute status text from the queue itself so callers don't have to
+  // pass in pre-aggregated counts. Distinguishing "running" (1, the actively
+  // processing job) from "queued" (pending count) is more accurate than the
+  // earlier "X in flight" copy, which lumped both together.
   const completedCount = queue.filter((q) => q.status === 'complete' || q.status === 'error').length;
+  const runningCount = queue.filter((q) => q.status === 'running').length;
+  const pendingCount = queue.filter((q) => q.status === 'pending').length;
+  const queueStatusText =
+    runningCount > 0 && pendingCount > 0
+      ? `${runningCount} running, ${pendingCount} queued`
+      : runningCount > 0
+        ? `${runningCount} running`
+        : pendingCount > 0
+          ? `${pendingCount} queued`
+          : 'idle';
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-gray-300">
           Batch queue
-          <span className="ml-2 text-xs text-gray-500">
-            {inFlightCount > 0 ? `${inFlightCount} in flight` : 'idle'}
-          </span>
+          <span className="ml-2 text-xs text-gray-500">{queueStatusText}</span>
         </h2>
         {completedCount > 0 && (
           <button
