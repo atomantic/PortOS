@@ -8,3 +8,7 @@
 ## Changed
 
 - **Worktree policy** clarified in `CLAUDE.md`: TUI sessions edit the main repo directly; worktrees are reserved for unattended CoS sub-agents.
+
+## Fixed
+
+- **CoS agents now reliably open PRs and request Copilot reviews when configured.** Previously, when both `openPR` and `reviewLoop` were enabled on a task, the worktree-cleanup logic's gate (`taskOpenPR && !taskReviewLoop`) skipped PR creation — falling through to auto-merge the agent's branch into main with no PR, no review, and contradictory wording in the agent prompt about whether it should open the PR itself. The cleanup now always opens the PR when `openPR` is set; when `reviewLoop` is also set, it requests a Copilot review on the new PR via the new `git.requestCopilotReview()` helper. The agent prompt is updated to consistently tell the agent the system handles PR creation and review requests.

@@ -1108,9 +1108,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
  * Clean up a worktree for a completed agent.
  * Reads worktree metadata from the agent's registered state and removes the worktree.
  * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
+ * When requestCopilotReview is also true, requests a Copilot code review on the new PR.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, description = null, agentOutput = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, description = null, agentOutput = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -1185,6 +1186,16 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, d
 
       const cliName = prResult.cli || 'gh';
       emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
+
+      if (shouldRequestCopilot) {
+        const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
+        if (reviewResult.success) {
+          emitLog('success', `🤖 Requested Copilot review on ${prResult.url}`, { agentId, prUrl: prResult.url });
+        } else {
+          emitLog('warn', `🤖 Failed to request Copilot review on ${prResult.url}: ${reviewResult.error}`, { agentId, prUrl: prResult.url });
+          warnings.push(`Copilot review request failed for ${prResult.url}: ${reviewResult.error}`);
+        }
+      }
 
       const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
         emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });

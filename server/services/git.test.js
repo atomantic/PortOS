@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli } from './git.js';
+import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli, parsePullRequestUrl, requestCopilotReview } from './git.js';
 
 describe('parseGitRemote', () => {
   it('parses GitHub SSH urls', () => {
@@ -112,6 +112,46 @@ describe('createPR', () => {
     expect(typeof result.error).toBe('string');
     // The error must come from gh/spawn behavior, NOT from a missing-import bug.
     expect(result.error).not.toMatch(/spawn is not defined/);
+  });
+});
+
+describe('parsePullRequestUrl', () => {
+  it('parses GitHub PR URLs', () => {
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/185')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 185
+    });
+    expect(parsePullRequestUrl('http://github.example.com/org/repo/pull/1')).toEqual({
+      host: 'github.example.com', owner: 'org', repo: 'repo', number: 1
+    });
+  });
+
+  it('parses GitLab MR URLs', () => {
+    expect(parsePullRequestUrl('https://gitlab.com/group/project/-/merge_requests/42')).toEqual({
+      host: 'gitlab.com', owner: 'group', repo: 'project', number: 42
+    });
+  });
+
+  it('returns null for invalid input', () => {
+    expect(parsePullRequestUrl(null)).toBeNull();
+    expect(parsePullRequestUrl('')).toBeNull();
+    expect(parsePullRequestUrl(undefined)).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS')).toBeNull();
+    expect(parsePullRequestUrl('not a url')).toBeNull();
+  });
+});
+
+describe('requestCopilotReview', () => {
+  it('returns structured failure for unparseable URL without invoking gh', async () => {
+    const result = await requestCopilotReview('/nonexistent-path-for-test', 'not a url');
+    expect(result).toEqual({ success: false, error: expect.stringContaining('unparseable PR URL') });
+  });
+
+  it('does not throw on a parseable URL when gh is unavailable (graceful failure)', async () => {
+    // We can't easily mock spawn here, but we can confirm the function returns
+    // a structured failure rather than throwing when invoked end-to-end.
+    const result = await requestCopilotReview('/nonexistent-path-for-test', 'https://github.com/test/repo/pull/1');
+    expect(result).toHaveProperty('success');
+    if (!result.success) expect(typeof result.error).toBe('string');
   });
 });
 

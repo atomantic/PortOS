@@ -482,6 +482,56 @@ export async function createPR(dir, { title, body, base, head }) {
 }
 
 /**
+ * Parse a PR / MR URL into { host, owner, repo, number }. Returns null on bad input.
+ * Handles GitHub (`/pull/N`) and GitLab (`/-/merge_requests/N`) URLs.
+ */
+export function parsePullRequestUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const ghMatch = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (ghMatch) return { host: ghMatch[1], owner: ghMatch[2], repo: ghMatch[3], number: Number(ghMatch[4]) };
+  const glMatch = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/-\/merge_requests\/(\d+)/);
+  if (glMatch) return { host: glMatch[1], owner: glMatch[2], repo: glMatch[3], number: Number(glMatch[4]) };
+  return null;
+}
+
+/**
+ * Request a Copilot code review on a GitHub PR. The reviewer login MUST include
+ * the `[bot]` suffix or GitHub returns 422 "must be a collaborator". GitLab has
+ * no equivalent — this is a GitHub-only no-op there.
+ *
+ * @param {string} dir - Working directory used to resolve gh auth
+ * @param {string} prUrl - PR URL returned by createPR
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+export async function requestCopilotReview(dir, prUrl) {
+  const parsed = parsePullRequestUrl(prUrl);
+  if (!parsed) return { success: false, error: `unparseable PR URL: ${prUrl}` };
+
+  const { cli, env } = await resolveForgeForRepo(dir);
+  if (cli !== 'gh') return { success: false, error: `Copilot reviewer is GitHub-only (got ${cli})` };
+
+  const args = [
+    'api',
+    `repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}/requested_reviewers`,
+    '-X', 'POST',
+    '-f', 'reviewers[]=copilot-pull-request-reviewer[bot]'
+  ];
+
+  return new Promise((resolve) => {
+    const child = spawn(cli, args, { cwd: dir, env, shell: false, windowsHide: true });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) resolve({ success: true });
+      else resolve({ success: false, error: stderr.trim() || `gh exited with code ${code}` });
+    });
+    child.on('error', (err) => {
+      resolve({ success: false, error: `gh not available: ${err.message}` });
+    });
+  });
+}
+
+/**
  * Generate a rich PR description from the agent's output summary.
  * Extracts the implementation summary from the tail of the agent output,
  * stripping tool-call artifacts and keeping only the meaningful explanation
