@@ -8,6 +8,31 @@ import { getSelf } from '../services/instances.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
+import { getSettings, updateSettings } from '../services/settings.js';
+
+// Defaults are tuned for a real dev machine: memory routinely sits in the
+// 75-85% band on a host with a couple of LLMs loaded, and big SSDs commonly
+// run >85% before being a real problem. Earlier thresholds (75/90 mem,
+// 85/95 disk) fired warnings on every healthy laptop. Users can override
+// these from /system-health (persisted to settings.json under `health`).
+const DEFAULT_THRESHOLDS = {
+  memoryWarn: 85,
+  memoryCritical: 95,
+  diskWarn: 90,
+  diskCritical: 98
+};
+
+async function loadThresholds() {
+  const settings = await getSettings().catch(() => ({}));
+  const h = settings.health || {};
+  return {
+    memoryWarn: Number(h.memoryWarn) || DEFAULT_THRESHOLDS.memoryWarn,
+    memoryCritical: Number(h.memoryCritical) || DEFAULT_THRESHOLDS.memoryCritical,
+    diskWarn: Number(h.diskWarn) || DEFAULT_THRESHOLDS.diskWarn,
+    diskCritical: Number(h.diskCritical) || DEFAULT_THRESHOLDS.diskCritical
+  };
+}
 
 const router = Router();
 
@@ -34,21 +59,19 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, allApps, cosStatus, self, dbHealth, version, diskStats] = await Promise.all([
+  const [pm2Processes, allApps, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAllApps({ includeArchived: false }).catch(() => []),
     cos.getStatus().catch(() => null),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
-    statfs('/').catch(() => null)
+    statfs('/').catch(() => null),
+    getMemoryStats(),
+    loadThresholds()
   ]);
 
-  // System metrics
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedMem = totalMem - freeMem;
-  const memUsagePercent = Math.round((usedMem / totalMem) * 100);
+  const memUsagePercent = Math.round((memStats.used / memStats.total) * 100);
   const cpuLoad = os.loadavg()[0]; // 1-minute load average
   const cpuCount = os.cpus().length;
   const cpuUsagePercent = Math.round((cpuLoad / cpuCount) * 100);
@@ -81,7 +104,8 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     errored: pm2Processes.filter(p => p.status === 'errored').length,
     totalMemory: pm2Processes.reduce((sum, p) => sum + (p.memory || 0), 0),
     totalCpu: pm2Processes.reduce((sum, p) => sum + (p.cpu || 0), 0),
-    totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0)
+    totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0),
+    unstableRestarts: pm2Processes.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0)
   };
 
   // App status summary
@@ -96,12 +120,12 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   let overallHealth = 'healthy';
   const warnings = [];
 
-  if (memUsagePercent > 90) {
+  if (memUsagePercent >= thresholds.memoryCritical) {
     overallHealth = 'critical';
-    warnings.push({ type: 'memory', message: 'Memory usage above 90%' });
-  } else if (memUsagePercent > 75) {
+    warnings.push({ type: 'memory', message: `Memory usage at or above ${thresholds.memoryCritical}%` });
+  } else if (memUsagePercent >= thresholds.memoryWarn) {
     if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'memory', message: 'Memory usage above 75%' });
+    warnings.push({ type: 'memory', message: `Memory usage at or above ${thresholds.memoryWarn}%` });
   }
 
   if (cpuUsagePercent > 100) {
@@ -110,12 +134,12 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   }
 
   if (disk) {
-    if (disk.usagePercent >= 95) {
+    if (disk.usagePercent >= thresholds.diskCritical) {
       overallHealth = 'critical';
-      warnings.push({ type: 'disk', message: 'Disk usage at or above 95%' });
-    } else if (disk.usagePercent >= 85) {
+      warnings.push({ type: 'disk', message: `Disk usage at or above ${thresholds.diskCritical}%` });
+    } else if (disk.usagePercent >= thresholds.diskWarn) {
       if (overallHealth !== 'critical') overallHealth = 'warning';
-      warnings.push({ type: 'disk', message: 'Disk usage at or above 85%' });
+      warnings.push({ type: 'disk', message: `Disk usage at or above ${thresholds.diskWarn}%` });
     }
   }
 
@@ -124,9 +148,14 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     warnings.push({ type: 'process', message: `${processStats.errored} process(es) errored` });
   }
 
-  if (processStats.totalRestarts > 10) {
+  if (processStats.unstableRestarts > 0) {
     if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'restarts', message: `${processStats.totalRestarts} total restarts` });
+    const crashing = pm2Processes.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
+    const plural = processStats.unstableRestarts === 1 ? '' : 's';
+    warnings.push({
+      type: 'restarts',
+      message: `${processStats.unstableRestarts} crash-loop restart${plural} (${crashing.join(', ')})`
+    });
   }
 
   if (!dbHealth.connected) {
@@ -180,13 +209,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
       uptime,
       uptimeFormatted,
       memory: {
-        total: totalMem,
-        used: usedMem,
-        free: freeMem,
+        total: memStats.total,
+        used: memStats.used,
+        free: memStats.free,
         usagePercent: memUsagePercent,
-        totalFormatted: formatBytes(totalMem),
-        usedFormatted: formatBytes(usedMem),
-        freeFormatted: formatBytes(freeMem)
+        totalFormatted: formatBytes(memStats.total),
+        usedFormatted: formatBytes(memStats.used),
+        freeFormatted: formatBytes(memStats.free)
       },
       cpu: {
         cores: cpuCount,
@@ -206,8 +235,54 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     processes: processStats,
     apps: appStats,
     cos: cosInfo,
-    database: dbHealth
+    database: dbHealth,
+    thresholds,
+    topProcesses: [...pm2Processes]
+      .sort((a, b) => (b.memory || 0) - (a.memory || 0))
+      .slice(0, 10)
+      .map(p => ({
+        name: p.name,
+        status: p.status,
+        memory: p.memory || 0,
+        memoryFormatted: formatBytes(p.memory || 0),
+        cpu: p.cpu || 0,
+        restarts: p.restarts || 0,
+        unstableRestarts: p.unstableRestarts || 0
+      }))
   });
+}));
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+router.put('/health/thresholds', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const incoming = {
+    memoryWarn: Number(body.memoryWarn),
+    memoryCritical: Number(body.memoryCritical),
+    diskWarn: Number(body.diskWarn),
+    diskCritical: Number(body.diskCritical)
+  };
+  for (const [k, v] of Object.entries(incoming)) {
+    if (!Number.isFinite(v)) {
+      return res.status(400).json({ error: `Invalid threshold value for ${k}` });
+    }
+  }
+  const next = {
+    memoryWarn: clamp(Math.round(incoming.memoryWarn), 50, 99),
+    memoryCritical: clamp(Math.round(incoming.memoryCritical), 50, 99),
+    diskWarn: clamp(Math.round(incoming.diskWarn), 50, 99),
+    diskCritical: clamp(Math.round(incoming.diskCritical), 50, 99)
+  };
+  if (next.memoryWarn >= next.memoryCritical) {
+    return res.status(400).json({ error: 'memoryWarn must be less than memoryCritical' });
+  }
+  if (next.diskWarn >= next.diskCritical) {
+    return res.status(400).json({ error: 'diskWarn must be less than diskCritical' });
+  }
+
+  const current = await getSettings().catch(() => ({}));
+  await updateSettings({ ...current, health: { ...(current.health || {}), ...next } });
+  res.json(next);
 }));
 
 export default router;

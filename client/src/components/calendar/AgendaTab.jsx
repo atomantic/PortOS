@@ -5,6 +5,7 @@ import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import { formatTimeOfDay as formatTime } from '../../utils/formatters';
+import BrailleSpinner from '../BrailleSpinner';
 
 const RSVP_STYLES = {
   accepted: 'bg-port-success/20 text-port-success',
@@ -119,7 +120,7 @@ export default function AgendaTab({ accounts }) {
       {/* Event list */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <RefreshCw size={24} className="text-port-accent animate-spin" />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : grouped.length === 0 ? (
         <div className="text-center py-12 text-gray-500">

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, Clock, RefreshCw, Zap, Server } from 'lucide-react';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function ProviderStatusCard() {
   const [statuses, setStatuses] = useState(null);
@@ -88,7 +89,7 @@ export default function ProviderStatusCard() {
     return (
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-center gap-2 text-gray-500">
-          <RefreshCw size={14} className="animate-spin" />
+          <BrailleSpinner />
           <span className="text-sm">Loading provider status...</span>
         </div>
       </div>
@@ -205,7 +206,7 @@ export default function ProviderStatusCard() {
                   title="Manually mark as recovered"
                 >
                   {recovering === provider.id ? (
-                    <RefreshCw size={12} className="animate-spin" />
+                    <BrailleSpinner />
                   ) : (
                     <Zap size={12} />
                   )}

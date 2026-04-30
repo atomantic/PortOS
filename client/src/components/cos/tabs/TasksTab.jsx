@@ -19,6 +19,22 @@ import * as api from '../../../services/api';
 import TaskItem from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 import TaskAddForm from '../TaskAddForm';
+import { MicroGlyph, SchematicLabel } from '../../micrographics';
+
+// Maps a task-section status → micrographic glyph spec. Animation only on
+// states where motion communicates real work happening (running tasks).
+const SECTION_GLYPH = {
+  pending:    { variant: 'pulse-dot',   state: 'warn',    animated: false },
+  active:     { variant: 'scan',        state: 'accent',  animated: true  },
+  blocked:    { variant: 'warning-tri', state: 'error',   animated: false },
+  completed:  { variant: 'check-tick',  state: 'success', animated: false },
+};
+
+function SectionGlyph({ status }) {
+  const spec = SECTION_GLYPH[status];
+  if (!spec) return null;
+  return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
+}
 
 export default function TasksTab({ tasks, onRefresh, providers, apps }) {
   const [userTasksLocal, setUserTasksLocal] = useState([]);
@@ -143,7 +159,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
 
         {/* User Tasks Sections */}
         {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
-          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
+          <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
+            <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No user tasks. Add one above or edit TASKS.md directly.
           </div>
         ) : (
@@ -152,7 +169,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {pendingUserTasksLocal.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-yellow-500">
+                  <span className="text-sm font-medium text-yellow-500 flex items-center gap-2">
+                    <SectionGlyph status="pending" />
                     Pending ({pendingUserTasksLocal.length})
                   </span>
                 </div>
@@ -181,7 +199,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {activeUserTasksLocal.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-accent">
+                  <span className="text-sm font-medium text-port-accent flex items-center gap-2">
+                    <SectionGlyph status="active" />
                     Active ({activeUserTasksLocal.length})
                   </span>
                 </div>
@@ -197,7 +216,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {blockedUserTasksLocal.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-error">
+                  <span className="text-sm font-medium text-port-error flex items-center gap-2">
+                    <SectionGlyph status="blocked" />
                     Blocked ({blockedUserTasksLocal.length})
                   </span>
                 </div>
@@ -219,6 +239,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 >
                   <span className="text-sm font-medium text-port-success flex items-center gap-2">
                     {showCompletedUserTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                    <SectionGlyph status="completed" />
                     Completed ({completedUserTasksLocal.length})
                   </span>
                 </button>
@@ -241,7 +262,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
 
         {/* System Tasks Sections */}
         {pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && completedSystemTasks.length === 0 ? (
-          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
+          <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
+            <SchematicLabel module="COS" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No system tasks.
           </div>
         ) : (
@@ -250,7 +272,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {pendingSystemTasks.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-yellow-500">
+                  <span className="text-sm font-medium text-yellow-500 flex items-center gap-2">
+                    <SectionGlyph status="pending" />
                     Pending ({pendingSystemTasks.length})
                   </span>
                 </div>
@@ -266,7 +289,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {activeSystemTasks.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-port-accent/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-accent">
+                  <span className="text-sm font-medium text-port-accent flex items-center gap-2">
+                    <SectionGlyph status="active" />
                     Active ({activeSystemTasks.length})
                   </span>
                 </div>
@@ -282,7 +306,8 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
             {blockedSystemTasks.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-port-error/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-port-error">
+                  <span className="text-sm font-medium text-port-error flex items-center gap-2">
+                    <SectionGlyph status="blocked" />
                     Blocked ({blockedSystemTasks.length})
                   </span>
                 </div>
@@ -304,6 +329,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
                 >
                   <span className="text-sm font-medium text-port-success flex items-center gap-2">
                     {showCompletedSystemTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                    <SectionGlyph status="completed" />
                     Completed ({completedSystemTasks.length})
                   </span>
                 </button>

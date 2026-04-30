@@ -8,6 +8,7 @@ import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { timeAgo } from '../components/feature-agents/constants';
 import { formatInterval } from '../components/cos/constants';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 const INTERVAL_PRESETS = [
   { label: '30s', value: '30s' },
@@ -21,7 +22,7 @@ const INTERVAL_PRESETS = [
 function StatusBadge({ loop }) {
   if (loop.isExecuting) return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-400">
-      <Loader2 size={12} className="animate-spin" /> Running
+      <BrailleSpinner /> Running
     </span>
   );
   if (loop.isRunning) return (
@@ -167,7 +168,7 @@ function CreateLoopForm({ providers, onCreated }) {
         disabled={!prompt.trim() || creating}
         className="px-4 py-1.5 bg-port-accent text-white rounded text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
       >
-        {creating ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+        {creating ? <BrailleSpinner /> : <Play size={14} />}
         Start Loop
       </button>
     </form>
@@ -291,7 +292,7 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
           <div className="border-t border-port-border/50">
             <div className="px-4 py-1 text-xs text-gray-500 flex items-center gap-2">
               Live Output
-              {loop.isExecuting && <Loader2 size={10} className="animate-spin text-blue-400" />}
+              {loop.isExecuting && <BrailleSpinner />}
               {liveOutput.length > 0 && (
                 <button onClick={() => setLiveOutput([])} className="ml-auto text-gray-600 hover:text-gray-400 text-xs">clear</button>
               )}

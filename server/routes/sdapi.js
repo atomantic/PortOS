@@ -183,14 +183,15 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
     modelId = sd_model_checkpoint.replace(/^portos-local-/, '').split(' ')[0];
   }
 
-  // In local mode generateImage returns the moment the Python child is
+  // In local + codex modes generateImage returns the moment the child is
   // spawned — the file isn't on disk yet. Subscribe to the completion event
   // BEFORE calling generateImage so a fast job (cached weights, low steps)
   // can't fire before we attach. External mode awaits internally and the
   // file is on disk by the time generateImage resolves, so the wait is a
   // no-op there.
   const mode = await getMode();
-  const localWait = mode === 'local'
+  const isAsyncMode = mode === 'local' || mode === 'codex';
+  const localWait = isAsyncMode
     ? createCompletionWaiter()
     : { register: () => {}, promise: Promise.resolve(), cleanup: () => {} };
 

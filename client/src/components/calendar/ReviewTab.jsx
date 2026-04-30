@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle, RefreshCw } from 'lucide-react';
+import {Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle} from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
+import BrailleSpinner from '../BrailleSpinner';
 
 export default function ReviewTab() {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -99,7 +100,7 @@ export default function ReviewTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

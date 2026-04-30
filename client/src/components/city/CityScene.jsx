@@ -24,7 +24,7 @@ import CitySky from './CitySky';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, productivityData, settings, playSfx, keysRef }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, productivityData, settings, playSfx, keysRef, dimmedAppIds }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -82,6 +82,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
         playSfx={playSfx}
         settings={settings}
         proximityAppId={proximityApp?.id}
+        dimmedAppIds={dimmedAppIds}
       />
       <CityDataStreams positions={positions} />
       <CityTraffic positions={positions} />

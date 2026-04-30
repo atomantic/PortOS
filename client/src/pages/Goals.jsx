@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, Target, TreePine, List } from 'lucide-react';
+import {Target, TreePine, List} from 'lucide-react';
 import * as api from '../services/api';
 import GoalsTreeView from '../components/goals/GoalsTreeView';
 import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 const TABS = [
   { id: 'list', label: 'List', icon: List },
@@ -81,7 +82,7 @@ export default function Goals() {
       <div className="flex-1 overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <Loader2 className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
           </div>
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} />

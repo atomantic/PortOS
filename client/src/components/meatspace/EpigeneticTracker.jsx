@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from '../ui/Toast';
-import {
-  Plus, RefreshCw, Trash2, ChevronDown, ChevronRight,
-  Activity, Pill, Heart, CheckCircle, Calendar, FlameKindling
-} from 'lucide-react';
+import {Plus, Trash2, ChevronDown, ChevronRight,
+  Activity, Pill, Heart, CheckCircle, Calendar, FlameKindling} from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 
 const CATEGORY_ICONS = {
@@ -108,7 +107,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <RefreshCw className="w-5 h-5 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -276,7 +275,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                         disabled={loggingId === key}
                         className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 rounded text-sm hover:bg-green-500/30 disabled:opacity-50"
                       >
-                        {loggingId === key ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                        {loggingId === key ? <BrailleSpinner /> : <CheckCircle size={12} />}
                         Log Today
                       </button>
                     </div>

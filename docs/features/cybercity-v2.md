@@ -2,315 +2,238 @@
 
 ## Intent
 
-CyberCity should be a **read-only interpretive layer** over PortOS state.
+CyberCity is the **spatial systems map** of PortOS. A single `/cybercity` page that
+turns the abstract state of every managed app, every active agent, every system
+signal into a 3D environment you can glance at, search, and act in.
 
-It is not a control plane and should not mutate canonical user data. Its job is to:
+It does three jobs:
 
-- spatialize important system state
-- make operational pressure legible at a glance
-- provide a memorable aesthetic layer for PortOS
-- route the user into deeper app surfaces when they want detail
+1. **Make operational pressure legible at a glance** — which buildings are hot,
+   where is review pressure piling up, what needs your attention right now.
+2. **Provide a fast spatial front-end to PortOS** — search any app, jump into
+   any detail page, take action on any building.
+3. **Be a memorable, distinctive aesthetic layer** — a cyberpunk city you
+   actually enjoy spending time in, with personality that grows over use.
 
-## Current State
+## Current State (as of 2026-04-29)
 
-The current implementation already has a strong rendering shell:
+Strong rendering shell already exists: 3D scene with apps as buildings (PM2-driven),
+boroughs, archive district, weather, traffic, particles, neon signs, billboards,
+HUD with vitals + activity log + agent bar, exploration mode (WASD), and an
+OrbitControls default view.
 
-- 3D city scene with buildings, districts, weather, traffic, particles, signs, billboards, and HUD
-- app-driven building placement
-- archived apps separated into an archive district
-- CoS activity shown in HUD and event logs
-- exploration mode / avatar controls
+Tech: React Three Fiber + Three.js (no postprocessing lib — bloom is custom).
 
-What it lacks is a stronger semantic model. Right now it is more of a stylish city visualization than a true systems map.
+What it lacks:
 
-## Core Design Rule
+- **Per-building real-time signal** — buildings show only binary online/stopped;
+  CPU/memory/error rate are invisible.
+- **Findability** — no search, no filter, scrolling through ~50 buildings is
+  the only way to locate one.
+- **Drill-down / actionability** — buildings click straight to `/apps/{id}`;
+  HUD stats are not interactive; no hover preview, no quick actions.
+- **Holistic coverage** — AI runs, CoS task queue depth, federation peers,
+  backups, voice agent state, notifications all invisible.
+- **Mobile** — desktop-only despite project mandate; no touch controls.
+- **Mutation surface** — the city is read-only today, but it is the natural
+  place to restart a stopped app or kick off a deploy without leaving the view.
 
-CyberCity is a **read layer**.
+## Design Rules
+
+CyberCity is an **interactive systems map**.
 
 Allowed:
-- query state from PortOS APIs
-- reflect state visually
-- link/navigate to app pages and dashboards
-- render symbolic or atmospheric interpretations
+
+- query state from PortOS APIs and reflect it visually
+- offer click-to-navigate into deeper app surfaces
+- offer **explicit user-initiated actions** that already exist elsewhere in
+  PortOS (restart app, deploy app, jump to logs, etc.) — the city is a
+  faster path, not a hidden side channel
+- render symbolic / atmospheric interpretations of state
 
 Not allowed:
-- mutate user goals, tasks, notes, or memory directly
-- trigger automations implicitly
-- act as a hidden write surface
 
-## V2 Design Goal
+- mutate user goals, tasks, notes, or memory directly (those flow through their
+  canonical pages with their own validation)
+- trigger automations *implicitly* (no auto-restart on click, no batch actions
+  without explicit confirmation)
+- act as an undocumented write surface — every action exposed in the city must
+  be discoverable elsewhere in PortOS too
 
-Turn CyberCity from a decorative scene into a **living systems dashboard**.
+In short: **interactive, but every action is intentional and user-initiated**.
 
-The city should answer questions like:
-- Where is activity happening?
-- Which systems are healthy vs degraded?
-- Where is review pressure building?
-- Which machine or domain is producing noise?
-- What deserves attention first?
-
-## Proposed Semantic Layers
+## Semantic Layers
 
 ### 1. Infrastructure Layer
-Maps operational system state into broad city behavior.
+Maps operational state into city behavior.
 
-Examples:
-- app health -> district brightness / outages / skyline quality
-- active agents -> drones, traffic density, lit windows, moving signals
-- alerts / review pressure -> warning beacons, weather severity, red pulses
-- archived apps -> warehouse / cold-storage district
-- remote instances / machines -> distinct boroughs or utility grids
+- App health → district brightness, building façade, ember/spark intensity
+- Active agents → tethered light to their assigned building, traffic density
+- Alerts / review pressure → warning beacons, weather severity, red pulses
+- Archived apps → cold-storage district
+- Remote instances → distant skyline silhouettes on the horizon
 
 ### 2. Domain Layer
-Maps major PortOS domains into recognizable urban geography.
+Maps PortOS domains into recognizable urban geography.
 
-Initial candidate districts:
-- Apps / operations district
-- CoS / agents district
-- Review / alerts district
-- Memory / archive district
-- Machine / instance district
-- Void machine district (remote primary node)
+Districts:
+- **Apps / operations** — main downtown, all PM2-managed buildings
+- **CoS / agents** — agent bar + tether anchors
+- **Review / alerts** — pressure landmarks
+- **Memory / archive** — archived apps + memory crystal layer (future)
+- **AI core** — central tower, all model activity radiates from here
+- **Backup vault** — small monument tracking snapshot health
+- **Federation horizon** — distant peer skyline
+- **Void machine** — reserved zone for the remote primary instance
 
 ### 3. Interface Layer
-Lets CyberCity route the user into the real app.
+Routes the user into the real app.
 
-Examples:
-- click building -> app detail
-- click review beacon -> Review Hub
-- click agent district -> CoS / agent page
-- click void-machine infrastructure -> instance/machine details
+- click building → app detail (existing)
+- click building façade health bar → live metrics page
+- click review beacon → Review Hub
+- click AI Core → AI runs page
+- click backup vault → Backup page
+- click distant peer city → instance management
+- press `/` → search overlay → focus camera + jump
 
 ### 4. Atmosphere Layer
-Adds meaning and personality without changing truth.
+Personality without changing truth.
 
-Examples:
-- ambient city mood tied to system conditions
-- earned monuments or holograms from milestones
-- subtle machine-familiar tone in signage / overlays
+- ambient mood tied to system conditions (weather already does this)
+- earned monuments / holograms from milestones
+- chronotype-driven energy levels (peak hours = bright/fast, recovery = dim/slow)
 - temporal events (night mode, storms, calm periods)
+- ambient soundscape (future)
 
 ## Roadmap
 
-### Phase 1 — Legibility
-Goal: make the city communicate real system state clearly.
+The roadmap unifies operational legibility (the *useful* layer) with atmospheric
+polish (the *delightful* layer). Phase 1 prioritizes legibility because that's
+what makes CyberCity worth visiting daily; later phases add depth.
 
-Planned work:
-- define district model beyond active vs archive
-- add explicit status-to-visual mappings
-- introduce review/alert pressure indicators
-- make remote instance presence visible through data-driven landmarks and signals
-- refine HUD so it reflects domain health, not just generic counts
+### Phase 1 — Operational Legibility (current focus)
 
-### Phase 2 — Navigation
-Goal: make CyberCity a spatial front-end to PortOS.
+Goal: a person walking into `/cybercity` for the first time can immediately see
+what's healthy, what's not, find a specific app, and take action.
 
-Planned work:
-- district click targets
-- landmark summaries
-- richer hover/interact states
-- direct routing into app areas from meaningful city objects
+| ID | Item | Effort |
+|----|------|--------|
+| **1.1** | **Per-building health glyph** — vertical CPU/MEM/ERR strip on every building façade, cyan→amber→red mapped from `/api/system/health/details` + PM2 metrics. The single highest-leverage change: every building tells you what it's doing right now. | M |
+| **1.2** | **Stress smoke / sparks** — reuse `CityEmbers` per-building. Persistent CPU spike = smoke trail; recent crash = sparks. Brings global weather vocabulary down to the per-building level. | S |
+| **1.3** | **Health card replaces cryptic weather glyph** — HUD shows plain `CPU 34% / MEM 71% / DISK 88%` with a sentinel dot. Atmospheric weather effect stays. | XS |
+| **1.4** | **System Health as City Atmosphere** — pipe `/api/system/health/details` into existing weather/fog/ground texture so the sky reflects real state. | S |
+| **1.5** | **Notification beacons** — extend `CitySignalBeacons` with notification backlog from `/api/notifications/counts`; brightness = unread count, color = type, click = navigate. | S |
+| **1.6** | **Brain inbox pulse** — central spire glow tracks `/api/brain/inbox` depth; new captures pulse the spire. | S |
+| **1.7** | **"Needs attention" pane** — replace the right-side `cos:log` stream with a structured list ranked by urgency: stopped/errored apps, high CPU/mem, pending reviews, stale backups, failed agent runs, federation sync failures, unread notifications. Every item clickable. Live log demoted to a tab. | S |
+| **1.8** | **Building search overlay** — press `/` to filter buildings by name/tag/status; non-matches dim, matches stay lit, Enter focuses camera. Local substring match against name/id/tags in `client/src/utils/cityFilter.js`. | S |
+| **1.9** | **Status filter chips in HUD** — All / Online / Stopped / Errored / Has-Agent / Has-Pending-Review pill row above legend. Persists per-session. | S |
+| **1.10** | **Hover preview card with quick actions** — show status / uptime / CPU / MEM / err / recent log line, with **Logs / Restart / Deploy / Open** buttons. Restart and Deploy POST to existing endpoints with explicit confirmation. | M |
+| **1.11** | **Clickable HUD stats** — every count routes somewhere: PENDING REVIEWS → `/review`, AGENTS → `/cos`, NODES → `/instances`, etc. | XS |
+| **1.12** | **Richer billboards** — rotate today's briefing headline, productivity streak, top actionable insight, recent agent completion summary, goal progress. | S |
+| **1.13** | **Agent → building tether** — visible light from `AgentEntity` to its assigned building; color = agent state. Plus window-pulse animation on the building. | M |
+| **1.14** | **Mobile / touch support** — `pointer: coarse` detection, single-finger orbit, two-finger pinch zoom, tap-to-select. Below 640px collapse HUD into a bottom sheet with search + filters + needs-attention. WASD exploration disables. CLAUDE.md mandate. | M |
+| **1.15** | **Quality auto-detection** — default low/medium for mobile or weak hardware; settings panel still allows override. | XS |
 
-### Phase 3 — Atmosphere
-Goal: make CyberCity feel alive and distinctive.
+### Phase 2 — Holistic Coverage
 
-Planned work:
-- domain-specific ambient effects
-- earned artifacts / monuments
-- ghost-console / familiar flavor in selected UI surfaces
-- stronger day/night and signal-noise mood shifts
+Goal: every major system PortOS tracks has a place in the city.
 
-## Related Future Ideas
-Track for later work:
+| ID | Item | Effort |
+|----|------|--------|
+| **2.1** | **AI Core landmark + activity beams** — central tower; on `ai:status` events, shoot a beam to the building whose agent issued the call. Thickness = tokens/sec, color = model tier. Solves the biggest current blind spot. | M |
+| **2.2** | **CoS task queue silhouette** — warehouse with stack height = pending CoS tasks. Boxes load on `tasks:cos:created`, unload on completion. | M |
+| **2.3** | **Backup vault landmark** — pulses on `backup:started/completed`, label shows time-since-last-snapshot, goes red when stale. | S |
+| **2.4** | **Voice agent district marker** — small area whose lighting mirrors voice-agent state (idle / dictating / error). | S |
+| **2.5** | **Federation horizon** — peers as distant skyline silhouettes; opacity = reachability, bridge condition = sync state. Even with one instance the void zone stays visible. | M |
+| **2.6** | **Productivity district** — streak monument, activity heatmap ground tiles, task flow river. Driven by `/api/cos/productivity/*`. | L |
+| **2.7** | **Goal monuments** — active goals as construction sites; completed goals as polished monuments; stalled goals dimmed. Driven by `/api/digital-twin/identity/goals`. | L |
+| **2.8** | **Mini-map overlay** — top-down map in HUD corner with click-to-teleport. | M |
+| **2.9** | **Health vitals tower** — biometric tower in a wellness district visualizing heart rate / steps / sleep / calories from `/api/meatspace/apple-health/metrics/latest`. | M |
+| **2.10** | **Data flow streams between buildings** — visible light streams for actual API/socket/file traffic; thickness = volume, color = type. | M |
+| **2.11** | **Character XP HUD** — floating level/XP badge with particle burst on XP gain; level-up triggers fireworks. | S |
 
-- Sandbox district (safe experiments, simulated artifacts, non-canonical play)
-- Memory museum / mausoleum layer
-- Ambient ritual layer
-- Ghost console / machine familiar mode
+### Phase 3 — Atmosphere & Polish
 
-These should remain separate from canonical write paths.
+Goal: the city feels alive, distinctive, and earned.
 
-## First Implementation Slice
+| ID | Item | Effort |
+|----|------|--------|
+| **3.1** | **Chronotype energy overlay** — city brightens/quickens during peak focus hours, dims during recovery, driven by `/api/digital-twin/identity/chronotype/energy-schedule`. | M |
+| **3.2** | **Memory / knowledge district** — categories as crystal clusters, graph edges as light bridges, brain inbox as a glowing well. Driven by `/api/memory/graph`. | L |
+| **3.3** | **Photo mode / cinematic camera** — pause animations, cinematic presets, depth-of-field, vignette, high-res screenshots, "city postcard" with stats overlay. | M |
+| **3.4** | **Ambient soundscape tied to data** — base key/tempo follows system health; agent activity adds rhythmic voices; completed tasks chime. Extends existing synth music. | L |
+| **3.5** | **Earned artifacts & achievements** — milestone statues, streak trophies, seasonal decorations, easter eggs. | M |
+| **3.6** | **Historical timeline scrubber** — scrub back to past city states; buildings appear/disappear via construction animations. Requires snapshot data. | L |
+| **3.7** | **JIRA sprint district** — current sprint tickets as crates / under-construction / completed structures. | M |
+| **3.8** | **Throttle expensive socket-driven repaints** — coalesce noisy event bursts into a 100ms tick. Becomes load-bearing once Phase 2's beams/vehicles ship. | S |
 
-The first useful slice should be:
+## Performance & Polish (cross-cutting)
 
-1. inspect and formalize current city data inputs
-2. introduce a district/state model that goes beyond `active apps vs archive`
-3. surface review/alert pressure in the scene, not just the Review Hub
-4. reserve a visible zone for the void machine / remote primary instance
+- Default to lower quality on `pointer: coarse` and `hardwareConcurrency < 8`
+- Coalesce socket events into a render tick to avoid bursty repaints
+- Lazy-load heavy effects (volumetric lights, postprocessing, particle storms)
+  on the basis of the active quality preset
+- All new components must respect the existing settings panel quality dial
 
-That creates a meaningful systems-map foundation before adding more spectacle.
+## Critical Files
 
----
+- `client/src/pages/CyberCity.jsx` — page wrapper
+- `client/src/components/city/CityScene.jsx` — Canvas, 3D containers, controls
+- `client/src/components/city/CityHud.jsx` — overlay HUD (most Phase 1 UX changes)
+- `client/src/components/city/Building.jsx`, `Borough.jsx` — façade work (1.1, 1.2, 1.13)
+- `client/src/components/city/AgentEntity.jsx` — tether (1.13)
+- `client/src/components/city/CityTraffic.jsx`, `CityDataStreams.jsx` — meaningful traffic (2.10)
+- `client/src/components/city/CitySignalBeacons.jsx` — extend for notifications (1.5) + landmarks (2.x)
+- `client/src/components/city/CityBillboards.jsx` — richer content (1.12)
+- `client/src/hooks/useCityData.js` — data layer; extend with new endpoints
+- `client/src/utils/cityFilter.js` — pure status/search filter logic (1.8, 1.9)
+- `client/src/utils/formatters.js` — reuse formatters; do not duplicate
 
-# CyberCity Improvement Plan
+## Endpoints used / to use
 
-Concrete ideas for making CyberCity more **useful** (a real systems dashboard) and more **interesting** (atmospheric, delightful, memorable). Organized by effort tier.
+| Endpoint | Phase | Purpose |
+|----------|-------|---------|
+| `/api/system/health/details` | 1.1, 1.3, 1.4 | CPU/MEM/DISK |
+| `/api/notifications/counts` | 1.5 | beacon brightness/colors |
+| `/api/brain/inbox` | 1.6 | spire pulse |
+| `/api/cos/queue` (or `/api/cos`) | 1.7, 2.2 | task queue depth |
+| `/api/instances/peers` | 1.7, 2.5 | sync failures, peer rendering |
+| `/api/cos/briefings/latest` | 1.12 | billboard headline |
+| `/api/cos/productivity/summary` | 1.12, 2.6 | streak, throughput |
+| `/api/cos/productivity/trends` | 2.6 | activity heatmap |
+| `/api/digital-twin/identity/goals` | 2.7 | goal monuments |
+| `/api/digital-twin/identity/chronotype/energy-schedule` | 3.1 | energy overlay |
+| `/api/meatspace/apple-health/metrics/latest` | 2.9 | health vitals tower |
+| `/api/memory/graph` | 3.2 | memory district |
+| `/api/character/` | 2.11 | XP HUD |
+| `/api/backup/*` | 2.3 | vault state |
 
-## Tier 1 — Quick Wins (single-file or small changes, high impact)
+## Sockets used / to use
 
-### 1.1 System Health as City Atmosphere
-**Data source:** `/api/system/health/details` (CPU, memory, disk, process stats)
-**Concept:** Map real system metrics to existing atmospheric effects:
-- **CPU load** → heat shimmer / haze intensity on buildings (reuse CityParticles or add a distortion shader)
-- **Memory pressure** → fog density (scale existing cloud/particle opacity)
-- **Disk usage** → ground texture degradation (swap ground material roughness/color at thresholds: green <70%, amber 70-90%, red >90%)
-- **Process error count** → ember/spark intensity (already have CityEmbers)
+Existing events the city should hook into more deeply:
 
-This turns the existing weather system from random decoration into a meaningful system health indicator. One glance at the sky tells you if the server is struggling.
+- `apps:changed` (already used)
+- `cos:agent:spawned` / `updated` / `completed` (already used)
+- `cos:status`, `cos:log` (already used)
+- `tasks:cos:created` / `changed` / `completed` (Phase 2.2)
+- `ai:status` (Phase 2.1)
+- `app:deploy:start/step/complete/error` (Phase 1.10, 2.10)
+- `backup:started` / `completed` (Phase 2.3)
+- `voice:idle` / `dictation` / `error` (Phase 2.4)
+- `system:critical-error` / `health:check` / `health:critical` (Phase 1.4, 1.7)
+- `peer:online` / `peers:updated` (Phase 2.5)
 
-### 1.2 Notification Beacons
-**Data source:** `/api/notifications/counts` (breakdown by type)
-**Concept:** Extend the existing CitySignalBeacons to pulse based on notification backlog. Unread notification count drives beacon brightness and pulse rate. Different notification types get different beacon colors. Clicking a beacon navigates to the relevant PortOS page.
+## Verification per phase
 
-### 1.3 Brain Inbox Pulse
-**Data source:** `/api/brain/inbox` (count of unprocessed thoughts)
-**Concept:** Add a central spire/antenna whose glow intensity reflects brain inbox depth. Each new thought capture triggers a brief light pulse visible from anywhere in the city. Zero inbox = calm blue glow. Growing inbox = increasingly urgent amber→red pulse.
+**Phase 1 acceptance test:** open `/cybercity`, confirm at a glance which apps
+need attention, search for a specific app by name in <2s, click any HUD stat
+and land on the relevant page, work the same flow on a phone via Tailscale.
 
-### 1.4 Richer Billboards with Real Content
-**Data source:** `/api/cos/briefings/latest`, `/api/cos/productivity/summary`
-**Concept:** The existing CityBillboards already show some data. Enhance them to rotate through:
-- Today's briefing headline
-- Productivity streak count ("7-day streak")
-- Top actionable insight from `/api/cos/actionable-insights`
-- Recent agent completion summary
-- Goal progress percentage for active goals
+**Phase 2 acceptance test:** every major system in PortOS has a visible spatial
+representation; new socket events animate the city in real time; opening
+`/cybercity` instead of `/dashboard` is a viable daily workflow.
 
-### 1.5 Building Pulse Animation for Active Agents
-**Concept:** When a CoS agent is actively working on an app, the building's windows should animate (scrolling light pattern, like code being written). Currently agents are octahedra floating above — add a visual link between agent and building (a light beam or tether).
-
-## Tier 2 — Medium Effort (new components, new data hooks)
-
-### 2.1 Productivity District
-**Data sources:** `/api/cos/productivity/trends`, `/api/cos/productivity/calendar`
-**Concept:** A dedicated district (offset from downtown) containing:
-- **Streak monument** — a tower whose height equals current task completion streak (days). Glows brighter at longer streaks. Crumbles/darkens when streak breaks.
-- **Activity heatmap ground** — ground tiles colored by the GitHub-style activity calendar data. Recent high-activity days glow; idle days are dark.
-- **Task flow river** — an animated stream running through the district whose width/speed reflects daily task throughput.
-
-### 2.2 Goal Monuments
-**Data source:** `/api/digital-twin/identity/goals`
-**Concept:** Each active goal becomes a landmark structure in the city:
-- **In-progress goals** → buildings under construction with scaffolding, cranes, and sparks
-- **Completed goals** → polished monuments with celebratory lighting
-- **Stalled goals** → dimmed, cobwebbed structures
-- Goal progress percentage maps to construction completion (25% = foundation only, 75% = mostly built, facade incomplete)
-- Milestone completions trigger a brief city-wide firework effect
-
-### 2.3 Chronotype Energy Overlay
-**Data source:** `/api/digital-twin/identity/chronotype/energy-schedule`
-**Concept:** The city's ambient energy level follows the user's chronotype profile:
-- During peak focus hours → brighter neon, faster traffic, more particle activity, upbeat synth music key
-- During recovery/wind-down hours → dimmer lights, slower traffic, calmer particles, mellow music
-- This makes the city feel like it "breathes" with the user's natural rhythm rather than running at constant intensity
-- Could be a toggle ("Chronotype mode") that overrides static time-of-day setting
-
-### 2.4 Character Level & XP HUD
-**Data source:** `/api/character/` (XP, level, events)
-**Concept:** Display character level as a floating holographic badge near the HUD. XP gains trigger a brief golden particle burst from the relevant building. Level-ups trigger a city-wide celebration (fireworks + music sting + temporary golden sky tint). This ties the gamification system directly into the spatial experience.
-
-### 2.5 Data Flow Streams Between Buildings
-**Concept:** Animate visible light streams between buildings that communicate (e.g., API calls between apps, agent messages). Stream thickness = traffic volume. Stream color = data type (blue = API, green = socket, orange = file I/O). This visualizes the actual interconnection topology of managed apps.
-
-### 2.6 Mini-Map Overlay
-**Concept:** A small top-down map in the HUD corner showing:
-- Building positions colored by status
-- Current camera position/orientation
-- Hot spots (buildings with active agents or alerts glow)
-- Click-to-teleport navigation
-This is especially useful as the city grows beyond a few buildings and districts spread out.
-
-### 2.7 Health Vitals Tower (Meatspace Integration)
-**Data source:** `/api/meatspace/apple-health/metrics/latest`
-**Concept:** A biometric tower in a "wellness district" that visualizes:
-- Heart rate → pulsing ring animation speed
-- Steps today → tower height growth throughout the day
-- Sleep quality last night → tower color (green=good, amber=fair, red=poor)
-- Active calories → glowing particle emission rate
-Makes physical health data part of the ambient awareness layer.
-
-## Tier 3 — Ambitious Features (new systems, significant effort)
-
-### 3.1 Memory/Knowledge District
-**Data sources:** `/api/memory/graph`, `/api/memory/stats`, `/api/brain/`
-**Concept:** A visually distinct district representing the knowledge base:
-- **Memory nodes as crystalline structures** — each memory category is a crystal cluster. Size = number of memories. Brightness = recency of access.
-- **Connection bridges** — graph edges from the memory graph rendered as light bridges between crystals
-- **Brain inbox as a glowing well** — new thoughts drop in as light orbs, processed thoughts flow out as connections
-- **Knowledge fog** — areas with sparse connections are foggy; dense knowledge areas are clear and well-lit
-- Clicking a crystal navigates to the Memory page filtered by that category
-
-### 3.2 Historical Timeline Scrubber
-**Data sources:** `/api/cos/productivity/trends`, `/api/history/stats`
-**Concept:** A timeline slider (in HUD or settings) that lets you see the city at previous points in time:
-- Scrub back to see which apps existed, which were online, what the system health was
-- Buildings appear/disappear, construction animations play for new apps
-- Useful for understanding system evolution and identifying when problems started
-- Data sourced from historical snapshots or reconstructed from event history
-
-### 3.3 JIRA/Sprint District
-**Data source:** `/api/jira/instances/:id/my-sprint-tickets`
-**Concept:** A "work board" district where current sprint tickets are visualized as:
-- **Todo tickets** → stacked crates in a warehouse
-- **In-progress tickets** → buildings under active construction with worker drones
-- **Done tickets** → completed structures that join the skyline
-- Sprint progress shown as a road being built across the district (0% = bare ground, 100% = complete highway)
-
-### 3.4 Federation/Network Visualization
-**Data source:** `/api/instances` (self + peers + sync status)
-**Concept:** When PortOS has federated peers, each remote instance appears as a distant city on the horizon:
-- Sync health shown as a bridge/highway between cities (broken bridge = sync failure)
-- Remote instance load shown as that city's skyline brightness
-- Click distant city → navigate to instance management page
-- Data streams flowing between cities show active sync traffic
-
-### 3.5 Photo Mode / Cinematic Camera
-**Concept:** A dedicated "photo mode" that:
-- Pauses animations at current state
-- Provides cinematic camera presets (aerial flyover, street level, dramatic angle)
-- Adds depth-of-field, vignette, and color grading controls
-- Captures high-res screenshots
-- Could auto-generate a "city postcard" with key stats overlaid
-- Sharable output for showing off your personal OS
-
-### 3.6 Ambient Soundscape Tied to Data
-**Concept:** Extend the existing synth music system so the soundscape reflects system state:
-- Base key/tempo shifts with overall system health (healthy = major key, degraded = minor key)
-- Agent activity adds rhythmic elements (each active agent = an additional synth voice)
-- High notification count adds tension (dissonant undertones)
-- Completed tasks trigger brief melodic chimes
-- This makes the city audible as well as visual — you could hear a problem before you see it
-
-### 3.7 Earned Artifacts & Achievement Layer
-**Concept:** Permanent visual rewards that accumulate over time:
-- **Milestone statues** — completing a major goal places a permanent statue in the city
-- **Streak trophies** — longest task streak, most productive week, etc. displayed in a "hall of fame" area
-- **Seasonal decorations** — city changes with real-world seasons (cherry blossoms in spring, snow in winter, etc.)
-- **Easter eggs** — hidden visual rewards for specific achievements (e.g., 1000th commit → neon dragon flyover)
-- These give the city a sense of personal history and make it feel earned, not just generated
-
-## Implementation Priority
-
-Recommended order based on impact-to-effort ratio:
-
-| Priority | Item | Why |
-|----------|------|-----|
-| 1 | 1.1 System Health Atmosphere | Highest ROI — existing effects just need real data piped in |
-| 2 | 1.4 Richer Billboards | Existing component, just needs more data sources |
-| 3 | 1.3 Brain Inbox Pulse | Simple visual, high daily utility |
-| 4 | 1.5 Building Pulse for Agents | Makes agent activity viscerally visible |
-| 5 | 2.4 Character XP HUD | Ties gamification to spatial experience |
-| 6 | 2.3 Chronotype Energy Overlay | Unique differentiator, makes city feel alive |
-| 7 | 2.1 Productivity District | New district with strong daily relevance |
-| 8 | 2.2 Goal Monuments | Visual goal tracking is motivating |
-| 9 | 2.6 Mini-Map | Navigation aid as city grows |
-| 10 | 1.2 Notification Beacons | Extends existing beacon system |
-| 11 | 2.7 Health Vitals Tower | Unique biometric integration |
-| 12 | 2.5 Data Flow Streams | Visually impressive, shows system topology |
-| 13 | 3.6 Ambient Soundscape | Audio feedback layer |
-| 14 | 3.7 Earned Artifacts | Long-term delight and personalization |
-| 15 | 3.1 Memory/Knowledge District | Ambitious but visually stunning |
-| 16 | 3.5 Photo Mode | Fun, shareable |
-| 17 | 3.4 Federation Visualization | Only relevant with multiple instances |
-| 18 | 3.3 JIRA Sprint District | Only relevant with JIRA integration active |
-| 19 | 3.2 Historical Timeline | Requires historical data infrastructure |
+**Phase 3 acceptance test:** the city feels distinctive — soundscape and mood
+shift with system state, milestones leave permanent visual artifacts, and
+photo mode produces shareable postcards.

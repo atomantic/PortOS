@@ -1,14 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from '../components/ui/Toast';
-import {
-  FileText,
+import {FileText,
   RefreshCw,
-  Loader2,
   Copy,
-  Check
-} from 'lucide-react';
+  Check} from 'lucide-react';
 import * as api from '../services/api';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 function ReportCard({ report, onClick, isSelected }) {
   return (
@@ -204,7 +202,7 @@ export default function JiraReports() {
             disabled={generating}
             className="flex items-center gap-1.5 bg-port-accent hover:bg-blue-600 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50"
           >
-            {generating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {generating ? <BrailleSpinner /> : <RefreshCw size={14} />}
             {generating ? 'Generating...' : 'Generate Report'}
           </button>
         </div>
@@ -212,7 +210,7 @@ export default function JiraReports() {
 
       {loading ? (
         <div className="flex items-center justify-center h-64">
-          <Loader2 size={24} className="animate-spin text-port-accent" />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : filteredReports.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">

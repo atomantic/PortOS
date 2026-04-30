@@ -1,15 +1,13 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
-import {
-  Settings,
-  RefreshCw,
+import {Settings,
   Save,
   Zap,
   Clock,
   Calendar,
   TrendingUp,
-  CheckCircle
-} from 'lucide-react';
+  CheckCircle} from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 
 const DAYS_OF_WEEK = [
@@ -108,7 +106,7 @@ export default function ConfigTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -129,7 +127,7 @@ export default function ConfigTab({ onRefresh }) {
           >
             {saving ? (
               <>
-                <RefreshCw size={14} className="animate-spin" />
+                <BrailleSpinner />
                 Saving...
               </>
             ) : (
@@ -356,7 +354,7 @@ export default function ConfigTab({ onRefresh }) {
           >
             {saving ? (
               <>
-                <RefreshCw size={14} className="animate-spin" />
+                <BrailleSpinner />
                 Saving...
               </>
             ) : (

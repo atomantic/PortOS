@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
 import useCityAudio from '../hooks/useCityAudio';
@@ -9,14 +9,49 @@ import CityHud from '../components/city/CityHud';
 import CityScanlines from '../components/city/CityScanlines';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
 import CitySettingsPanel from '../components/city/CitySettingsPanel';
+import { computeFilterResult } from '../utils/cityFilter';
 
 function CyberCityInner() {
-  const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, loading, connected } = useCityData();
+  const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, loading, connected } = useCityData();
   const { settings, updateSetting } = useCitySettingsContext();
   const { playSfx } = useCityAudio(settings);
   const navigate = useNavigate();
   const location = useLocation();
   const [productivityData, setProductivityData] = useState(null);
+  const [filter, setFilter] = useState(() => {
+    // try/catch is necessary because sessionStorage values are external state
+    // a corrupted/older-schema entry would throw and crash the page render.
+    try {
+      const raw = sessionStorage.getItem('cybercity.filter');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.status === 'string') {
+          return {
+            status: parsed.status,
+            search: typeof parsed.search === 'string' ? parsed.search : '',
+          };
+        }
+      }
+    } catch {
+      // fall through to default
+    }
+    return { status: 'all', search: '' };
+  });
+
+  useEffect(() => {
+    // setItem can throw (Safari private mode, storage quota); ignore — this
+    // is a UX nicety, not load-bearing state.
+    try {
+      sessionStorage.setItem('cybercity.filter', JSON.stringify(filter));
+    } catch {
+      // intentionally swallow
+    }
+  }, [filter]);
+
+  const filterResult = useMemo(
+    () => computeFilterResult({ apps, agentMap, status: filter.status, search: filter.search }),
+    [apps, agentMap, filter.status, filter.search]
+  );
 
   const showSettings = location.pathname === '/city/settings';
 
@@ -44,6 +79,11 @@ function CyberCityInner() {
       navigate('/apps');
     }
   }, [navigate]);
+
+  const handleJumpToFirst = useCallback(() => {
+    const first = filterResult.matches[0];
+    if (first?.id) navigate(`/apps/${first.id}`);
+  }, [filterResult.matches, navigate]);
 
   if (loading) {
     return (
@@ -74,6 +114,7 @@ function CyberCityInner() {
         settings={settings}
         playSfx={playSfx}
         keysRef={keysRef}
+        dimmedAppIds={filterResult.dimmed}
       />
       <CityHud
         cosStatus={cosStatus}
@@ -85,6 +126,12 @@ function CyberCityInner() {
         reviewCounts={reviewCounts}
         instances={instances}
         productivityData={productivityData}
+        systemHealth={systemHealth}
+        notificationCounts={notificationCounts}
+        filter={filter}
+        onFilterChange={setFilter}
+        onJumpToFirst={handleJumpToFirst}
+        matchCount={filterResult.matches.length}
         onToggleExploration={handleToggleExploration}
         explorationMode={settings?.explorationMode}
       />

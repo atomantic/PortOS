@@ -1,16 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
-import {
-  RefreshCw,
-  Plus,
+import {Plus,
   Edit2,
   Trash2,
   X,
   Save,
   CheckCircle2,
   Search,
-  AlertTriangle
-} from 'lucide-react';
+  AlertTriangle} from 'lucide-react';
 import toast from '../../ui/Toast';
 
 import {
@@ -21,6 +18,7 @@ import {
   ADMIN_STATUS_COLORS
 } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function MemoryTab({ onRefresh }) {
   const [activeType, setActiveType] = useState('memories');
@@ -696,7 +694,7 @@ export default function MemoryTab({ onRefresh }) {
       {/* Records list */}
       {loading ? (
         <div className="flex items-center justify-center h-32">
-          <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : (() => {
         const q = searchQuery.toLowerCase();

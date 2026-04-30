@@ -1,15 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
-import {
-  RefreshCw,
-  Play,
+import {Play,
   Calendar,
   ChevronDown,
   ChevronRight,
   AlertCircle,
   CheckCircle,
-  Clock
-} from 'lucide-react';
+  Clock} from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 
 import { timeAgo } from '../../../utils/formatters';
@@ -77,7 +75,7 @@ export default function DigestTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -97,7 +95,7 @@ export default function DigestTab({ onRefresh }) {
             className="flex items-center gap-2 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded-lg text-sm hover:bg-port-accent/30 disabled:opacity-50"
           >
             {runningDigest ? (
-              <RefreshCw size={14} className="animate-spin" />
+              <BrailleSpinner />
             ) : (
               <Play size={14} />
             )}
@@ -198,7 +196,7 @@ export default function DigestTab({ onRefresh }) {
             className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/20 text-purple-400 rounded-lg text-sm hover:bg-purple-500/30 disabled:opacity-50"
           >
             {runningReview ? (
-              <RefreshCw size={14} className="animate-spin" />
+              <BrailleSpinner />
             ) : (
               <Play size={14} />
             )}

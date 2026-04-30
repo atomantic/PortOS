@@ -40,6 +40,8 @@ import { syncAllBrainData } from '../services/brainMemoryBridge.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
 import * as brainSync from '../services/brainSync.js';
 import * as journal from '../services/brainJournal.js';
+import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
+import * as cos from '../services/cos.js';
 
 const router = Router();
 
@@ -719,6 +721,64 @@ router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
   console.log(`📂 Opened folder: ${link.localPath}`);
 
   res.json({ message: 'Folder opened', path: link.localPath });
+}));
+
+/**
+ * POST /api/brain/links/:id/scan
+ * Queue a read-only malware/risk scan (do:scan) against the cloned repo.
+ * Creates a CoS user task whose context inlines the do:scan command body
+ * with the repo's localPath baked in as SCAN_DIR. The agent writes its
+ * markdown report to ~/.claude/scans/.
+ */
+router.post('/links/:id/scan', asyncHandler(async (req, res) => {
+  const link = await brainService.getLinkById(req.params.id);
+  if (!link) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  if (!link.isGitHubRepo || link.cloneStatus !== 'cloned' || !link.localPath) {
+    throw new ServerError('Link is not a cloned GitHub repository', {
+      status: 400,
+      code: 'NOT_CLONED'
+    });
+  }
+  if (!existsSync(link.localPath)) {
+    throw new ServerError('Local clone folder does not exist', {
+      status: 400,
+      code: 'PATH_NOT_FOUND'
+    });
+  }
+
+  const scanCommand = await loadSlashdoCommand('scan');
+  if (!scanCommand) {
+    throw new ServerError('Failed to load do:scan command', {
+      status: 500,
+      code: 'COMMAND_LOAD_FAILED'
+    });
+  }
+
+  const repoLabel = link.title || link.url;
+  const description = `Malware scan: ${repoLabel} (do:scan)`;
+  const context = `Run the /do:scan workflow against the cloned repository at: \`${link.localPath}\`
+
+Use that path as SCAN_DIR. Adhere to every Operational Invariant in the command body — this is a hostile-until-proven-safe audit. The full markdown report will be written to ~/.claude/scans/. When complete, summarize the verdict (CLEAN / CAUTION / DANGEROUS) and the top findings in your final response so the report can be surfaced in the UI.
+
+---
+
+${scanCommand}`;
+
+  const result = await cos.addTask(
+    { description, context, useWorktree: false, openPR: false, simplify: false, reviewLoop: false },
+    'user'
+  );
+  if (result?.duplicate) {
+    throw new ServerError('A scan for this repo is already pending or in progress', {
+      status: 409,
+      code: 'DUPLICATE_TASK'
+    });
+  }
+
+  console.log(`🛡️ Queued malware scan: link=${link.id} path=${link.localPath} task=${result.id}`);
+  res.json({ message: 'Scan queued', taskId: result.id, linkId: link.id, scanPath: link.localPath });
 }));
 
 // =============================================================================

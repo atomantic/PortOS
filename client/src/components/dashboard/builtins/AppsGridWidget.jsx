@@ -1,12 +1,22 @@
 import { Link } from 'react-router-dom';
 import AppTile from '../../AppTile';
+import { SchematicLabel, MicroGlyph } from '../../micrographics';
 
 export default function AppsGridWidget({ dashboardState }) {
   const { apps, sortedApps, refetch } = dashboardState;
   if (apps.length === 0) {
     return (
-      <div className="bg-port-card border border-port-border rounded-xl p-8 sm:p-12 text-center">
-        <div className="text-4xl mb-4">📦</div>
+      <div className="relative bg-port-card border border-port-border rounded-xl p-8 sm:p-12 text-center">
+        <SchematicLabel
+          module="03"
+          status="EMPTY"
+          glyph="bracket-pair"
+          state="idle"
+          variant="tab"
+        />
+        <div className="flex justify-center mb-4 text-port-accent/70">
+          <MicroGlyph variant="reticle" size={48} state="accent" />
+        </div>
         <h3 className="text-xl font-semibold text-white mb-2">No apps registered</h3>
         <p className="text-gray-500 mb-6">Register your first app to get started</p>
         <Link

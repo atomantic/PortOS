@@ -18,6 +18,7 @@ import {
   writeVoiceHidden,
   isVoiceHiddenStorageEvent,
 } from '../../services/voiceVisibility';
+import { MicroGlyph } from '../micrographics';
 
 // Peak below this (0..1) is usually whisper's [BLANK_AUDIO] territory.
 const QUIET_MIC_THRESHOLD = 0.02;
@@ -381,6 +382,9 @@ export default function VoiceWidget() {
 
   // Hotkey toggles listening (press once to start, press again to send).
   // Ignored while focus is on an input/textarea so typing isn't hijacked.
+  // If the widget is currently hidden, the hotkey also un-hides it so the
+  // FAB/sidebar mic icon reflect the live mic state — otherwise the user
+  // hears no audio cue and has no UI to confirm the mic is open.
   useEffect(() => {
     if (!enabled) return;
     const isTypingTarget = (el) => {
@@ -392,11 +396,14 @@ export default function VoiceWidget() {
       if (e.code !== hotkey || e.repeat) return;
       if (isTypingTarget(document.activeElement)) return;
       e.preventDefault();
+      // writeVoiceHidden dispatches VISIBILITY_EVENT, which the listener
+      // below syncs into local `hidden` — no explicit setHidden needed.
+      if (hidden) writeVoiceHidden(false);
       toggleCapture();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [enabled, hotkey, toggleCapture]);
+  }, [enabled, hotkey, hidden, toggleCapture]);
 
   // Settings → Voice can toggle widget visibility without a reload. Listen for
   // the custom event and the storage event (covers other tabs).
@@ -567,10 +574,11 @@ export default function VoiceWidget() {
           <span className={`text-xs ${tone}`}>{label}</span>
           {!useWebSpeech && handsFree && isContinuous() && (
             <span
-              className="w-1.5 rounded-full bg-port-accent transition-all"
-              style={{ height: `${Math.min(20, 4 + level * 120)}px` }}
+              className="inline-flex items-center text-port-accent"
               title={`mic level ${level.toFixed(3)}`}
-            />
+            >
+              <MicroGlyph variant="signal" size={18} level={level} state="accent" />
+            </span>
           )}
           {!useWebSpeech && (
             <button

@@ -17,6 +17,7 @@ export function normalizeImage(i) {
     quantize: i.quantize,
     seed: i.seed,
     createdAt: i.createdAt,
+    hidden: !!i.hidden,
     raw: i,
   };
 }
@@ -37,6 +38,7 @@ export function normalizeVideo(v) {
     fps: v.fps,
     stitchedFrom: v.stitchedFrom,
     createdAt: v.createdAt,
+    hidden: !!v.hidden,
     raw: v,
   };
 }

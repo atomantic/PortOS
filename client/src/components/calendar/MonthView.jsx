@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import {ChevronLeft, ChevronRight} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import { buildSubcalendarColorMap } from './calendarUtils';
+import BrailleSpinner from '../BrailleSpinner';
 
 function getMonthGrid(year, month) {
   const firstDay = new Date(year, month, 1);
@@ -105,7 +106,7 @@ export default function MonthView({ accounts }) {
 
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <RefreshCw size={24} className="text-port-accent animate-spin" />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : (
         <div className="border border-port-border rounded-lg overflow-hidden bg-port-card">

@@ -5,6 +5,7 @@ import LayoutPicker from '../components/dashboard/LayoutPicker';
 import LayoutEditor from '../components/dashboard/LayoutEditor';
 import DashboardGrid, { reconcileGrid, synthesizeGrid } from '../components/dashboard/DashboardGrid.jsx';
 import { WIDGETS_BY_ID, FALLBACK_LAYOUT } from '../components/dashboard/widgetRegistry.jsx';
+import { SchematicLabel } from '../components/micrographics';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import { Monitor, Move, Save, X } from 'lucide-react';
 import * as api from '../services/api';
@@ -221,7 +222,8 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <SchematicLabel module="DASH" status="BOOTING" glyph="orbit" state="active" />
         <BrailleSpinner text="Loading dashboard" />
       </div>
     );
@@ -329,7 +331,25 @@ export default function Dashboard() {
             renderItem={(item) => {
               const meta = WIDGETS_BY_ID[item.id];
               if (!meta) return null;
-              return <meta.Component dashboardState={dashboardState} />;
+              const widget = <meta.Component dashboardState={dashboardState} />;
+              if (!meta.module) return widget;
+              // Tab sits inside the wrapper (DashboardGrid clips with
+              // overflow-hidden); sm:pt-4 reserves a header zone so
+              // the tab doesn't overlap widget header content.
+              return (
+                <div className="relative sm:pt-4">
+                  <span className="hidden sm:inline">
+                    <SchematicLabel
+                      module={meta.module.id}
+                      status={meta.module.status}
+                      glyph={meta.module.glyph}
+                      state="active"
+                      variant="tab"
+                    />
+                  </span>
+                  {widget}
+                </div>
+              );
             }}
           />
         </>

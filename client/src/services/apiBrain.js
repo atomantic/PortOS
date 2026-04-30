@@ -164,6 +164,7 @@ export const deleteBrainLink = (id) => request(`/brain/links/${id}`, { method: '
 export const cloneBrainLink = (id) => request(`/brain/links/${id}/clone`, { method: 'POST' });
 export const pullBrainLink = (id) => request(`/brain/links/${id}/pull`, { method: 'POST' });
 export const openBrainLinkFolder = (id) => request(`/brain/links/${id}/open-folder`, { method: 'POST' });
+export const scanBrainLink = (id) => request(`/brain/links/${id}/scan`, { method: 'POST' });
 
 // Brain - Graph
 export const getBrainGraph = () => request('/brain/graph');

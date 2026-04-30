@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import * as api from '../../../services/api';
-import {
-  FileText, FolderOpen,
+import {FileText, FolderOpen,
   ChevronDown, ChevronRight, ArrowLeft, Tag, Link2, Edit3, Save,
-  Trash2, X, RefreshCw
-} from 'lucide-react';
+  Trash2, X} from 'lucide-react';
 import toast from '../../ui/Toast';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { WIKI_CATEGORIES } from '../constants.jsx';
+import BrailleSpinner from '../../BrailleSpinner';
 
 const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, icon: c.icon, color: c.textClass }));
 const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color: 'text-gray-400' }];
@@ -198,7 +197,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
       <div className="flex-1 flex flex-col min-w-0">
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
           </div>
         ) : selectedNote ? (
           <>

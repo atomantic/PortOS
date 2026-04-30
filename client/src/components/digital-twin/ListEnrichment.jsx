@@ -1,19 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  ArrowLeft,
+import {ArrowLeft,
   Plus,
   X,
   Sparkles,
-  RefreshCw,
   Save,
   Edit3,
   Eye,
   ChevronDown,
   ChevronRight,
-  Check
-} from 'lucide-react';
+  Check} from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import BrailleSpinner from '../BrailleSpinner';
 
 import { ENRICHMENT_CATEGORIES } from './constants';
 
@@ -140,7 +138,7 @@ export default function ListEnrichment({
   if (loadingItems) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -263,8 +261,7 @@ export default function ListEnrichment({
           >
             {analyzing ? (
               <>
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                Analyzing...
+                <BrailleSpinner /> Analyzing...
               </>
             ) : (
               <>
@@ -407,8 +404,7 @@ export default function ListEnrichment({
               >
                 {saving ? (
                   <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Saving...
+                    <BrailleSpinner /> Saving...
                   </>
                 ) : (
                   <>

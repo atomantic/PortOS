@@ -9,7 +9,10 @@ vi.mock('fs/promises', () => ({
 
 const emit = vi.fn();
 const reviewEvents = { emit };
-const cosEvents = { on: vi.fn() };
+const registeredHandlers = {};
+const cosEvents = {
+  on: vi.fn((event, handler) => { registeredHandlers[event] = handler; })
+};
 
 vi.mock('./cosEvents.js', () => ({ cosEvents }));
 
@@ -180,6 +183,94 @@ describe('review service', () => {
       const briefing = await getBriefing();
       expect(briefing.source).toBe('none');
       expect(briefing.content).toContain('No CoS daily briefing found yet');
+    });
+  });
+
+  describe('bulkUpdateStatus', () => {
+    it('updates every pending item in a single write when no ids passed', async () => {
+      const { bulkUpdateStatus } = await import('./review.js');
+      const items = [
+        { id: 'a', status: 'pending', metadata: {} },
+        { id: 'b', status: 'pending', metadata: {} },
+        { id: 'c', status: 'completed', metadata: {} }
+      ];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      const updated = await bulkUpdateStatus({ status: 'dismissed' });
+
+      expect(updated).toHaveLength(2);
+      expect(atomicWrite).toHaveBeenCalledTimes(1);
+      const written = atomicWrite.mock.calls[0][1];
+      expect(written.find(i => i.id === 'a').status).toBe('dismissed');
+      expect(written.find(i => i.id === 'b').status).toBe('dismissed');
+      expect(written.find(i => i.id === 'c').status).toBe('completed');
+    });
+
+    it('only updates items whose ids are passed in', async () => {
+      const { bulkUpdateStatus } = await import('./review.js');
+      const items = [
+        { id: 'a', status: 'pending', metadata: {} },
+        { id: 'b', status: 'pending', metadata: {} }
+      ];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      const updated = await bulkUpdateStatus({ status: 'completed', ids: ['a'] });
+
+      expect(updated).toHaveLength(1);
+      const written = atomicWrite.mock.calls[0][1];
+      expect(written.find(i => i.id === 'a').status).toBe('completed');
+      expect(written.find(i => i.id === 'b').status).toBe('pending');
+    });
+
+    it('skips the write entirely when nothing matches', async () => {
+      const { bulkUpdateStatus } = await import('./review.js');
+      readFile.mockResolvedValue(JSON.stringify([{ id: 'a', status: 'completed', metadata: {} }]));
+
+      const updated = await bulkUpdateStatus({ status: 'dismissed' });
+
+      expect(updated).toEqual([]);
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid status values', async () => {
+      const { bulkUpdateStatus } = await import('./review.js');
+      await expect(bulkUpdateStatus({ status: 'bogus' })).rejects.toThrow('Invalid status');
+    });
+  });
+
+  describe('cosEvents bridge', () => {
+    it('auto-completes the matching review item when an agent finishes successfully', async () => {
+      const handler = registeredHandlers['agent:completed'];
+      expect(handler).toBeDefined();
+
+      const items = [
+        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } },
+        { id: 'r2', type: 'cos', status: 'pending', metadata: { referenceId: 'task-99', taskId: 'task-99' } }
+      ];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      handler({ taskId: 'task-42', result: { success: true } });
+      // Wait a tick for the async chain inside the handler to flush
+      await new Promise(r => setImmediate(r));
+
+      const written = atomicWrite.mock.calls[0][1];
+      const updated = written.find(i => i.id === 'r1');
+      const untouched = written.find(i => i.id === 'r2');
+      expect(updated.status).toBe('completed');
+      expect(untouched.status).toBe('pending');
+    });
+
+    it('does not auto-complete when the agent failed', async () => {
+      const handler = registeredHandlers['agent:completed'];
+      const items = [
+        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } }
+      ];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      handler({ taskId: 'task-42', result: { success: false, error: 'boom' } });
+      await new Promise(r => setImmediate(r));
+
+      expect(atomicWrite).not.toHaveBeenCalled();
     });
   });
 });

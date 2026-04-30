@@ -1,18 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import {
-  Sparkles,
+import {Sparkles,
   ChevronRight,
   Check,
   Send,
   SkipForward,
-  RefreshCw,
   ArrowLeft,
   FileText,
   PenTool,
   Eye,
-  Save
-} from 'lucide-react';
+  Save} from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
@@ -240,7 +238,7 @@ export default function EnrichTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -343,7 +341,7 @@ export default function EnrichTab({ onRefresh }) {
         {/* Question */}
         {loadingQuestion ? (
           <div className="flex items-center justify-center h-48">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
           </div>
         ) : (
           <div className="bg-port-card rounded-lg border border-port-border p-6">
@@ -395,7 +393,7 @@ export default function EnrichTab({ onRefresh }) {
               >
                 {submitting ? (
                   <>
-                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <BrailleSpinner />
                     Saving...
                   </>
                 ) : (
@@ -600,7 +598,7 @@ export default function EnrichTab({ onRefresh }) {
               >
                 {analyzingWriting ? (
                   <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <BrailleSpinner />
                     Analyzing...
                   </>
                 ) : (
@@ -666,7 +664,7 @@ export default function EnrichTab({ onRefresh }) {
                         className="px-3 py-2 min-h-[40px] bg-green-600 text-white rounded text-sm hover:bg-green-500 disabled:opacity-50 flex items-center justify-center gap-1"
                       >
                         {savingWritingStyle ? (
-                          <RefreshCw className="w-3 h-3 animate-spin" />
+                          <BrailleSpinner />
                         ) : (
                           <Save className="w-3 h-3" />
                         )}

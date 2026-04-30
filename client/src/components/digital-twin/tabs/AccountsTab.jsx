@@ -22,6 +22,7 @@ import {
   Check,
   X,
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 
@@ -191,7 +192,7 @@ export default function AccountsTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -387,7 +388,7 @@ export default function AccountsTab() {
               className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-accent text-white rounded-lg hover:bg-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {saving ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
+                <BrailleSpinner />
               ) : (
                 <Check className="w-4 h-4" />
               )}
@@ -489,7 +490,7 @@ export default function AccountsTab() {
                       title="Remove"
                     >
                       {deleting === account.id ? (
-                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <BrailleSpinner />
                       ) : (
                         <Trash2 className="w-4 h-4" />
                       )}

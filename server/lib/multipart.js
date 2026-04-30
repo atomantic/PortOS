@@ -24,18 +24,33 @@ export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
 
   return (req, res, next) => {
     const ct = req.headers['content-type'] || '';
-    if (!ct.startsWith('multipart/form-data')) {
+    // Media type is case-insensitive (RFC 2045), but the boundary value is
+    // case-sensitive — match the type prefix on a lowercased copy and parse
+    // the boundary off the original.
+    if (!ct.toLowerCase().startsWith('multipart/form-data')) {
       const err = new Error('Expected multipart/form-data');
       err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
       return next(err);
     }
-    const bm = ct.match(/boundary=([^\s;]+)/);
+    const bm = ct.match(/boundary=([^\s;]+)/i);
     if (!bm) {
       const err = new Error('Missing multipart boundary');
       err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
       return next(err);
     }
     streamMultipart(req, bm[1], fieldName, maxSize, fileFilter, next);
+  };
+}
+
+// Wrap uploadSingle so the parser only kicks in for multipart bodies — JSON
+// callers fall through untouched. Useful when an existing JSON endpoint adds
+// optional file-upload support without breaking back-compat.
+export function optionalUpload(fieldName, opts) {
+  const uploader = uploadSingle(fieldName, opts);
+  return (req, res, next) => {
+    const ct = req.headers['content-type'] || '';
+    if (!ct.toLowerCase().startsWith('multipart/form-data')) return next();
+    return uploader(req, res, next);
   };
 }
 
@@ -252,6 +267,11 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
 
   const tick = () => {
     if (done) return;
+    // Defer while a file flush is in flight: state is still STATE_BODY but
+    // writeStream has been nulled by endPart. Re-entering tick (e.g. from
+    // req.on('end')) would crash on writeStream.write. The endPart callback
+    // re-invokes tick once state has advanced.
+    if (pendingFlush > 0) return;
 
     while (true) {
       if (state === STATE_PREAMBLE) {
@@ -313,10 +333,18 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
         // Found end of part. Emit everything before the boundary, then advance.
         if (!writePartChunk(buf.slice(0, idx))) return;
         buf = buf.slice(idx + PART_DELIM.length);
-        // endPart may be async (file flush) — pause the request, resume after.
+        // Transition state SYNCHRONOUSLY before endPart's async ws.end() runs.
+        // endPart sets writeStream = null synchronously, but its file-flush
+        // callback (which used to set this state) may not fire before
+        // req.on('end') re-enters tick. Without this sync transition, tick
+        // would re-process buf (which now contains the NEXT part) as if we
+        // were still inside the previous part's body and crash on
+        // writeStream.write(chunk) with writeStream === null.
+        state = STATE_AFTER_BOUNDARY;
+        // endPart may still be async (file flush) — pause the request,
+        // resume after the flush completes.
         req.pause();
         endPart(() => {
-          state = STATE_AFTER_BOUNDARY;
           req.resume();
           tick(); // process anything already buffered
         });

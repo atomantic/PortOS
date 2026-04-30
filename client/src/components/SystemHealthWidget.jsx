@@ -1,4 +1,4 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, memo, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -14,6 +14,7 @@ import {
   Zap
 } from 'lucide-react';
 import * as api from '../services/api';
+import { MicroGlyph } from './micrographics';
 
 /**
  * SystemHealthWidget - Compact system health overview for the Dashboard
@@ -32,6 +33,34 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
 
     loadData();
   }, []);
+
+  // Decorative chrome that reflects real state — top row reads as a HUD
+  // readout (memory/cpu/proc/apps/disk), rows below fade so the eye
+  // doesn't read it as a chart. Computed before the early returns below
+  // so React's hook count stays stable across renders.
+  const memPct = health?.system?.memory?.usagePercent;
+  const cpuPct = health?.system?.cpu?.usagePercent;
+  const diskPct = health?.system?.disk?.usagePercent;
+  const procOnline = health?.processes?.online;
+  const procTotal = health?.processes?.total;
+  const appOnline = health?.apps?.online;
+  const appTotal = health?.apps?.total;
+  const matrixIntensity = useMemo(() => {
+    const cells = new Array(25).fill(0.18);
+    const norm = (pct) => Math.max(0.18, Math.min(1, (pct ?? 0) / 100));
+    cells[0] = norm(memPct);
+    cells[1] = norm(cpuPct);
+    cells[2] = procTotal ? Math.max(0.25, procOnline / procTotal) : 0.25;
+    cells[3] = appTotal ? Math.max(0.25, appOnline / appTotal) : 0.25;
+    cells[4] = norm(diskPct);
+    for (let row = 1; row < 5; row++) {
+      const decay = 1 - row * 0.18;
+      for (let col = 0; col < 5; col++) {
+        cells[row * 5 + col] = Math.max(0.18, cells[col] * decay);
+      }
+    }
+    return cells;
+  }, [memPct, cpuPct, diskPct, procOnline, procTotal, appOnline, appTotal]);
 
   // Don't render while loading
   if (loading) {
@@ -97,13 +126,21 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
             </div>
           </div>
         </div>
-        <Link
-          to="/apps"
-          className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
-        >
-          <span className="hidden sm:inline">Details</span>
-          <ChevronRight size={16} />
-        </Link>
+        <div className="flex items-center gap-3">
+          <span
+            className={`hidden md:inline-flex ${healthStyle.color}`}
+            title="Live load matrix — top row reflects memory/cpu/proc/apps/disk"
+          >
+            <MicroGlyph variant="matrix" size={28} intensity={matrixIntensity} />
+          </span>
+          <Link
+            to="/system-health"
+            className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+          >
+            <span className="hidden sm:inline">Details</span>
+            <ChevronRight size={16} />
+          </Link>
+        </div>
       </div>
 
       {/* Warnings */}

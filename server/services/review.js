@@ -145,6 +145,39 @@ export async function dismissItem(id) {
 }
 
 /**
+ * Bulk-update many items to the same status in a single read-modify-write.
+ * Concurrent per-item POSTs race on saveItems and silently drop updates;
+ * this endpoint handles the "Complete All" / "Dismiss All" cases atomically.
+ * Pass `ids` to target specific items, or omit to target every pending item.
+ */
+export async function bulkUpdateStatus({ ids, status }) {
+  if (!ITEM_STATUSES.includes(status)) {
+    const err = new Error(`Invalid status: ${status}`);
+    err.status = 400;
+    throw err;
+  }
+
+  const items = await loadItems();
+  const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids) : null;
+  const updated = [];
+  const now = new Date().toISOString();
+  for (const item of items) {
+    if (item.status !== 'pending') continue;
+    if (idSet && !idSet.has(item.id)) continue;
+    item.status = status;
+    item.updatedAt = now;
+    updated.push(item);
+  }
+
+  if (updated.length === 0) return [];
+
+  await saveItems(items);
+  console.log(`📋 Review items bulk-${status}: ${updated.length}`);
+  for (const item of updated) reviewEvents.emit('item:updated', item);
+  return updated;
+}
+
+/**
  * Update an item's title and/or description
  */
 export async function updateItem(id, { title, description }) {
@@ -238,16 +271,27 @@ cosEvents.on('memory:approval-needed', (data) => {
   }
 });
 
-async function dismissByReferenceId(referenceId) {
+async function updateStatusByReferenceId(referenceId, status) {
+  if (!ITEM_STATUSES.includes(status)) {
+    const err = new Error(`Invalid status: ${status}`);
+    err.status = 400;
+    throw err;
+  }
+
   const items = await loadItems();
   const matching = items.filter(i => i.metadata?.referenceId === referenceId && i.status === 'pending');
+  if (matching.length === 0) return;
+  const now = new Date().toISOString();
   for (const item of matching) {
-    item.status = 'dismissed';
-    item.updatedAt = new Date().toISOString();
-    reviewEvents.emit('item:updated', item);
+    item.status = status;
+    item.updatedAt = now;
   }
-  if (matching.length > 0) await saveItems(items);
+  await saveItems(items);
+  for (const item of matching) reviewEvents.emit('item:updated', item);
 }
+
+const dismissByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'dismissed');
+const completeByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'completed');
 
 cosEvents.on('memory:approved', (data) => {
   if (data?.id) dismissByReferenceId(data.id).catch(err => console.error(`❌ Failed to dismiss approved memory review item: ${err.message}`));
@@ -264,4 +308,18 @@ cosEvents.on('task:ready', (data) => {
     description: data?.description ?? '',
     metadata: { taskId: data?.id, referenceId: data?.id }
   }).catch(err => console.error(`❌ Failed to create review item: ${err.message}`));
+});
+
+// When a CoS agent finishes a task, auto-resolve the matching review item so
+// the user isn't asked to manually mark something complete that an agent
+// already handled. Success → complete; failure stays pending so the user can
+// see and act on it.
+cosEvents.on('agent:completed', (agent) => {
+  const taskId = agent?.taskId;
+  if (!taskId) return;
+  if (agent.result?.success) {
+    completeByReferenceId(taskId).catch(err =>
+      console.error(`❌ Failed to auto-complete review item for task ${taskId}: ${err.message}`)
+    );
+  }
 });

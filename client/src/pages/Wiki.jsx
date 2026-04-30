@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
-import { BookOpen, Search, Network, FileText, BarChart3, RefreshCw, Activity } from 'lucide-react';
+import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 import WikiOverviewTab from '../components/wiki/tabs/OverviewTab';
 import WikiBrowseTab from '../components/wiki/tabs/BrowseTab';
@@ -81,7 +82,7 @@ export default function Wiki() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

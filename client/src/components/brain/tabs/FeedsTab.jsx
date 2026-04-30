@@ -11,6 +11,7 @@ import {
   ChevronRight,
   X
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -132,7 +133,7 @@ export default function FeedsTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -158,7 +159,7 @@ export default function FeedsTab({ onRefresh }) {
             title={adding ? 'Subscribing...' : 'Subscribe to feed'}
           >
             {adding ? (
-              <RefreshCw className="w-5 h-5 animate-spin" />
+              <BrailleSpinner />
             ) : (
               <Send className="w-5 h-5" />
             )}

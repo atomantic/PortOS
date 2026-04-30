@@ -1,30 +1,39 @@
 /**
- * Image Generation Routes — works against either the external SD API or the
- * local mflux backend, depending on settings.imageGen.mode.
+ * Image Generation Routes — works against the external SD API, local mflux,
+ * or the Codex CLI built-in image_gen tool, depending on settings.imageGen.mode
+ * (or the per-request `mode` override).
  *
  * Generic endpoints (status, generate, avatar) go through the dispatcher.
- * Local-mode endpoints (events SSE, gallery, loras, cancel, delete) target
- * the local module directly because their shape doesn't apply to external.
+ * Async-mode endpoints (events SSE, cancel) also go through the dispatcher
+ * which routes the jobId to whichever provider owns it. Local-only endpoints
+ * (gallery, loras, models, delete) target the local module directly.
  */
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { existsSync } from 'fs';
+import { copyFile, unlink } from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
-import { local } from '../services/imageGen/index.js';
+import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
 } from '../lib/pythonSetup.js';
-import { PATHS } from '../lib/fileUtils.js';
-import { join } from 'node:path';
+import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
 
 const router = Router();
 
 const generateSchema = z.object({
   prompt: z.string().min(1).max(2000),
   negativePrompt: z.string().max(2000).optional(),
+  // Per-request backend override. If omitted, the dispatcher uses
+  // `imageGen.mode` from settings.json.
+  mode: z.enum(IMAGE_GEN_MODES).optional(),
   modelId: z.string().max(64).optional(),
   width: z.number().int().min(64).max(2048).optional(),
   height: z.number().int().min(64).max(2048).optional(),
@@ -40,7 +49,36 @@ const generateSchema = z.object({
   loraFilenames: z.array(z.string().max(256).regex(/^[^/\\]+$/, 'lora filename must not contain path separators')).max(8).optional(),
   loraPaths: z.array(z.string().max(512)).max(8).optional(),
   loraScales: z.array(z.number().min(0).max(2)).max(8).optional(),
+  // i2i: pick an existing gallery image (basename) as the init image. If
+  // initImage was uploaded via multipart, this is ignored in favor of the
+  // upload. Strength: 0.0 = ignore source, 1.0 = max influence.
+  initImageFile: z.string().max(256).regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, 'init image must be a basename ending in png/jpg/jpeg/webp').optional(),
+  initImageStrength: z.number().min(0).max(1).optional(),
 });
+
+// JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
+// shape) skip the parser entirely; FormData callers get req.file + string
+// req.body that coerceFormFields() converts before Zod validation.
+// Only the formats mflux can decode — keep this in sync with the extension
+// allowlist below so the route never silently relabels (e.g. HEIC) bytes
+// as ".png".
+const ACCEPTED_INIT_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
+
+const initImageUpload = optionalUpload('initImage', {
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
+});
+
+// Numerics arrive as strings from FormData — coerce before Zod validation.
+function coerceFormFields(body) {
+  const numericFields = ['width', 'height', 'steps', 'cfgScale', 'guidance', 'seed', 'initImageStrength'];
+  for (const f of numericFields) {
+    if (typeof body[f] === 'string' && body[f] !== '') body[f] = Number(body[f]);
+  }
+  if (typeof body.quantize === 'string' && /^\d+$/.test(body.quantize)) body.quantize = Number(body.quantize);
+  return body;
+}
 
 const avatarSchema = z.object({
   name: z.string().max(100).optional(),
@@ -48,16 +86,58 @@ const avatarSchema = z.object({
   prompt: z.string().max(2000).optional(),
 });
 
-router.get('/status', asyncHandler(async (_req, res) => {
-  res.json(await imageGen.checkConnection());
+router.get('/status', asyncHandler(async (req, res) => {
+  // Optional ?mode= override lets the Image Gen page probe a specific
+  // backend (e.g. when the user flips the per-render chip to Codex but
+  // hasn't saved Codex as the default yet). Express's default query
+  // parser turns duplicated keys (?mode=local&mode=codex) into arrays,
+  // so guard on string type before forwarding so `mode` always reaches
+  // the dispatcher as `string | undefined`.
+  const rawMode = req.query.mode;
+  const mode = typeof rawMode === 'string' && IMAGE_GEN_MODES.includes(rawMode) ? rawMode : undefined;
+  res.json(await imageGen.checkConnection({ mode }));
 }));
 
 router.get('/active', asyncHandler(async (_req, res) => {
   res.json({ activeJob: await imageGen.getActiveJob() });
 }));
 
-router.post('/generate', asyncHandler(async (req, res) => {
-  const data = validateRequest(generateSchema, req.body);
+router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
+  const data = validateRequest(generateSchema, coerceFormFields(req.body));
+  // Resolve init image source: uploaded file > gallery filename. The local
+  // service double-checks that the path stays under PATHS.images.
+  let initImagePath = null;
+  let uploadedInitTempPath = null;
+  if (req.file) {
+    await ensureDir(PATHS.images);
+    // Trust the validated mimetype from the fileFilter — picking the ext
+    // off the original filename can mismatch the bytes (e.g. HEIC saved
+    // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
+    const ext = MIME_TO_EXT[(req.file.mimetype || '').toLowerCase()] || '.png';
+    const initFilename = `init-${randomUUID()}${ext}`;
+    initImagePath = join(PATHS.images, initFilename);
+    await copyFile(req.file.path, initImagePath);
+    uploadedInitTempPath = req.file.path;
+  } else if (data.initImageFile) {
+    const candidate = join(PATHS.images, basename(data.initImageFile));
+    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+    const resolved = resolvePath(candidate);
+    if (!resolved.startsWith(imagesRoot) || !existsSync(resolved)) {
+      throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });
+    }
+    initImagePath = resolved;
+  }
+  // Strip the route-only `initImageFile` field — providers expect `initImagePath`.
+  delete data.initImageFile;
+  if (initImagePath) data.initImagePath = initImagePath;
+
+  // Multer's tmp upload is no longer needed once we've copied it into
+  // PATHS.images. Use res.on('close') so the temp file is cleaned up whether
+  // generateImage resolves, throws (handled by errorHandler middleware), or
+  // the client drops the connection mid-flight.
+  if (uploadedInitTempPath) {
+    res.on('close', () => { unlink(uploadedInitTempPath).catch(() => {}); });
+  }
   res.json(await imageGen.generateImage(data));
 }));
 
@@ -79,20 +159,24 @@ router.get('/gallery', asyncHandler(async (_req, res) => {
   res.json(await local.listGallery());
 }));
 
-// SSE progress stream for the local backend. EventSource consumers (the
-// ImageGen page) attach here using the jobId returned from POST /generate.
+// SSE progress stream. Local + Codex both produce job-keyed SSE; the
+// dispatcher picks the right provider for whichever owns the job.
 router.get('/:jobId/events', (req, res) => {
-  const ok = local.attachSseClient(req.params.jobId, res);
+  const ok = imageGen.attachSseClient(req.params.jobId, res);
   if (!ok) res.status(404).json({ error: 'Job not found or expired' });
 });
 
 router.post('/cancel', (_req, res) => {
-  const cancelled = local.cancel();
+  const cancelled = imageGen.cancel();
   res.json({ ok: cancelled });
 });
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
   res.json(await local.deleteImage(req.params.filename));
+}));
+
+router.post('/:filename/visibility', asyncHandler(async (req, res) => {
+  res.json(await local.setImageHidden(req.params.filename, !!req.body?.hidden));
 }));
 
 // --- Local-mode setup automation ---

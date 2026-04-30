@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  Palette,
+import {Palette,
   Film,
   Music,
   Building,
@@ -11,7 +10,6 @@ import {
   ArrowLeft,
   Send,
   SkipForward,
-  RefreshCw,
   Check,
   Sparkles,
   RotateCcw,
@@ -21,8 +19,8 @@ import {
   Telescope,
   ThumbsUp,
   ThumbsDown,
-  Minus
-} from 'lucide-react';
+  Minus} from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -261,7 +259,7 @@ export default function TasteTab({ onRefresh }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -295,7 +293,7 @@ export default function TasteTab({ onRefresh }) {
 
         {loadingReview ? (
           <div className="flex items-center justify-center h-48">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
           </div>
         ) : (
           <div className="space-y-4">
@@ -353,7 +351,7 @@ export default function TasteTab({ onRefresh }) {
                 disabled={generatingSummary || reviewResponses.length === 0}
                 className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50"
               >
-                {generatingSummary ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles size={16} />}
+                {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
                 {section?.summary ? 'Regenerate Summary' : 'Generate Summary'}
               </button>
               <button
@@ -426,7 +424,7 @@ export default function TasteTab({ onRefresh }) {
               className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 disabled:opacity-50"
               title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
-              {loadingPersonalized ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Telescope size={16} />}
+              {loadingPersonalized ? <BrailleSpinner /> : <Telescope size={16} />}
               Go Deeper
             </button>
             <button
@@ -442,7 +440,7 @@ export default function TasteTab({ onRefresh }) {
               className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50"
               title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
-              {generatingSummary ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles size={16} />}
+              {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
               Generate Summary
             </button>
           </div>
@@ -491,7 +489,7 @@ export default function TasteTab({ onRefresh }) {
 
         {loadingQuestion || loadingPersonalized ? (
           <div className="flex flex-col items-center justify-center h-48 gap-3">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
             {loadingPersonalized && (
               <span className="text-sm text-gray-400">Generating personalized question...</span>
             )}
@@ -569,7 +567,7 @@ export default function TasteTab({ onRefresh }) {
               >
                 {submitting ? (
                   <>
-                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <BrailleSpinner />
                     Saving...
                   </>
                 ) : (
@@ -745,7 +743,7 @@ export default function TasteTab({ onRefresh }) {
               disabled={generatingSummary || (profile?.completedCount || 0) === 0}
               className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50 whitespace-nowrap"
             >
-              {generatingSummary ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles size={16} />}
+              {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
               {profile?.profileSummary ? 'Regenerate' : 'Generate Profile'}
             </button>
           </div>

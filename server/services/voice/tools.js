@@ -13,6 +13,9 @@ import { getUserTimezone, todayInTimezone, getLocalParts } from '../../lib/timez
 import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
+import * as imageGen from '../imageGen/index.js';
+import { imageGenEvents } from '../imageGenEvents.js';
+import { getSettings } from '../settings.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
 
@@ -66,6 +69,7 @@ const TOOL_GROUPS = {
   ui_select: 'ui',
   ui_check: 'ui',
   ui_ask: 'ask',
+  image_generate: 'media',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -108,6 +112,10 @@ const GROUP_INTENT = {
   // want it stealing turns the cheaper tools handle. Catches "advise me",
   // "draft a/an X", "what did I decide", "what's on my plate", "ask myself".
   ask: /\b(?:ask my ?self|advise me|coach me|draft (?:a|an|my|me|something)|what(?:'s| is) on my plate|what (?:did|do|should) i (?:decide|think|believe|say|want|do)|why did i|when did i|recall (?:my|that|when))\b/i,
+  // Imagery verbs that should surface image_generate. Tight-ish: avoids
+  // common false positives like "imagine if" or "show me a picture of the
+  // page" by anchoring on creation verbs paired with visual nouns.
+  media: /\b(?:generate|render|create|draw|sketch|paint|illustrate|make|design|produce)\b[^.!?\n]{0,30}\b(?:image|picture|photo|illustration|art(?:work)?|render|drawing|sketch|portrait|wallpaper|scene|asset|graphic|logo|icon)\b|\bimagegen\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -1050,6 +1058,143 @@ const TOOLS = [
         providerId,
         model,
         summary: `Answered "${trimmed.slice(0, 60)}${trimmed.length > 60 ? '…' : ''}" using ${sources.length} source${sources.length === 1 ? '' : 's'}.`,
+      };
+    },
+  },
+
+  {
+    name: 'image_generate',
+    description:
+      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool (subject to the user enabling it in Settings). Returns the saved file path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'What to draw, in natural language. Be specific about subject, style, and mood.',
+        },
+        provider: {
+          type: 'string',
+          enum: ['auto', ...imageGen.IMAGE_GEN_MODES],
+          description: '"auto" (default) uses the user\'s saved backend. Override only when the user explicitly asks for a specific one or the task strongly favors it.',
+        },
+        negativePrompt: {
+          type: 'string',
+          description: 'Optional list of things to avoid (e.g. "watermark, low quality").',
+        },
+        width: { type: 'integer', description: 'Optional pixel width (64-2048).' },
+        height: { type: 'integer', description: 'Optional pixel height (64-2048).' },
+      },
+      required: ['prompt'],
+    },
+    execute: async ({ prompt, provider, negativePrompt, width, height } = {}) => {
+      if (typeof prompt !== 'string' || !prompt.trim()) {
+        return { ok: false, summary: 'prompt is required' };
+      }
+      // Match the /api/image-gen/generate Zod schema (max 2000 chars).
+      // Voice tool calls bypass the route entirely, so without this an
+      // oversized prompt would propagate to providers and fail with a
+      // less helpful error (codex CLI in particular hits OS ARG_MAX
+      // limits before the model even sees the prompt).
+      if (prompt.length > 2000) {
+        return { ok: false, summary: 'prompt must be 2000 characters or fewer' };
+      }
+      const requestedMode = (provider && provider !== 'auto') ? provider : undefined;
+      // Codex is gated separately — it costs against the user's Codex plan,
+      // and not every plan exposes image_gen. The dispatcher would also
+      // reject this, but catching it here lets us return a friendlier
+      // summary to the voice agent / palette.
+      if (requestedMode === 'codex') {
+        const s = await getSettings();
+        if (!s?.imageGen?.codex?.enabled) {
+          return { ok: false, summary: 'Codex Imagegen is disabled — enable it in Settings → Image Gen first.' };
+        }
+      }
+      // LLMs/tool callers often hand back numeric args as strings ("512").
+      // Coerce + bounds-check before forwarding — the route's Zod schema
+      // also gates these, but voice tool calls bypass the route, so an
+      // unvalidated string would propagate to providers that build
+      // payloads with raw width values (external SD API: "width": "512").
+      const normalizeDimension = (value, name) => {
+        if (value === undefined || value === null || value === '') return { ok: true, value: undefined };
+        const parsed = Number(value);
+        if (!Number.isInteger(parsed) || parsed < 64 || parsed > 2048) {
+          return { ok: false, summary: `${name} must be an integer between 64 and 2048` };
+        }
+        return { ok: true, value: parsed };
+      };
+      const w = normalizeDimension(width, 'width');
+      if (!w.ok) return w;
+      const h = normalizeDimension(height, 'height');
+      if (!h.ok) return h;
+      // Local + codex backends return a job descriptor synchronously and
+      // emit 'completed'/'failed' on imageGenEvents when the file actually
+      // lands. Subscribe BEFORE calling generateImage so a fast job can't
+      // emit 'completed' before we attach. External backends await the
+      // upstream HTTP call internally and the file is on disk by the time
+      // generateImage resolves — wait() is a no-op there.
+      let resolveDone, rejectDone;
+      const completionPromise = new Promise((res, rej) => { resolveDone = res; rejectDone = rej; });
+      let registeredId = null;
+      const onCompleted = (ev) => { if (ev.generationId === registeredId) cleanup(resolveDone, ev); };
+      const onFailed = (ev) => { if (ev.generationId === registeredId) cleanup(rejectDone, ev); };
+      const cleanup = (fn, ev) => {
+        clearTimeout(timeout);
+        imageGenEvents.off('completed', onCompleted);
+        imageGenEvents.off('failed', onFailed);
+        fn(ev);
+      };
+      // 5-min cap mirrors the codex provider's own timeout — a stuck job
+      // shouldn't leak listeners into the voice/palette dispatcher forever.
+      const timeout = setTimeout(() => cleanup(rejectDone, { error: 'image generation timed out' }), 5 * 60 * 1000);
+      imageGenEvents.on('completed', onCompleted);
+      imageGenEvents.on('failed', onFailed);
+      // Swallow unhandled rejection if generateImage throws before we
+      // register; the catch block below handles it.
+      completionPromise.catch(() => {});
+
+      let result;
+      try {
+        result = await imageGen.generateImage({
+          prompt: prompt.trim(),
+          negativePrompt: negativePrompt?.trim() || undefined,
+          width: w.value,
+          height: h.value,
+          mode: requestedMode,
+        });
+      } catch (err) {
+        cleanup(() => {}, null);
+        return { ok: false, summary: `Image generation failed: ${err?.message || err}` };
+      }
+
+      const usedMode = result?.mode || requestedMode || 'default';
+      const isAsync = usedMode === 'local' || usedMode === 'codex';
+      // External resolves with the file already on disk — short-circuit.
+      if (!isAsync) {
+        cleanup(() => {}, null);
+        return {
+          ok: true,
+          path: result?.path,
+          filename: result?.filename,
+          mode: usedMode,
+          summary: `Generated image (${usedMode}): ${result?.filename || 'pending'}`,
+        };
+      }
+
+      registeredId = result.generationId;
+      const ev = await completionPromise.catch((errEv) => ({ __failed: true, ...errEv }));
+      if (ev?.__failed) {
+        return { ok: false, summary: `Image generation failed: ${ev.error || 'unknown'}` };
+      }
+      // The 'completed' event carries the canonical path/filename — prefer
+      // it over the descriptor returned by generateImage (which may not
+      // have the final filename in some providers).
+      return {
+        ok: true,
+        path: ev?.path || result?.path,
+        filename: ev?.filename || result?.filename,
+        mode: usedMode,
+        summary: `Generated image (${usedMode}): ${ev?.filename || result?.filename}`,
       };
     },
   },

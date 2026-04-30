@@ -114,10 +114,8 @@ export default function Review() {
     setEditingId(null);
   };
 
-  const handleMarkAllRead = async () => {
-    const pendingItems = items.filter(i => i.status === 'pending');
-    await Promise.all(pendingItems.map(i => api.dismissReviewItem(i.id).catch(() => null)));
-  };
+  const handleMarkAllRead = () => api.bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
+  const handleCompleteAll = () => api.bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
 
   const grouped = items.reduce((acc, item) => {
     if (!acc[item.type]) acc[item.type] = [];
@@ -171,12 +169,22 @@ export default function Review() {
               <option value="all">All</option>
             </select>
             {pendingCount > 0 && (
-              <button
-                onClick={handleMarkAllRead}
-                className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
-              >
-                Mark All Read
-              </button>
+              <>
+                <button
+                  onClick={handleCompleteAll}
+                  className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
+                  title="Mark all pending items as completed"
+                >
+                  Complete All
+                </button>
+                <button
+                  onClick={handleMarkAllRead}
+                  className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
+                  title="Dismiss all pending items"
+                >
+                  Dismiss All
+                </button>
+              </>
             )}
           </div>
         </div>

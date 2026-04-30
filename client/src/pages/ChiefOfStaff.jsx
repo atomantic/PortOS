@@ -272,8 +272,11 @@ export default function ChiefOfStaff() {
     };
     socket.on('apps:changed', handleAppsChanged);
 
+    // Don't emit cos:unsubscribe — the cos:* namespace is shared with
+    // useCityData (CyberCity), useAgentFeedbackToast, and other always-mounted
+    // consumers; the server's per-socket subscriber Set has no ref count.
+    // Unsubscribing here would yank events out from under them.
     return () => {
-      socket.emit('cos:unsubscribe');
       socket.off('connect', subscribe);
       socket.off('cos:status', handleCosStatus);
       socket.off('cos:tasks:user:changed', handleTasksUserChanged);

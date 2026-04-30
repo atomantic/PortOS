@@ -17,6 +17,7 @@ import { getGoals } from './identity.js';
 import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
 import { getUsage } from './usage.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
 
 const STALL_THRESHOLD_DAYS = 14;
 const SUCCESS_RATE_WARNING = 50;
@@ -84,10 +85,8 @@ async function checkSuccessRates() {
 async function checkSystemHealth() {
   const alerts = [];
 
-  // Memory check
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const memPct = Math.round(((totalMem - freeMem) / totalMem) * 100);
+  const memStats = await getMemoryStats();
+  const memPct = Math.round((memStats.used / memStats.total) * 100);
 
   if (memPct >= MEMORY_WARNING_PCT) {
     const formatGB = (bytes) => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
@@ -95,7 +94,7 @@ async function checkSystemHealth() {
       type: 'system_resource',
       severity: memPct >= MEMORY_CRITICAL_PCT ? 'critical' : 'high',
       title: 'High memory usage',
-      detail: `${memPct}% — ${formatGB(totalMem - freeMem)} / ${formatGB(totalMem)}`,
+      detail: `${memPct}% — ${formatGB(memStats.used)} / ${formatGB(memStats.total)}`,
       link: '/apps',
       metadata: { resource: 'memory', percent: memPct }
     });
@@ -128,6 +127,19 @@ async function checkSystemHealth() {
       detail: `${errored} of ${processes.length} processes in error state`,
       link: '/apps',
       metadata: { errored, total: processes.length }
+    });
+  }
+
+  const crashing = processes.filter(p => (p.unstableRestarts || 0) > 0);
+  if (crashing.length > 0) {
+    const total = crashing.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0);
+    alerts.push({
+      type: 'process_error',
+      severity: 'high',
+      title: `${crashing.length} process${crashing.length > 1 ? 'es' : ''} in crash loop`,
+      detail: `${total} crash-loop restart${total === 1 ? '' : 's'}: ${crashing.map(p => p.name).join(', ')}`,
+      link: '/apps',
+      metadata: { unstableRestarts: total, names: crashing.map(p => p.name) }
     });
   }
 

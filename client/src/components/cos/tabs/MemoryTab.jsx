@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { RefreshCw, Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot } from 'lucide-react';
+import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
@@ -10,6 +10,7 @@ import MemoryGraph from './MemoryGraph';
 import MemoryEditModal from './MemoryEditModal';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function MemoryTab({ apps = [] }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -298,7 +299,7 @@ export default function MemoryTab({ apps = [] }) {
                     className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-green-500/20 text-green-400 hover:bg-green-500/30 active:bg-green-500/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Approve"
                   >
-                    {actionInFlight === memory.id ? <RefreshCw className="animate-spin" size={20} /> : <Check size={20} />}
+                    {actionInFlight === memory.id ? <BrailleSpinner /> : <Check size={20} />}
                   </button>
                   <button
                     onClick={() => handleReject(memory.id)}
@@ -306,7 +307,7 @@ export default function MemoryTab({ apps = [] }) {
                     className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 active:bg-red-500/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Reject"
                   >
-                    {actionInFlight === memory.id ? <RefreshCw className="animate-spin" size={20} /> : <XCircle size={20} />}
+                    {actionInFlight === memory.id ? <BrailleSpinner /> : <XCircle size={20} />}
                   </button>
                 </div>
               </div>
@@ -318,7 +319,7 @@ export default function MemoryTab({ apps = [] }) {
       {/* Content */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <RefreshCw className="animate-spin text-port-accent" size={24} />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : view === 'list' ? (
         <div className="space-y-3">

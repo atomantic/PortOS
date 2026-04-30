@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, RefreshCw, MapPin } from 'lucide-react';
+import {ChevronLeft, ChevronRight, MapPin} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap } from './calendarUtils';
 import { formatDateFull } from '../../utils/formatters';
+import BrailleSpinner from '../BrailleSpinner';
 
 const START_HOUR = 6;
 const END_HOUR = 23;
@@ -171,7 +172,7 @@ export default function DayView({ accounts }) {
 
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <RefreshCw size={24} className="text-port-accent animate-spin" />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : (
         <>

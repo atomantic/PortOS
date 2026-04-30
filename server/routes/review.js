@@ -16,6 +16,11 @@ const updateItemSchema = z.object({
   description: z.string().max(5000).optional()
 });
 
+const bulkStatusSchema = z.object({
+  status: z.enum(['completed', 'dismissed']),
+  ids: z.array(z.string()).optional()
+});
+
 // GET /api/review/items — list all items (optional ?status=pending&type=todo filters)
 router.get('/items', asyncHandler(async (req, res) => {
   const { status, type } = req.query;
@@ -63,6 +68,13 @@ router.post('/items/:id/complete', asyncHandler(async (req, res) => {
 router.post('/items/:id/dismiss', asyncHandler(async (req, res) => {
   const item = await reviewService.dismissItem(req.params.id);
   res.json(item);
+}));
+
+// POST /api/review/items/bulk-status — bulk update many items in one write
+router.post('/items/bulk-status', asyncHandler(async (req, res) => {
+  const data = validateRequest(bulkStatusSchema, req.body);
+  const updated = await reviewService.bulkUpdateStatus(data);
+  res.json({ updated: updated.length, items: updated });
 }));
 
 // DELETE /api/review/items/:id — delete an item

@@ -483,8 +483,15 @@ export function formatDuration(ms) {
 /**
  * Load a slashdo command markdown file, resolving !`cat ~/.claude/lib/...` includes.
  * Optionally strips YAML frontmatter.
+ *
+ * Cached: slashdo files are static within a server lifetime (submodule updates
+ * require restart). Cache resets on process restart, which is the right behavior.
  */
+const slashdoFileCache = new Map();
 export async function loadSlashdoFile(commandName, { stripFrontmatter = false } = {}) {
+  const cacheKey = `${commandName}::${stripFrontmatter}`;
+  if (slashdoFileCache.has(cacheKey)) return slashdoFileCache.get(cacheKey);
+
   const cmdPath = join(PATHS.slashdo, 'commands/do', `${commandName}.md`);
   let content = await readFile(cmdPath, 'utf-8').catch(() => null);
   if (!content) return null;
@@ -500,6 +507,7 @@ export async function loadSlashdoFile(commandName, { stripFrontmatter = false } 
   for (const { pattern, content: libContent } of replacements) {
     if (libContent) content = content.replace(pattern, libContent);
   }
+  slashdoFileCache.set(cacheKey, content);
   return content;
 }
 

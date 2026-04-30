@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Upload,
+import {Upload,
   ArrowLeft,
   ArrowRight,
   Check,
@@ -9,12 +8,11 @@ import {
   AlertCircle,
   FileJson,
   ExternalLink,
-  RefreshCw,
   X,
-  Sparkles
-} from 'lucide-react';
+  Sparkles} from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import BrailleSpinner from '../../BrailleSpinner';
 
 // Sources we plan to support. Only `available` ones are clickable.
 const SOURCES = [
@@ -254,7 +252,7 @@ function ChatGPTWizard({ onExit, navigate }) {
 
       {step.id === 'run' && (
         <div className="text-center py-12">
-          <RefreshCw size={32} className="text-port-accent animate-spin mx-auto mb-3" />
+          <BrailleSpinner />
           <p className="text-white">Importing conversations into Memory…</p>
           <p className="text-xs text-gray-500 mt-1">
             {importing ? 'Don\'t close this tab.' : 'Finalising…'}
@@ -394,7 +392,7 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
         )}
         {uploading && (
           <div className="mt-3 text-xs text-port-accent flex items-center justify-center gap-1">
-            <RefreshCw size={12} className="animate-spin" aria-hidden="true" /> Parsing…
+            <BrailleSpinner /> Parsing…
           </div>
         )}
         <input

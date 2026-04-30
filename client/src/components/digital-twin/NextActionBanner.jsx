@@ -4,7 +4,6 @@ import {
   Sparkles,
   Send,
   SkipForward,
-  RefreshCw,
   ArrowRight,
   CheckCircle,
   MessageSquare,
@@ -13,6 +12,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import BrailleSpinner from '../BrailleSpinner';
 import { ENRICHMENT_CATEGORIES } from './constants';
 import ScaleInput from './ScaleInput';
 
@@ -320,8 +320,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
 
           {loading ? (
             <div className="flex items-center gap-2 text-gray-400 py-4">
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              Loading question...
+              <BrailleSpinner text="Loading question..." />
             </div>
           ) : question ? (
             <>
@@ -352,7 +351,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                     disabled={submitting || (question.questionType === 'scale' ? scaleValue == null : !answer.trim())}
                     className="px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 disabled:opacity-50 flex items-center gap-1.5"
                   >
-                    {submitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send size={14} />}
+                    {submitting ? <BrailleSpinner /> : <Send size={14} />}
                     Submit
                   </button>
                   <button

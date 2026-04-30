@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import * as api from '../../../services/api';
 import { RefreshCw, Clock } from 'lucide-react';
 import { timeAgo } from '../../../utils/formatters';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function LogTab({ vaultId, allNotes }) {
   const [log, setLog] = useState(null);
@@ -51,7 +52,7 @@ export default function LogTab({ vaultId, allNotes }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

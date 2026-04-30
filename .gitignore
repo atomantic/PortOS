@@ -20,6 +20,8 @@ npm-debug.log*
 
 # Screenshots
 *.png
+!client/public/portos-logo.png
+!docs/media/portos-logo.png
 
 # OS files
 .DS_Store

@@ -21,3 +21,7 @@ export const updateReviewItem = (id, data) => request(`/review/items/${id}`, {
 export const completeReviewItem = (id) => request(`/review/items/${id}/complete`, { method: 'POST' });
 export const dismissReviewItem = (id) => request(`/review/items/${id}/dismiss`, { method: 'POST' });
 export const deleteReviewItem = (id) => request(`/review/items/${id}`, { method: 'DELETE' });
+export const bulkUpdateReviewStatus = ({ status, ids }) => request('/review/items/bulk-status', {
+  method: 'POST',
+  body: JSON.stringify({ status, ...(ids ? { ids } : {}) })
+});

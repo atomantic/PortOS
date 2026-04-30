@@ -16,6 +16,7 @@ import {
   Minus
 } from 'lucide-react';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function DigestTab() {
   const [currentDigest, setCurrentDigest] = useState(null);
@@ -105,7 +106,7 @@ export default function DigestTab() {
   if (loading && !currentDigest) {
     return (
       <div className="flex items-center justify-center py-12">
-        <RefreshCw className="w-6 h-6 animate-spin text-port-accent" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

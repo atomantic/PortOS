@@ -1,4 +1,8 @@
-# PortOS
+<p align="center">
+  <img src="./docs/media/portos-logo.png" alt="PortOS logo" width="160" />
+</p>
+
+<h1 align="center">PortOS</h1>
 
 **Your self-hosted operating system for dev machines.** Manage apps, orchestrate AI agents, build your digital twin, capture knowledge, and track your health — all from a single dashboard accessible anywhere via [Tailscale](https://tailscale.com).
 

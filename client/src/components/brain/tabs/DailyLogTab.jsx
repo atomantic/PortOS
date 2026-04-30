@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, RefreshCw, Save, Volume2, Settings,
-  Plus, Trash2, CloudUpload, Menu, X
-} from 'lucide-react';
+import {BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, Save, Volume2, Settings,
+  Plus, Trash2, CloudUpload, Menu, X} from 'lucide-react';
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
+import BrailleSpinner from '../../BrailleSpinner';
 
 // Slim shape kept in the sidebar history list — full `content`/`segments`
 // would accumulate as the log grows and the sidebar never renders them.
@@ -561,7 +560,7 @@ export default function DailyLogTab() {
 
         {loading ? (
           <div className="flex items-center justify-center flex-1">
-            <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+            <BrailleSpinner text="Loading" />
           </div>
         ) : (
           <>

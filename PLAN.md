@@ -15,10 +15,14 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **Voice CoS tool expansion** — `calendar_today` / `calendar_next` (Google Calendar via existing MCP), `meatspace_log_workout` (wraps `meatspaceHealth.js`), `weather_now` (needs API choice — OpenWeather / WeatherKit / NWS), `timer_set` (reuses `agentActionExecutor.js` scheduled actions).
 - [ ] **Voice agent vision fallback** — `ui_describe_visually` tool: screenshot the current tab (or a named canvas/chart) and send to a vision-capable model so "what's on this chart?" works on non-DOM content (CyberCity, graph views). Depends on a vision provider in `portos-ai-toolkit`.
 - [ ] **Voice agent — explicit long-term memory routing** — On "remember that …", auto-route to `brain_capture` and inject top-N relevant memories into the voice turn's system prompt via `brain_search`. Some of this is ambient today; make it explicit and self-improving.
-- [ ] **CyberCity v2** — Transform from decorative scene to living systems dashboard. See [cybercity-v2.md](./docs/features/cybercity-v2.md). Top priorities: system health atmosphere, richer billboards, brain inbox pulse, agent activity visualization, chronotype energy overlay.
+- [ ] **CyberCity v2** — Transform from decorative scene to interactive systems map. See [cybercity-v2.md](./docs/features/cybercity-v2.md). Phase 1 (operational legibility) underway: per-building health glyphs, "needs attention" pane, search overlay, status filter chips, clickable HUD stats, hover preview with quick actions, mobile/touch support.
 - [ ] **M50 P9 — CoS Automation & Rules** — Automated email classification, rule-based pre-filtering, email-to-task pipeline.
 - [ ] **M50 P10 — Auto-Send with AI Review Gate** — Per-account/per-recipient trust level + dual-LLM review (drafter + reviewer). Only auto-send when both approve or trust ≥ 0.9. See [Messages Security](./docs/features/messages-security.md).
 - [ ] **M34 P5-P7 — Digital Twin** — Multi-modal capture (voice/video/image identity sources), advanced testing, personas. Ties to GOALS.md secondary "Multi-Modal Identity Capture".
+
+### Depfree Audit — 2026-04-28
+
+All dependencies audited and justified. 0 removals. See [docs/DEPS.md](./docs/DEPS.md) for the full classification table and per-package rationale.
 
 ### Better Audit — pending (2026-04-21)
 

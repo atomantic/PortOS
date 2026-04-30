@@ -1,4 +1,4 @@
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff } from 'lucide-react';
 
 // Single card used everywhere a generated image/video appears in a grid:
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
@@ -13,6 +13,7 @@ export default function MediaCard({
   onSendToVideo,
   onContinue,
   onDelete,
+  onToggleHidden,
   selectionLabel = null, // e.g. "1", "2" — shown as the stitch order badge
   selected = false,
   disabled = false,
@@ -99,6 +100,16 @@ export default function MediaCard({
             >
               <Download className="w-3 h-3" />
             </a>
+            {onToggleHidden && (
+              <button
+                type="button"
+                onClick={() => onToggleHidden(item)}
+                className="px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
+              >
+                {item.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              </button>
+            )}
             {onDelete && (
               <button
                 type="button"

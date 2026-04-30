@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import BrailleSpinner from '../../BrailleSpinner';
 
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
@@ -156,7 +157,7 @@ export default function LearningTab() {
 
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <RefreshCw className="w-6 h-6 animate-spin text-port-accent" />
+          <BrailleSpinner text="Loading" />
         </div>
       ) : !hasData ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">

@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import CityActivityLog from './CityActivityLog';
+import CityIntelPane from './CityIntelPane';
 import CityAgentBar from './CityAgentBar';
+import CityFilterBar from './CityFilterBar';
 
 // WASD controls hint shown briefly on first exploration entry
 function ControlsHint({ visible }) {
@@ -55,13 +56,20 @@ const formatUptime = (seconds) => {
   return `${s}s`;
 };
 
-// Weather status text based on system health
-const getWeatherStatus = (onlineRatio) => {
-  if (onlineRatio >= 1.0) return { text: 'CLEAR', color: 'text-emerald-400', icon: '//', desc: 'All systems operational' };
-  if (onlineRatio >= 0.8) return { text: 'FAIR', color: 'text-cyan-400', icon: '~', desc: 'Minor issues detected' };
-  if (onlineRatio >= 0.5) return { text: 'OVERCAST', color: 'text-amber-400', icon: '%%', desc: 'Multiple systems down' };
-  if (onlineRatio >= 0.2) return { text: 'RAIN', color: 'text-orange-400', icon: '||', desc: 'Significant outages' };
-  return { text: 'STORM', color: 'text-red-400', icon: '!!', desc: 'Critical system failure' };
+const getHealthSentinel = (systemHealth, onlineRatio) => {
+  if (systemHealth?.overallHealth === 'critical') return { dot: 'bg-red-400', text: 'text-red-400', label: 'CRITICAL' };
+  if (systemHealth?.overallHealth === 'warning') return { dot: 'bg-amber-400', text: 'text-amber-400', label: 'WARN' };
+  if (systemHealth?.overallHealth === 'healthy') return { dot: 'bg-emerald-400', text: 'text-emerald-400', label: 'OK' };
+  if (onlineRatio >= 0.8) return { dot: 'bg-cyan-400', text: 'text-cyan-400', label: 'OK' };
+  if (onlineRatio >= 0.5) return { dot: 'bg-amber-400', text: 'text-amber-400', label: 'WARN' };
+  return { dot: 'bg-red-400', text: 'text-red-400', label: 'CRIT' };
+};
+
+const metricColor = (pct) => {
+  if (pct == null) return 'text-gray-500';
+  if (pct >= 90) return 'text-red-400';
+  if (pct >= 75) return 'text-amber-400';
+  return 'text-cyan-400';
 };
 
 // Animated corner decoration for HUD panels
@@ -119,7 +127,23 @@ function GlitchTitle({ text, className }) {
   );
 }
 
-// System health bar visualization
+function StatButton({ label, valueClass, value, onClick, title, prefix = null }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="w-full flex items-center justify-between gap-6 -mx-1 px-1 py-0.5 rounded hover:bg-cyan-500/5 transition-colors"
+    >
+      <span className="font-pixel text-[10px] text-gray-400 tracking-wide">{label}</span>
+      <span className={`font-pixel text-[11px] ${valueClass || 'text-cyan-400'}`}>
+        {prefix}
+        {value}
+      </span>
+    </button>
+  );
+}
+
 function HealthBar({ value, max, color }) {
   const pct = max > 0 ? (value / max) * 100 : 0;
   return (
@@ -136,7 +160,7 @@ function HealthBar({ value, max, color }) {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, onToggleExploration, explorationMode }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [time, setTime] = useState(new Date());
@@ -149,18 +173,30 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
     return () => clearInterval(interval);
   }, []);
 
-  const activeApps = apps.filter(a => !a.archived && a.overallStatus === 'online').length;
-  const stoppedApps = apps.filter(a => !a.archived && a.overallStatus === 'stopped').length;
-  const totalApps = apps.filter(a => !a.archived).length;
-  const archivedApps = apps.filter(a => a.archived).length;
+  const { activeApps, stoppedApps, totalApps, archivedApps } = useMemo(() => {
+    const acc = { activeApps: 0, stoppedApps: 0, totalApps: 0, archivedApps: 0 };
+    (apps || []).forEach(a => {
+      if (a.archived) { acc.archivedApps++; return; }
+      acc.totalApps++;
+      if (a.overallStatus === 'online') acc.activeApps++;
+      else if (a.overallStatus === 'stopped') acc.stoppedApps++;
+    });
+    return acc;
+  }, [apps]);
 
   const onlineRatio = totalApps > 0 ? activeApps / totalApps : 1;
-  const weather = useMemo(() => getWeatherStatus(onlineRatio), [onlineRatio]);
+  const sentinel = useMemo(() => getHealthSentinel(systemHealth, onlineRatio), [systemHealth, onlineRatio]);
+  const cpuPct = systemHealth?.system?.cpu?.usagePercent;
+  const memPct = systemHealth?.system?.memory?.usagePercent;
+  const diskPct = systemHealth?.system?.disk?.usagePercent;
   const pendingReview = reviewCounts?.total || 0;
   const alertCount = reviewCounts?.alert || 0;
   const peers = instances?.peers || [];
-  const onlinePeers = peers.filter(peer => peer.status === 'online').length;
-  const totalNodes = peers.length;
+  const { onlinePeers, totalNodes } = useMemo(() => {
+    let online = 0;
+    peers.forEach(p => { if (p.status === 'online') online++; });
+    return { onlinePeers: online, totalNodes: peers.length };
+  }, [peers]);
 
   const activeAgentCount = (cosAgents || []).filter(a =>
     a.status === 'running' || a.state === 'coding' || a.state === 'thinking' || a.state === 'investigating'
@@ -213,77 +249,104 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
             </span>
           </div>
 
-          {/* Weather (system health) */}
-          <div className="flex items-center justify-between gap-6" title={weather.desc}>
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">WEATHER</span>
-            <span className={`font-pixel text-[11px] ${weather.color}`}>
-              <span className="opacity-60 mr-1">{weather.icon}</span>{weather.text}
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            className="w-full flex items-center justify-between gap-3 -mx-1 px-1 py-1 rounded hover:bg-cyan-500/5 transition-colors"
+            title={systemHealth?.warnings?.length ? systemHealth.warnings.map(w => w.message).join(' · ') : 'System health — click to open dashboard'}
+          >
+            <span className="font-pixel text-[10px] text-gray-400 tracking-wide flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${sentinel.dot} shadow-[0_0_4px_currentColor]`} />
+              HEALTH
             </span>
+            <span className="font-pixel text-[10px] tracking-wide flex items-center gap-2">
+              <span className={metricColor(cpuPct)}>{cpuPct != null ? `${cpuPct}%` : '—'}</span>
+              <span className="text-gray-600">/</span>
+              <span className={metricColor(memPct)}>{memPct != null ? `${memPct}%` : '—'}</span>
+              <span className="text-gray-600">/</span>
+              <span className={metricColor(diskPct)}>{diskPct != null ? `${diskPct}%` : '—'}</span>
+            </span>
+          </button>
+          <div className="flex items-center justify-between gap-6 -mt-0.5">
+            <span className="font-pixel text-[8px] text-gray-600 tracking-wider pl-3.5">CPU · MEM · DISK</span>
+            <span className={`font-pixel text-[8px] ${sentinel.text} tracking-wider`}>{sentinel.label}</span>
           </div>
 
-          {/* Active agents */}
-          <div className="flex items-center justify-between gap-6">
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">AGENTS</span>
-            <span className={`font-pixel text-[11px] ${activeAgentCount > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>
-              {activeAgentCount > 0 && <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse" />}
-              {activeAgentCount} ACTIVE
-            </span>
-          </div>
+          <StatButton
+            label="AGENTS"
+            valueClass={activeAgentCount > 0 ? 'text-emerald-400' : 'text-gray-600'}
+            value={`${activeAgentCount} ACTIVE`}
+            prefix={activeAgentCount > 0 ? <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse" /> : null}
+            onClick={() => navigate('/cos')}
+            title="Open Chief of Staff"
+          />
 
-          {/* Stopped count */}
           {stoppedApps > 0 && (
-            <div className="flex items-center justify-between gap-6">
-              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">STOPPED</span>
-              <span className="font-pixel text-[11px] text-red-400" style={{ textShadow: '0 0 4px rgba(239,68,68,0.3)' }}>
-                {stoppedApps}
-              </span>
-            </div>
+            <StatButton
+              label="STOPPED"
+              valueClass="text-red-400"
+              value={stoppedApps}
+              onClick={() => navigate('/apps')}
+              title="View apps"
+            />
           )}
 
-          {/* Archived */}
           {archivedApps > 0 && (
-            <div className="flex items-center justify-between gap-6">
-              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">ARCHIVED</span>
-              <span className="font-pixel text-[11px] text-gray-500">{archivedApps}</span>
-            </div>
+            <StatButton
+              label="ARCHIVED"
+              valueClass="text-gray-500"
+              value={archivedApps}
+              onClick={() => navigate('/apps')}
+              title="View apps"
+            />
           )}
 
-          {/* Review pressure */}
           {(pendingReview > 0 || alertCount > 0) && (
-            <div className="flex items-center justify-between gap-6">
-              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">REVIEW</span>
-              <span className={`font-pixel text-[11px] ${alertCount > 0 ? 'text-orange-400' : 'text-cyan-400'}`}>
-                {pendingReview} PENDING{alertCount > 0 ? ` · ${alertCount} ALERT${alertCount === 1 ? '' : 'S'}` : ''}
-              </span>
-            </div>
+            <StatButton
+              label="REVIEW"
+              valueClass={alertCount > 0 ? 'text-orange-400' : 'text-cyan-400'}
+              value={`${pendingReview} PENDING${alertCount > 0 ? ` · ${alertCount} ALERT${alertCount === 1 ? '' : 'S'}` : ''}`}
+              onClick={() => navigate('/review')}
+              title="Open Review Hub"
+            />
           )}
 
-          {/* Instance mesh */}
-          <div className="flex items-center justify-between gap-6">
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">NODES</span>
-            <span className={`font-pixel text-[11px] ${onlinePeers > 0 ? 'text-violet-400' : 'text-gray-500'}`}>
-              {onlinePeers}/{totalNodes} LINKED
-            </span>
-          </div>
+          <StatButton
+            label="NODES"
+            valueClass={onlinePeers > 0 ? 'text-violet-400' : 'text-gray-500'}
+            value={`${onlinePeers}/${totalNodes} LINKED`}
+            onClick={() => navigate('/instances')}
+            title="Open Federation / Instances"
+          />
 
-          {/* Productivity - today's tasks */}
+          {notificationCounts?.unread > 0 && (
+            <StatButton
+              label="NOTIFS"
+              valueClass="text-cyan-400"
+              value={`${notificationCounts.unread} UNREAD`}
+              onClick={() => navigate('/')}
+              title="Open dashboard alerts"
+            />
+          )}
+
           {productivityData?.todaySucceeded > 0 && (
-            <div className="flex items-center justify-between gap-6">
-              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">TASKS</span>
-              <span className="font-pixel text-[11px] text-purple-400" style={{ textShadow: '0 0 4px rgba(168,85,247,0.3)' }}>
-                {productivityData.todaySucceeded} TODAY
-              </span>
-            </div>
+            <StatButton
+              label="TASKS"
+              valueClass="text-purple-400"
+              value={`${productivityData.todaySucceeded} TODAY`}
+              onClick={() => navigate('/cos')}
+              title="Open Chief of Staff"
+            />
           )}
 
-          {/* Streak */}
           {productivityData?.currentDailyStreak > 0 && (
-            <div className="flex items-center justify-between gap-6">
-              <span className="font-pixel text-[10px] text-gray-400 tracking-wide">STREAK</span>
-              <span className={`font-pixel text-[11px] ${productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}`}>
-                {productivityData.currentDailyStreak}d
-              </span>
-            </div>
+            <StatButton
+              label="STREAK"
+              valueClass={productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}
+              value={`${productivityData.currentDailyStreak}d`}
+              onClick={() => navigate('/cos')}
+              title="Open Chief of Staff"
+            />
           )}
 
           {/* Divider */}
@@ -309,6 +372,17 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
         </div>
       </div>
 
+      {filter && onFilterChange && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2">
+          <CityFilterBar
+            filter={filter}
+            onChange={onFilterChange}
+            onJumpToFirst={onJumpToFirst}
+            matchCount={matchCount}
+          />
+        </div>
+      )}
+
       {/* Top-right: Connection + CoS status */}
       <div className="absolute top-3 right-3 pointer-events-auto">
         <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2.5 flex items-center gap-4">
@@ -333,8 +407,16 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
         </div>
       </div>
 
-      {/* Right side: Activity log */}
-      <CityActivityLog logs={eventLogs} />
+      {/* Right side: Intel pane (Attention + Activity tabs) */}
+      <CityIntelPane
+        apps={apps}
+        cosAgents={cosAgents}
+        reviewCounts={reviewCounts}
+        instances={instances}
+        systemHealth={systemHealth}
+        notificationCounts={notificationCounts}
+        eventLogs={eventLogs}
+      />
 
       {/* Bottom: Agent status bar */}
       <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />

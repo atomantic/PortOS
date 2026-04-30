@@ -409,6 +409,15 @@ export async function stitchVideos(videoIds) {
   return stitchedMeta;
 }
 
+export async function setHistoryItemHidden(id, hidden) {
+  const history = await loadHistory();
+  const item = history.find((h) => h.id === id);
+  if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  item.hidden = !!hidden;
+  await saveHistory(history);
+  return { ok: true, hidden: item.hidden };
+}
+
 export async function deleteHistoryItem(id) {
   const history = await loadHistory();
   const item = history.find((h) => h.id === id);

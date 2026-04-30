@@ -1,0 +1,184 @@
+/* PortOS micrographics — small SVG glyphs + schematic HUD labels.
+   All keyframes live inside the prefers-reduced-motion guard so users who
+   request reduced motion get a fully static set of glyphs.
+   `content-visibility: auto` lets the browser skip rendering + animating
+   off-screen instances, so a dashboard full of widgets doesn't burn CPU
+   on glyphs the user can't see. */
+
+.port-microglyph {
+  display: inline-block;
+  flex: none;
+  overflow: visible;
+  color: currentColor;
+  vertical-align: -0.15em;
+  content-visibility: auto;
+  contain-intrinsic-size: 16px 16px;
+}
+
+.port-microglyph--success { color: rgb(var(--port-success)); }
+.port-microglyph--warn { color: rgb(var(--port-warning)); }
+.port-microglyph--error { color: rgb(var(--port-error)); }
+.port-microglyph--accent { color: rgb(var(--port-accent)); }
+.port-microglyph--muted { color: rgb(var(--port-border)); opacity: 0.85; }
+
+.port-microglyph__line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.port-microglyph__muted { stroke: currentColor; opacity: 0.4; }
+.port-microglyph__ghost { opacity: 0.42; }
+.port-microglyph__fill { fill: currentColor; }
+.port-microglyph__dim { opacity: 0.46; }
+.port-microglyph__core { filter: drop-shadow(0 0 6px currentColor); }
+
+.port-microglyph__progress-ring {
+  stroke-dasharray: calc(var(--port-micro-progress, 0.66) * 151) 151;
+  transform: rotate(-90deg);
+  transform-origin: 32px 32px;
+}
+
+/* SchematicLabel uses .font-pixel for typography (defined in index.css);
+   only layout + sizing live here. */
+.port-schematic-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--port-accent));
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.port-schematic-label__module {
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.port-schematic-label__divider {
+  color: currentColor;
+  opacity: 0.45;
+}
+
+.port-schematic-label__status {
+  color: currentColor;
+  opacity: 0.95;
+  font-weight: 600;
+}
+
+.port-schematic-label--success { color: rgb(var(--port-success)); }
+.port-schematic-label--warn { color: rgb(var(--port-warning)); }
+.port-schematic-label--error { color: rgb(var(--port-error)); }
+.port-schematic-label--muted { color: rgb(var(--port-border)); opacity: 0.85; }
+
+/* Card-tab variant: sits like a blueprint tab on the card's top border.
+   The host needs `position: relative` plus enough top padding/space that
+   the tab isn't clipped by an `overflow: hidden` ancestor (e.g. the
+   dashboard grid wraps each widget in a clipped container). The tab is
+   anchored INSIDE the host so it can't escape; the card's own border
+   line is masked by the tab's own background where they overlap. */
+.port-schematic-label--tab {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.9rem;
+  z-index: 1;
+  padding: 0 0.45rem;
+  background: rgb(var(--port-bg));
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .port-microglyph--animated .port-microglyph__orbit {
+    animation: spin 4.8s linear infinite;
+    transform-origin: 32px 32px;
+  }
+
+  .port-microglyph--animated .port-microglyph__counter-orbit {
+    animation: spin 7s linear infinite reverse;
+    transform-origin: 32px 32px;
+  }
+
+  .port-microglyph--animated .port-microglyph__nodes {
+    animation: port-micro-breathe 2.8s ease-in-out infinite;
+    transform-origin: 32px 32px;
+  }
+
+  .port-microglyph--animated .port-microglyph__spark {
+    animation: port-micro-spark 3.2s ease-in-out infinite;
+    transform-origin: 32px 32px;
+  }
+
+  .port-microglyph--animated .port-microglyph__scan-sweep {
+    animation: port-micro-scan 1.35s ease-in-out infinite;
+  }
+
+  .port-microglyph--animated .port-microglyph__matrix-dot {
+    animation: port-micro-dot 1.35s ease-in-out infinite;
+  }
+
+  .port-microglyph--animated .port-microglyph__matrix-dot-1 { animation-delay: 90ms; }
+  .port-microglyph--animated .port-microglyph__matrix-dot-2 { animation-delay: 180ms; }
+  .port-microglyph--animated .port-microglyph__matrix-dot-3 { animation-delay: 270ms; }
+  .port-microglyph--animated .port-microglyph__matrix-dot-4 { animation-delay: 360ms; }
+
+  .port-microglyph--animated .port-microglyph__bar {
+    animation: port-micro-bars 1.1s ease-in-out infinite;
+    transform-origin: center;
+  }
+
+  .port-microglyph--animated .port-microglyph__bar-2 { animation-delay: 90ms; }
+  .port-microglyph--animated .port-microglyph__bar-3 { animation-delay: 180ms; }
+  .port-microglyph--animated .port-microglyph__bar-4 { animation-delay: 270ms; }
+
+  .port-microglyph--animated .port-microglyph__pulse {
+    animation: port-micro-pulse 2.2s ease-in-out infinite;
+    transform-origin: 32px 32px;
+  }
+
+  .port-microglyph--animated .port-microglyph__warn-blink {
+    animation: port-micro-warn 1.2s steps(2, end) infinite;
+    transform-origin: 32px 32px;
+  }
+}
+
+@keyframes port-micro-breathe {
+  0%, 100% { opacity: 0.72; transform: scale(0.96); }
+  50%      { opacity: 1;    transform: scale(1.04); }
+}
+
+@keyframes port-micro-spark {
+  0%, 100% { opacity: 0.64; transform: rotate(0deg) scale(0.94); }
+  50%      { opacity: 1;    transform: rotate(45deg) scale(1.04); }
+}
+
+@keyframes port-micro-scan {
+  0%        { opacity: 0; transform: translateY(-13px); }
+  35%, 65%  { opacity: 1; }
+  100%      { opacity: 0; transform: translateY(13px); }
+}
+
+@keyframes port-micro-dot {
+  0%, 100% { opacity: 0.32; transform: scale(0.86); }
+  50%      { opacity: 1;    transform: scale(1.18); }
+}
+
+@keyframes port-micro-bars {
+  0%, 100% { opacity: 0.48; transform: scaleY(0.68); }
+  50%      { opacity: 1;    transform: scaleY(1); }
+}
+
+@keyframes port-micro-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.08); }
+}
+
+@keyframes port-micro-warn {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}

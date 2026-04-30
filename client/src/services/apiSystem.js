@@ -6,6 +6,10 @@ export const getAlertsSummary = (options) => request('/alerts/summary', options)
 // Health
 export const checkHealth = () => request('/system/health');
 export const getSystemHealth = (options) => request('/system/health/details', options);
+export const updateHealthThresholds = (thresholds) => request('/system/health/thresholds', {
+  method: 'PUT',
+  body: JSON.stringify(thresholds)
+});
 
 // Update
 export const getUpdateStatus = () => request('/update/status');
@@ -111,9 +115,10 @@ export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { m
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
 export const getTailnetInfo = () => request('/instances/tailnet-suffix');
+export const provisionTailnetCert = () => request('/instances/provision-cert', { method: 'POST' });
 
 // Image Generation
-export const getImageGenStatus = () => request('/image-gen/status');
+export const getImageGenStatus = (mode) => request(`/image-gen/status${mode ? `?mode=${encodeURIComponent(mode)}` : ''}`);
 export const generateImage = (data) => request('/image-gen/generate', {
   method: 'POST',
   body: JSON.stringify(data)

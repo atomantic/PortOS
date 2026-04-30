@@ -66,12 +66,14 @@ const JiraReports = lazyWithReload(() => import('./pages/JiraReports'));
 const DataManager = lazyWithReload(() => import('./pages/DataManager'));
 const Insights = lazyWithReload(() => import('./pages/Insights'));
 const Instances = lazyWithReload(() => import('./pages/Instances'));
+const SystemHealthPage = lazyWithReload(() => import('./pages/SystemHealthPage'));
 const MeatSpace = lazyWithReload(() => import('./pages/MeatSpace'));
 const Post = lazyWithReload(() => import('./pages/Post'));
 const Review = lazyWithReload(() => import('./pages/Review'));
 const Loops = lazyWithReload(() => import('./pages/Loops'));
 const CharacterSheet = lazyWithReload(() => import('./pages/CharacterSheet'));
 const Wiki = lazyWithReload(() => import('./pages/Wiki'));
+const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -157,6 +159,7 @@ export default function App() {
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
           <Route path="insights/:tab" element={<Insights />} />
           <Route path="instances" element={<Instances />} />
+          <Route path="system-health" element={<SystemHealthPage />} />
           <Route path="loops" element={<Loops />} />
           <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
           <Route path="meatspace/:tab" element={<MeatSpace />} />
@@ -190,6 +193,7 @@ export default function App() {
           <Route path="media-models" element={<RedirectWithSearch to="/media/models" />} />
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
+          <Route path="rapid-reader" element={<RapidReaderPage />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />

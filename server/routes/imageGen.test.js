@@ -7,12 +7,13 @@ vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
   generateAvatar: vi.fn(),
+  attachSseClient: vi.fn(() => false),
+  cancel: vi.fn(() => false),
+  IMAGE_GEN_MODES: ['external', 'local', 'codex'],
   local: {
     listImageModels: vi.fn(() => []),
     listLoras: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
-    attachSseClient: vi.fn(() => false),
-    cancel: vi.fn(() => false),
     deleteImage: vi.fn(async () => ({ ok: true })),
   },
 }));
@@ -47,6 +48,31 @@ describe('Image Gen Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.connected).toBe(false);
+    });
+
+    it('forwards a valid ?mode= query into checkConnection', async () => {
+      imageGen.checkConnection.mockResolvedValue({ connected: true, mode: 'codex' });
+      const response = await request(app).get('/api/image-gen/status?mode=codex');
+      expect(response.status).toBe(200);
+      expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: 'codex' });
+    });
+
+    it('ignores an invalid ?mode= query and uses the saved default', async () => {
+      imageGen.checkConnection.mockResolvedValue({ connected: true, mode: 'external' });
+      const response = await request(app).get('/api/image-gen/status?mode=bogus');
+      expect(response.status).toBe(200);
+      expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: undefined });
+    });
+
+    // Express turns ?mode=a&mode=b into an array — without the
+    // typeof === 'string' guard, that array would either match
+    // IMAGE_GEN_MODES.includes() falsely or propagate as a non-string
+    // mode to the dispatcher.
+    it('ignores a duplicated-key ?mode= array', async () => {
+      imageGen.checkConnection.mockResolvedValue({ connected: true, mode: 'external' });
+      const response = await request(app).get('/api/image-gen/status?mode=local&mode=codex');
+      expect(response.status).toBe(200);
+      expect(imageGen.checkConnection).toHaveBeenCalledWith({ mode: undefined });
     });
   });
 
@@ -125,6 +151,33 @@ describe('Image Gen Routes', () => {
         .send({});
 
       expect(response.status).toBe(200);
+    });
+  });
+
+  // GET /:jobId/events and POST /cancel both go through the dispatcher's
+  // attachSseClient/cancel — these tests lock in that contract so a future
+  // refactor can't accidentally re-couple them to the local provider.
+  describe('SSE attach + cancel via dispatcher', () => {
+    it('GET /:jobId/events returns 404 when no provider owns the job', async () => {
+      imageGen.attachSseClient.mockReturnValueOnce(false);
+      const response = await request(app).get('/api/image-gen/missing-job/events');
+      expect(response.status).toBe(404);
+      expect(imageGen.attachSseClient).toHaveBeenCalledWith('missing-job', expect.anything());
+    });
+
+    it('POST /cancel returns ok=false when no provider had a job', async () => {
+      imageGen.cancel.mockReturnValueOnce(false);
+      const response = await request(app).post('/api/image-gen/cancel');
+      expect(response.status).toBe(200);
+      expect(response.body.ok).toBe(false);
+      expect(imageGen.cancel).toHaveBeenCalled();
+    });
+
+    it('POST /cancel returns ok=true when a provider cancelled', async () => {
+      imageGen.cancel.mockReturnValueOnce(true);
+      const response = await request(app).post('/api/image-gen/cancel');
+      expect(response.status).toBe(200);
+      expect(response.body.ok).toBe(true);
     });
   });
 });

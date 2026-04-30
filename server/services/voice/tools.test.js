@@ -32,6 +32,44 @@ vi.mock('../feeds.js', () => ({
   markItemRead: vi.fn(async () => ({ updated: true })),
   markAllRead: vi.fn(async () => ({ marked: 0 })),
 }));
+// imageGen dispatcher — tests pin the dispatch and let us assert what mode
+// the voice tool forwards. The settings mock controls the codex-enabled gate.
+// For async modes (local/codex) the mock also simulates the per-provider
+// 'completed' event the real providers emit on imageGenEvents — without
+// that, the tool's await would hang for 5 minutes.
+const codexEnabledRef = { value: false };
+
+// Hoisting note: vi.mock factories run before the module under test loads,
+// so we can't import imageGenEvents up here. Instead, do the import lazily
+// inside the mock factory using vi.importActual.
+let _imageGenEvents = null;
+const getEvents = async () => {
+  if (!_imageGenEvents) _imageGenEvents = (await vi.importActual('../imageGenEvents.js')).imageGenEvents;
+  return _imageGenEvents;
+};
+
+const generateImageMock = vi.fn(async (params) => {
+  const mode = params?.mode || 'external';
+  const generationId = `mock-${Math.random().toString(36).slice(2, 10)}`;
+  const result = { generationId, filename: 'mock.png', path: '/data/images/mock.png', mode };
+  if (mode === 'local' || mode === 'codex') {
+    // Fire the completion event after generateImage resolves so the tool
+    // has time to register its listener with the captured generationId.
+    setImmediate(async () => {
+      const events = await getEvents();
+      events.emit('completed', { generationId, path: result.path, filename: result.filename });
+    });
+  }
+  return result;
+});
+vi.mock('../imageGen/index.js', () => ({
+  generateImage: (...args) => generateImageMock(...args),
+  IMAGE_GEN_MODES: ['external', 'local', 'codex'],
+}));
+vi.mock('../settings.js', () => ({
+  getSettings: vi.fn(async () => ({ imageGen: { codex: { enabled: codexEnabledRef.value } } })),
+}));
+
 // askService.runAsk is an async generator. Default mock yields a small
 // synthetic stream so ui_ask tests don't need to spin up real providers.
 vi.mock('../askService.js', () => ({
@@ -419,5 +457,129 @@ describe('getToolSpecsForIntent — ui_ask gating', () => {
   it('hides ui_ask on plain capture turns', () => {
     const { specs } = getToolSpecsForIntent('remember to buy milk');
     expect(names(specs)).not.toContain('ui_ask');
+  });
+});
+
+// image_generate uses imageGen.generateImage under the hood; mocked
+// above. The codexEnabledRef toggle drives the disabled-gate test.
+describe("image_generate", () => {
+  it("rejects empty prompt", async () => {
+    const r = await dispatchTool("image_generate", { prompt: "  " });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/prompt is required/);
+  });
+
+  it("forwards prompt to dispatcher with no mode by default (auto)", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox" });
+    expect(r.ok).toBe(true);
+    expect(generateImageMock).toHaveBeenCalledTimes(1);
+    const args = generateImageMock.mock.calls[0][0];
+    expect(args.prompt).toBe("a fox");
+    expect(args.mode).toBeUndefined();
+  });
+
+  it("treats provider=auto the same as no provider", async () => {
+    generateImageMock.mockClear();
+    await dispatchTool("image_generate", { prompt: "a fox", provider: "auto" });
+    expect(generateImageMock.mock.calls[0][0].mode).toBeUndefined();
+  });
+
+  it("forwards provider=local as mode=local", async () => {
+    generateImageMock.mockClear();
+    await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    expect(generateImageMock.mock.calls[0][0].mode).toBe("local");
+  });
+
+  it("rejects provider=codex when codex is disabled in settings", async () => {
+    codexEnabledRef.value = false;
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/Codex Imagegen is disabled/);
+    expect(generateImageMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards provider=codex when codex is enabled", async () => {
+    codexEnabledRef.value = true;
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    expect(r.ok).toBe(true);
+    expect(generateImageMock.mock.calls[0][0].mode).toBe("codex");
+    codexEnabledRef.value = false;
+  });
+
+  it("includes the saved file path in summary", async () => {
+    const r = await dispatchTool("image_generate", { prompt: "a fox" });
+    expect(r.path).toBe("/data/images/mock.png");
+    expect(r.filename).toBe("mock.png");
+  });
+
+  it("coerces stringified width/height to numbers before forwarding", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", width: "512", height: "768" });
+    expect(r.ok).toBe(true);
+    const args = generateImageMock.mock.calls[0][0];
+    expect(args.width).toBe(512);
+    expect(args.height).toBe(768);
+  });
+
+  it("rejects prompt longer than 2000 characters (matches route schema)", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2001) });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/prompt must be 2000 characters or fewer/);
+    expect(generateImageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts prompt at exactly 2000 characters", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "x".repeat(2000) });
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects out-of-bounds width", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", width: 50000 });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/width must be an integer between 64 and 2048/);
+    expect(generateImageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-integer height (e.g. floats)", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", height: "768.5" });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/height must be an integer between 64 and 2048/);
+  });
+
+  // The tool returns synchronously for external (file is already on disk)
+  // but for local/codex it must await the imageGenEvents 'completed' event
+  // — otherwise the palette toast says "image generated" before the file
+  // actually exists.
+  it("waits for imageGenEvents 'completed' on async modes (local) before resolving", async () => {
+    generateImageMock.mockClear();
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "local" });
+    expect(r.ok).toBe(true);
+    expect(r.mode).toBe("local");
+    expect(r.summary).toMatch(/^Generated image \(local\)/);
+  });
+
+  it("returns ok:false when imageGenEvents emits 'failed' for async modes", async () => {
+    codexEnabledRef.value = true;
+    generateImageMock.mockClear();
+    // Override the default mock to emit 'failed' instead of 'completed'.
+    generateImageMock.mockImplementationOnce(async (params) => {
+      const generationId = `mockfail-${Math.random().toString(36).slice(2, 8)}`;
+      setImmediate(async () => {
+        const events = await getEvents();
+        events.emit('failed', { generationId, error: 'mock provider failure' });
+      });
+      return { generationId, filename: 'mock.png', path: '/data/images/mock.png', mode: params.mode };
+    });
+    const r = await dispatchTool("image_generate", { prompt: "a fox", provider: "codex" });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/mock provider failure/);
+    codexEnabledRef.value = false;
   });
 });

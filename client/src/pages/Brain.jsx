@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
-import { Brain as BrainIcon, RefreshCw } from 'lucide-react';
+import {Brain as BrainIcon} from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 import { TABS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
@@ -79,7 +80,7 @@ export default function Brain() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }

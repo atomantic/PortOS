@@ -94,6 +94,51 @@ describe('uploadSingle multipart parser', () => {
     expect(req.file?.originalname).toBe('a.png');
   });
 
+  it('does not crash when req end fires while file flush is pending', async () => {
+    // Regression: previously, if the file write stream's end() callback ran
+    // asynchronously (real disk I/O) and `req.on('end')` fired first, the
+    // end handler called tick() while writeStream was already null, crashing
+    // with "Cannot read properties of null (reading 'write')".
+    vi.resetModules();
+    vi.doMock('fs', () => ({
+      createWriteStream: () => {
+        const handlers = {};
+        return {
+          write: () => true,
+          end: (data, cb) => {
+            const callback = typeof data === 'function' ? data : cb;
+            // Defer the callback past the current macrotask so the request's
+            // 'end' event can fire while we're still "flushing".
+            if (callback) setTimeout(callback, 5);
+          },
+          destroy: () => {},
+          on: (evt, fn) => { handlers[evt] = fn; },
+          once: (evt, fn) => { handlers[evt] = fn; },
+        };
+      },
+    }));
+    const { uploadSingle: uploadSingleAsync } = await import('./multipart.js');
+    const req = makeMultipartReq([
+      { name: 'sourceImage', filename: 'a.png', contentType: 'image/png', body: Buffer.from([0xaa, 0xbb, 0xcc]) },
+      { name: 'prompt', body: 'after-file' },
+    ]);
+    let uncaught = null;
+    const onUncaught = (err) => { uncaught = err; };
+    process.once('uncaughtException', onUncaught);
+    await new Promise((resolve, reject) => {
+      const mw = uploadSingleAsync('sourceImage', { limits: { fileSize: 1024 * 1024 } });
+      mw(req, {}, (err) => err ? reject(err) : resolve());
+    });
+    // Wait for any deferred ws.end callbacks to flush so a stray uncaught
+    // exception surfaces before we assert.
+    await new Promise((r) => setTimeout(r, 30));
+    process.removeListener('uncaughtException', onUncaught);
+    expect(uncaught).toBeNull();
+    expect(req.file?.originalname).toBe('a.png');
+    expect(req.body.prompt).toBe('after-file');
+    vi.doUnmock('fs');
+  });
+
   it('rejects requests without the multipart Content-Type', async () => {
     const stream = Readable.from(['nope']);
     stream.headers = { 'content-type': 'application/json' };

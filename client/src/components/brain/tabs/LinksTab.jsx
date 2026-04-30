@@ -14,8 +14,10 @@ import {
   Check,
   AlertCircle,
   FolderOpen,
-  Tag
+  Tag,
+  ShieldCheck
 } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -46,6 +48,7 @@ export default function LinksTab({ onRefresh }) {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [scanningId, setScanningId] = useState(null);
   const inputRef = useRef(null);
 
   const fetchLinks = useCallback(async () => {
@@ -189,10 +192,23 @@ export default function LinksTab({ onRefresh }) {
     });
   };
 
+  const handleScan = async (linkId) => {
+    setScanningId(linkId);
+    const result = await api.scanBrainLink(linkId).catch(err => {
+      toast.error(err.message || 'Failed to start scan');
+      return null;
+    });
+    setScanningId(null);
+
+    if (result) {
+      toast.success('Malware scan queued — track progress in CoS Tasks');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
@@ -218,7 +234,7 @@ export default function LinksTab({ onRefresh }) {
             title={sending ? 'Saving...' : 'Save link'}
           >
             {sending ? (
-              <RefreshCw className="w-5 h-5 animate-spin" />
+              <BrailleSpinner />
             ) : (
               <Send className="w-5 h-5" />
             )}
@@ -424,7 +440,7 @@ export default function LinksTab({ onRefresh }) {
                     {/* Clone status */}
                     <span className={`flex items-center gap-1 text-xs ${CLONE_STATUS_STYLES[link.cloneStatus]}`}>
                       {link.cloneStatus === 'cloned' && <Check size={12} />}
-                      {link.cloneStatus === 'cloning' && <RefreshCw size={12} className="animate-spin" />}
+                      {link.cloneStatus === 'cloning' && <BrailleSpinner />}
                       {link.cloneStatus === 'pending' && <Download size={12} />}
                       {link.cloneStatus === 'failed' && <AlertCircle size={12} />}
                       {link.cloneStatus === 'cloned' && 'Cloned'}
@@ -488,6 +504,19 @@ export default function LinksTab({ onRefresh }) {
                         >
                           <RefreshCw size={12} />
                           Pull
+                        </button>
+                        <button
+                          onClick={() => handleScan(link.id)}
+                          disabled={scanningId === link.id}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Read-only malware/risk scan via /do:scan (writes report to ~/.claude/scans/)"
+                        >
+                          {scanningId === link.id ? (
+                            <BrailleSpinner />
+                          ) : (
+                            <ShieldCheck size={12} />
+                          )}
+                          Scan
                         </button>
                       </>
                     )}

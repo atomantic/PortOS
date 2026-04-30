@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, AlertTriangle, Package } from 'lucide-react';
 import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
+import BrailleSpinner from '../components/BrailleSpinner';
 
 function SizeBar({ size, maxSize }) {
   const pct = maxSize > 0 ? Math.max(1, (size / maxSize) * 100) : 0;
@@ -96,8 +97,8 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
             </div>
           ) : (
             <div className="p-3 flex items-center gap-2 text-xs text-gray-500">
-              <RefreshCw size={11} className="animate-spin" /> Loading...
-            </div>
+              <BrailleSpinner text="Loading" />
+      </div>
           )}
         </div>
       )}
@@ -224,7 +225,7 @@ export default function DataManager() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <RefreshCw className="w-8 h-8 text-port-accent animate-spin" />
+        <BrailleSpinner text="Loading" />
       </div>
     );
   }
