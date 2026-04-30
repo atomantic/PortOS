@@ -14,6 +14,9 @@ const execAsync = promisify(exec);
 // shape that matches the "Memory Used" figure Activity Monitor / `top`
 // (and macOS's own pressure indicator) display.
 
+const CACHE_TTL_MS = 3000;
+let cached = null;
+
 function fallback() {
   const total = os.totalmem();
   const free = os.freemem();
@@ -21,7 +24,7 @@ function fallback() {
 }
 
 async function macMemory() {
-  const { stdout } = await execAsync('vm_stat', { windowsHide: true });
+  const { stdout } = await execAsync('vm_stat', { windowsHide: true, timeout: 5000 });
   const pageSizeMatch = stdout.match(/page size of (\d+) bytes/);
   const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 16384;
 
@@ -58,12 +61,21 @@ async function linuxMemory() {
   return { total, used, free: available, source: 'meminfo' };
 }
 
-export async function getMemoryStats() {
-  if (process.platform === 'darwin') {
-    return macMemory().catch(() => fallback());
-  }
-  if (process.platform === 'linux') {
-    return linuxMemory().catch(() => fallback());
-  }
+async function probe() {
+  if (process.platform === 'darwin') return macMemory().catch(() => fallback());
+  if (process.platform === 'linux') return linuxMemory().catch(() => fallback());
   return fallback();
+}
+
+export async function getMemoryStats() {
+  const now = Date.now();
+  if (cached && (now - cached.at) < CACHE_TTL_MS) return cached.stats;
+  const stats = await probe();
+  cached = { stats, at: now };
+  return stats;
+}
+
+// Test hook — drop the cache so tests can swap mocked vm_stat output between cases.
+export function _resetMemoryStatsCache() {
+  cached = null;
 }

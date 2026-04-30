@@ -34,6 +34,7 @@ import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getUserTimezone, getLocalParts, nextLocalTime, todayInTimezone } from '../lib/timezone.js';
 import { PORTOS_UI_URL } from '../lib/ports.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -2027,11 +2028,7 @@ export async function runHealthCheck() {
     });
   }
 
-  // Get system memory
-  const memCmd = process.platform === 'win32' ? 'wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /VALUE' :
-    process.platform === 'darwin' ? 'vm_stat' : 'free -m';
-  const memResult = await execAsync(memCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
-  metrics.memory = { raw: memResult.stdout.slice(0, 500) }; // Truncate for storage
+  metrics.memory = await getMemoryStats();
 
   // Store health check result with lock to prevent race conditions
   await withStateLock(async () => {

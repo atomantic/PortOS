@@ -85,9 +85,6 @@ async function checkSuccessRates() {
 async function checkSystemHealth() {
   const alerts = [];
 
-  // Memory check — uses getMemoryStats() so the percentage matches Activity
-  // Monitor's "Memory Used" instead of (totalmem - freemem), which on macOS
-  // counts the reclaimable file cache as used and reads ~98% on every box.
   const memStats = await getMemoryStats();
   const memPct = Math.round((memStats.used / memStats.total) * 100);
 

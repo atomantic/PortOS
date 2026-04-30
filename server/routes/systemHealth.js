@@ -46,11 +46,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     getMemoryStats()
   ]);
 
-  // System metrics
-  const totalMem = memStats.total;
-  const freeMem = memStats.free;
-  const usedMem = memStats.used;
-  const memUsagePercent = Math.round((usedMem / totalMem) * 100);
+  const memUsagePercent = Math.round((memStats.used / memStats.total) * 100);
   const cpuLoad = os.loadavg()[0]; // 1-minute load average
   const cpuCount = os.cpus().length;
   const cpuUsagePercent = Math.round((cpuLoad / cpuCount) * 100);
@@ -182,13 +178,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
       uptime,
       uptimeFormatted,
       memory: {
-        total: totalMem,
-        used: usedMem,
-        free: freeMem,
+        total: memStats.total,
+        used: memStats.used,
+        free: memStats.free,
         usagePercent: memUsagePercent,
-        totalFormatted: formatBytes(totalMem),
-        usedFormatted: formatBytes(usedMem),
-        freeFormatted: formatBytes(freeMem)
+        totalFormatted: formatBytes(memStats.total),
+        usedFormatted: formatBytes(memStats.used),
+        freeFormatted: formatBytes(memStats.free)
       },
       cpu: {
         cores: cpuCount,

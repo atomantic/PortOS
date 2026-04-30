@@ -11,7 +11,7 @@ vi.mock('fs/promises', () => ({
 
 const { exec } = await import('child_process');
 const { readFile } = await import('fs/promises');
-const { getMemoryStats } = await import('./memoryStats.js');
+const { getMemoryStats, _resetMemoryStatsCache } = await import('./memoryStats.js');
 
 const mockExec = (stdout) => {
   exec.mockImplementation((_cmd, _opts, cb) => cb(null, { stdout, stderr: '' }));
@@ -20,6 +20,7 @@ const mockExec = (stdout) => {
 describe('getMemoryStats', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetMemoryStatsCache();
   });
 
   it('on macOS, returns "Memory Used" matching Activity Monitor (anonymous - purgeable + wired + compressor)', async () => {
@@ -70,5 +71,21 @@ Pages occupied by compressor:               0.
     const stats = await getMemoryStats();
     expect(stats.source).toBe('os');
     expect(stats.total).toBe(os.totalmem());
+  });
+
+  it('caches the result and skips the subprocess on rapid repeat calls', async () => {
+    if (process.platform !== 'darwin') return;
+
+    mockExec(`Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages wired down:                           100.
+Anonymous pages:                            500.
+Pages purgeable:                              0.
+Pages occupied by compressor:                50.
+`);
+
+    await getMemoryStats();
+    await getMemoryStats();
+    await getMemoryStats();
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 });
