@@ -123,8 +123,14 @@ describe('videoGen routes', () => {
         mode: 'fflf',
       });
       expect(r.status).toBe(200);
+      // Locks in the new request-field plumbing: lastImageFile becomes
+      // lastImagePath resolved under PATHS.images, and the mode hint flows
+      // through to the service. existsSync + PATHS.images are mocked so the
+      // resolver returns deterministic paths.
       expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
         prompt: 'morph between two scenes',
+        sourceImagePath: '/mock/images/first.png',
+        lastImagePath: '/mock/images/last.png',
         mode: 'fflf',
       }));
     });

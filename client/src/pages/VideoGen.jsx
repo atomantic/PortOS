@@ -167,6 +167,11 @@ export default function VideoGen() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const eventSourceRef = useRef(null);
+  // Hold the reject() of the in-flight runGeneration Promise so cancel can
+  // settle it. Without this, handleCancel() closes the EventSource but the
+  // outstanding Promise dangles forever — and the queue worker's .finally()
+  // never runs, leaving runningQueueId stuck and freezing further dequeue.
+  const runRejectRef = useRef(null);
 
   // Batch queue. Each item snapshots the params at enqueue time so the user
   // can keep editing the form while jobs are in flight without affecting the
@@ -273,14 +278,21 @@ export default function VideoGen() {
   });
 
   // Run a single payload through the SSE pipeline. Returns a promise that
-  // resolves when the job completes (or rejects on error). Shared by the
-  // inline submit and the queue worker.
+  // resolves when the job completes (or rejects on error / cancel). Shared
+  // by the inline submit and the queue worker.
   const runGeneration = (payload) => new Promise((resolve, reject) => {
     setGenerating(true);
     setProgress({ progress: 0 });
     setStatusMsg('Starting...');
     setResult(null);
     setError(null);
+
+    // Wrap settle so the cancel ref is cleared exactly once when the Promise
+    // transitions to a final state — guarantees the queue worker's .finally()
+    // always runs and stale rejects can't fire after a successful complete.
+    const settleResolve = (value) => { runRejectRef.current = null; resolve(value); };
+    const settleReject = (err) => { runRejectRef.current = null; reject(err); };
+    runRejectRef.current = settleReject;
 
     generateVideo(payload).then((data) => {
       const jobId = data.jobId || data.generationId;
@@ -303,27 +315,27 @@ export default function VideoGen() {
           es.close();
           toast.success('Video generated');
           refreshHistory();
-          resolve(msg.result);
+          settleResolve(msg.result);
         }
         if (msg.type === 'error') {
           setError(msg.error);
           setGenerating(false);
           es.close();
           toast.error(msg.error);
-          reject(new Error(msg.error));
+          settleReject(new Error(msg.error));
         }
       };
       es.onerror = () => {
         setError('Lost connection to server');
         setGenerating(false);
         es.close();
-        reject(new Error('Lost connection to server'));
+        settleReject(new Error('Lost connection to server'));
       };
     }).catch((err) => {
       setError(err.message || 'Video generation failed');
       setGenerating(false);
       toast.error(err.message || 'Video generation failed');
-      reject(err);
+      settleReject(err);
     });
   });
 
@@ -383,6 +395,14 @@ export default function VideoGen() {
     await cancelVideoGen().catch(() => {});
     setGenerating(false);
     setStatusMsg('Cancelled');
+    // Settle the in-flight runGeneration Promise so the queue worker's
+    // .finally() releases runningQueueId and the next pending item can run.
+    // Without this the Promise would dangle and the worker would stay parked.
+    if (runRejectRef.current) {
+      const reject = runRejectRef.current;
+      runRejectRef.current = null;
+      reject(new Error('Cancelled'));
+    }
     if (runningQueueId) {
       setQueue((q) => q.map((item) => item.id === runningQueueId ? { ...item, status: 'error', error: 'Cancelled' } : item));
       setRunningQueueId(null);

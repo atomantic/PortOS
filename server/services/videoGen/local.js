@@ -119,7 +119,7 @@ const generateThumbnail = async (videoPath, jobId) => {
 export const loadHistory = () => readJSONFile(HISTORY_FILE, []);
 export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, outputPath }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, mode, outputPath }) => {
   if (IS_WIN) {
     const scriptPath = join(PATHS.root, 'scripts', 'generate_win.py');
     const args = [scriptPath, '--model', modelId, '--prompt', prompt, '--height', String(height), '--width', String(width), '--num-frames', String(numFrames), '--fps', String(fps), '--steps', String(steps), '--guidance', String(guidance), '--seed', String(seed), '--output', outputPath];
@@ -148,13 +148,14 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   if (sourceImagePath) args.push('--image', sourceImagePath);
   // mlx_video.generate_av exposes only single-image conditioning at a chosen
   // frame index (--image-frame-idx). True FFLF (two keyframes) requires the
-  // wrapper script to support multi-frame conditioning. For now we surface
-  // the limitation: if the caller requested FFLF, we condition on the LAST
-  // image at the final frame index — gives a "video ends here" feel even
-  // without the start-frame keyframe. UI labels this clearly.
-  if (lastImagePath && !sourceImagePath) {
+  // wrapper script to support multi-frame conditioning. We only opt into the
+  // last-frame-as-end-frame fallback when the caller explicitly asked for
+  // FFLF and supplied ONLY a last image (no source) — gating on `mode`
+  // matches the comment and avoids accidentally triggering the fallback for
+  // an i2v request that happened to send a `lastImagePath`.
+  if (mode === 'fflf' && lastImagePath && !sourceImagePath) {
     args.push('--image', lastImagePath, '--image-frame-idx', String(Math.max(0, numFrames - 1)));
-  } else if (lastImagePath && sourceImagePath) {
+  } else if (mode === 'fflf' && lastImagePath && sourceImagePath) {
     // Both frames provided. mlx_video CLI can't currently consume both —
     // log so the user knows their last image is advisory.
     console.log(`⚠️ FFLF requested but mlx_video CLI only supports single-frame conditioning — last image ignored`);
@@ -190,7 +191,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // exact dimensions (it doesn't auto-pad), and pixie-forge learned the
   // hard way that letting the model upscale a portrait reference makes
   // garbled output.
-  const ffmpeg = (sourceImagePath || lastImagePath) ? await findFfmpeg() : null;
+  //
+  // Skip the last-image resize when buildArgs would discard it anyway:
+  //  - On macOS/mlx_video the FFLF fallback only triggers when no source
+  //    image is also provided (single conditioning frame only).
+  //  - On Windows we always forward --last-image to generate_win.py so it can
+  //    log status, but the diffusers pipeline still consumes only --image —
+  //    the resize is needed there because the script reads the file.
+  const lastImageWillBeUsed = !!lastImagePath && (IS_WIN || !sourceImagePath);
+  const ffmpeg = (sourceImagePath || lastImageWillBeUsed) ? await findFfmpeg() : null;
   const resizeImage = async (srcPath, tag) => {
     if (!srcPath || !ffmpeg) return { resolved: srcPath, tempPath: null };
     const resizedPath = join(tmpdir(), `resized-${tag}-${jobId}.png`);
@@ -207,13 +216,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     return { resolved: resizedPath, tempPath: resizedPath };
   };
   const { resolved: resolvedSourceImage, tempPath: resizedSrcTempPath } = await resizeImage(sourceImagePath, 'src');
-  const { resolved: resolvedLastImage, tempPath: resizedLastTempPath } = await resizeImage(lastImagePath, 'last');
+  const { resolved: resolvedLastImage, tempPath: resizedLastTempPath } = lastImageWillBeUsed
+    ? await resizeImage(lastImagePath, 'last')
+    : { resolved: lastImagePath, tempPath: null };
 
   const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, filename, createdAt: new Date().toISOString(), mode: mode || (sourceImagePath ? 'image' : 'text') };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
-  const { bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, outputPath });
+  const { bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, mode, outputPath });
 
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps}`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta });

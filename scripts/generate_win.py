@@ -74,8 +74,23 @@ def main():
                         'consume two keyframes; flag is accepted for forward '
                         'compatibility with multi-keyframe pipelines.')
     args = p.parse_args()
+    # The current LTX-Video 0.9.5 diffusers pipelines only accept a single
+    # conditioning image, so --last-image is forward-compat only. Tailor the
+    # STATUS log to the actual branch the script will take based on whether
+    # --image was also provided, so users/logs aren't misled into thinking we
+    # ran an I2V flow when we're really running T2V.
     if args.last_image:
-        log(f'STATUS:Last-frame image supplied ({args.last_image}) — currently advisory; falling back to single-image I2V')
+        if args.image:
+            log(
+                f'STATUS:Last-frame image supplied ({args.last_image}) — '
+                'currently advisory; using single-image I2V with --image as '
+                'the only conditioning frame'
+            )
+        else:
+            log(
+                f'STATUS:Last-frame image supplied ({args.last_image}) without --image — '
+                'currently advisory and ignored for mode selection; continuing with T2V'
+            )
 
     dtype = torch.bfloat16
     generator = torch.Generator('cuda').manual_seed(args.seed) if args.seed is not None else None
