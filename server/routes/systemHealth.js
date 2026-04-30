@@ -79,7 +79,12 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     errored: pm2Processes.filter(p => p.status === 'errored').length,
     totalMemory: pm2Processes.reduce((sum, p) => sum + (p.memory || 0), 0),
     totalCpu: pm2Processes.reduce((sum, p) => sum + (p.cpu || 0), 0),
-    totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0)
+    totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0),
+    // unstable_restarts is incremented only when a process exits inside its
+    // min_uptime window — i.e., a real crash loop, not a developer-driven
+    // restart. We use this for the warning, not totalRestarts.
+    unstableRestarts: pm2Processes.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0),
+    crashingProcesses: pm2Processes.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name)
   };
 
   // App status summary
@@ -122,9 +127,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     warnings.push({ type: 'process', message: `${processStats.errored} process(es) errored` });
   }
 
-  if (processStats.totalRestarts > 10) {
+  if (processStats.unstableRestarts > 0) {
     if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'restarts', message: `${processStats.totalRestarts} total restarts` });
+    const names = processStats.crashingProcesses.join(', ');
+    warnings.push({
+      type: 'restarts',
+      message: `${processStats.unstableRestarts} crash-loop restart${processStats.unstableRestarts === 1 ? '' : 's'}${names ? ` (${names})` : ''}`
+    });
   }
 
   if (!dbHealth.connected) {

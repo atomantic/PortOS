@@ -248,6 +248,7 @@ export async function getAppStatus(name, pm2Home = null) {
     memory: proc.monit?.memory || 0,
     uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
     restarts: proc.pm2_env?.restart_time || 0,
+    unstableRestarts: proc.pm2_env?.unstable_restarts || 0,
     createdAt: proc.pm2_env?.created_at || null
   };
 }
@@ -339,7 +340,8 @@ export async function listProcesses(pm2Home = null) {
     cpu: proc.monit?.cpu || 0,
     memory: proc.monit?.memory || 0,
     uptime: proc.pm2_env?.pm_uptime ? Date.now() - proc.pm2_env.pm_uptime : null,
-    restarts: proc.pm2_env?.restart_time || 0
+    restarts: proc.pm2_env?.restart_time || 0,
+    unstableRestarts: proc.pm2_env?.unstable_restarts || 0
   }));
 }
 

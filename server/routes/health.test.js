@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
+import { listProcesses } from '../services/pm2.js';
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([])
@@ -39,5 +40,25 @@ describe('System Health Routes', () => {
     expect(response.body).toHaveProperty('system');
     expect(response.body).toHaveProperty('apps');
     expect(response.body).toHaveProperty('overallHealth');
+  });
+
+  it('does not warn on cumulative restart_time (developer-driven restarts)', async () => {
+    listProcesses.mockResolvedValueOnce([
+      { name: 'portos', status: 'online', restarts: 97, unstableRestarts: 0, cpu: 0, memory: 0 }
+    ]);
+    const response = await request(app).get('/api/system/health/details');
+    const restartWarnings = (response.body.warnings || []).filter(w => w.type === 'restarts');
+    expect(restartWarnings).toHaveLength(0);
+  });
+
+  it('warns when a process has unstable_restarts (real crash loop)', async () => {
+    listProcesses.mockResolvedValueOnce([
+      { name: 'flaky-svc', status: 'online', restarts: 5, unstableRestarts: 3, cpu: 0, memory: 0 }
+    ]);
+    const response = await request(app).get('/api/system/health/details');
+    const restartWarnings = (response.body.warnings || []).filter(w => w.type === 'restarts');
+    expect(restartWarnings).toHaveLength(1);
+    expect(restartWarnings[0].message).toContain('crash-loop');
+    expect(restartWarnings[0].message).toContain('flaky-svc');
   });
 });
