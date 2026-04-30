@@ -24,12 +24,15 @@ export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
 
   return (req, res, next) => {
     const ct = req.headers['content-type'] || '';
-    if (!ct.startsWith('multipart/form-data')) {
+    // Media type is case-insensitive (RFC 2045), but the boundary value is
+    // case-sensitive — match the type prefix on a lowercased copy and parse
+    // the boundary off the original.
+    if (!ct.toLowerCase().startsWith('multipart/form-data')) {
       const err = new Error('Expected multipart/form-data');
       err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
       return next(err);
     }
-    const bm = ct.match(/boundary=([^\s;]+)/);
+    const bm = ct.match(/boundary=([^\s;]+)/i);
     if (!bm) {
       const err = new Error('Missing multipart boundary');
       err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
@@ -46,7 +49,7 @@ export function optionalUpload(fieldName, opts) {
   const uploader = uploadSingle(fieldName, opts);
   return (req, res, next) => {
     const ct = req.headers['content-type'] || '';
-    if (!ct.startsWith('multipart/form-data')) return next();
+    if (!ct.toLowerCase().startsWith('multipart/form-data')) return next();
     return uploader(req, res, next);
   };
 }

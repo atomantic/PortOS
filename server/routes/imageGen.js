@@ -24,7 +24,7 @@ import {
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
-import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'node:path';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
 
 const router = Router();
 
@@ -59,9 +59,15 @@ const generateSchema = z.object({
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
 // shape) skip the parser entirely; FormData callers get req.file + string
 // req.body that coerceFormFields() converts before Zod validation.
+// Only the formats mflux can decode — keep this in sync with the extension
+// allowlist below so the route never silently relabels (e.g. HEIC) bytes
+// as ".png".
+const ACCEPTED_INIT_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
+
 const initImageUpload = optionalUpload('initImage', {
   limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+  fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
 // Numerics arrive as strings from FormData — coerce before Zod validation.
@@ -104,8 +110,10 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   let uploadedInitTempPath = null;
   if (req.file) {
     await ensureDir(PATHS.images);
-    const safeExt = (extname(req.file.originalname || '') || '.png').toLowerCase();
-    const ext = ['.png', '.jpg', '.jpeg', '.webp'].includes(safeExt) ? safeExt : '.png';
+    // Trust the validated mimetype from the fileFilter — picking the ext
+    // off the original filename can mismatch the bytes (e.g. HEIC saved
+    // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
+    const ext = MIME_TO_EXT[(req.file.mimetype || '').toLowerCase()] || '.png';
     const initFilename = `init-${randomUUID()}${ext}`;
     initImagePath = join(PATHS.images, initFilename);
     await copyFile(req.file.path, initImagePath);

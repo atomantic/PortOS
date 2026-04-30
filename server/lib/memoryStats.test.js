@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 
 vi.mock('child_process', () => ({
@@ -87,5 +87,52 @@ Pages occupied by compressor:                50.
     await getMemoryStats();
     await getMemoryStats();
     expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  // Linux path — runs unconditionally by stubbing process.platform so CI
+  // (ubuntu-latest) actually exercises the /proc/meminfo branch instead of
+  // skipping every assertion.
+  describe('linux /proc/meminfo path', () => {
+    let platformSpy;
+    beforeEach(() => {
+      platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    });
+
+    it('uses MemAvailable when present', async () => {
+      readFile.mockResolvedValue(`MemTotal:       16384000 kB
+MemFree:         1000000 kB
+MemAvailable:   12000000 kB
+Buffers:          500000 kB
+Cached:          3000000 kB
+`);
+      const stats = await getMemoryStats();
+      expect(stats.source).toBe('meminfo');
+      expect(stats.total).toBe(16384000 * 1024);
+      expect(stats.free).toBe(12000000 * 1024);
+      expect(stats.used).toBe((16384000 - 12000000) * 1024);
+    });
+
+    it('falls back to MemFree+Buffers+Cached when MemAvailable missing (older kernels)', async () => {
+      readFile.mockResolvedValue(`MemTotal:       16384000 kB
+MemFree:         1000000 kB
+Buffers:          500000 kB
+Cached:          3000000 kB
+`);
+      const stats = await getMemoryStats();
+      expect(stats.source).toBe('meminfo');
+      expect(stats.free).toBe((1000000 + 500000 + 3000000) * 1024);
+      expect(stats.used).toBe((16384000 - (1000000 + 500000 + 3000000)) * 1024);
+    });
+
+    it('falls back to os.freemem when /proc/meminfo read fails', async () => {
+      readFile.mockRejectedValue(new Error('ENOENT'));
+      const stats = await getMemoryStats();
+      expect(stats.source).toBe('os');
+      expect(stats.total).toBe(os.totalmem());
+    });
+
+    afterEach(() => {
+      platformSpy?.mockRestore();
+    });
   });
 });

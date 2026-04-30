@@ -72,6 +72,9 @@ export const cancel = () => {
 
 const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
   if (IS_WIN) {
+    // imagine_win.py does not implement i2i — silently drop the init-image
+    // args here so the request still produces a normal txt2img result rather
+    // than failing argparse with "unrecognized arguments".
     const scriptPath = join(PATHS.root, 'scripts', 'imagine_win.py');
     return {
       bin: pythonPath,
@@ -80,8 +83,6 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
         ...(negativePrompt ? ['--negative-prompt', negativePrompt] : []),
         ...(loraPaths.length ? ['--lora-paths', ...loraPaths] : []),
         ...(loraScales.length ? ['--lora-scales', ...loraScales.map(String)] : []),
-        ...(initImagePath ? ['--image-path', initImagePath] : []),
-        ...(initImagePath && initImageStrength != null ? ['--image-strength', String(initImageStrength)] : []),
       ],
     };
   }
