@@ -166,12 +166,10 @@ function useAudioContext() {
   return ensureCtx;
 }
 
-// Global, single-source keying decoder. Listens for spacebar (skipping INPUT/
-// TEXTAREA), exposes pointer handlers for the on-screen tap key, and decodes
-// the buffered symbols into letters as silence boundaries elapse. The current
-// in-flight pattern is exposed live so the side widget can highlight a tree
-// path; the committed `decoded` string is exposed so drills can score.
-function useKeyingDecoder({ unitMs, hz, ensureCtx }) {
+// `enabled` must default false-friendly so the global spacebar listener only
+// attaches in Send mode — otherwise it competes with text input in Copy mode
+// and suppresses the voice-widget push-to-talk hotkey via stopImmediatePropagation.
+function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = true }) {
   const oscRef = useRef(null);
   const gainRef = useRef(null);
   const pressStartRef = useRef(0);
@@ -263,6 +261,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx }) {
   // firing while the user is keying morse. This only suppresses spacebar; the
   // voice widget's hotkey works normally everywhere else in the app.
   useEffect(() => {
+    if (!enabled) return undefined;
     function consume(e) {
       if (e.code !== 'Space') return false;
       const tag = (e.target && e.target.tagName) || '';
@@ -290,7 +289,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx }) {
       if (wordTimerRef.current) clearTimeout(wordTimerRef.current);
       stopTone();
     };
-  }, [beginPress, endPress, stopTone]);
+  }, [beginPress, endPress, stopTone, enabled]);
 
   return { pattern, decoded, pressing, beginPress, endPress, clear };
 }
@@ -300,7 +299,7 @@ export default function MorseTrainer({ onBack }) {
   const [mode, setMode] = useState(null);
   const ensureCtx = useAudioContext();
   const unitMs = 1.2 / prefs.wpm * 1000;
-  const keying = useKeyingDecoder({ unitMs, hz: prefs.hz, ensureCtx });
+  const keying = useKeyingDecoder({ unitMs, hz: prefs.hz, ensureCtx, enabled: mode === 'send' });
 
   function updatePrefs(patch) {
     setPrefs((prev) => {
@@ -343,7 +342,7 @@ export default function MorseTrainer({ onBack }) {
             <SendDrill keying={keying} onExit={() => setMode(null)} />
           )}
         </div>
-        <ReferenceWidget keying={keying} unitMs={unitMs} />
+        <ReferenceWidget keying={keying} mode={mode} />
       </div>
     </div>
   );
@@ -422,9 +421,11 @@ const REFERENCE_VIEWS = [
   { id: 'list', label: 'List', icon: ListIcon },
 ];
 
-function ReferenceWidget({ keying, unitMs }) {
+function ReferenceWidget({ keying, mode }) {
   const [view, setView] = useState('tree');
-  const liveChar = keying.pattern ? (MORSE_LOOKUP[keying.pattern] || '?') : '';
+  // Only show the in-progress key path in Send mode — in Copy mode the right
+  // widget is a passive cheat-sheet, not live feedback for the user.
+  const currentPath = mode === 'send' ? keying.pattern : '';
 
   return (
     <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
@@ -448,17 +449,13 @@ function ReferenceWidget({ keying, unitMs }) {
           })}
         </div>
         <div className="p-4">
-          {view === 'tree' && <TreeView currentPath={keying.pattern} />}
-          {view === 'length' && <LengthView currentPath={keying.pattern} />}
-          {view === 'list' && <ListView currentPath={keying.pattern} />}
+          {view === 'tree' && <TreeView currentPath={currentPath} />}
+          {view === 'length' && <LengthView currentPath={currentPath} />}
+          {view === 'list' && <ListView currentPath={currentPath} />}
         </div>
       </div>
 
-      <KeyPad
-        keying={keying}
-        liveChar={liveChar}
-        unitMs={unitMs}
-      />
+      {mode === 'send' && <KeyPad keying={keying} />}
     </div>
   );
 }
@@ -554,8 +551,7 @@ function ListView({ currentPath }) {
   );
 }
 
-function KeyPad({ keying, liveChar, unitMs }) {
-  const dotMs = Math.round(unitMs);
+function KeyPad({ keying }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -579,20 +575,9 @@ function KeyPad({ keying, liveChar, unitMs }) {
       >
         {keying.pressing ? '▮ KEYING' : 'TAP / HOLD SPACE'}
       </button>
-      <div className="grid grid-cols-2 gap-2 text-center">
-        <div className="bg-port-bg border border-port-border rounded p-2">
-          <div className="text-[9px] uppercase tracking-wide text-gray-500">Path</div>
-          <div className="font-mono text-port-accent text-sm h-5 tracking-widest">{keying.pattern || '—'}</div>
-        </div>
-        <div className="bg-port-bg border border-port-border rounded p-2">
-          <div className="text-[9px] uppercase tracking-wide text-gray-500">Letter</div>
-          <div className={`font-mono text-sm h-5 ${liveChar === '?' ? 'text-port-error' : 'text-white'}`}>{liveChar || '—'}</div>
-        </div>
-      </div>
-      <div className="bg-port-bg border border-port-border rounded p-2">
-        <div className="text-[9px] uppercase tracking-wide text-gray-500 mb-1">Decoded ({dotMs} ms unit)</div>
-        <div className="font-mono text-white text-sm tracking-widest break-all min-h-[1.25rem]">{keying.decoded || '—'}</div>
-      </div>
+      <p className="text-[10px] text-gray-500 text-center">
+        Tap short for · · hold for —. Your decoded text appears in the drill.
+      </p>
     </div>
   );
 }
@@ -811,6 +796,12 @@ function SendDrill({ keying, onExit }) {
   const [prompt, setPrompt] = useState(() => pickSendPrompt());
   const [feedback, setFeedback] = useState(null);
 
+  // Drop any stale keying state from a prior session so "Your sending" starts empty.
+  const { clear: clearKeying } = keying;
+  useEffect(() => {
+    clearKeying();
+  }, [clearKeying]);
+
   function decodeNow() {
     const target = prompt.toUpperCase();
     const got = keying.decoded.replace(/\s+/g, ' ').trim().toUpperCase();
@@ -828,18 +819,19 @@ function SendDrill({ keying, onExit }) {
       <div className="text-center">
         <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Send this</div>
         <div className="text-3xl font-mono font-bold text-white tracking-widest">{prompt}</div>
-        <div className="text-[11px] text-gray-500 mt-2 font-mono">
-          {prompt.split('').map((c) => MORSE_TABLE[c] || '').join(' ')}
-        </div>
       </div>
 
       <p className="text-xs text-gray-500 text-center">
-        Use the practice key on the right (or hold space) — the tree highlights your path and the decoded text shows below.
+        Hold space (or tap the practice key on the right) to send dits and dahs. Use the reference tabs if you need a hint.
       </p>
 
-      <div className="bg-port-bg border border-port-border rounded-lg p-3 min-h-[3rem] text-center">
+      <div className="bg-port-bg border border-port-border rounded-lg p-3 min-h-[3rem] flex flex-col items-center justify-center">
         <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Your sending</div>
-        <div className="font-mono text-white text-lg tracking-widest break-all">{keying.decoded || '—'}</div>
+        {keying.decoded ? (
+          <div className="font-mono text-white text-lg tracking-widest break-all">{keying.decoded}</div>
+        ) : (
+          <div className="text-[11px] text-gray-600 italic">waiting for your first key…</div>
+        )}
       </div>
 
       {feedback ? (

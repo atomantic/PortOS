@@ -9,3 +9,7 @@
 ## Changed
 
 - **Worktree policy** clarified in `CLAUDE.md`: TUI sessions edit the main repo directly; worktrees are reserved for unattended CoS sub-agents.
+
+## Fixed
+
+- **Morse Send drill** no longer reveals the answer or competes with itself for spacebar input: the morse pattern under each prompt is gone (the reference tabs on the right are still available for hints), the global spacebar keying listener only attaches in Send mode (so it doesn't fire on the trainer landing page or during Copy drills), the side widget's "Practice Key" panel is hidden outside Send mode and no longer duplicates the live decoded letter, and the "Your sending" box starts blank with a "waiting for your first key…" hint instead of a misleading "—" placeholder.
