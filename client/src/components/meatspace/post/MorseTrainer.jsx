@@ -166,10 +166,11 @@ function useAudioContext() {
   return ensureCtx;
 }
 
-// `enabled` must default false-friendly so the global spacebar listener only
-// attaches in Send mode — otherwise it competes with text input in Copy mode
-// and suppresses the voice-widget push-to-talk hotkey via stopImmediatePropagation.
-function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = true }) {
+// `enabled` defaults to false so callers must explicitly opt in to attaching
+// the global spacebar listener — it's only safe in Send mode. In other modes
+// it would compete with text input and suppress the voice-widget push-to-talk
+// hotkey via stopImmediatePropagation.
+function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   const oscRef = useRef(null);
   const gainRef = useRef(null);
   const pressStartRef = useRef(0);
@@ -245,16 +246,22 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = true }) {
     wordTimerRef.current = setTimeout(() => setDecoded((d) => d.endsWith(' ') ? d : d + ' '), 7 * unitMs);
   }, [pressing, stopTone, unitMs, flushLetter]);
 
+  // Reset every piece of keying state — including in-flight press tracking and
+  // the audible tone — so a missed keyup or a mid-keying mode switch can't leave
+  // `pressing` stuck true (which would block the next beginPress).
   const clear = useCallback(() => {
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     if (wordTimerRef.current) clearTimeout(wordTimerRef.current);
     flushTimerRef.current = null;
     wordTimerRef.current = null;
     patternRef.current = '';
+    pressStartRef.current = 0;
     lastReleaseRef.current = 0;
+    stopTone();
+    setPressing(false);
     setPattern('');
     setDecoded('');
-  }, []);
+  }, [stopTone]);
 
   // Capture-phase listener with stopImmediatePropagation prevents other global
   // spacebar handlers (notably the voice widget's push-to-talk hotkey) from
@@ -576,7 +583,7 @@ function KeyPad({ keying }) {
         {keying.pressing ? '▮ KEYING' : 'TAP / HOLD SPACE'}
       </button>
       <p className="text-[10px] text-gray-500 text-center">
-        Tap short for · · hold for —. Your decoded text appears in the drill.
+        Tap short for ·, hold for —. Your decoded text appears in the drill.
       </p>
     </div>
   );
