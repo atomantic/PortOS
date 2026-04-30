@@ -130,6 +130,19 @@ async function checkSystemHealth() {
     });
   }
 
+  const crashing = processes.filter(p => (p.unstableRestarts || 0) > 0);
+  if (crashing.length > 0) {
+    const total = crashing.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0);
+    alerts.push({
+      type: 'process_error',
+      severity: 'high',
+      title: `${crashing.length} process${crashing.length > 1 ? 'es' : ''} in crash loop`,
+      detail: `${total} crash-loop restart${total === 1 ? '' : 's'}: ${crashing.map(p => p.name).join(', ')}`,
+      link: '/apps',
+      metadata: { unstableRestarts: total, names: crashing.map(p => p.name) }
+    });
+  }
+
   return alerts;
 }
 
