@@ -557,12 +557,19 @@ export async function requestCopilotReview(dir, prUrl) {
   // so cleanupAgentWorktree doesn't emit a warning for every GitLab MR.
   if (cli !== 'gh') return { success: true, skipped: true };
 
-  const args = [
-    'api',
+  // Target the same GitHub instance the PR lives on. Without --hostname, gh uses
+  // its current default host, which is wrong for GHES installs or when the user
+  // has multiple gh hosts configured. github.com is gh's implicit default so we
+  // only need to set it explicitly for non-default hosts.
+  const args = ['api'];
+  if (parsed.host && parsed.host !== 'github.com') {
+    args.push('--hostname', parsed.host);
+  }
+  args.push(
     `repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}/requested_reviewers`,
     '-X', 'POST',
     '-f', 'reviewers[]=copilot-pull-request-reviewer[bot]'
-  ];
+  );
 
   return new Promise((resolve) => {
     const child = spawn(cli, args, { cwd: dir, env, shell: false, windowsHide: true });
