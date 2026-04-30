@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer } from 'lucide-react';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio } from 'lucide-react';
 import { getProviders } from '../../../services/api';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS } from './constants';
 
-export default function PostSessionLauncher({ config, recentSessions, onStart, onViewHistory, onViewConfig, onViewMemory }) {
+export default function PostSessionLauncher({ config, recentSessions, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [providers, setProviders] = useState([]);
@@ -135,6 +135,13 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
           >
             <BookOpen size={14} />
             Memory
+          </button>
+          <button
+            onClick={onViewMorse}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors"
+          >
+            <Radio size={14} />
+            Morse
           </button>
           <button
             onClick={onViewHistory}

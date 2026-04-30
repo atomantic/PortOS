@@ -105,6 +105,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.post.config', path: '/post/config', label: 'Config', section: 'POST', aliases: ['post-config'] },
   { id: 'nav.post.history', path: '/post/history', label: 'History', section: 'POST', aliases: ['post-history'] },
   { id: 'nav.post.memory', path: '/post/memory', label: 'Memory', section: 'POST', aliases: ['post-memory'] },
+  { id: 'nav.post.morse', path: '/post/morse', label: 'Morse', section: 'POST', aliases: ['post-morse', 'morse', 'morse-code'], keywords: ['cw', 'ham', 'radio', 'koch', 'cognitive'] },
   { id: 'nav.post.wordplay', path: '/post/wordplay', label: 'Wordplay', section: 'POST', aliases: ['post-wordplay'] },
 
   { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'] },
