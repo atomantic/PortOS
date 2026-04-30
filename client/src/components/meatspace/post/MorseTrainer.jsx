@@ -761,16 +761,23 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
         {playing ? (
           <div className="text-cyan-400 text-sm animate-pulse">▮ ▮ ▮ playing...</div>
         ) : feedback ? (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {feedback.correct ? (
               <CheckCircle size={36} className="text-port-success mx-auto" />
             ) : (
               <XCircle size={36} className="text-port-error mx-auto" />
             )}
-            <div className="text-gray-400 text-xs">
-              You typed <span className="font-mono text-white">{feedback.guess || '—'}</span> ·{' '}
-              answer was <span className="font-mono text-port-accent">{feedback.prompt}</span>
+            <div className="text-3xl font-mono font-bold text-port-accent tracking-widest">
+              {feedback.prompt}
             </div>
+            <div className="font-mono text-port-accent/70 text-base tracking-widest">
+              {feedback.prompt.split('').map((c) => MORSE_TABLE[c] || '').join('   ')}
+            </div>
+            {!feedback.correct && (
+              <div className="text-gray-400 text-xs pt-1">
+                You typed <span className="font-mono text-white">{feedback.guess || '—'}</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-gray-500 text-sm">Type what you heard, then Enter</div>
