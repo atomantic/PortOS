@@ -100,6 +100,10 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       );
     }
     const scriptPath = join(PATHS.root, 'scripts', 'flux2_macos.py');
+    // No --metadata flag: local.js's proc.on('close') already writes the
+    // canonical sidecar at <jobId>.metadata.json after a successful exit.
+    // Letting the runner write its own would duplicate work and the JS
+    // sidecar would clobber any flux2-specific fields anyway.
     const args = [
       scriptPath,
       '--model', modelId,
@@ -112,7 +116,6 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       '--guidance', String(guidance ?? 0),
       '--seed', String(seed),
       '--output', outputPath,
-      '--metadata',
     ];
     if (model.tokenizerRepo) args.push('--tokenizer-repo', model.tokenizerRepo);
     if (model.basePipelineRepo) args.push('--base-pipeline-repo', model.basePipelineRepo);

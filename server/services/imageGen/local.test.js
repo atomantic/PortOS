@@ -85,7 +85,8 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args).toContain('a red cube');
     expect(args).toContain('--seed');
     expect(args[args.indexOf('--seed') + 1]).toBe('42');
-    expect(args).toContain('--metadata');
+    // No --metadata flag: local.js writes the canonical sidecar itself.
+    expect(args).not.toContain('--metadata');
     // Stepwise dir threads through so live preview frames land where local.js's watcher reads.
     expect(args).toContain('--stepwise-image-output-dir');
     expect(args[args.indexOf('--stepwise-image-output-dir') + 1]).toBe('/tmp/stepwise');

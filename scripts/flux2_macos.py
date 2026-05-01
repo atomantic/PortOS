@@ -129,11 +129,12 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
 
     print("🔧 int8: text encoder …", file=sys.stderr)
     # AutoModelForCausalLM picks the right class from the config
-    # (Qwen3ForCausalLM here). Going through the Auto API avoids hard-coding
-    # a class import that older transformers versions don't expose.
-    config = AutoConfig.from_pretrained(f"{model_path}/text_encoder", trust_remote_code=True)
+    # (Qwen3ForCausalLM here). transformers>=4.51 ships Qwen3 in-tree so we
+    # don't need trust_remote_code; passing it would let a maliciously edited
+    # model registry point at a repo that executes arbitrary Python at load.
+    config = AutoConfig.from_pretrained(f"{model_path}/text_encoder")
     with init_empty_weights():
-        text_encoder = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+        text_encoder = AutoModelForCausalLM.from_config(config)
     with open(f"{model_path}/text_encoder/quanto_qmap.json", "r") as f:
         te_qmap = json.load(f)
     te_state = load_file(f"{model_path}/text_encoder/model.safetensors")
