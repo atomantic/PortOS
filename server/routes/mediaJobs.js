@@ -74,7 +74,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 router.post('/:id/cancel', asyncHandler(async (req, res) => {
   const result = await cancelJob(req.params.id);
-  if (!result.ok) throw new ServerError(result.error || 'Not found', { status: 404, code: 'NOT_FOUND' });
+  if (!result.ok) {
+    // Distinguish "no such id" (404) from "exists but already terminal"
+    // (409) so consumers can react appropriately — e.g. the UI doesn't
+    // need to display "Not found" when the user just clicked Cancel
+    // again on a job that already finished.
+    const status = result.code === 'ALREADY_TERMINAL' ? 409 : 404;
+    throw new ServerError(result.error || 'Cancel failed', { status, code: result.code || 'NOT_FOUND' });
+  }
   res.json(result);
 }));
 

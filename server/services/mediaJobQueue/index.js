@@ -262,6 +262,9 @@ async function drainLoop() {
         job.error = `runJob threw: ${err.message}`;
         job.completedAt = new Date().toISOString();
         broadcastSse(ensureSseEntry(job.id), { type: 'error', error: job.error });
+        // Mirror the in-job failed path: schedule SSE cleanup so this rare
+        // recovery doesn't leak the sseJobs entry + open clients forever.
+        closeJobAfterDelay(sseJobs, job.id);
         mediaJobEvents.emit('failed', job);
       }
     }
@@ -560,7 +563,13 @@ export async function cancelJob(jobId) {
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] cancel signal sent (was running)`);
     return { ok: true, status: 'canceling' };
   }
-  return { ok: false, error: 'Job not found or already finished' };
+  // Distinguish "no such id" from "id exists but is already terminal" so
+  // the route layer can map the right HTTP status (404 vs 409).
+  const archived = archive.find((j) => j.id === jobId);
+  if (archived) {
+    return { ok: false, code: 'ALREADY_TERMINAL', status: archived.status, error: `Job is already ${archived.status}` };
+  }
+  return { ok: false, code: 'NOT_FOUND', error: 'Job not found' };
 }
 
 function ensureSseEntry(jobId) {
