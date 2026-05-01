@@ -65,7 +65,7 @@ describe('mediaCollections service', () => {
   it('updateCollection rejects coverKey not in items', async () => {
     const c = await svc.createCollection({ name: 'A' });
     await expect(svc.updateCollection(c.id, { coverKey: 'image:missing.png' }))
-      .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
   });
 
   it('deleteCollection removes the entry', async () => {

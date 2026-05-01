@@ -18,6 +18,7 @@ const STATE_PATH = join(PATHS.data, 'media-collections.json');
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
+export const ERR_VALIDATION = 'VALIDATION_ERROR';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const NAME_MAX_LENGTH = 80;
@@ -126,7 +127,7 @@ export async function updateCollection(id, patch) {
   // also reject up-front so the API gives a clear error rather than silently
   // dropping the cover.
   if (patch.coverKey != null && !cur.items.find((it) => itemKey(it) === patch.coverKey)) {
-    throw makeErr('coverKey must reference an item in this collection', ERR_NOT_FOUND);
+    throw makeErr('coverKey must reference an item in this collection', ERR_VALIDATION);
   }
   const merged = {
     ...cur,
@@ -158,7 +159,7 @@ export async function addItem(id, item) {
     throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
   }
   if (cur.items.length >= ITEMS_MAX) {
-    throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_DUPLICATE);
+    throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
   }
   const merged = {
     ...cur,

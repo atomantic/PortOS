@@ -19,6 +19,7 @@ const router = Router();
 const SERVICE_ERROR_STATUS = {
   [svc.ERR_NOT_FOUND]: 404,
   [svc.ERR_DUPLICATE]: 409,
+  [svc.ERR_VALIDATION]: 400,
 };
 
 const mapServiceError = (err) => {
