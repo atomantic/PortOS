@@ -37,6 +37,22 @@ const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_ARCHIVE = 500;
 
+// Defense-in-depth helper for cleaning up staged multipart uploads. Job
+// params are persisted (and replayed on boot), so a corrupted media-jobs.json
+// or a buggy caller could otherwise feed an arbitrary path into unlink().
+// Confine deletion to PATHS.uploads — the routes (videoGen.js, imageGen.js)
+// always copy multipart uploads into that directory before enqueueing, so
+// any legitimate `uploadedTempPath` is under that root.
+async function safeUnlinkUpload(path) {
+  if (!path) return;
+  const uploadsRoot = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
+  if (!pathResolve(path).startsWith(uploadsRoot)) {
+    console.log(`⚠️ mediaJobQueue refused to unlink path outside PATHS.uploads: ${path}`);
+    return;
+  }
+  await unlink(path).catch(() => {});
+}
+
 export const JOB_KINDS = Object.freeze(['video', 'image']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
@@ -126,10 +142,6 @@ export async function initMediaJobQueue() {
     const data = await readJSONFile(JOBS_FILE, { jobs: [] });
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
-    // Resolve PATHS.uploads once so we can confine the orphan-upload cleanup
-    // to files under that directory. We don't unlink arbitrary paths the
-    // job's params might reference (e.g. gallery sources).
-    const uploadsRootPrefix = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
     for (const j of persistedJobs) {
       if (j.status === 'running') {
         const failed = {
@@ -142,12 +154,10 @@ export async function initMediaJobQueue() {
         restartedFailedIds.push(failed.id);
         // The failed job will never reach the worker's cleanup, so any
         // multipart upload it staged into data/uploads would leak forever.
-        // Best-effort unlink — confined to PATHS.uploads so we never delete
-        // a file the job merely referenced (gallery image, prior render, etc).
-        const staged = j.params?.uploadedTempPath;
-        if (staged && pathResolve(staged).startsWith(uploadsRootPrefix)) {
-          unlink(staged).catch(() => {});
-        }
+        // safeUnlinkUpload constrains the delete to PATHS.uploads so we
+        // never delete a file the job merely referenced (gallery image,
+        // prior render, etc).
+        safeUnlinkUpload(j.params?.uploadedTempPath);
       } else if (j.status === 'queued') {
         queue.push({ ...j });
       } else {
@@ -213,8 +223,10 @@ async function drainLoop() {
     // /api/media-jobs would show "running, 2 in queue" when it's really 1.
     job.position = 1;
     running = job;
-    // Recompute positions for everyone still queued.
-    queue.forEach((q, i) => { q.position = i + 2; });
+    // Recompute positions for everyone still queued AND broadcast the new
+    // position over SSE so clients listening to /:jobId/events see "you are
+    // now #2" instead of staying frozen at the original enqueue-time slot.
+    recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on start failed: ${e.message}`));
     broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
     mediaJobEvents.emit('started', job);
@@ -224,10 +236,27 @@ async function drainLoop() {
     archive.push(job);
     // Now that running is cleared, every queued job has shifted up one slot.
     // Recompute immediately so /api/media-jobs and any subsequent persist()
-    // see accurate positions even before the next dequeue.
-    queue.forEach((q, i) => { q.position = i + 1; });
+    // see accurate positions even before the next dequeue, and broadcast
+    // the new position to each waiting client.
+    recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on done failed: ${e.message}`));
   }
+}
+
+// Recompute queue positions and notify each waiting SSE client of its new
+// slot. Called whenever the queue layout shifts (job dequeued, finished, or
+// canceled mid-queue). Without the broadcast, a client connected to
+// /:jobId/events would keep showing the position from its original enqueue
+// frame even after the line ahead of it cleared.
+function recomputeQueuePositions() {
+  queue.forEach((q, i) => {
+    const newPosition = i + 1 + (running ? 1 : 0);
+    if (q.position !== newPosition) {
+      q.position = newPosition;
+      const entry = sseJobs.get(q.id);
+      if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
+    }
+  });
 }
 
 // Filter videoGenEvents/imageGenEvents down to a single jobId and translate
@@ -357,10 +386,9 @@ async function runJob(job) {
     // generateVideo / generateImage threw before reaching their proc.on
     // cleanup hooks (e.g. PYTHON not configured, validation fail). Clean up
     // multipart upload temp files the route handed us so they don't leak
-    // in /tmp.
-    if (job.params?.uploadedTempPath) {
-      await unlink(job.params.uploadedTempPath).catch(() => {});
-    }
+    // under data/uploads. safeUnlinkUpload constrains the delete to
+    // PATHS.uploads as defense-in-depth against corrupted persisted params.
+    await safeUnlinkUpload(job.params?.uploadedTempPath);
     if (job.status === 'running') handlers.failed({ error: err.message });
   }
 
@@ -405,11 +433,11 @@ export async function cancelJob(jobId) {
   if (queueIdx >= 0) {
     const [job] = queue.splice(queueIdx, 1);
     // Multipart uploads (e.g. /api/video-gen with an image) hand us a path
-    // in the OS temp dir. If we drop the job before it starts, runJob never
-    // gets a chance to delete it — clean up here so /tmp doesn't accumulate.
-    if (job.params?.uploadedTempPath) {
-      await unlink(job.params.uploadedTempPath).catch(() => {});
-    }
+    // staged under PATHS.uploads. If we drop the job before it starts,
+    // runJob never gets a chance to delete it — clean up here so the
+    // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
+    // delete to PATHS.uploads.
+    await safeUnlinkUpload(job.params?.uploadedTempPath);
     job.status = 'canceled';
     // Persist the cancel reason on the job so a late SSE reconnect (after
     // the live SSE entry was cleaned up) can synthesize the same terminal
@@ -419,7 +447,10 @@ export async function cancelJob(jobId) {
     job.error = 'Canceled before start';
     job.completedAt = new Date().toISOString();
     archive.push(job);
-    queue.forEach((q, i) => { q.position = i + 1 + (running ? 1 : 0); });
+    // Removing a queued job shifts everyone behind it up one slot. Recompute
+    // + broadcast so clients still attached to those SSE streams see the new
+    // position immediately, instead of waiting for the next dequeue.
+    recomputeQueuePositions();
     const sseEntry = ensureSseEntry(jobId);
     // Emit `canceled` (not `error`) so clients can distinguish a user-
     // initiated cancellation from a real failure. Mirror the event type
