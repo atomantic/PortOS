@@ -19,6 +19,37 @@ const listQuerySchema = z.object({
   owner: z.string().max(256).optional(),
 });
 
+// Sanitize a job before serialization. The internal job record carries
+// worker-only data (the python interpreter path, absolute filesystem paths
+// to multipart uploads / source images) that the UI doesn't need and that
+// shouldn't ride out over the API. Only surface the user-visible params
+// the Render Queue UI actually renders (prompt, owner-supplied settings).
+const PARAM_ALLOWLIST = new Set([
+  'prompt', 'negativePrompt', 'modelId',
+  'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
+  'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
+  'cfgScale', 'guidance', 'quantize',
+]);
+function sanitizeJob(job) {
+  if (!job) return job;
+  const safeParams = job.params
+    ? Object.fromEntries(Object.entries(job.params).filter(([k]) => PARAM_ALLOWLIST.has(k)))
+    : undefined;
+  return {
+    id: job.id,
+    kind: job.kind,
+    owner: job.owner,
+    status: job.status,
+    queuedAt: job.queuedAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    position: job.position,
+    error: job.error,
+    result: job.result,
+    params: safeParams,
+  };
+}
+
 router.get('/', asyncHandler(async (req, res) => {
   const filters = validateRequest(listQuerySchema, req.query);
   // Most-recent activity first across all statuses. Live (queued/running)
@@ -32,13 +63,13 @@ router.get('/', asyncHandler(async (req, res) => {
     const tb = new Date(b.startedAt || b.completedAt || b.queuedAt || 0).getTime();
     return tb - ta;
   });
-  res.json(sorted);
+  res.json(sorted.map(sanitizeJob));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
   const job = getJob(req.params.id);
   if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(job);
+  res.json(sanitizeJob(job));
 }));
 
 router.post('/:id/cancel', asyncHandler(async (req, res) => {

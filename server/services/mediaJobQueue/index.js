@@ -222,24 +222,44 @@ async function drainLoop() {
 //   videoGen.progress  → { generationId, progress: number, step?, totalSteps? }
 //   imageGen.progress  → { generationId, progress: number, step?, totalSteps? }
 //   imageGen.progress  → { generationId, currentImage } (preview-only frames)
-// Neither gen module emits `message`, so we don't pass it through (passing
-// `undefined` clobbers any prior status text on the client).
+// `message` is synthesized from `step` / `totalSteps` so the existing UIs
+// (which display `msg.message` as the status line) keep working through
+// the queue, even though the underlying emitters don't supply one.
+function synthesizeMessage(e, kind) {
+  if (typeof e.step === 'number' && typeof e.totalSteps === 'number' && e.totalSteps > 0) {
+    const verb = kind === 'video' ? 'Rendering' : 'Generating';
+    return `${verb} step ${e.step}/${e.totalSteps}`;
+  }
+  return undefined;
+}
 function makeGenDispatcher(emitter, job, handlers) {
   const onProgress = (e) => {
     if (e.generationId !== job.id) return;
     const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
     const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
+    const message = e.message !== undefined ? e.message : synthesizeMessage(e, job.kind);
     if (hasProgress) {
       const payload = { type: 'progress', progress: e.progress };
       if (hasCurrentImage) payload.currentImage = e.currentImage;
-      if (e.message !== undefined) payload.message = e.message;
+      if (message !== undefined) payload.message = message;
       handlers.progress(payload);
       return;
     }
     if (hasCurrentImage) {
       // Preview-only frame (imageGen step thumbnail) — distinct SSE type so
       // existing consumers can keep their progress-bar value untouched.
-      handlers.progress({ type: 'preview', currentImage: e.currentImage });
+      const payload = { type: 'preview', currentImage: e.currentImage };
+      if (message !== undefined) payload.message = message;
+      handlers.progress(payload);
+    }
+  };
+  const onStatus = (e) => {
+    // Optional explicit `status` event for gens that want to push a status
+    // line independent of progress. Unused today; here so a future emitter
+    // can call `videoGenEvents.emit('status', { generationId, message })`.
+    if (e.generationId !== job.id) return;
+    if (typeof e.message === 'string' && e.message.length > 0) {
+      handlers.progress({ type: 'status', message: e.message });
     }
   };
   const onCompleted = (e) => { if (e.generationId === job.id) handlers.completed(e); };
@@ -247,11 +267,13 @@ function makeGenDispatcher(emitter, job, handlers) {
   return {
     attach() {
       emitter.on('progress', onProgress);
+      emitter.on('status', onStatus);
       emitter.on('completed', onCompleted);
       emitter.on('failed', onFailed);
     },
     detach() {
       emitter.off('progress', onProgress);
+      emitter.off('status', onStatus);
       emitter.off('completed', onCompleted);
       emitter.off('failed', onFailed);
     },

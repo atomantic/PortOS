@@ -8,11 +8,13 @@
 
 import { Router } from 'express';
 import { existsSync, statSync } from 'fs';
-import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { copyFile, unlink } from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { uploadSingle } from '../lib/multipart.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
 import {
   listVideoModels,
@@ -111,8 +113,15 @@ const resolveGalleryImage = (name) => {
 };
 
 router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
+  // Pre-enqueue cleanup hook: every throw path below MUST drop the multipart
+  // temp upload (Multer wrote it before this handler ran). Without this a
+  // configuration/validation error leaks the upload in the OS temp dir.
+  const cleanupTempUpload = async () => {
+    if (req.file?.path) await unlink(req.file.path).catch(() => {});
+  };
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
+    await cleanupTempUpload();
     throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   const body = parsed.data;
@@ -123,6 +132,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   // surface the failure asynchronously on SSE — which then pollutes the
   // persisted queue with a doomed entry.
   if (!pythonPath) {
+    await cleanupTempUpload();
     throw new ServerError(
       'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
       { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
@@ -134,6 +144,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   if (body.modelId) {
     const known = listVideoModels();
     if (!known.some((m) => m.id === body.modelId)) {
+      await cleanupTempUpload();
       throw new ServerError(
         `Unknown modelId: ${body.modelId}`,
         { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
@@ -144,12 +155,19 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   let sourceImagePath = null;
   let uploadedTempPath = null;
   if (req.file) {
-    sourceImagePath = req.file.path;
-    // Hand the multipart upload's temp path to the service so it can unlink
-    // it in the proc.on('close') cleanup — covers both the success path
-    // (after ffmpeg consumed it for resize) and the no-ffmpeg fallback path
-    // (where the python child reads it directly and we can't unlink earlier).
-    uploadedTempPath = req.file.path;
+    // Copy the multipart upload into a durable location under data/uploads
+    // before enqueueing. The Multer temp file lives in the OS temp dir —
+    // which gets reaped by macOS on reboot, and might be missing entirely
+    // when the queue replays a persisted `queued` job after a server
+    // restart. Copying here gives the worker a stable path that survives
+    // restarts; the worker unlinks it on completion or cancel.
+    await ensureDir(PATHS.uploads);
+    const ext = extname(req.file.originalname || req.file.path) || '.bin';
+    const durablePath = join(PATHS.uploads, `video-source-${randomUUID()}${ext}`);
+    await copyFile(req.file.path, durablePath);
+    await unlink(req.file.path).catch(() => {});
+    sourceImagePath = durablePath;
+    uploadedTempPath = durablePath;
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
