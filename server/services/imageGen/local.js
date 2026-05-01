@@ -67,6 +67,25 @@ export const cancel = () => {
 export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
   const modelId = model?.id;
   if (isFlux2(model)) {
+    if (!model.repo) {
+      throw new ServerError(
+        `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
+    const quantization = model.quantization || 'sdnq';
+    if (quantization === 'sdnq' && !model.tokenizerRepo) {
+      throw new ServerError(
+        `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
+    if (quantization === 'int8' && !model.basePipelineRepo) {
+      throw new ServerError(
+        `FLUX.2 Int8 model "${modelId}" requires 'basePipelineRepo' (the gated base repo for VAE/scheduler)`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
     const flux2Python = resolveFlux2Python();
     if (!flux2Python) {
       throw new ServerError(
@@ -78,7 +97,7 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     const args = [
       scriptPath,
       '--model', modelId,
-      '--quantization', model.quantization || 'sdnq',
+      '--quantization', quantization,
       '--repo', model.repo,
       '--prompt', prompt,
       '--height', String(height),

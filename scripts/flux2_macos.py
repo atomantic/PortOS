@@ -21,6 +21,7 @@ Both branches need an HF_TOKEN with the FLUX.2-klein license accepted.
 """
 
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -270,6 +271,10 @@ def main() -> None:
         )
 
     callback = make_stepwise_callback(args.stepwise_image_output_dir, pipe)
+    # Flux2KleinPipeline.__call__ doesn't always accept negative_prompt or
+    # strength — passing an unsupported kwarg raises TypeError. Filter to
+    # what the live signature actually accepts.
+    accepted = set(inspect.signature(pipe.__call__).parameters.keys())
     pipe_kwargs = dict(
         prompt=args.prompt,
         height=int(args.height),
@@ -278,22 +283,19 @@ def main() -> None:
         guidance_scale=float(args.guidance),
         generator=generator,
     )
-    if args.negative_prompt:
-        # Flux2KleinPipeline currently ignores negative prompts when
-        # guidance is 0, but the kwarg is accepted — pass through.
+    if args.negative_prompt and "negative_prompt" in accepted:
         pipe_kwargs["negative_prompt"] = args.negative_prompt
-    if callback is not None:
+    if callback is not None and "callback_on_step_end" in accepted:
         pipe_kwargs["callback_on_step_end"] = callback
         pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
-    if init_image is not None:
+    if init_image is not None and "image" in accepted:
         pipe_kwargs["image"] = init_image
         # Disable VAE tiling for i2i — tiled encode of a small image
         # produces seams on the output (matches the reference impl).
         vae = getattr(pipe, "vae", None)
         if vae is not None and hasattr(vae, "disable_tiling"):
             vae.disable_tiling()
-        if args.image_strength is not None:
-            # Some Flux2 image-edit pipelines accept `strength`; pass when supplied.
+        if args.image_strength is not None and "strength" in accepted:
             pipe_kwargs["strength"] = float(args.image_strength)
 
     print(

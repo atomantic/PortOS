@@ -100,6 +100,41 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     })).toThrow(/INSTALL_FLUX2=1/);
   });
 
+  it('throws when an SDNQ flux2 model is missing tokenizerRepo', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    expect(() => buildArgs({
+      ...baseInput,
+      model: {
+        id: 'flux2-klein-4b',
+        runner: 'flux2',
+        quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+        // tokenizerRepo missing — registry was edited badly
+      },
+    })).toThrow(/tokenizerRepo/);
+  });
+
+  it('throws when an Int8 flux2 model is missing basePipelineRepo', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    expect(() => buildArgs({
+      ...baseInput,
+      model: {
+        id: 'flux2-klein-4b-int8',
+        runner: 'flux2',
+        quantization: 'int8',
+        repo: 'aydin99/FLUX.2-klein-4B-int8',
+      },
+    })).toThrow(/basePipelineRepo/);
+  });
+
+  it('throws when a flux2 model is missing repo entirely', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    expect(() => buildArgs({
+      ...baseInput,
+      model: { id: 'flux2-broken', runner: 'flux2', quantization: 'sdnq' },
+    })).toThrow(/missing the 'repo' field/);
+  });
+
   it('passes init-image args for flux2 i2i', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     const { args } = buildArgs({
