@@ -32,6 +32,7 @@ import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { existsSync } from 'fs';
 import { PATHS } from '../../lib/fileUtils.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
+import { extractEvaluationFrames, safeUnder } from '../../lib/ffmpeg.js';
 import { extractLastFrame } from '../videoGen/local.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
@@ -224,11 +225,32 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
     await advanceAfterSceneSettled(projectId);
     return;
   }
+  // Sample 5 evenly-spaced frames so the evaluator can judge intent across
+  // the full timeline rather than only the opening pose. i2v scenes whose
+  // payoff lands mid- or late-clip (archway appearing, light bloom) were
+  // getting rejected when the agent only saw frame 0.
+  const videoPath = safeUnder(PATHS.videos, `${jobId}.mp4`);
+  const evaluationFrames = videoPath
+    ? await extractEvaluationFrames(videoPath, jobId, 5).catch((e) => {
+        console.log(`⚠️ CD multi-frame extract failed for ${jobId.slice(0, 8)}: ${e.message}`);
+        return [];
+      })
+    : [];
+  if (evaluationFrames.length > 0) {
+    console.log(`🎞️ CD sampled ${evaluationFrames.length} evaluator frames for ${sceneId} (${jobId.slice(0, 8)})`);
+  }
+
   await updateScene(projectId, sceneId, {
     status: 'evaluating',
     renderedJobId: jobId,
+    evaluationFrames,
   });
-  await enqueueEvaluateTask(fresh, scene);
+  await enqueueEvaluateTask(fresh, {
+    ...scene,
+    status: 'evaluating',
+    renderedJobId: jobId,
+    evaluationFrames,
+  });
 }
 
 async function handleRenderCanceled(projectId, sceneId) {

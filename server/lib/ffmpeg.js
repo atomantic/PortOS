@@ -84,6 +84,94 @@ export const generateThumbnail = async (videoPath, jobId) => {
   });
 };
 
+// Probe the video's total frame count. Tries the fast metadata path first
+// (`stream=nb_frames`) and falls back to an actual frame count
+// (`-count_frames stream=nb_read_frames`) for containers that don't expose
+// nb_frames in their header. Returns null when both paths fail or the
+// reported count is unusable.
+const probeFrameCount = async (videoPath) => {
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return null;
+  const run = async (countFrames) => {
+    const args = [
+      '-v', 'error',
+      ...(countFrames ? ['-count_frames'] : []),
+      '-select_streams', 'v:0',
+      '-show_entries', `stream=${countFrames ? 'nb_read_frames' : 'nb_frames'}`,
+      '-of', 'default=nokey=1:noprint_wrappers=1',
+      videoPath,
+    ];
+    const { stdout } = await execFileAsync(ffprobe, args, { timeout: 15000 }).catch(() => ({ stdout: '' }));
+    const n = parseInt((stdout || '').trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  return (await run(false)) ?? (await run(true));
+};
+
+// Extract `count` evenly-spaced frames across the video for the cognitive
+// evaluator. Saved as `<jobId>-f1.jpg ... -f<count>.jpg` in
+// `data/video-thumbnails/`. Returns the array of basenames in timeline order
+// on success, or `[]` on any failure — callers should fall back to the
+// single-frame thumbnail rather than aborting.
+//
+// Why this exists: i2v scenes whose intent develops mid-or-late (archway
+// appears at 60%, light bloom at 80%) get rejected by the evaluator when it
+// only sees frame 0. Sampling 5 frames lets the agent judge intent across
+// the entire timeline rather than just the opening pose.
+export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return [];
+
+  const totalFrames = await probeFrameCount(videoPath);
+  if (!totalFrames) return [];
+
+  await ensureDir(PATHS.videoThumbnails);
+
+  const frameIndices = totalFrames <= count
+    ? Array.from({ length: totalFrames }, (_, i) => i)
+    : (() => {
+        const last = totalFrames - 1;
+        // Quartile sampling (start, 25%, 50%, 75%, end). Generalizes to any
+        // `count` ≥ 2 — for count=5 this matches the spec exactly.
+        const positions = [];
+        if (count === 1) return [0];
+        for (let i = 0; i < count; i++) {
+          positions.push(Math.round((i * last) / (count - 1)));
+        }
+        // Dedup in case rounding collapses adjacent indices on tiny clips.
+        return Array.from(new Set(positions));
+      })();
+
+  // Filter expression: select frames matching any of the target indices.
+  // Single-quoting the expression lets ffmpeg's filter parser treat the
+  // commas inside `eq(n,X)` as expression args rather than filter-chain
+  // separators. `-vsync vfr` prevents the image2 muxer from padding output
+  // to maintain input fps (which would re-emit each match repeatedly).
+  const selectExpr = frameIndices.map((i) => `eq(n,${i})`).join('+');
+  const outPattern = join(PATHS.videoThumbnails, `${jobId}-f%d.jpg`);
+
+  const ok = await new Promise((resolve) => {
+    const proc = spawn(ffmpeg, [
+      '-i', videoPath,
+      '-vf', `select='${selectExpr}'`,
+      '-vsync', 'vfr',
+      '-q:v', '5',
+      '-y',
+      outPattern,
+    ], { stdio: 'ignore' });
+    proc.on('close', (code) => resolve(code === 0));
+    proc.on('error', (err) => {
+      console.log(`⚠️ ffmpeg multi-frame extract failed to spawn: ${err.message}`);
+      resolve(false);
+    });
+  });
+
+  if (!ok) return [];
+  // ffmpeg's image2 muxer numbers output starting at 1 in match order, so
+  // the basenames map 1:1 to our frameIndices in timeline order.
+  return frameIndices.map((_, i) => `${jobId}-f${i + 1}.jpg`);
+};
+
 // MP4s with the moov atom at the END require browsers to download the entire
 // file before they can render the first-frame poster on preload="metadata".
 // Remux with -movflags +faststart to move moov to the front. Stream copy —

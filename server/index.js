@@ -85,6 +85,7 @@ import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
+import { seedCreativeDirectorPrompts } from './services/creativeDirector/promptSeeder.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
@@ -457,6 +458,13 @@ ensureSelf()
     // orchestrator so projects don't sit frozen waiting for listeners that
     // no longer exist. Doesn't block startup.
     recoverInFlightProjects().catch((e) => console.log(`⚠️ CD boot recovery failed: ${e.message}`));
+    // Seed cd-treatment / cd-evaluate prompt stages on first run if the user
+    // hasn't customized them yet. data/prompts/ is gitignored so without
+    // this, fresh installs would break with "Stage cd-treatment not found"
+    // the first time the Creative Director enqueues an agent task.
+    seedCreativeDirectorPrompts()
+      .then(() => aiToolkit.services.prompts.init())
+      .catch((e) => console.log(`⚠️ CD prompt seeder failed: ${e.message}`));
   })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.

@@ -32,10 +32,16 @@ describe('createSmokeTestProject', () => {
     const project = await createSmokeTestProject();
     expect(project.disableAudio).toBe(true);
     expect(project.autoAcceptScenes).toBe(true);
-    expect(project.aspectRatio).toBe('1:1');
+    // Hidden small preset (384×384) keeps smoke renders fast — present in
+    // ASPECT_PRESETS but intentionally absent from ASPECT_RATIOS so the UI
+    // doesn't expose it.
+    expect(project.aspectRatio).toBe('1:1-small');
     expect(project.quality).toBe('draft');
-    expect(project.targetDurationSeconds).toBe(9);
+    expect(project.targetDurationSeconds).toBe(6);
     expect(project.treatment.scenes).toHaveLength(3);
+    for (const scene of project.treatment.scenes) {
+      expect(scene.durationSeconds).toBe(2);
+    }
   });
 
   it('scene 1 is text-to-video (no continuation, no source image)', async () => {

@@ -11,10 +11,18 @@
 
 // Width/height pairs are 64-aligned (videoGen rounds down to multiples of
 // 64 anyway) and chosen for sensible LTX defaults.
+//
+// `1:1-small` is intentionally NOT exported in ASPECT_RATIOS — it's a
+// hidden preset used only by the smoke-test fixture (cuts pixel count by
+// ~44% vs 1:1 to keep the CI/dev health-check render time low). The smoke
+// route bypasses the route-level enum validation (it calls createProject
+// directly), so the smaller dimensions land in the render queue without
+// the user-facing dropdown ever seeing it.
 export const ASPECT_PRESETS = Object.freeze({
   '16:9': { width: 768, height: 432 },
   '9:16': { width: 432, height: 768 },
   '1:1':  { width: 512, height: 512 },
+  '1:1-small': { width: 384, height: 384 },
 });
 
 // `steps` and `guidance` are mlx_video knobs. `fps` is the render frame
