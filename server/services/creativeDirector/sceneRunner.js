@@ -55,6 +55,26 @@ export async function runSceneRender(project, scene) {
 
   const settings = await getSettings();
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
+  // Fail fast when local video gen isn't configured. Without this guard the
+  // job would be enqueued, fail inside `generateVideo`, retry up to
+  // MAX_SCENE_RETRIES, and pollute the persisted queue with N doomed entries
+  // — none of which can ever succeed without operator intervention. Mark
+  // the scene failed and let advanceAfterSceneSettled flag the project so
+  // the user can configure pythonPath and Resume from the UI.
+  if (!pythonPath) {
+    console.log(`❌ CD scene ${scene.sceneId}: local video gen not configured (settings.imageGen.local.pythonPath missing)`);
+    await updateScene(project.id, scene.sceneId, {
+      status: 'failed',
+      evaluation: {
+        accepted: false,
+        notes: 'Local video generation is not configured — set settings.imageGen.local.pythonPath in Settings > Image Gen.',
+        sampledAt: new Date().toISOString(),
+      },
+    });
+    const { advanceAfterSceneSettled } = await import('./completionHook.js');
+    await advanceAfterSceneSettled(project.id);
+    return null;
+  }
 
   // Resolve the source image:
   //  - useContinuationFromPrior=true → extract the prior accepted scene's

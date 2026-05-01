@@ -612,15 +612,20 @@ export const creativeDirectorQualitySchema = z.enum(QUALITIES);
 // has a different speed/VRAM/quality profile and the project locks it at
 // creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
 // — much beyond that and the agent's treatment quality drifts hard.
-// Strict basename: no path separators, no `.`/`..` segments, no embedded
-// `..`. Used for both startingImageFile (project create) and sourceImageFile
-// (per-scene) since both feed into `join(PATHS.images, ...)` later — without
-// this guard, a value like `..` would resolve outside the images directory.
+// Strict basename: rejects path separators and the exact `.`/`..` segments.
+// Used for both startingImageFile (project create) and sourceImageFile
+// (per-scene) since both feed into `join(PATHS.images, ...)` later. The
+// downstream consumers also do a resolve+prefix-check against PATHS.images
+// (sceneRunner.js) — that's the real traversal guard; this validator just
+// catches the obvious bad values at the route boundary. Note: a substring
+// check on `..` would over-reject legitimate names like `my..image.png`,
+// so we only reject the exact dot segments and rely on prefix-checks for
+// the actual escape protection.
 const safeBasename = z.string()
   .max(256)
   .regex(/^[^/\\]+$/, 'must be a basename (no path separators)')
-  .refine((v) => v !== '.' && v !== '..' && !v.includes('..'),
-    'must not contain `.` or `..` traversal segments');
+  .refine((v) => v !== '.' && v !== '..',
+    'must not be `.` or `..`');
 
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
