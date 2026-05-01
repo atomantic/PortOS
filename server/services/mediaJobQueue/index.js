@@ -23,7 +23,7 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import {
   broadcastSse,
@@ -126,6 +126,10 @@ export async function initMediaJobQueue() {
     const data = await readJSONFile(JOBS_FILE, { jobs: [] });
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
+    // Resolve PATHS.uploads once so we can confine the orphan-upload cleanup
+    // to files under that directory. We don't unlink arbitrary paths the
+    // job's params might reference (e.g. gallery sources).
+    const uploadsRootPrefix = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
     for (const j of persistedJobs) {
       if (j.status === 'running') {
         const failed = {
@@ -136,6 +140,14 @@ export async function initMediaJobQueue() {
         };
         archive.push(failed);
         restartedFailedIds.push(failed.id);
+        // The failed job will never reach the worker's cleanup, so any
+        // multipart upload it staged into data/uploads would leak forever.
+        // Best-effort unlink — confined to PATHS.uploads so we never delete
+        // a file the job merely referenced (gallery image, prior render, etc).
+        const staged = j.params?.uploadedTempPath;
+        if (staged && pathResolve(staged).startsWith(uploadsRootPrefix)) {
+          unlink(staged).catch(() => {});
+        }
       } else if (j.status === 'queued') {
         queue.push({ ...j });
       } else {
@@ -195,9 +207,14 @@ async function drainLoop() {
     const job = queue.shift();
     job.status = 'running';
     job.startedAt = new Date().toISOString();
+    // The running job is always slot 1 in the overall pipeline. Without
+    // this, a job dequeued from position 2 (queued behind another job that
+    // just finished) would keep its old position=2 even while running, and
+    // /api/media-jobs would show "running, 2 in queue" when it's really 1.
+    job.position = 1;
     running = job;
     // Recompute positions for everyone still queued.
-    queue.forEach((q, i) => { q.position = i + 1 + (running ? 1 : 0); });
+    queue.forEach((q, i) => { q.position = i + 2; });
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on start failed: ${e.message}`));
     broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
     mediaJobEvents.emit('started', job);
@@ -301,8 +318,12 @@ async function runJob(job) {
       // than an error so /api/media-jobs?status=canceled works.
       if (job.cancelRequested) {
         job.status = 'canceled';
+        // Persist the reason so a late SSE reconnect after the live entry
+        // is cleaned up still gets a meaningful terminal frame from the
+        // archived state, rather than the generic "Canceled" fallback.
+        job.error = 'Canceled while running';
         job.completedAt = new Date().toISOString();
-        broadcastSse(sseEntry, { type: 'canceled' });
+        broadcastSse(sseEntry, { type: 'canceled', reason: job.error });
         closeJobAfterDelay(sseJobs, job.id);
         mediaJobEvents.emit('canceled', job);
         console.log(`🛑 media-job [${job.id.slice(0, 8)}] canceled (was running)`);
@@ -390,6 +411,12 @@ export async function cancelJob(jobId) {
       await unlink(job.params.uploadedTempPath).catch(() => {});
     }
     job.status = 'canceled';
+    // Persist the cancel reason on the job so a late SSE reconnect (after
+    // the live SSE entry was cleaned up) can synthesize the same terminal
+    // payload from the archived state — without this, attachSseClient's
+    // post-cleanup terminal frame would just say "Canceled" and lose the
+    // more specific "Canceled before start" reason we just broadcast.
+    job.error = 'Canceled before start';
     job.completedAt = new Date().toISOString();
     archive.push(job);
     queue.forEach((q, i) => { q.position = i + 1 + (running ? 1 : 0); });
@@ -397,7 +424,7 @@ export async function cancelJob(jobId) {
     // Emit `canceled` (not `error`) so clients can distinguish a user-
     // initiated cancellation from a real failure. Mirror the event type
     // emitted for running-job cancellation in runJob's failed handler.
-    broadcastSse(sseEntry, { type: 'canceled', reason: 'Canceled before start' });
+    broadcastSse(sseEntry, { type: 'canceled', reason: job.error });
     closeJobAfterDelay(sseJobs, jobId);
     mediaJobEvents.emit('canceled', job);
     persist().catch(() => {});
