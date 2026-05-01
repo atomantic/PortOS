@@ -29,7 +29,7 @@
  */
 
 // Canonical prefix lists — add new prefixes here, not in scattered startsWith checks
-const INTERNAL_PREFIXES = ['sys-', 'app-improve-'];
+const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-'];
 const ALL_KNOWN_PREFIXES = ['task-', ...INTERNAL_PREFIXES];
 
 export const hasKnownPrefix = (id) => ALL_KNOWN_PREFIXES.some(p => id?.startsWith(p));
