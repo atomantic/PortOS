@@ -77,7 +77,11 @@ describe('mediaModels registry', () => {
     // the `~/` prefix before joining. Result MUST start with the user's
     // actual home directory, not just `/`.
     expect(slash.localPath.startsWith(homedir())).toBe(true);
-    expect(slash.localPath).toContain('/some/nonexistent/path');
+    // Use path.join to assemble the expected suffix so the assertion
+    // works on Windows (where the joined path uses backslashes) as well
+    // as POSIX. The earlier `toContain('/some/nonexistent/path')` would
+    // fail under win32's backslash-separated paths.
+    expect(slash.localPath.endsWith(join('some', 'nonexistent', 'path'))).toBe(true);
     expect(tilde.localPath).toBe(homedir());
   });
 

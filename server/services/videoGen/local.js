@@ -443,15 +443,22 @@ export async function extractLastFrame(historyId) {
   // (palette → continue, gallery → continue, etc.) and re-extracting on
   // every click was wasting 1–2s per click + spawning ffmpeg children.
   // Validate non-zero size — a prior ffmpeg crash could leave a 0-byte
-  // placeholder, which would otherwise be served as a broken image
-  // forever. statSync errors fall through to re-extraction.
-  if (existsSync(framePath)) {
-    const cached = statSync(framePath, { throwIfNoEntry: false });
-    if (cached && cached.size > 0) {
-      return { filename: frameFilename, path: `/data/images/${frameFilename}` };
+  // placeholder, which would otherwise be served as a broken image forever.
+  // Treat ANY stat failure (EACCES, EIO, etc.) as a cache miss rather than
+  // letting it abort the request.
+  const safeStatSize = (path) => {
+    try {
+      const s = statSync(path, { throwIfNoEntry: false });
+      return s ? s.size : null;
+    } catch {
+      return null;
     }
-    await unlink(framePath).catch(() => {});
+  };
+  const cachedSize = safeStatSize(framePath);
+  if (cachedSize != null && cachedSize > 0) {
+    return { filename: frameFilename, path: `/data/images/${frameFilename}` };
   }
+  if (cachedSize === 0) await unlink(framePath).catch(() => {});
 
   return new Promise((resolve, reject) => {
     // -sseof -1.0 seeks 1s before end. The previous -0.1 was too tight on
@@ -462,12 +469,15 @@ export async function extractLastFrame(historyId) {
     // any partial file from a prior failed run instead of erroring.
     const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], { stdio: 'ignore' });
     proc.on('close', async (code) => {
-      const written = existsSync(framePath) ? statSync(framePath, { throwIfNoEntry: false }) : null;
-      if (code !== 0 || !written || written.size === 0) {
+      // safeStatSize swallows throws so the async handler can't leak an
+      // unhandled rejection on transient stat errors — null is treated as
+      // "extraction failed".
+      const writtenSize = safeStatSize(framePath);
+      if (code !== 0 || writtenSize == null || writtenSize === 0) {
         // A 0-byte file is a partial extraction, not a cache-worthy result —
         // delete it so the next call retries instead of returning a broken
         // image from the cache hit above.
-        if (written && written.size === 0) await unlink(framePath).catch(() => {});
+        if (writtenSize === 0) await unlink(framePath).catch(() => {});
         return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
       }
       console.log(`🎞️ Extracted last frame: ${frameFilename}`);
