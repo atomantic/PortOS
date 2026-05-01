@@ -448,9 +448,14 @@ app.use(errorMiddleware);
 // race conditions where brain mutations arrive before the sync log is ready
 ensureSelf()
   .then(() => initSyncLog())
-  .then(() => initMediaJobQueue().catch(err => console.error(`❌ mediaJobQueue init failed: ${err instanceof Error ? err.message : String(err)}`)))
+  .then(() => initMediaJobQueue())
   .then(() => {
-    // Start server only after sync log + media job queue are initialized
+    // Start server only after sync log + media job queue are initialized.
+    // initMediaJobQueue failure is fatal: the queue owns persistence + SSE
+    // + temp-file cleanup for /api/video-gen and local /api/image-gen, and
+    // accepting requests with a half-init queue silently corrupts state
+    // (persist() throws, SSE streams degrade). Catch + crash via the
+    // outer .catch(...process.exit) below.
     httpServer.listen(PORT, HOST, () => {
       // One canonical "where do I open this" banner — :5555 is always user-facing
       // (HTTP or HTTPS), :PORTOS_HTTP_PORT (default 5553) is the loopback HTTP

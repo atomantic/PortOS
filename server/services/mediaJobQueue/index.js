@@ -351,7 +351,10 @@ export async function cancelJob(jobId) {
     archive.push(job);
     queue.forEach((q, i) => { q.position = i + 1 + (running ? 1 : 0); });
     const sseEntry = ensureSseEntry(jobId);
-    broadcastSse(sseEntry, { type: 'error', error: 'Canceled before start' });
+    // Emit `canceled` (not `error`) so clients can distinguish a user-
+    // initiated cancellation from a real failure. Mirror the event type
+    // emitted for running-job cancellation in runJob's failed handler.
+    broadcastSse(sseEntry, { type: 'canceled', reason: 'Canceled before start' });
     closeJobAfterDelay(sseJobs, jobId);
     mediaJobEvents.emit('canceled', job);
     persist().catch(() => {});
@@ -386,10 +389,36 @@ function ensureSseEntry(jobId) {
 }
 
 // Routes call this. Returns false when the jobId is unknown to the queue.
+//
+// Three cases:
+// 1. Live job (queued/running) — sseJobs already has an entry created by
+//    enqueueJob; attach replays lastPayload (queued/started/progress).
+// 2. Terminal job within the SSE_CLEANUP_DELAY_MS grace window — entry is
+//    still around with the terminal lastPayload (complete/error/canceled),
+//    so attach immediately replays + the deferred close ends the stream.
+// 3. Terminal job after the grace window — entry is gone; we synthesize a
+//    one-shot terminal frame from the archived job and end the stream so
+//    a late client doesn't hang on an empty SSE stream forever.
 export function attachSseClient(jobId, res) {
-  if (!findJob(jobId)) return false;
-  ensureSseEntry(jobId);
-  return attachSse(sseJobs, jobId, res);
+  const job = findJob(jobId);
+  if (!job) return false;
+  if (sseJobs.has(jobId)) {
+    return attachSse(sseJobs, jobId, res);
+  }
+  // Terminal job whose SSE entry was already cleaned up. Synthesize the
+  // expected terminal payload from the archived state and end immediately.
+  const terminal =
+    job.status === 'completed' ? { type: 'complete', result: job.result }
+    : job.status === 'canceled' ? { type: 'canceled', reason: job.error || 'Canceled' }
+    : { type: 'error', error: job.error || `Job ${job.status}` };
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write(`data: ${JSON.stringify(terminal)}\n\n`);
+  res.end();
+  return true;
 }
 
 function sleep(ms) {

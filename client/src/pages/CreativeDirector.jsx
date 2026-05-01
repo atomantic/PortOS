@@ -261,7 +261,10 @@ export default function CreativeDirector() {
                 {p.treatment?.scenes?.length ? `${p.treatment.scenes.filter((s) => s.status === 'accepted').length}/${p.treatment.scenes.length} scenes accepted` : 'No treatment yet'}
               </div>
               <div className="flex gap-1 mt-1">
-                {p.status !== 'paused' && p.status !== 'complete' && p.status !== 'failed' && (
+                {/* Pause is meaningful only when the agent could be in flight.
+                    `draft` has nothing running yet, and the terminal states are
+                    obviously inert — match the detail page's gating. */}
+                {!['paused', 'complete', 'failed', 'draft'].includes(p.status) && (
                   <button onClick={() => handlePause(p.id)} className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs">
                     <Pause className="w-3 h-3" /> Pause
                   </button>
