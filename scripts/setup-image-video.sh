@@ -102,7 +102,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       "torch>=2.5" \
       torchvision \
       accelerate \
-      "transformers>=4.45" \
+      "transformers>=4.51" \
       sentencepiece \
       protobuf \
       safetensors \

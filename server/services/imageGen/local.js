@@ -153,12 +153,13 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // on — without this, a double-click on Generate would orphan the first
   // child (cancel() can only kill the one stored in activeProcess).
   if (activeProcess) throw new ServerError('A generation is already in progress — cancel it before starting another', { status: 409, code: 'IMAGE_GEN_BUSY' });
-  // Re-read on each call so flux2 entries the registry's first-boot seed
-  // wrote into a stale data/media-models.json show up without requiring the
-  // server's IMAGE_MODELS module-load snapshot to be in sync.
-  // getImageModels() already filters out entries marked broken on the current
-  // platform — checking model.broken again here would also reject entries
-  // marked broken on the OTHER platform (e.g. 'windows' on a macOS box).
+  // Use the registry cache view (which applies the per-platform `broken`
+  // filter via getImageModels) rather than the module-load IMAGE_MODELS
+  // snapshot. Note: loadMediaModels memoizes on first read — on-disk edits
+  // to data/media-models.json still need a server restart to apply.
+  // Don't re-check model.broken here: getImageModels() already filtered
+  // current-platform entries; an extra truthiness check would also reject
+  // entries broken on the OTHER platform (e.g. 'windows' on a macOS box).
   const model = getImageModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   if (!isFlux2(model) && !pythonPath) {

@@ -115,7 +115,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
     from huggingface_hub import snapshot_download
     from optimum.quanto import requantize
     from safetensors.torch import load_file
-    from transformers import AutoConfig, AutoTokenizer, Qwen3ForCausalLM
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from flux2_quantized import QuantizedFlux2Transformer2DModel
@@ -128,9 +128,12 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
     qtransformer.to(device=device, dtype=dtype)
 
     print("🔧 int8: text encoder …", file=sys.stderr)
+    # AutoModelForCausalLM picks the right class from the config
+    # (Qwen3ForCausalLM here). Going through the Auto API avoids hard-coding
+    # a class import that older transformers versions don't expose.
     config = AutoConfig.from_pretrained(f"{model_path}/text_encoder", trust_remote_code=True)
     with init_empty_weights():
-        text_encoder = Qwen3ForCausalLM(config)
+        text_encoder = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
     with open(f"{model_path}/text_encoder/quanto_qmap.json", "r") as f:
         te_qmap = json.load(f)
     te_state = load_file(f"{model_path}/text_encoder/model.safetensors")
