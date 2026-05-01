@@ -38,7 +38,13 @@ export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 // Project CRUD
 // =====================================================================
 
-export const loadProjects = () => readJSONFile(PROJECTS_FILE, []);
+export const loadProjects = async () => {
+  // Defend against a hand-edited / corrupted JSON state file. Without this,
+  // a non-array root would crash every CRUD path with "x.findIndex is not a
+  // function" instead of degrading gracefully to an empty list.
+  const raw = await readJSONFile(PROJECTS_FILE, []);
+  return Array.isArray(raw) ? raw : [];
+};
 const saveProjects = async (projects) => {
   // First write on a fresh install lands before PATHS.data is created by any
   // other service — without ensureDir it would ENOENT on the temp-file write

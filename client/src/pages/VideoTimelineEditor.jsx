@@ -20,11 +20,10 @@ import {
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 
-// Project-time math helpers — every clip on the track contributes its trimmed
-// duration (outSec - inSec) to project-time. Map between project-time `t`
-// and the (clipIndex, withinClipSec) pair that the preview <video> element
-// needs. A small epsilon avoids landing exactly on the boundary where the
-// next clip's first frame might not be decoded yet.
+// Map project-time t (every clip contributes its trimmed duration) to the
+// (clipIndex, withinClipSec) pair the preview <video> element needs. The
+// strict t < acc+dur comparison falls through on exact boundaries so a
+// playhead landing on a seam plays the next clip, not the end of the prior.
 const findClipAt = (clips, t) => {
   let acc = 0;
   for (let i = 0; i < clips.length; i++) {
@@ -36,8 +35,6 @@ const findClipAt = (clips, t) => {
   }
   return { index: -1, within: 0, startAtProj: 0 };
 };
-// Maps project-time t to (clipIndex, withinClipSec). The strictly-less-than
-// comparison falls through on exact-boundary t to the next clip naturally.
 
 const totalDuration = (clips) => clips.reduce((s, c) => s + Math.max(0, c.outSec - c.inSec), 0);
 
@@ -219,6 +216,14 @@ export default function VideoTimelineEditor() {
   const metaFor = useCallback((clipId) => historyMap.get(clipId), [historyMap]);
 
   const total = useMemo(() => totalDuration(clips), [clips]);
+
+  // Clamp the playhead into [0, total] when the timeline duration shrinks
+  // (clip removal, tighter trim, etc.). Without this, t can exceed total
+  // and findClipAt returns a `within` past the last clip's outSec — the
+  // preview seeks to black frames.
+  useEffect(() => {
+    if (t > total) { setT(total); setPlaying(false); }
+  }, [total, t]);
 
   // Save current timeline (debounced via the caller). Server validates and
   // returns the canonical project; we only update updatedAt and preserve

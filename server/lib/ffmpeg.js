@@ -9,7 +9,7 @@
 import { execFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { unlink, rename } from 'fs/promises';
-import { join, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { join, resolve as resolvePath, sep as PATH_SEP, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS } from './fileUtils.js';
@@ -52,7 +52,12 @@ export const findFfprobe = async () => {
   if (cachedFfprobePath !== undefined) return cachedFfprobePath;
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) { cachedFfprobePath = null; return null; }
-  const probe = ffmpeg.replace(/ffmpeg(\.exe)?$/, IS_WIN ? 'ffprobe.exe' : 'ffprobe');
+  // Derive ffprobe from ffmpeg's directory rather than regex-replacing the
+  // basename. A case-sensitive replace would silently miss `FFMPEG.EXE` on
+  // Windows and let callers spawn ffmpeg as if it were ffprobe (audio
+  // probing then always reports "no audio"). dirname-based join sidesteps
+  // the casing question entirely.
+  const probe = join(dirname(ffmpeg), IS_WIN ? 'ffprobe.exe' : 'ffprobe');
   if (existsSync(probe)) { cachedFfprobePath = probe; return probe; }
   const cmd = IS_WIN ? 'where' : 'which';
   const { stdout } = await execFileAsync(cmd, ['ffprobe'], { timeout: 5000 }).catch(() => ({ stdout: '' }));
