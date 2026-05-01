@@ -174,6 +174,15 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   if (!isFlux2(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
+  // FLUX.2 runner doesn't apply LoRAs yet — reject up-front so the user
+  // doesn't end up with a metadata sidecar that records LoRAs the renderer
+  // silently dropped.
+  if (isFlux2(model) && (loraFilenames.length > 0 || loraPaths.length > 0)) {
+    throw new ServerError(
+      'LoRAs are not supported for FLUX.2 models yet — clear the LoRA selection or pick a Flux 1 model.',
+      { status: 400, code: 'IMAGE_GEN_FLUX2_LORA_UNSUPPORTED' },
+    );
+  }
 
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.loras);

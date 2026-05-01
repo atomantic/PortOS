@@ -691,17 +691,19 @@ export default function ImageGen() {
                     className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">Quantize (bits)</label>
-                  <select
-                    value={quantize}
-                    onChange={(e) => setQuantize(e.target.value)}
-                    disabled={generating}
-                    className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                  >
-                    {['3', '4', '5', '6', '8'].map((q) => <option key={q} value={q}>{q}-bit{q === '8' ? ' (default)' : q === '4' ? ' (fast)' : ''}</option>)}
-                  </select>
-                </div>
+                {!isFlux2Model && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1">Quantize (bits)</label>
+                    <select
+                      value={quantize}
+                      onChange={(e) => setQuantize(e.target.value)}
+                      disabled={generating}
+                      className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                    >
+                      {['3', '4', '5', '6', '8'].map((q) => <option key={q} value={q}>{q}-bit{q === '8' ? ' (default)' : q === '4' ? ' (fast)' : ''}</option>)}
+                    </select>
+                  </div>
+                )}
               </>
             ) : (
               <div>
@@ -717,7 +719,7 @@ export default function ImageGen() {
             ))}
           </div>
 
-          {isLocalMode && availableLoras.length > 0 && (
+          {isLocalMode && !isFlux2Model && availableLoras.length > 0 && (
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">LoRAs</label>
               <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
