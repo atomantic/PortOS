@@ -39,7 +39,13 @@ export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 // =====================================================================
 
 export const loadProjects = () => readJSONFile(PROJECTS_FILE, []);
-const saveProjects = (projects) => atomicWrite(PROJECTS_FILE, projects);
+const saveProjects = async (projects) => {
+  // First write on a fresh install lands before PATHS.data is created by any
+  // other service — without ensureDir it would ENOENT on the temp-file write
+  // inside atomicWrite.
+  await ensureDir(PATHS.data);
+  return atomicWrite(PROJECTS_FILE, projects);
+};
 
 export async function listProjects() {
   return loadProjects();

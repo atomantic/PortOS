@@ -153,6 +153,11 @@ export default function VideoTimelineEditor() {
   const [renderJobId, setRenderJobId] = useState(null);
   const [renderProgress, setRenderProgress] = useState(0);
   const [showLibrary, setShowLibrary] = useState(true);
+  // Local input drafts. Editing the canonical state on every keystroke makes
+  // the rename onBlur-vs-canonical comparison always-equal, and forces the
+  // trim inputs through toFixed() per stroke (which prevents typing "0.").
+  const [nameDraft, setNameDraft] = useState('');
+  const [trimDraft, setTrimDraft] = useState({ inSec: '', outSec: '' });
 
   const videoRef = useRef(null);
   const lastSrcRef = useRef('');
@@ -182,6 +187,26 @@ export default function VideoTimelineEditor() {
   }, [projectId]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Sync the rename draft to the canonical name when the project (re)loads
+  // or is renamed elsewhere. Local edits (onChange) take over until the
+  // user blurs.
+  useEffect(() => {
+    if (project?.name) setNameDraft(project.name);
+  }, [project?.id, project?.name]);
+
+  // Sync trim drafts when the user picks a different clip. While editing the
+  // selected clip, the draft is the source of truth — committing on blur
+  // drives the canonical update.
+  useEffect(() => {
+    setTrimDraft((prev) => {
+      const sel = clips.find((c) => c._key === selectedKey);
+      if (!sel) return { inSec: '', outSec: '' };
+      const next = { inSec: sel.inSec.toFixed(2), outSec: sel.outSec.toFixed(2) };
+      if (prev.inSec === next.inSec && prev.outSec === next.outSec) return prev;
+      return next;
+    });
+  }, [selectedKey, clips]);
 
   // O(1) clip metadata lookup. The video-sync effect runs on every rAF tick
   // during playback; a linear find() per frame multiplied by clip count is
@@ -456,15 +481,23 @@ export default function VideoTimelineEditor() {
           </button>
           <input
             type="text"
-            value={project.name}
-            onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))}
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
             onBlur={async (e) => {
               const trimmed = e.target.value.trim();
-              if (!trimmed || trimmed === project.name) return;
+              if (!trimmed) { setNameDraft(project.name); return; }
+              if (trimmed === project.name) return;
               const updated = await api.updateTimelineProject(projectId, {
                 name: trimmed, expectedUpdatedAt: project.updatedAt,
-              }).catch(() => null);
-              if (updated) setProject((p) => ({ ...p, name: updated.name, updatedAt: updated.updatedAt }));
+              }).catch((err) => {
+                toast.error(`Rename failed: ${err.message}`);
+                setNameDraft(project.name);
+                return null;
+              });
+              if (updated) {
+                setProject((p) => ({ ...p, name: updated.name, updatedAt: updated.updatedAt }));
+                setNameDraft(updated.name);
+              }
             }}
             className="bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
           />
@@ -635,8 +668,12 @@ export default function VideoTimelineEditor() {
                   step="0.05"
                   min={0}
                   max={selectedSourceDur || undefined}
-                  value={selectedClip.inSec.toFixed(2)}
-                  onChange={(e) => editSelected({ inSec: Number(e.target.value) })}
+                  value={trimDraft.inSec}
+                  onChange={(e) => setTrimDraft((d) => ({ ...d, inSec: e.target.value }))}
+                  onBlur={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) editSelected({ inSec: n });
+                  }}
                   className="w-full mt-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent"
                 />
               </label>
@@ -647,8 +684,12 @@ export default function VideoTimelineEditor() {
                   step="0.05"
                   min={selectedClip.inSec + 0.05}
                   max={selectedSourceDur || undefined}
-                  value={selectedClip.outSec.toFixed(2)}
-                  onChange={(e) => editSelected({ outSec: Number(e.target.value) })}
+                  value={trimDraft.outSec}
+                  onChange={(e) => setTrimDraft((d) => ({ ...d, outSec: e.target.value }))}
+                  onBlur={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) editSelected({ outSec: n });
+                  }}
                   className="w-full mt-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent"
                 />
               </label>
