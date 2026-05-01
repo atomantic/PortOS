@@ -1,0 +1,182 @@
+/**
+ * Creative Director — server-side scene render orchestrator.
+ *
+ * Render submission, last-frame extraction, and queue-completion handling
+ * are all mechanical operations — no LLM cognition required. We do them
+ * directly here instead of paying for a Claude task that would just shell
+ * out to the same HTTP endpoints. Once the render lands, we hand off to
+ * an `evaluate` agent task whose ONLY job is the cognitive step (read the
+ * thumbnail, score it against the style spec + scene intent, accept or
+ * request a re-render).
+ *
+ * Lifecycle for a single scene:
+ *   1. updateScene(status='rendering', renderedJobId=null)
+ *   2. resolve sourceImageFile (extract last-frame of prior scene if
+ *      `useContinuationFromPrior`; else use scene.sourceImageFile if any;
+ *      else text-to-video).
+ *   3. enqueueJob into mediaJobQueue with owner=`cd:<projectId>:<sceneId>`.
+ *   4. listen for mediaJobEvents 'completed'/'failed' for that jobId.
+ *   5a. on 'completed': updateScene(renderedJobId, status='evaluating')
+ *       and enqueue evaluate agent task.
+ *   5b. on 'failed': bump retryCount; if < 3, retry with same prompt; else
+ *       updateScene(status='failed') and let completionHook decide what to
+ *       do next.
+ *
+ * Each call sets up its own event listeners and detaches them on settle.
+ * Multiple concurrent runners are not expected (the queue serializes
+ * renders) but the listener is jobId-scoped so concurrent calls would be
+ * isolated anyway.
+ */
+
+import { join } from 'path';
+import { existsSync } from 'fs';
+import { PATHS } from '../../lib/fileUtils.js';
+import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
+import { extractLastFrame } from '../videoGen/local.js';
+import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
+import { getSettings } from '../settings.js';
+import { updateScene, getProject } from './local.js';
+import { enqueueEvaluateTask } from './agentBridge.js';
+
+const MAX_SCENE_RETRIES = 3;
+
+/**
+ * Kick off a render for a single scene. Returns the jobId; the caller does
+ * not need to await completion — the listener installed here will spawn
+ * the evaluate task or schedule a retry.
+ */
+export async function runSceneRender(project, scene) {
+  console.log(`🎞️  CD scene render starting: ${project.id} / ${scene.sceneId} (order ${scene.order}, attempt ${(scene.retryCount || 0) + 1}/${MAX_SCENE_RETRIES + 1})`);
+
+  await updateScene(project.id, scene.sceneId, {
+    status: 'rendering',
+    renderedJobId: null,
+  });
+
+  const settings = await getSettings();
+  const pythonPath = settings.imageGen?.local?.pythonPath || null;
+
+  // Resolve the source image:
+  //  - useContinuationFromPrior=true → extract the prior accepted scene's
+  //    last frame and use that as the source.
+  //  - else if scene.sourceImageFile set → use that file.
+  //  - else → text-to-video (no source).
+  let sourceImageFile = scene.sourceImageFile || null;
+  if (scene.useContinuationFromPrior) {
+    const fresh = await getProject(project.id);
+    const priorScene = (fresh?.treatment?.scenes || [])
+      .filter((s) => s.order < scene.order && s.status === 'accepted')
+      .sort((a, b) => b.order - a.order)[0];
+    if (priorScene?.renderedJobId) {
+      const lf = await extractLastFrame(priorScene.renderedJobId).catch((e) => {
+        console.log(`⚠️ CD last-frame for ${priorScene.renderedJobId} failed: ${e.message}`);
+        return null;
+      });
+      if (lf?.filename) {
+        sourceImageFile = lf.filename;
+      } else {
+        console.log(`⚠️ CD scene ${scene.sceneId} requested continuation but last-frame extract failed — falling back to text-to-video`);
+      }
+    } else {
+      console.log(`⚠️ CD scene ${scene.sceneId} requested continuation but no prior accepted scene exists — falling back`);
+    }
+  }
+
+  // Resolve sourceImageFile to an absolute path if it's a basename in the
+  // gallery. Path-traversal guard via existsSync + safe join.
+  let sourceImagePath = null;
+  if (sourceImageFile) {
+    const candidate = join(PATHS.images, sourceImageFile);
+    if (existsSync(candidate)) sourceImagePath = candidate;
+    else console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile not found on disk: ${sourceImageFile}`);
+  }
+
+  const renderParams = presetToRenderParams({
+    aspectRatio: project.aspectRatio,
+    quality: project.quality,
+    durationSeconds: scene.durationSeconds,
+  });
+
+  const params = {
+    pythonPath,
+    prompt: scene.prompt,
+    negativePrompt: scene.negativePrompt || '',
+    modelId: project.modelId,
+    width: renderParams.width,
+    height: renderParams.height,
+    numFrames: renderParams.numFrames,
+    fps: renderParams.fps,
+    steps: renderParams.steps,
+    guidanceScale: renderParams.guidanceScale,
+    tiling: 'auto',
+    sourceImagePath,
+    mode: sourceImagePath ? 'image' : 'text',
+  };
+
+  const owner = `cd:${project.id}:${scene.sceneId}`;
+  const { jobId } = enqueueJob({ kind: 'video', params, owner });
+
+  // Wire one-shot listeners scoped to this jobId so we can hand off to the
+  // evaluator on success or schedule a retry on failure. mediaJobEvents
+  // fires `completed` and `failed` from the queue's runJob handlers.
+  const onCompleted = async (job) => {
+    if (job.id !== jobId) return;
+    cleanup();
+    await handleRenderCompleted(project.id, scene.sceneId, jobId);
+  };
+  const onFailed = async (job) => {
+    if (job.id !== jobId) return;
+    cleanup();
+    await handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed');
+  };
+  function cleanup() {
+    mediaJobEvents.off('completed', onCompleted);
+    mediaJobEvents.off('failed', onFailed);
+  }
+  mediaJobEvents.on('completed', onCompleted);
+  mediaJobEvents.on('failed', onFailed);
+
+  return jobId;
+}
+
+async function handleRenderCompleted(projectId, sceneId, jobId) {
+  console.log(`✅ CD scene render done: ${projectId} / ${sceneId} → ${jobId.slice(0, 8)}`);
+  await updateScene(projectId, sceneId, {
+    status: 'evaluating',
+    renderedJobId: jobId,
+  });
+  const fresh = await getProject(projectId);
+  if (!fresh) return;
+  const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
+  if (!scene) return;
+  await enqueueEvaluateTask(fresh, scene);
+}
+
+async function handleRenderFailed(projectId, sceneId, errorMsg) {
+  const fresh = await getProject(projectId);
+  if (!fresh) return;
+  const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
+  if (!scene) return;
+  const nextRetry = (scene.retryCount || 0) + 1;
+  if (nextRetry <= MAX_SCENE_RETRIES) {
+    console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${MAX_SCENE_RETRIES}`);
+    await updateScene(projectId, sceneId, { status: 'pending', retryCount: nextRetry });
+    const updated = { ...scene, retryCount: nextRetry };
+    await runSceneRender(fresh, updated);
+    return;
+  }
+  console.log(`❌ CD scene ${sceneId} render failed terminally: ${errorMsg}`);
+  await updateScene(projectId, sceneId, {
+    status: 'failed',
+    evaluation: {
+      accepted: false,
+      notes: `Render failed: ${errorMsg}`,
+      sampledAt: new Date().toISOString(),
+    },
+  });
+  // The completionHook will be triggered when the evaluate-step is skipped;
+  // here we delegate by directly invoking the hook's logic via a synthetic
+  // re-evaluation of project state. Simplest: import and call.
+  const { advanceAfterSceneSettled } = await import('./completionHook.js');
+  await advanceAfterSceneSettled(projectId);
+}

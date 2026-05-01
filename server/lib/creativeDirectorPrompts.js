@@ -1,27 +1,16 @@
 /**
- * Creative Director — agent prompt templates for the three task kinds:
- * treatment (initial story planning), scene (single segment render +
- * evaluation), and stitch (final concat). The agent runs as a CoS task and
- * receives one of these strings via task.metadata.context.
+ * Creative Director — agent prompt templates.
  *
- * Constraint surface: every prompt tells the agent which exact PortOS HTTP
- * endpoints to call and what payload shape to send. The agent does NOT call
- * `addTask` itself for follow-ups — the server's completion hook owns that
- * (see services/creativeDirector/agentBridge.js).
+ * Only two cognitive steps require an agent:
+ *   - `treatment`: write the story + scene plan
+ *   - `evaluate` : judge a single rendered scene against the style spec
+ *
+ * Programmatic steps (per-scene render orchestration, final stitch) live
+ * server-side in services/creativeDirector/{sceneRunner,stitchRunner}.js
+ * and never spawn an agent.
  */
 
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from './creativeDirectorPresets.js';
-
-function renderPriorRefBlock(scene, priorScene) {
-  if (scene.useContinuationFromPrior && priorScene) {
-    return `### Continuation from prior scene\n\nPrior accepted scene: ${priorScene.sceneId} (renderedJobId: ${priorScene.renderedJobId}).\n\nFirst, extract its last frame:\n\n\`\`\`\nPOST http://localhost:5555/api/video-gen/last-frame/${priorScene.renderedJobId}\n\`\`\`\n\nThe response gives you \`{ filename }\`. Use that as the \`sourceImageFile\` in the render request below.\n`;
-  }
-  if (scene.useContinuationFromPrior) {
-    return `### Continuation requested but no prior scene available\n\nFalling back to text-to-video for this scene. Do NOT call last-frame.\n`;
-  }
-  if (scene.sourceImageFile) return `### Starts from image: \`${scene.sourceImageFile}\``;
-  return `### Text-to-video (no source image)`;
-}
 
 // Common header. Project context the agent always needs to know.
 function projectBlock(project) {
@@ -51,7 +40,7 @@ export function buildTreatmentPrompt(project) {
   return [
     `# Creative Director — Treatment task`,
     ``,
-    `You are the Creative Director for a long-form generated-video project. Your job in this task is to produce a TREATMENT — a complete scene-by-scene plan that a sequence of follow-up "scene" tasks will then render.`,
+    `You are the Creative Director for a long-form generated-video project. Your job in this task is to produce a TREATMENT — a complete scene-by-scene plan that the server will then render scene-by-scene (no further agent task is needed for rendering — the server orchestrates that). After each render lands, a separate short evaluation task will judge it.`,
     ``,
     projectBlock(project),
     userStoryBlock,
@@ -59,7 +48,7 @@ export function buildTreatmentPrompt(project) {
     ``,
     `1. Design a story arc that fits ~${project.targetDurationSeconds}s of total runtime. Think in scenes that are 1–10 seconds each (most should be 4–6s; reserve short ones for cuts and long ones for held shots).`,
     `2. Each scene should have a clear visual intent and a render prompt that incorporates the style spec.`,
-    `3. Decide for each scene whether it continues from the previous scene's last frame (\`useContinuationFromPrior: true\`) or starts from a new image (use a fresh prompt with no source image, or specify a sourceImageFile if the user already provided a starting image you want to reuse). Scene 1 either uses the project starting image (if provided — copy its filename into \`sourceImageFile\`) or starts as text-to-video (\`useContinuationFromPrior: false\` and no \`sourceImageFile\`).`,
+    `3. Decide for each scene whether it continues from the previous scene's last frame (\`useContinuationFromPrior: true\`) or starts from a new image (\`useContinuationFromPrior: false\`, optionally with a \`sourceImageFile\` basename if you want to seed from a specific gallery image). Scene 1 either uses the project starting image (if provided — copy its filename into \`sourceImageFile\`) or starts as text-to-video.`,
     `4. Don't pad with filler; if the natural arc is shorter than the target, that's fine — produce fewer scenes.`,
     ``,
     `## Output contract`,
@@ -89,185 +78,104 @@ export function buildTreatmentPrompt(project) {
     `}`,
     `\`\`\``,
     ``,
-    `On a 200 response your task is complete. The server will automatically queue the first scene render task next. Do not create any additional tasks yourself.`,
+    `On a 200 response your task is complete. The server will automatically begin rendering scene 1 — do not create any additional tasks yourself.`,
     ``,
     `If the PATCH returns 4xx, fix the validation issue (read the error body) and retry. Do not retry on 5xx more than twice.`,
   ].join('\n');
 }
 
-export function buildScenePrompt(project, scene) {
+export function buildEvaluatePrompt(project, scene) {
   const renderParams = presetToRenderParams({
     aspectRatio: project.aspectRatio,
     quality: project.quality,
     durationSeconds: scene.durationSeconds,
   });
-  const priorScene = project.treatment?.scenes
-    ?.filter((s) => s.order < scene.order && s.status === 'accepted')
-    ?.sort((a, b) => b.order - a.order)?.[0] || null;
-  const priorRefBlock = renderPriorRefBlock(scene, priorScene);
-
+  const renderedId = scene.renderedJobId || '<unknown>';
   return [
-    `# Creative Director — Scene task`,
+    `# Creative Director — Scene evaluation task`,
+    ``,
+    `Your ONLY job is to evaluate a freshly-rendered scene and decide whether it works. The render itself was done by the server (no upstream task to do); the rendered video and its thumbnail are already on disk.`,
     ``,
     projectBlock(project),
-    `## Scene to render`,
+    `## Scene to evaluate`,
     ``,
-    `- Scene id: \`${scene.sceneId}\` (order ${scene.order})`,
+    `- Scene id: \`${scene.sceneId}\` (${scene.order + 1}/${project.treatment?.scenes?.length || '?'})`,
     `- Intent: ${scene.intent}`,
-    `- Duration: ${scene.durationSeconds}s → ${renderParams.numFrames} frames @ ${renderParams.fps}fps`,
-    `- Retry count so far: ${scene.retryCount} (max 3)`,
+    `- Render prompt: ${JSON.stringify(scene.prompt)}`,
+    `- Render: \`${renderParams.width}×${renderParams.height}\`, ${renderParams.numFrames} frames @ ${renderParams.fps}fps`,
+    `- Strategy: ${scene.useContinuationFromPrior ? 'continued from prior scene last-frame' : (scene.sourceImageFile ? `seeded from image \`${scene.sourceImageFile}\`` : 'text-to-video')}`,
+    `- Retry count: ${scene.retryCount || 0} (max 3)`,
+    `- Rendered video: \`/data/videos/${renderedId}.mp4\``,
+    `- Thumbnail (use this for evaluation): \`/data/video-thumbnails/${renderedId}.jpg\``,
     ``,
-    priorRefBlock,
+    `## Step 1 — Read the thumbnail using your vision capability`,
     ``,
-    `## Render`,
+    `Open the thumbnail file (Read tool) and inspect the frame.`,
     ``,
-    `Submit the render and watch the SSE stream until it terminates:`,
+    `## Step 2 — Score against three dimensions`,
     ``,
-    `\`\`\``,
-    `POST http://localhost:5555/api/video-gen`,
-    `Content-Type: application/json`,
+    `1. **Style adherence**: does it match the project style spec?`,
+    `2. **Continuity**: does it flow from the prior accepted scene's tone, color, characters? (If this is scene 1, just check it stands on its own.)`,
+    `3. **Scene intent**: does it actually depict "${scene.intent}"?`,
     ``,
-    `{`,
-    `  "prompt": ${JSON.stringify(scene.prompt)},`,
-    scene.negativePrompt ? `  "negativePrompt": ${JSON.stringify(scene.negativePrompt)},` : `  "negativePrompt": "",`,
-    `  "modelId": "${project.modelId}",`,
-    `  "width": ${renderParams.width},`,
-    `  "height": ${renderParams.height},`,
-    `  "numFrames": ${renderParams.numFrames},`,
-    `  "fps": ${renderParams.fps},`,
-    `  "steps": ${renderParams.steps},`,
-    `  "guidanceScale": ${renderParams.guidanceScale},`,
-    scene.useContinuationFromPrior
-      ? `  "sourceImageFile": "<filename returned by last-frame call above>",`
-      : scene.sourceImageFile
-        ? `  "sourceImageFile": "${scene.sourceImageFile}",`
-        : `  // (no sourceImageFile — text-to-video)`,
-    `  "mode": "${scene.useContinuationFromPrior || scene.sourceImageFile ? 'image' : 'text'}"`,
-    `}`,
-    `\`\`\``,
+    `## Step 3 — Decide`,
     ``,
-    `Response: \`{ "jobId", "status": "queued"|..., "position", "filename" }\`. The render system queues all submissions — you will NEVER see a BUSY error. Subscribe to:`,
-    ``,
-    `\`\`\``,
-    `GET http://localhost:5555/api/video-gen/{jobId}/events  (SSE)`,
-    `\`\`\``,
-    ``,
-    `Wait for the \`{ "type": "complete" }\` event. The result includes \`thumbnail\` (basename in \`/data/video-thumbnails/\`) and \`path\` (the final mp4).`,
-    ``,
-    `## Evaluate`,
-    ``,
-    `Read the thumbnail file at \`/data/video-thumbnails/<thumbnail>\` using your vision capability. Score against:`,
-    `1. Style adherence — does it match the style spec?`,
-    `2. Continuity — does it flow from the prior scene's tone, color, characters?`,
-    `3. Scene intent — does it actually depict "${scene.intent}"?`,
-    ``,
-    `Decide \`accepted: true | false\`. If false and \`retryCount < 3\`: tweak the prompt (more specific style language, stronger negative prompt, or adjust mood) and re-render — repeat the POST + SSE wait. Track your retries via the PATCH below.`,
-    ``,
-    `## Finalize the scene`,
-    ``,
-    `Once you accept (or hit retry=3 and give up):`,
+    `Issue ONE PATCH to record your verdict, then exit. Do not request renders, do not call last-frame, do not create follow-up tasks — the server handles all of that.`,
     ``,
     `\`\`\``,
     `PATCH http://localhost:5555/api/creative-director/${project.id}/scene/${scene.sceneId}`,
     `Content-Type: application/json`,
+    `\`\`\``,
     ``,
+    `**If the render is acceptable** (good enough — perfect is the enemy of done):`,
+    `\`\`\`json`,
     `{`,
-    `  "status": "accepted" | "failed",`,
-    `  "retryCount": <final count>,`,
-    `  "renderedJobId": "<jobId>",`,
-    `  "evaluation": { "score": 0.0-1.0, "notes": "<short reason>", "accepted": true|false, "sampledAt": "<iso8601>" }`,
+    `  "status": "accepted",`,
+    `  "evaluation": {`,
+    `    "accepted": true,`,
+    `    "score": 0.0–1.0,`,
+    `    "notes": "<one-sentence reason>",`,
+    `    "sampledAt": "<ISO 8601 timestamp>"`,
+    `  }`,
+    `}`,
+    `\`\`\``,
+    ``,
+    `**If the render misses the mark and retries are still available** (\`retryCount < 3\`): tweak the prompt and request a re-render. The server will run the new render and then send you back here for another evaluation.`,
+    `\`\`\`json`,
+    `{`,
+    `  "status": "pending",`,
+    `  "prompt": "<refined render prompt>",`,
+    `  "retryCount": ${(scene.retryCount || 0) + 1},`,
+    `  "evaluation": {`,
+    `    "accepted": false,`,
+    `    "score": 0.0–1.0,`,
+    `    "notes": "<what to fix>",`,
+    `    "sampledAt": "<ISO 8601 timestamp>"`,
+    `  }`,
+    `}`,
+    `\`\`\``,
+    ``,
+    `**If retries are exhausted** (\`retryCount >= 3\`) and the render is still not acceptable, give up on this scene:`,
+    `\`\`\`json`,
+    `{`,
+    `  "status": "failed",`,
+    `  "evaluation": {`,
+    `    "accepted": false,`,
+    `    "score": 0.0–1.0,`,
+    `    "notes": "<why no further retry helps>",`,
+    `    "sampledAt": "<ISO 8601 timestamp>"`,
+    `  }`,
     `}`,
     `\`\`\``,
     ``,
     `Then add the rendered video to the project's collection (only if accepted):`,
-    ``,
     `\`\`\``,
     `POST http://localhost:5555/api/media/collections/${project.collectionId}/items`,
     `Content-Type: application/json`,
     ``,
-    `{ "kind": "video", "ref": "<jobId>" }`,
+    `{ "kind": "video", "ref": "${renderedId}" }`,
     `\`\`\``,
     ``,
-    `Then exit. The server will queue the next scene (or the final stitch) on its own.`,
-  ].join('\n');
-}
-
-export function buildStitchPrompt(project) {
-  const accepted = (project.treatment?.scenes || [])
-    .filter((s) => s.status === 'accepted' && s.renderedJobId)
-    .sort((a, b) => a.order - b.order);
-  if (!accepted.length) {
-    return [
-      `# Creative Director — Stitch task`,
-      ``,
-      `Project ${project.id} has no accepted scenes. Mark it failed:`,
-      ``,
-      `\`\`\``,
-      `PATCH http://localhost:5555/api/creative-director/${project.id}`,
-      `Content-Type: application/json`,
-      ``,
-      `{ "status": "failed" }`,
-      `\`\`\``,
-    ].join('\n');
-  }
-  return [
-    `# Creative Director — Stitch task`,
-    ``,
-    projectBlock(project),
-    `## Task`,
-    ``,
-    `All ${accepted.length} scenes are rendered and accepted. Stitch them into a single episode video using the existing video-timeline pipeline.`,
-    ``,
-    `### Step 1: Create a timeline project`,
-    ``,
-    `\`\`\``,
-    `POST http://localhost:5555/api/video-timeline/projects`,
-    `Content-Type: application/json`,
-    ``,
-    `{ "name": "${project.name} — Final Cut" }`,
-    `\`\`\``,
-    ``,
-    `Response: \`{ "id": "<timelineProjectId>" }\`.`,
-    ``,
-    `### Step 2: Set the clips`,
-    ``,
-    `\`\`\``,
-    `PATCH http://localhost:5555/api/video-timeline/projects/<timelineProjectId>`,
-    `Content-Type: application/json`,
-    ``,
-    `{`,
-    `  "clips": [`,
-    ...accepted.map((s, i) => `    { "clipId": "${s.renderedJobId}", "inSec": 0, "outSec": ${s.durationSeconds} }${i < accepted.length - 1 ? ',' : ''}`),
-    `  ]`,
-    `}`,
-    `\`\`\``,
-    ``,
-    `### Step 3: Render the concat`,
-    ``,
-    `\`\`\``,
-    `POST http://localhost:5555/api/video-timeline/projects/<timelineProjectId>/render`,
-    `\`\`\``,
-    ``,
-    `Response: \`{ "jobId" }\`. Subscribe to \`GET /api/video-timeline/{jobId}/events\` and wait for \`complete\`. The result has \`{ "filename", "id" }\` — the id is the final video's history id.`,
-    ``,
-    `### Step 4: Mark the project complete`,
-    ``,
-    `\`\`\``,
-    `PATCH http://localhost:5555/api/creative-director/${project.id}`,
-    `Content-Type: application/json`,
-    ``,
-    `{ "status": "complete", "timelineProjectId": "<timelineProjectId>", "finalVideoId": "<finalVideoId>" }`,
-    `\`\`\``,
-    ``,
-    `Add the final video to the project's collection too:`,
-    ``,
-    `\`\`\``,
-    `POST http://localhost:5555/api/media/collections/${project.collectionId}/items`,
-    `Content-Type: application/json`,
-    ``,
-    `{ "kind": "video", "ref": "<finalVideoId>" }`,
-    `\`\`\``,
-    ``,
-    `Then exit.`,
+    `Then exit. The server picks up from there.`,
   ].join('\n');
 }

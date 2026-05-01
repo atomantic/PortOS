@@ -12,17 +12,12 @@ vi.mock('../services/creativeDirector/local.js', () => ({
   updateScene: vi.fn(),
 }));
 
-vi.mock('../services/creativeDirector/agentBridge.js', () => ({
-  enqueueCreativeDirectorTask: vi.fn(async () => ({ id: 'task-mock' })),
-}));
-
-vi.mock('../services/creativeDirector/orchestrator.js', () => ({
-  nextTaskKind: vi.fn(),
+vi.mock('../services/creativeDirector/completionHook.js', () => ({
+  startCreativeDirectorProject: vi.fn(async () => undefined),
 }));
 
 import * as cdService from '../services/creativeDirector/local.js';
-import * as agentBridge from '../services/creativeDirector/agentBridge.js';
-import * as orchestrator from '../services/creativeDirector/orchestrator.js';
+import * as hook from '../services/creativeDirector/completionHook.js';
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -109,25 +104,32 @@ describe('creativeDirector routes', () => {
   });
 
   describe('POST /:id/start', () => {
-    it('enqueues the next-kind task when project is in draft', async () => {
-      cdService.getProject
-        .mockResolvedValueOnce({ id: 'cd-1', name: 'A', status: 'draft' })
-        .mockResolvedValueOnce({ id: 'cd-1', name: 'A', status: 'planning' });
+    it('flips draft → planning and triggers the orchestrator', async () => {
+      cdService.getProject.mockResolvedValueOnce({ id: 'cd-1', name: 'A', status: 'draft' });
       cdService.updateProject.mockResolvedValue({});
-      orchestrator.nextTaskKind.mockReturnValue('treatment');
       const r = await request(app).post('/api/creative-director/cd-1/start');
       expect(r.status).toBe(200);
-      expect(r.body.kind).toBe('treatment');
-      expect(agentBridge.enqueueCreativeDirectorTask).toHaveBeenCalled();
+      expect(r.body.ok).toBe(true);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'planning' });
+      expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });
 
-    it('reports nothing-to-do when terminal', async () => {
-      cdService.getProject.mockResolvedValue({ id: 'cd-1', name: 'A', status: 'complete' });
-      orchestrator.nextTaskKind.mockReturnValue(null);
+    it('resets failed scenes back to pending and re-fires orchestrator', async () => {
+      cdService.getProject.mockResolvedValueOnce({
+        id: 'cd-1',
+        status: 'failed',
+        treatment: { scenes: [
+          { sceneId: 'scene-1', status: 'failed', retryCount: 3 },
+          { sceneId: 'scene-2', status: 'accepted', retryCount: 0 },
+        ] },
+      });
+      cdService.updateProject.mockResolvedValue({});
+      cdService.updateScene.mockResolvedValue({});
       const r = await request(app).post('/api/creative-director/cd-1/start');
       expect(r.status).toBe(200);
-      expect(r.body.message).toMatch(/Nothing to do/);
-      expect(agentBridge.enqueueCreativeDirectorTask).not.toHaveBeenCalled();
+      expect(cdService.updateScene).toHaveBeenCalledWith('cd-1', 'scene-1', { status: 'pending', retryCount: 0 });
+      expect(cdService.updateScene).not.toHaveBeenCalledWith('cd-1', 'scene-2', expect.anything());
+      expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });
   });
 
@@ -147,15 +149,18 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(400);
     });
 
-    it('flips status back and enqueues next task', async () => {
-      cdService.getProject
-        .mockResolvedValueOnce({ id: 'cd-1', status: 'paused', treatment: { scenes: [{ status: 'pending' }] } })
-        .mockResolvedValueOnce({ id: 'cd-1', status: 'rendering', treatment: { scenes: [{ status: 'pending' }] } });
+    it('flips paused → rendering and triggers the orchestrator', async () => {
+      cdService.getProject.mockResolvedValueOnce({
+        id: 'cd-1',
+        status: 'paused',
+        treatment: { scenes: [{ status: 'pending' }] },
+      });
       cdService.updateProject.mockResolvedValue({});
-      orchestrator.nextTaskKind.mockReturnValue('scene');
       const r = await request(app).post('/api/creative-director/cd-1/resume');
       expect(r.status).toBe(200);
-      expect(r.body.kind).toBe('scene');
+      expect(r.body.ok).toBe(true);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'rendering' });
+      expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });
   });
 });

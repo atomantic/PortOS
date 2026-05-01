@@ -25,8 +25,7 @@ import {
   setTreatment,
   updateScene,
 } from '../services/creativeDirector/local.js';
-import { enqueueCreativeDirectorTask } from '../services/creativeDirector/agentBridge.js';
-import { nextTaskKind } from '../services/creativeDirector/orchestrator.js';
+import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 
 const router = Router();
 
@@ -84,11 +83,12 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   if (project.status === 'failed') {
-    // Reset every failed scene back to pending so nextTaskKind picks it up.
+    // Reset every failed scene back to pending so the orchestrator picks
+    // them up. Without this, a single failed scene would leave Start a no-op.
     const scenes = project.treatment?.scenes || [];
     for (const s of scenes) {
       if (s.status === 'failed') {
-        await updateScene(project.id, s.sceneId, { status: 'pending' });
+        await updateScene(project.id, s.sceneId, { status: 'pending', retryCount: 0 });
       }
     }
     await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
@@ -97,18 +97,16 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
   } else if (project.status === 'draft') {
     await updateProject(project.id, { status: 'planning' });
   }
-  const fresh = await getProject(project.id);
-  const kind = nextTaskKind(fresh);
-  if (!kind) {
-    return res.json({ ok: true, message: 'Nothing to do — project is already in a terminal state.' });
-  }
-  const task = await enqueueCreativeDirectorTask(fresh, kind);
-  res.json({ ok: true, taskId: task.id, kind });
+  // Fire-and-forget — the orchestrator runs server-side and may spawn an
+  // agent (treatment / evaluate) or kick off a render directly. The route
+  // returns immediately; the UI's polling reflects state changes.
+  startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD start failed: ${e.message}`));
+  res.json({ ok: true });
 }));
 
 // User-callable: pause. Stops the server from auto-enqueueing follow-up
-// tasks. The currently running task (if any) keeps going to completion —
-// canceling renders is a separate gesture (POST /api/media-jobs/:id/cancel).
+// work. The currently running render (if any) keeps going to completion —
+// canceling that is a separate gesture (POST /api/media-jobs/:id/cancel).
 router.post('/:id/pause', asyncHandler(async (req, res) => {
   const updated = await updateProject(req.params.id, { status: 'paused' });
   res.json(updated);
@@ -122,11 +120,8 @@ router.post('/:id/resume', asyncHandler(async (req, res) => {
   }
   const restored = project.treatment ? 'rendering' : 'planning';
   await updateProject(project.id, { status: restored });
-  const fresh = await getProject(project.id);
-  const kind = nextTaskKind(fresh);
-  if (!kind) return res.json({ ok: true, message: 'Nothing to do.' });
-  const task = await enqueueCreativeDirectorTask(fresh, kind);
-  res.json({ ok: true, taskId: task.id, kind });
+  startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD resume failed: ${e.message}`));
+  res.json({ ok: true });
 }));
 
 export default router;

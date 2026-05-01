@@ -1,74 +1,91 @@
 /**
- * Creative Director — CoS task bridge.
+ * Creative Director — CoS agent task bridge.
  *
- * The orchestrator decides what task kind comes next; this module knows how
- * to encode that as a CoS task (description, priority, metadata) and push it
- * onto the task queue. Mirrors the pattern used by handlePipelineProgression
- * in services/agentLifecycle.js — addTask(..., 'internal', { raw: true })
- * followed by cosEvents.emit('task:ready', task) so subAgentSpawner picks it
- * up.
+ * Only spawns agents for the COGNITIVE steps in the pipeline:
+ *   - `treatment`: write the story + scene plan (one per project)
+ *   - `evaluate` : read a rendered scene's thumbnail and judge it against
+ *                  the style spec + scene intent (one per scene render)
  *
- * Tasks set `useWorktree: false` because render work is file-based, not
- * git-based — there's nothing for a worktree to isolate.
+ * The mechanical steps (per-scene render orchestration, concat stitch) run
+ * server-side via sceneRunner / stitchRunner — they don't need an LLM.
+ * That cuts agent runtime from ~3 minutes per scene down to ~30 seconds.
+ *
+ * Tasks set `useWorktree: false` because render evaluation is file-based,
+ * not git-based.
  */
 
 import { randomUUID } from 'crypto';
 import { addTask, cosEvents } from '../cos.js';
-import { buildTreatmentPrompt, buildScenePrompt, buildStitchPrompt } from '../../lib/creativeDirectorPrompts.js';
-import { nextPendingScene } from './orchestrator.js';
+import { buildTreatmentPrompt, buildEvaluatePrompt } from '../../lib/creativeDirectorPrompts.js';
 import { recordRun } from './local.js';
 
-function buildTask(project, kind) {
+function buildTaskRecord(project, kind, scene, context) {
   const taskId = `cd-${project.id}-${kind}-${Date.now().toString(36)}`;
   const runId = randomUUID();
-  let context;
-  let sceneId = null;
-  if (kind === 'treatment') {
-    context = buildTreatmentPrompt(project);
-  } else if (kind === 'scene') {
-    const scene = nextPendingScene(project);
-    if (!scene) throw new Error('agentBridge: no pending scene to enqueue');
-    sceneId = scene.sceneId;
-    context = buildScenePrompt(project, scene);
-  } else if (kind === 'stitch') {
-    context = buildStitchPrompt(project);
-  } else {
-    throw new Error(`agentBridge: unknown kind '${kind}'`);
-  }
-
   return {
     id: taskId,
-    status: 'pending',
-    priority: 'MEDIUM',
-    priorityValue: 2,
-    description: `Creative Director — ${kind} for "${project.name}"`,
-    metadata: {
-      creativeDirector: { projectId: project.id, kind, sceneId, runId },
-      context,
-      useWorktree: false,
-      readOnly: false,
+    runId,
+    record: {
+      id: taskId,
+      status: 'pending',
+      priority: 'MEDIUM',
+      priorityValue: 2,
+      description: buildDescription(project, kind, scene),
+      metadata: {
+        creativeDirector: {
+          projectId: project.id,
+          kind,
+          sceneId: scene?.sceneId || null,
+          runId,
+        },
+        context,
+        useWorktree: false,
+        readOnly: false,
+      },
+      approvalRequired: false,
+      autoApproved: true,
+      section: 'pending',
     },
-    approvalRequired: false,
-    autoApproved: true,
-    section: 'pending',
   };
 }
 
-export async function enqueueCreativeDirectorTask(project, kind) {
-  const task = buildTask(project, kind);
+function buildDescription(project, kind, scene) {
+  if (kind === 'treatment') {
+    return `Creative Director — Treatment for "${project.name}"`;
+  }
+  if (kind === 'evaluate' && scene) {
+    const total = project.treatment?.scenes?.length || '?';
+    const intent = (scene.intent || '').slice(0, 60);
+    return `Creative Director — Evaluate Scene ${scene.order + 1}/${total}: "${intent}" (${project.name})`;
+  }
+  return `Creative Director — ${kind} for "${project.name}"`;
+}
+
+async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
   // Record the run as `running` up-front so the Runs tab shows in-flight
-  // state immediately. completionHook updates the same runId on finish via
-  // updateRun (matched by runId stored in task metadata).
-  const meta = task.metadata.creativeDirector;
+  // state immediately. completionHook updates the same runId on finish.
   await recordRun(project.id, {
-    runId: meta.runId,
-    taskId: task.id,
-    kind: meta.kind,
-    sceneId: meta.sceneId || null,
+    runId,
+    taskId: id,
+    kind,
+    sceneId: sceneId || null,
     status: 'running',
   }).catch((err) => console.log(`⚠️ CD recordRun(running) failed: ${err.message}`));
-  await addTask(task, 'internal', { raw: true });
-  cosEvents.emit('task:ready', task);
-  console.log(`📤 CD task enqueued: ${task.id} (${kind} for ${project.id})`);
-  return task;
+  await addTask(record, 'internal', { raw: true });
+  cosEvents.emit('task:ready', record);
+  console.log(`📤 CD task enqueued: ${id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);
+  return record;
+}
+
+export async function enqueueTreatmentTask(project) {
+  const context = buildTreatmentPrompt(project);
+  const built = buildTaskRecord(project, 'treatment', null, context);
+  return persistAndEmit(built, project, 'treatment', null);
+}
+
+export async function enqueueEvaluateTask(project, scene) {
+  if (!scene) throw new Error('enqueueEvaluateTask: scene is required');
+  const context = buildEvaluatePrompt(project, scene);
+  const built = buildTaskRecord(project, 'evaluate', scene, context);
+  return persistAndEmit(built, project, 'evaluate', scene.sceneId);
 }
