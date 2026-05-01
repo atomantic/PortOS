@@ -56,6 +56,10 @@ export default function ImageGen() {
   const [gallery, setGallery] = useState([]);
   const [preview, setPreview] = useState(null);
   const [showHidden, setShowHidden] = useState(false);
+  // FLUX.2 readiness — drives the gating banner. Lazy-fetched on the first
+  // selection of a flux2 model so we don't make an extra request when the
+  // user is only using mflux/external/codex.
+  const [flux2Status, setFlux2Status] = useState(null);
 
   const [selectedMode, setSelectedMode] = useState(null);
   const [availableBackends, setAvailableBackends] = useState([]);
@@ -272,6 +276,19 @@ export default function ImageGen() {
   const currentModel = models.find((m) => m.id === modelId);
   const matchedResolution = RESOLUTIONS.find((r) => r.w === width && r.h === height);
   const resolutionLabel = matchedResolution?.label || `${width}×${height}`;
+  const isFlux2Model = currentModel?.runner === 'flux2';
+
+  useEffect(() => {
+    if (!isFlux2Model) { setFlux2Status(null); return; }
+    fetch('/api/image-gen/setup/flux2-status')
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => { if (s) setFlux2Status(s); })
+      .catch(() => {});
+  }, [isFlux2Model, modelId]);
+
+  const flux2Issue = isFlux2Model && flux2Status
+    ? (!flux2Status.venvInstalled ? 'venv' : !flux2Status.hfTokenPresent ? 'token' : null)
+    : null;
   const { visibleGallery, hiddenGallery } = useMemo(() => ({
     visibleGallery: gallery.filter((img) => !img.hidden),
     hiddenGallery: gallery.filter((img) => img.hidden),
@@ -565,6 +582,22 @@ export default function ImageGen() {
               />
             </div>
           </div>
+
+          {flux2Issue === 'venv' && (
+            <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
+              FLUX.2 venv not found at <code className="text-white">{flux2Status.expectedVenvPath}</code>.
+              Run <code className="text-white">INSTALL_FLUX2=1 bash scripts/setup-image-video.sh</code> to bootstrap it.
+            </div>
+          )}
+          {flux2Issue === 'token' && (
+            <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
+              FLUX.2-klein is gated. Accept the license at{' '}
+              <a href={flux2Status.licenseUrl} target="_blank" rel="noreferrer" className="underline text-white">
+                huggingface.co/black-forest-labs/FLUX.2-klein-4B
+              </a>{' '}
+              and export <code className="text-white">HF_TOKEN=…</code> before running PortOS.
+            </div>
+          )}
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {isLocalMode && models.length > 0 && (

@@ -43,10 +43,43 @@ const DEFAULT_REGISTRY = {
     defaultWindows: 'ltx_video',
   },
   image: [
+    // mflux runner — MLX-only, Flux 1 (dev/schnell). `runner` defaults to 'mflux'.
     { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5 },
     { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0   },
-    { id: 'flux2-klein-4b',   name: 'Flux 2 Klein 4B', steps: 8,  guidance: 3.5, broken: 'macos' },
-    { id: 'flux2-klein-9b',   name: 'Flux 2 Klein 9B', steps: 8,  guidance: 3.5, broken: 'macos' },
+    // flux2 runner — PyTorch + diffusers + MPS (Apple Silicon) or CUDA (Win/Linux).
+    // Models are quantized to fit on consumer hardware; tokenizer comes from the
+    // gated base repo, so users must accept the license at huggingface.co and
+    // set HF_TOKEN before first use.
+    {
+      id: 'flux2-klein-4b',
+      name: 'Flux 2 Klein 4B (SDNQ 4-bit, ~8 GB @ 512px)',
+      runner: 'flux2',
+      quantization: 'sdnq',
+      repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+      tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      steps: 8,
+      guidance: 3.5,
+    },
+    {
+      id: 'flux2-klein-9b',
+      name: 'Flux 2 Klein 9B (SDNQ 4-bit, ~12 GB — needs 32+ GB RAM)',
+      runner: 'flux2',
+      quantization: 'sdnq',
+      repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
+      tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B',
+      steps: 8,
+      guidance: 3.5,
+    },
+    {
+      id: 'flux2-klein-4b-int8',
+      name: 'Flux 2 Klein 4B (Int8, ~16 GB)',
+      runner: 'flux2',
+      quantization: 'int8',
+      repo: 'aydin99/FLUX.2-klein-4B-int8',
+      basePipelineRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      steps: 8,
+      guidance: 3.5,
+    },
   ],
   textEncoders: [
     { id: 'gemma-4bit',     label: 'Gemma 3 12B 4-bit (smallest, ~7 GB)',                repo: 'mlx-community/gemma-3-12b-it-4bit' },
@@ -90,13 +123,34 @@ const seedIfMissing = () => {
 const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const arrayOrDefault = (v, fallback) => (Array.isArray(v) ? v : fallback);
 
+// Pre-flux2 stored entries had `broken: 'macos'` and no `runner` field. Merge
+// missing flux2 fields from DEFAULT_REGISTRY when an entry id matches a known
+// flux2 model but is missing the runner discriminator. User overrides for
+// other fields (custom name, steps, repo) are preserved.
+const FLUX2_DEFAULTS_BY_ID = Object.fromEntries(
+  DEFAULT_REGISTRY.image.filter((m) => m.runner === 'flux2').map((m) => [m.id, m])
+);
+
+const upgradeImageEntries = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || typeof entry.id !== 'string') return entry;
+    const seed = FLUX2_DEFAULTS_BY_ID[entry.id];
+    if (!seed || entry.runner === 'flux2') return entry;
+    const { broken: _drop, ...rest } = entry;
+    return { ...seed, ...rest, runner: 'flux2' };
+  });
+};
+
+export const isFlux2 = (model) => model?.runner === 'flux2';
+
 const normalizeRegistry = (parsed) => {
   const safe = isPlainObject(parsed) ? parsed : {};
   const safeVideo = isPlainObject(safe.video) ? safe.video : {};
   return {
     ...DEFAULT_REGISTRY,
     ...safe,
-    image: arrayOrDefault(safe.image, DEFAULT_REGISTRY.image),
+    image: upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
     textEncoders: arrayOrDefault(safe.textEncoders, DEFAULT_REGISTRY.textEncoders),
     video: {
       ...DEFAULT_REGISTRY.video,

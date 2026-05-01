@@ -68,6 +68,31 @@ export async function detectPython() {
   return stdout.trim().split(/\r?\n/)[0] || null;
 }
 
+// FLUX.2 runs in its own venv because mflux (MLX) and torch+diffusers-from-git
+// have hostile dependency trees. Bootstrap with `INSTALL_FLUX2=1
+// scripts/setup-image-video.sh`. We probe a small candidate list rather than
+// asking the user to configure it separately — first match wins.
+const FLUX2_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-flux2', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-flux2', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-flux2', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-flux2', 'bin', 'python3'),
+    ];
+
+export const FLUX2_VENV_DEFAULT = FLUX2_VENV_CANDIDATES[0];
+
+let cachedFlux2Python = null;
+export function resolveFlux2Python() {
+  if (cachedFlux2Python && existsSync(cachedFlux2Python)) return cachedFlux2Python;
+  for (const p of FLUX2_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedFlux2Python = p; return p; }
+  }
+  return null;
+}
+
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
 // before exec. Single-user / Tailnet model means we trust the operator, but
 // "you can shell out to anything" is still too sharp — restrict to actual

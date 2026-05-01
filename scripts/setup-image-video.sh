@@ -9,6 +9,7 @@
 #   PYTHON_BIN     Python 3 binary to use (default: python3)
 #   PORTOS_DATA    Path to PortOS data dir (default: ./data, resolved from $REPO_ROOT)
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
+#   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 
 set -euo pipefail
 
@@ -70,6 +71,56 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
   fi
 fi
 
+INSTALL_FLUX2="${INSTALL_FLUX2:-$(is_macos && echo 1 || echo 0)}"
+
+if [[ "$INSTALL_FLUX2" == "1" ]]; then
+  # FLUX.2-klein needs torch>=2.5 + diffusers-from-git + sdnq + optimum-quanto.
+  # Mixing those into the mflux pip --user pile (mflux pulls older torch) is
+  # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
+  # python3 here when the active model has runner=='flux2'.
+  FLUX2_VENV="${HOME}/.portos/venv-flux2"
+  FLUX2_PY="$FLUX2_VENV/bin/python3"
+  if [[ ! -x "$FLUX2_PY" ]]; then
+    echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV}..."
+    mkdir -p "${HOME}/.portos"
+    "$PYTHON_BIN" -m venv "$FLUX2_VENV"
+  fi
+
+  # Skip the (slow, network-heavy) pip path when Flux2KleinPipeline already
+  # imports — diffusers-from-git is a git clone every run otherwise. Use
+  # FLUX2_FORCE_REINSTALL=1 to bypass.
+  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline" 2>/dev/null; then
+    echo "✅ FLUX.2 venv already ready: $FLUX2_PY"
+  else
+    echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
+    "$FLUX2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # diffusers-from-git is required because Flux2KleinPipeline isn't in any
+    # tagged release as of late 2025 / early 2026. sdnq is git-only too —
+    # registers a custom config type at import-time which
+    # Flux2KleinPipeline.from_pretrained relies on.
+    "$FLUX2_PY" -m pip install --upgrade \
+      "torch>=2.5" \
+      torchvision \
+      accelerate \
+      "transformers>=4.45" \
+      sentencepiece \
+      protobuf \
+      safetensors \
+      "huggingface_hub[hf_xet]" \
+      "diffusers @ git+https://github.com/huggingface/diffusers" \
+      "sdnq @ git+https://github.com/Disty0/sdnq.git" \
+      "peft>=0.17" \
+      "optimum-quanto>=0.2.7" \
+      pillow
+    if ! "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline" 2>/dev/null; then
+      echo "❌ flux2 venv built but 'from diffusers import Flux2KleinPipeline' failed." >&2
+      echo "   Try: $FLUX2_PY -m pip install --upgrade --force-reinstall 'diffusers @ git+https://github.com/huggingface/diffusers'" >&2
+      exit 1
+    fi
+    echo "✅ FLUX.2 venv ready: $FLUX2_PY"
+  fi
+fi
+
 # ffmpeg — required for thumbnails, last-frame extraction, and stitch.
 if ! have ffmpeg; then
   if is_macos && have brew; then
@@ -87,5 +138,12 @@ echo "   Python:    $PYTHON_PATH"
 echo "   HF cache:  ~/.cache/huggingface (HF default)"
 echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"
+if [[ "$INSTALL_FLUX2" == "1" ]]; then
+  echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"
+  echo ""
+  echo "⚠️  FLUX.2-klein needs HF auth: accept the license at"
+  echo "    https://huggingface.co/black-forest-labs/FLUX.2-klein-4B"
+  echo "    then export HF_TOKEN=... before running PortOS."
+fi
 echo ""
 echo "Set this Python path in PortOS Settings → Image Gen → Local."

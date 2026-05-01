@@ -22,6 +22,7 @@ import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
+  resolveFlux2Python, FLUX2_VENV_DEFAULT,
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
@@ -185,6 +186,20 @@ router.get('/setup/python', asyncHandler(async (_req, res) => {
   const path = await detectPython();
   res.json({ path });
 }));
+
+// Used by the FLUX.2 model picker: surface a banner when the gated repo's
+// license hasn't been accepted (HF_TOKEN missing) and the runner is set up.
+router.get('/setup/flux2-status', (_req, res) => {
+  const hasToken = !!(process.env.HF_TOKEN || process.env.HUGGING_FACE_HUB_TOKEN);
+  const venvPython = resolveFlux2Python();
+  res.json({
+    hfTokenPresent: hasToken,
+    venvInstalled: !!venvPython,
+    venvPath: venvPython,
+    expectedVenvPath: FLUX2_VENV_DEFAULT,
+    licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B',
+  });
+});
 
 const checkSchema = z.object({ pythonPath: z.string().min(1) });
 
