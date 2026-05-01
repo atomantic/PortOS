@@ -1068,10 +1068,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     await handlePipelineProgression(task, agentId, effectiveSuccess);
   }
 
-  // Advance Creative Director task chain if applicable. After a treatment /
-  // scene / stitch task finishes, the orchestrator decides what comes next
-  // (next scene, then stitch, then nothing) and enqueues it. Failure marks
-  // the project failed; the user can resume from the UI.
+  // Advance Creative Director task chain if applicable. After a Creative
+  // Director agent task (treatment or evaluate) finishes, the orchestrator
+  // decides what comes next and enqueues it. Scene rendering and final
+  // stitching run server-side rather than as separate CoS tasks, so they
+  // never reach this hook directly. Failure marks the project failed; the
+  // user can resume from the UI.
   if (task?.metadata?.creativeDirector) {
     try {
       const { handleCreativeDirectorCompletion } = await import('./creativeDirector/completionHook.js');

@@ -164,7 +164,20 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
     await ensureDir(PATHS.uploads);
     const ext = extname(req.file.originalname || req.file.path) || '.bin';
     const durablePath = join(PATHS.uploads, `video-source-${randomUUID()}${ext}`);
-    await copyFile(req.file.path, durablePath);
+    // copyFile can throw on disk-full / permission errors. If it does we
+    // need to clean up: drop the multipart temp upload AND the half-written
+    // durablePath (copyFile may have created a zero-byte sentinel before
+    // bailing). Without this, a failed POST leaks files in /tmp + data/uploads.
+    try {
+      await copyFile(req.file.path, durablePath);
+    } catch (err) {
+      await unlink(durablePath).catch(() => {});
+      await cleanupTempUpload();
+      throw new ServerError(
+        `Failed to stage upload to durable location: ${err.message}`,
+        { status: 500, code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED' },
+      );
+    }
     await unlink(req.file.path).catch(() => {});
     sourceImagePath = durablePath;
     uploadedTempPath = durablePath;

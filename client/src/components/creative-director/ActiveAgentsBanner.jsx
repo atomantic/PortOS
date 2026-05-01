@@ -34,13 +34,15 @@ export default function ActiveAgentsBanner({ agents }) {
   );
 }
 
-// Pull the task kind (treatment / scene / stitch) out of the
+// Pull the task kind (treatment / evaluate) out of the
 // cd-<projectId>-<kind>-<ts> task id. Project UUIDs contain hex segments,
 // so a token-includes match is more reliable than counting separators.
+// Only `treatment` and `evaluate` reach the CoS task queue today; scene
+// rendering and final stitching run server-side and never appear here.
 export function extractKind(taskId) {
   if (!taskId) return 'task';
   const parts = taskId.split('-');
-  for (const k of ['treatment', 'scene', 'stitch']) {
+  for (const k of ['treatment', 'evaluate']) {
     if (parts.includes(k)) return k;
   }
   return 'task';

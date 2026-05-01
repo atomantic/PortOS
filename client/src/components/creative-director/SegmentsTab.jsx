@@ -17,19 +17,28 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
   }
   const sorted = scenes.slice().sort((a, b) => a.order - b.order);
 
-  // The orchestrator's nextPendingScene picks the lowest-order non-terminal
-  // scene; agentBridge enqueues a `scene` task pointing at it. So while a
-  // `scene`-kind agent is running, it's working on this one. Fold the active
-  // agent onto that scene's card so the user can see something is happening
-  // even before the agent PATCHes its scene status.
-  const sceneAgents = activeAgents.filter((a) => extractKind(a.taskId) === 'scene');
+  // Scene rendering runs server-side now (no `scene` CoS task), so the only
+  // CD agent we'd see attached to a specific scene is `evaluate` — it reads
+  // the rendered thumbnail and judges it against the project's style spec.
+  // Use the explicit sceneId from the agent's task metadata (set by
+  // agentBridge#enqueueEvaluateTask) when available — that pins the active
+  // agent to the exact scene being judged. Fall back to the orchestrator's
+  // "next non-terminal scene" guess only when metadata is missing.
+  const sceneAgents = activeAgents.filter((a) => extractKind(a.taskId) === 'evaluate');
   const inflightScene = sorted.find((s) => s.status === 'pending' || s.status === 'rendering' || s.status === 'evaluating');
-  const inflightSceneId = sceneAgents.length ? inflightScene?.sceneId : null;
+  const agentSceneIds = new Set(
+    sceneAgents
+      .map((a) => a.task?.metadata?.creativeDirector?.sceneId)
+      .filter(Boolean),
+  );
+  const fallbackInflightSceneId = sceneAgents.length ? inflightScene?.sceneId : null;
+  const isSceneInflight = (sceneId) =>
+    agentSceneIds.has(sceneId) || (agentSceneIds.size === 0 && sceneId === fallbackInflightSceneId);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
       {sorted.map((s) => {
-        const isInflight = inflightSceneId === s.sceneId;
+        const isInflight = isSceneInflight(s.sceneId);
         const decoratedStatus = isInflight && s.status === 'pending' ? 'rendering' : s.status;
         return (
           <div key={s.sceneId} className={`bg-port-card border rounded overflow-hidden ${isInflight ? 'border-port-accent/60' : 'border-port-border'}`}>
