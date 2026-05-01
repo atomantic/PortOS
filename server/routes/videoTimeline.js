@@ -37,6 +37,8 @@ const updateBodySchema = z.object({
   name: z.string().min(1).max(200).optional(),
   clips: z.array(clipSchema).max(200).optional(),
   expectedUpdatedAt: z.string().optional(),
+}).refine((b) => b.name !== undefined || b.clips !== undefined, {
+  message: 'PATCH body must include at least name or clips',
 });
 
 router.get('/projects', asyncHandler(async (_req, res) => {

@@ -31,13 +31,18 @@ const resolveCover = (collection, imagesByName, videosById) => {
       if (url) return url;
     }
   }
-  // Fallback chain: most-recently-added item with a renderable thumbnail.
-  const sorted = [...items].sort((a, b) => new Date(b.addedAt || 0) - new Date(a.addedAt || 0));
-  for (const it of sorted) {
+  // Fallback: single O(n) pass for the most-recently-added item that has a
+  // renderable thumbnail. Sorting all items is O(n log n) and gets expensive
+  // on collections approaching ITEMS_MAX (5000).
+  let bestUrl = null;
+  let bestTs = -Infinity;
+  for (const it of items) {
     const url = lookup(it);
-    if (url) return url;
+    if (!url) continue;
+    const ts = new Date(it.addedAt || 0).getTime();
+    if (ts > bestTs) { bestTs = ts; bestUrl = url; }
   }
-  return null;
+  return bestUrl;
 };
 
 export default function MediaCollections() {

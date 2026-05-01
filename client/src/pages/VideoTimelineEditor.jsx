@@ -193,7 +193,7 @@ export default function VideoTimelineEditor() {
   // returns the canonical project; we only update updatedAt and preserve
   // local _keys to avoid blowing away the dnd identity.
   const saveTimeline = useCallback(async (next) => {
-    if (!project) return;
+    if (!project) return false;
     const cleanClips = next.map((c) => ({ clipId: c.clipId, inSec: c.inSec, outSec: c.outSec }));
     const updated = await api.updateTimelineProject(projectId, {
       clips: cleanClips,
@@ -207,7 +207,9 @@ export default function VideoTimelineEditor() {
       toast.error(`Save failed: ${err.message}`);
       return null;
     });
-    if (updated) setProject((p) => ({ ...p, updatedAt: updated.updatedAt }));
+    if (!updated) return false;
+    setProject((p) => ({ ...p, updatedAt: updated.updatedAt }));
+    return true;
   }, [project, projectId, refresh]);
 
   // Debounced save: trim-input edits fire many PATCHes per drag if we don't
@@ -218,6 +220,10 @@ export default function VideoTimelineEditor() {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => saveTimeline(next), 400);
   }, [saveTimeline]);
+
+  // Drop any pending debounced save when the editor unmounts so a stale
+  // timeout doesn't fire after navigation.
+  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
 
   const updateClips = useCallback((updater) => {
     setClips((prev) => {
@@ -339,9 +345,12 @@ export default function VideoTimelineEditor() {
       toast.error('Add at least one clip before rendering');
       return;
     }
-    // Flush any pending PATCH so the server-side render reads the latest layout.
+    // Flush any pending PATCH so the server-side render reads the latest
+    // layout. If the save fails (conflict, network), abort — otherwise we'd
+    // render a stale server-side timeline while the UI shows fresh edits.
     clearTimeout(saveTimerRef.current);
-    await saveTimeline(clips);
+    const saved = await saveTimeline(clips);
+    if (!saved) return;
     const result = await api.renderTimelineProject(projectId).catch((err) => {
       if (err.code === 'RENDER_IN_PROGRESS') {
         const jobId = err.context?.jobId;

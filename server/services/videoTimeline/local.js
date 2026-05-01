@@ -184,9 +184,15 @@ export async function resolveClips(project) {
       status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missing },
     });
   }
-  // ffprobe spawns one child per clip — parallelize so 5 clips don't add 5×
-  // sequential probe latency to render startup.
-  const audioFlags = await Promise.all(prepared.map((p) => probeAudio(p.videoPath)));
+  // ffprobe spawns one child per clip. Parallelize, but cap concurrency so a
+  // 200-clip project doesn't fork-bomb on render startup.
+  const PROBE_CONCURRENCY = 8;
+  const audioFlags = new Array(prepared.length);
+  for (let start = 0; start < prepared.length; start += PROBE_CONCURRENCY) {
+    const batch = prepared.slice(start, start + PROBE_CONCURRENCY);
+    const results = await Promise.all(batch.map((p) => probeAudio(p.videoPath)));
+    for (let j = 0; j < results.length; j++) audioFlags[start + j] = results[j];
+  }
   return prepared.map((p, idx) => ({
     index: p.i,
     clipId: p.ref.clipId,
@@ -240,7 +246,12 @@ export function buildFfmpegArgs(clips, outputPath) {
         `[${aIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=start=${c.inSec}:end=${c.outSec},asetpts=PTS-STARTPTS[a${i}]`
       );
     } else {
-      filters.push(`[${aIdx}:a]asetpts=PTS-STARTPTS[a${i}]`);
+      // The silent input must match the same sample-format/layout as the
+      // real-audio branches; concat=v=1:a=1 fails fast with "Input link
+      // parameters do not match" if they diverge.
+      filters.push(
+        `[${aIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`
+      );
     }
     concatStreams.push(`[v${i}][a${i}]`);
   }

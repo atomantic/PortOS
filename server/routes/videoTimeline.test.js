@@ -67,8 +67,13 @@ describe('videoTimeline routes', () => {
   describe('PATCH /projects/:id', () => {
     it('rejects clip with negative inSec', async () => {
       const r = await request(app).patch('/api/video-timeline/projects/p1').send({
-        clips: [{ clipId: 'c1', inSec: -1, outSec: 2 }],
+        clips: [{ clipId: '11111111-1111-4111-8111-111111111111', inSec: -1, outSec: 2 }],
       });
+      expect(r.status).toBe(400);
+    });
+
+    it('rejects empty patch body', async () => {
+      const r = await request(app).patch('/api/video-timeline/projects/p1').send({});
       expect(r.status).toBe(400);
     });
 

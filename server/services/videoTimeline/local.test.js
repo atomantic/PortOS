@@ -57,9 +57,11 @@ describe('buildFfmpegArgs', () => {
     expect(inputs).toContain('anullsrc=channel_layout=stereo:sample_rate=48000');
 
     const filter = args[args.indexOf('-filter_complex') + 1];
-    // Clip 0's video uses input 0; its audio uses input 1 (silent stub)
+    // Clip 0's video uses input 0; its audio uses input 1 (silent stub) and
+    // is normalized to match the real-audio sample-format/layout so concat
+    // accepts both branches.
     expect(filter).toContain('[0:v]scale=768:512');
-    expect(filter).toContain('[1:a]asetpts=PTS-STARTPTS[a0]');
+    expect(filter).toContain('[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[a0]');
     // Clip 1's video uses input 2; its audio uses input 2 (real audio)
     expect(filter).toContain('[2:v]scale=768:512');
     expect(filter).toContain('[2:a]aresample=48000');
