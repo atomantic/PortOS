@@ -248,7 +248,23 @@ async function drainLoop() {
     broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
     mediaJobEvents.emit('started', job);
     console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${job.kind} started`);
-    await runJob(job);
+    // The worker loop is a top-level fire-and-forget — if runJob throws
+    // unexpectedly (an unhandled emitter / listener edge case, etc.), an
+    // uncaught error here would terminate the loop and freeze the queue
+    // until the next enqueueJob re-armed startWorker. Catch + recover so a
+    // single bad job can't kill the worker.
+    try {
+      await runJob(job);
+    } catch (err) {
+      console.log(`❌ media-job [${job.id.slice(0, 8)}] runJob threw: ${err.message}`);
+      if (job.status === 'running') {
+        job.status = 'failed';
+        job.error = `runJob threw: ${err.message}`;
+        job.completedAt = new Date().toISOString();
+        broadcastSse(ensureSseEntry(job.id), { type: 'error', error: job.error });
+        mediaJobEvents.emit('failed', job);
+      }
+    }
     running = null;
     archive.push(job);
     // Now that running is cleared, every queued job has shifted up one slot.
