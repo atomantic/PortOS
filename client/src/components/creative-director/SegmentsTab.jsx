@@ -34,6 +34,18 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
   const fallbackInflightSceneId = sceneAgents.length ? inflightScene?.sceneId : null;
   const isSceneInflight = (sceneId) =>
     agentSceneIds.has(sceneId) || (agentSceneIds.size === 0 && sceneId === fallbackInflightSceneId);
+  // Pick out only the agents whose task metadata names this exact scene.
+  // Without this filter the row would render every evaluate agent in the
+  // project — confusing if multiple evaluates run concurrently or if an
+  // earlier agent's metadata is stale. When metadata is missing for all
+  // agents (older runs / queued pre-spawn), fall back to the orchestrator's
+  // single inflight guess so the row still shows *something*.
+  const agentsForScene = (sceneId) => {
+    const tagged = sceneAgents.filter((a) => a.task?.metadata?.creativeDirector?.sceneId === sceneId);
+    if (tagged.length) return tagged;
+    if (agentSceneIds.size === 0 && sceneId === fallbackInflightSceneId) return sceneAgents;
+    return [];
+  };
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -69,15 +81,19 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
               <div className="text-xs text-port-text-muted">
                 {s.durationSeconds}s • retries: {s.retryCount || 0}
               </div>
-              {isInflight && sceneAgents.length > 0 && (
-                <div className="text-xs text-port-accent font-mono mt-1 flex flex-wrap gap-x-2">
-                  {sceneAgents.map((a) => (
-                    <Link key={a.id} to={`/cos/agents?id=${encodeURIComponent(a.id)}`} className="hover:underline">
-                      {a.id?.slice(0, 14) || 'agent'}
-                    </Link>
-                  ))}
-                </div>
-              )}
+              {isInflight && (() => {
+                const myAgents = agentsForScene(s.sceneId);
+                if (!myAgents.length) return null;
+                return (
+                  <div className="text-xs text-port-accent font-mono mt-1 flex flex-wrap gap-x-2">
+                    {myAgents.map((a) => (
+                      <Link key={a.id} to={`/cos/agents?id=${encodeURIComponent(a.id)}`} className="hover:underline">
+                        {a.id?.slice(0, 14) || 'agent'}
+                      </Link>
+                    ))}
+                  </div>
+                );
+              })()}
               {s.evaluation?.notes && (
                 <div className="text-xs text-port-text-muted italic truncate" title={s.evaluation.notes}>
                   {s.evaluation.notes}

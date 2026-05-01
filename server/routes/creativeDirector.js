@@ -98,7 +98,9 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
         await updateScene(project.id, s.sceneId, { status: 'pending', retryCount: 0 });
       }
     }
-    await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
+    // Clear the prior failure banner — restart implies the user has
+    // accepted the previous failure and wants a fresh attempt.
+    await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning', failureReason: null });
   } else if (project.status === 'paused') {
     await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
   } else if (project.status === 'draft') {

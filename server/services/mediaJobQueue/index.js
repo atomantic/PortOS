@@ -415,9 +415,14 @@ async function runJob(job) {
   // so the queue can make forward progress.
   const watchdogMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
   watchdogTimer = setTimeout(async () => {
+    // If the gen emitted a terminal event between the timer firing and now,
+    // job.status is already non-running. Skip both the failed-handler call
+    // (terminate is idempotent, but logging would still mislead) AND the
+    // cancel() — calling cancel() here could SIGTERM the *next* gen run
+    // since cancel() targets whatever child is currently spawned.
+    if (job.status !== 'running') return;
     console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogMs}ms — marking failed`);
     handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogMs}ms` });
-    // Best-effort cancel the underlying child process.
     if (job.kind === 'video') {
       const { cancel } = await import('../videoGen/local.js');
       cancel();
