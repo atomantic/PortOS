@@ -681,9 +681,10 @@ export const creativeDirectorTreatmentSchema = z.object({
 
 // Used by the agent when finishing a scene render.
 export const creativeDirectorSceneUpdateSchema = z.object({
-  // Subset of SCENE_STATUSES — agents update via this endpoint and shouldn't
-  // be allowed to flip a scene back to 'pending'.
-  status: z.enum(SCENE_STATUSES.filter((s) => s !== 'pending')).optional(),
+  // Full SCENE_STATUSES — the evaluator agent flips a scene back to 'pending'
+  // (with an updated prompt + bumped retryCount) to request a re-render; see
+  // creativeDirectorPrompts.js and completionHook.js's advanceAfterSceneSettled.
+  status: z.enum(SCENE_STATUSES).optional(),
   retryCount: z.number().int().min(0).max(10).optional(),
   renderedJobId: z.string().max(64).nullable().optional(),
   prompt: z.string().min(1).max(2000).optional(),
