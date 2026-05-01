@@ -136,9 +136,17 @@ const upgradeImageEntries = (list) => {
   return list.map((entry) => {
     if (!isPlainObject(entry) || typeof entry.id !== 'string') return entry;
     const seed = FLUX2_DEFAULTS_BY_ID[entry.id];
-    if (!seed || entry.runner === 'flux2') return entry;
-    const { broken: _drop, ...rest } = entry;
-    return { ...seed, ...rest, runner: 'flux2' };
+    // Only upgrade entries that DIDN'T set `runner` at all — a user who
+    // explicitly chose a different runner for a known flux2 id (e.g. to
+    // wire it up to a custom runner) keeps that override.
+    if (!seed || entry.runner !== undefined) return entry;
+    // Only strip `broken: 'macos'` (the legacy flag the upgrade is meant
+    // to clear). Any other broken value the user added is intentional and
+    // preserved.
+    const { broken, ...rest } = entry;
+    const merged = { ...seed, ...rest, runner: 'flux2' };
+    if (broken !== undefined && broken !== 'macos') merged.broken = broken;
+    return merged;
   });
 };
 

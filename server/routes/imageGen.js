@@ -190,7 +190,15 @@ router.get('/setup/python', asyncHandler(async (_req, res) => {
 // Used by the FLUX.2 model picker: surface a banner when the gated repo's
 // license hasn't been accepted (HF_TOKEN missing) and the runner is set up.
 router.get('/setup/flux2-status', (_req, res) => {
-  const hasToken = !!(process.env.HF_TOKEN || process.env.HUGGING_FACE_HUB_TOKEN);
+  // huggingface_hub reads HF_TOKEN (preferred) and the legacy
+  // HUGGINGFACEHUB_API_TOKEN / HUGGINGFACE_HUB_TOKEN names. Earlier rev of
+  // this code used HUGGING_FACE_HUB_TOKEN (extra underscore) which doesn't
+  // match what the library actually checks.
+  const hasToken = !!(
+    process.env.HF_TOKEN ||
+    process.env.HUGGINGFACE_HUB_TOKEN ||
+    process.env.HUGGINGFACEHUB_API_TOKEN
+  );
   const venvPython = resolveFlux2Python();
   res.json({
     hfTokenPresent: hasToken,
