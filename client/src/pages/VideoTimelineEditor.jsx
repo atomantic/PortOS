@@ -156,6 +156,12 @@ export default function VideoTimelineEditor() {
 
   const videoRef = useRef(null);
   const lastSrcRef = useRef('');
+  // The video.onloadedmetadata callback fires async after a src swap. Reading
+  // `playing` directly inside it captures the value at swap time — if the
+  // user pauses while metadata loads, the handler would still autoplay. A
+  // ref we update synchronously gives the handler the live value.
+  const playingRef = useRef(false);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
   const playClipIndexRef = useRef(-1);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -323,7 +329,7 @@ export default function VideoTimelineEditor() {
       // and the user sees frame 0 of the clip instead of `inSec + within`.
       video.onloadedmetadata = () => {
         video.currentTime = wantTime;
-        if (playing) video.play().catch(() => {});
+        if (playingRef.current) video.play().catch(() => {});
       };
     } else if (index !== playClipIndexRef.current) {
       video.currentTime = wantTime;
@@ -393,6 +399,11 @@ export default function VideoTimelineEditor() {
         toast.error(data.error || 'Render failed');
         es.close();
         setRenderJobId(null);
+      } else if (data.type === 'cancelled') {
+        toast('Render cancelled');
+        es.close();
+        setRenderJobId(null);
+        setRenderProgress(0);
       }
     };
     es.onerror = () => {

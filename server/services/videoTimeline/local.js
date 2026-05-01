@@ -244,8 +244,12 @@ export function buildFfmpegArgs(clips, outputPath) {
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
     const { vIdx, aIdx } = indices[i];
+    // fps=<canon> resamples each clip to the timeline's canonical frame rate;
+    // without it, concat fails with "Input link parameters do not match" when
+    // a project mixes clips of different fps (e.g. a 24fps generation and a
+    // 30fps one).
     filters.push(
-      `[${vIdx}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=start=${c.inSec}:end=${c.outSec},setpts=PTS-STARTPTS[v${i}]`
+      `[${vIdx}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${clips[0].fps || 24},trim=start=${c.inSec}:end=${c.outSec},setpts=PTS-STARTPTS[v${i}]`
     );
     if (c.hasAudio) {
       filters.push(
@@ -384,13 +388,14 @@ export async function renderProject(projectId) {
   proc.on('close', async (code, signal) => {
     job.process = null;
     if (code !== 0) {
-      job.status = 'error';
-      const reason = signal === 'SIGKILL'
-        ? 'Render killed (cancelled or out of memory)'
+      const cancelled = signal === 'SIGTERM' || signal === 'SIGKILL';
+      job.status = cancelled ? 'cancelled' : 'error';
+      const reason = cancelled
+        ? 'Render cancelled'
         : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
-      console.log(`❌ Timeline render failed [${jobId.slice(0, 8)}]: ${reason}`);
+      console.log(`${cancelled ? '🛑' : '❌'} Timeline render ${cancelled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       await unlink(outputPath).catch(() => {});
-      broadcastSse(job, { type: 'error', error: reason });
+      broadcastSse(job, { type: cancelled ? 'cancelled' : 'error', error: reason });
       projectRenders.delete(projectId);
       closeJobAfterDelay(jobs, jobId);
       return;

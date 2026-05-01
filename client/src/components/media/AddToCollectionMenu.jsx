@@ -83,12 +83,21 @@ export default function AddToCollectionMenu({ item }) {
     });
     if (!created) { setCreating(false); return; }
     // Auto-add the current item so the user doesn't have to click twice
-    // after creating a brand-new collection for it.
-    const withItem = await addMediaCollectionItem(created.id, { kind: item.kind, ref: itemRef }).catch(() => created);
+    // after creating a brand-new collection for it. Track the add result
+    // separately so a failure here doesn't masquerade as success.
+    let addError = null;
+    const withItem = await addMediaCollectionItem(created.id, { kind: item.kind, ref: itemRef }).catch((err) => {
+      addError = err;
+      return created;
+    });
     setCollections((prev) => ([...(prev || []), withItem]));
     setNewName('');
     setCreating(false);
-    toast.success(`Added to ${created.name}`);
+    if (addError) {
+      toast.error(`Created "${created.name}" but failed to add: ${addError.message}`);
+    } else {
+      toast.success(`Added to ${created.name}`);
+    }
   };
 
   return (
