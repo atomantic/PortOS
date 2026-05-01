@@ -50,6 +50,8 @@ const RESOLUTIONS = [
   { label: '768×512 (3:2 default)', w: 768, h: 512 },
   { label: '1024×576 (16:9)', w: 1024, h: 576 },
   { label: '512×768 (portrait)', w: 512, h: 768 },
+  { label: '512×512 (1:1)', w: 512, h: 512 },
+  { label: '768×768 (1:1)', w: 768, h: 768 },
 ];
 
 const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241];
@@ -72,6 +74,13 @@ const newQueueId = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID()
     : `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const ImagePreview = ({ src, alt, label }) => (
+  <div className="space-y-1">
+    <img src={src} alt={alt} className="w-full max-h-48 object-contain rounded border border-port-border bg-port-bg" />
+    <div className="text-[11px] text-gray-500 truncate">{label}</div>
+  </div>
+);
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -128,6 +137,17 @@ export default function VideoGen() {
   const [preview, setPreview] = useState(null);
   const [showHidden, setShowHidden] = useState(false);
   const navigate = useNavigate();
+
+  // Object URL for the currently-selected upload File so we can render a
+  // real preview before the file ever hits the server. Revoked on change /
+  // unmount so the blob is released.
+  const [sourceUploadUrl, setSourceUploadUrl] = useState(null);
+  useEffect(() => {
+    if (!(sourceImageUpload instanceof File)) { setSourceUploadUrl(null); return; }
+    const url = URL.createObjectURL(sourceImageUpload);
+    setSourceUploadUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [sourceImageUpload]);
 
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
@@ -567,7 +587,6 @@ export default function VideoGen() {
               type="button"
               aria-pressed={active}
               onClick={() => handleModeChange(id)}
-              disabled={generating}
               className={`flex-1 min-w-[120px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
                 active
                   ? 'bg-port-accent text-white shadow'
@@ -591,7 +610,6 @@ export default function VideoGen() {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="Describe the video you want to generate..."
               />
@@ -602,7 +620,6 @@ export default function VideoGen() {
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 rows={3}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="What to avoid..."
               />
@@ -620,20 +637,19 @@ export default function VideoGen() {
                     <button type="button" onClick={clearSourceImage} className="text-[11px] text-port-error hover:underline">Clear</button>
                   )}
                 </div>
-                {sourceImageFile && (
-                  <div className="flex items-center gap-2">
-                    <img src={`/data/images/${sourceImageFile}`} alt="Source" className="w-12 h-12 object-cover rounded border border-port-border shrink-0" />
-                    <span className="text-[11px] text-gray-500 truncate">{sourceImageFile}</span>
-                  </div>
-                )}
-                {!sourceImageFile && (
+                {(sourceImageFile || sourceUploadUrl) ? (
+                  <ImagePreview
+                    src={sourceImageFile ? `/data/images/${sourceImageFile}` : sourceUploadUrl}
+                    alt="Source"
+                    label={sourceImageFile || sourceImageUpload?.name}
+                  />
+                ) : (
                   <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
                     <Upload className="w-3.5 h-3.5" />
-                    <span className="truncate">{sourceImageUpload ? sourceImageUpload.name : 'Upload an image'}</span>
+                    <span className="truncate">Upload an image</span>
                     <input
                       type="file"
                       accept="image/*"
-                      disabled={generating}
                       onChange={(e) => setSourceImageUpload(e.target.files?.[0] || null)}
                       className="hidden"
                     />
@@ -649,14 +665,10 @@ export default function VideoGen() {
                     )}
                   </div>
                   {lastImageFile ? (
-                    <div className="flex items-center gap-2">
-                      <img src={`/data/images/${lastImageFile}`} alt="End frame" className="w-12 h-12 object-cover rounded border border-port-border shrink-0" />
-                      <span className="text-[11px] text-gray-500 truncate">{lastImageFile}</span>
-                    </div>
+                    <ImagePreview src={`/data/images/${lastImageFile}`} alt="End frame" label={lastImageFile} />
                   ) : (
                     <select
                       value=""
-                      disabled={generating}
                       onChange={(e) => setLastImageFile(e.target.value || null)}
                       className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                     >
@@ -684,7 +696,7 @@ export default function VideoGen() {
               </div>
               <select
                 value={extendFromVideoId}
-                disabled={generating || extendingFrame}
+                disabled={extendingFrame}
                 onChange={(e) => handleExtendPick(e.target.value)}
                 className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
@@ -699,10 +711,11 @@ export default function VideoGen() {
                 <span className="text-[11px] text-gray-500">Extracting last frame…</span>
               )}
               {sourceImageFile && extendFromVideoId && !extendingFrame && (
-                <div className="flex items-center gap-2">
-                  <img src={`/data/images/${sourceImageFile}`} alt="Last frame" className="w-12 h-12 object-cover rounded border border-port-border shrink-0" />
-                  <span className="text-[11px] text-gray-500 truncate">Starts from: {sourceImageFile}</span>
-                </div>
+                <ImagePreview
+                  src={`/data/images/${sourceImageFile}`}
+                  alt="Last frame"
+                  label={`Starts from: ${sourceImageFile}`}
+                />
               )}
             </div>
           )}
@@ -714,7 +727,6 @@ export default function VideoGen() {
                 <select
                   value={modelId}
                   onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidanceScale(''); }}
-                  disabled={generating}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 >
                   {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -727,7 +739,6 @@ export default function VideoGen() {
               <select
                 value={resolutionLabel}
                 onChange={handleResolutionChange}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
                 {RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
@@ -739,7 +750,6 @@ export default function VideoGen() {
               <select
                 value={numFrames}
                 onChange={(e) => setNumFrames(Number(e.target.value))}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
                 {FRAME_OPTIONS.map((f) => <option key={f} value={f}>{f} ({(f / fps).toFixed(1)}s @ {fps}fps)</option>)}
@@ -751,7 +761,6 @@ export default function VideoGen() {
               <select
                 value={fps}
                 onChange={(e) => setFps(Number(e.target.value))}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
                 {FPS_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
@@ -765,14 +774,12 @@ export default function VideoGen() {
                   type="number"
                   value={seed}
                   onChange={(e) => setSeed(e.target.value)}
-                  disabled={generating}
                   placeholder="Random"
                   className="flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 />
                 <button
                   type="button"
                   onClick={handleRandomSeed}
-                  disabled={generating}
                   className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
                   title="Randomize seed"
                 >
@@ -790,7 +797,6 @@ export default function VideoGen() {
                 value={steps}
                 onChange={(e) => setSteps(e.target.value)}
                 placeholder={String(currentModel?.steps || 25)}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               />
             </div>
@@ -804,7 +810,6 @@ export default function VideoGen() {
                 value={guidanceScale}
                 onChange={(e) => setGuidanceScale(e.target.value)}
                 placeholder={String(currentModel?.guidance ?? 3.0)}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               />
             </div>
@@ -814,7 +819,6 @@ export default function VideoGen() {
               <select
                 value={tiling}
                 onChange={(e) => setTiling(e.target.value)}
-                disabled={generating}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
                 {TILING_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -826,7 +830,6 @@ export default function VideoGen() {
                 type="checkbox"
                 checked={disableAudio}
                 onChange={(e) => setDisableAudio(e.target.checked)}
-                disabled={generating}
                 className="rounded"
               />
               Disable audio (LTX-2 only — speeds up generation)

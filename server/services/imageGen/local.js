@@ -23,20 +23,16 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 
-const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
-// Model catalog. `broken: true` hides a model on a platform where it doesn't
-// run (e.g. Flux 2 Klein needs CUDA, so we mark it broken on macOS).
-export const IMAGE_MODELS = {
-  dev:               { id: 'dev',               name: 'Flux 1 Dev',         steps: 20, guidance: 3.5 },
-  schnell:           { id: 'schnell',           name: 'Flux 1 Schnell',     steps: 4,  guidance: 0   },
-  'flux2-klein-4b':  { id: 'flux2-klein-4b',    name: 'Flux 2 Klein 4B',    steps: 8,  guidance: 3.5, broken: IS_MAC },
-  'flux2-klein-9b':  { id: 'flux2-klein-9b',    name: 'Flux 2 Klein 9B',    steps: 8,  guidance: 3.5, broken: IS_MAC },
-};
+// Catalog comes from data/media-models.json (see server/lib/mediaModels.js).
+// `broken: 'macos' | 'windows'` in the registry hides a model per-platform
+// (e.g. Flux 2 Klein needs CUDA, so it's broken on macOS).
+import { getImageModels } from '../../lib/mediaModels.js';
 
-export const listImageModels = () =>
-  Object.values(IMAGE_MODELS).filter((m) => !m.broken);
+export const IMAGE_MODELS = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
+
+export const listImageModels = () => getImageModels();
 
 // Per-job clients: jobId -> { clients, status, meta, broadcast }
 const jobs = new Map();
@@ -329,6 +325,7 @@ export async function deleteImage(filename) {
   await unlink(join(PATHS.images, filename)).catch(() => {});
   await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
+  console.log(`🗑️ Deleted image: ${filename}`);
   return { ok: true };
 }
 

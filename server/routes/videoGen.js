@@ -59,6 +59,7 @@ const generateBodySchema = z.object({
   steps: optionalNum(1, 200, 'steps'),
   guidanceScale: optionalNum(0, 30, 'guidanceScale'),
   seed: optionalNum(0, Number.MAX_SAFE_INTEGER, 'seed'),
+  imageStrength: optionalNum(0, 1, 'imageStrength'),
   tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
   disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),
@@ -156,6 +157,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       uploadedTempPath,
       lastImagePath,
       mode: body.mode,
+      imageStrength: body.imageStrength,
     });
     res.json(result);
   } catch (err) {
