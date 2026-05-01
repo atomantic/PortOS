@@ -432,7 +432,11 @@ async function runJob(job) {
   // the job failed via the normal handlers path (SSE + mediaJobEvents +
   // persistence all fire) and best-effort cancels the underlying process
   // so the queue can make forward progress.
-  const watchdogMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
+  // Renamed from `watchdogMs` to avoid shadowing the top-level
+  // `watchdogMs(envValue, defaultMs)` helper that parses the env-var
+  // overrides. Both lived as `watchdogMs` previously and made the call
+  // site easy to misread.
+  const watchdogTimeoutMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
   watchdogTimer = setTimeout(async () => {
     // Two-stage status guard: first check stops us if the gen settled
     // before the timer fired. The await on the dynamic import below opens
@@ -447,13 +451,13 @@ async function runJob(job) {
       : job.kind === 'image' ? import('../imageGen/local.js') : null;
     const mod = importer ? await importer : null;
     if (job.status !== 'running') return;
-    console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogMs}ms — marking failed`);
+    console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogTimeoutMs}ms — marking failed`);
     // Cancel BEFORE marking failed — that ordering keeps the SIGTERM
     // pointed at *this* job's child. The gen module will then emit its
     // own 'failed' event, but the terminate() guard makes it a no-op.
     if (mod?.cancel) mod.cancel();
-    handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogMs}ms` });
-  }, watchdogMs);
+    handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogTimeoutMs}ms` });
+  }, watchdogTimeoutMs);
   // Ensure the timer doesn't keep Node alive after the job settles.
   watchdogTimer.unref?.();
 
