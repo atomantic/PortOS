@@ -26,12 +26,12 @@ export default function MediaCard({
   const handleTileClick = onClick || (() => onPreview?.(item));
 
   return (
-    <div className={`bg-port-card border rounded-xl overflow-hidden ${selected ? 'border-port-accent' : 'border-port-border'}`}>
+    <div className={`bg-port-card border rounded-xl ${selected ? 'border-port-accent' : 'border-port-border'}`}>
       <button
         type="button"
         onClick={() => handleTileClick(item)}
         disabled={disabled}
-        className="block w-full aspect-square bg-port-bg relative disabled:cursor-not-allowed disabled:opacity-40"
+        className="block w-full aspect-square bg-port-bg relative rounded-t-xl overflow-hidden disabled:cursor-not-allowed disabled:opacity-40"
       >
         {previewUrl ? (
           <img src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
