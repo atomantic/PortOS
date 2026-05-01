@@ -24,10 +24,10 @@ import {
 const router = Router();
 
 const clipSchema = z.object({
-  clipId: z.string().min(1).max(64),
+  clipId: z.string().uuid(),
   inSec: z.number().min(0),
   outSec: z.number().min(0),
-});
+}).refine((c) => c.outSec > c.inSec, { message: 'outSec must be > inSec', path: ['outSec'] });
 
 const createBodySchema = z.object({
   name: z.string().min(1).max(200),

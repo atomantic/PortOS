@@ -36,6 +36,8 @@ const findClipAt = (clips, t) => {
   }
   return { index: -1, within: 0, startAtProj: 0 };
 };
+// Maps project-time t to (clipIndex, withinClipSec). The strictly-less-than
+// comparison falls through on exact-boundary t to the next clip naturally.
 
 const totalDuration = (clips) => clips.reduce((s, c) => s + Math.max(0, c.outSec - c.inSec), 0);
 
@@ -160,6 +162,7 @@ export default function VideoTimelineEditor() {
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setError(null);
     const [proj, hist] = await Promise.all([
       api.getTimelineProject(projectId).catch((err) => { setError(err.message); return null; }),
       api.listVideoHistory().catch(() => []),
@@ -373,7 +376,12 @@ export default function VideoTimelineEditor() {
         setRenderJobId(null);
       }
     };
-    es.onerror = () => { es.close(); };
+    es.onerror = () => {
+      es.close();
+      toast.error('Lost connection to render — check Media History');
+      setRenderJobId(null);
+      setRenderProgress(0);
+    };
     return () => es.close();
   }, [renderJobId, navigate]);
 

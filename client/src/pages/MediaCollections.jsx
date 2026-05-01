@@ -80,8 +80,6 @@ export default function MediaCollections() {
   };
 
   const handleDelete = async (collection) => {
-    // No window.confirm — soft-delete with toast undo would be nicer, but
-    // for now require a deliberate second click.
     setCollections((prev) => prev.filter((c) => c.id !== collection.id));
     await deleteMediaCollection(collection.id).catch((err) => {
       toast.error(err.message || 'Delete failed');

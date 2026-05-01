@@ -85,12 +85,26 @@ describe('videoTimeline routes', () => {
     it('forwards a multi-clip update', async () => {
       svc.updateProject.mockResolvedValue({ id: 'p1', clips: [] });
       const clips = [
-        { clipId: 'c1', inSec: 0, outSec: 4 },
-        { clipId: 'c2', inSec: 1.5, outSec: 3.5 },
+        { clipId: '11111111-1111-4111-8111-111111111111', inSec: 0, outSec: 4 },
+        { clipId: '22222222-2222-4222-8222-222222222222', inSec: 1.5, outSec: 3.5 },
       ];
       const r = await request(app).patch('/api/video-timeline/projects/p1').send({ clips });
       expect(r.status).toBe(200);
       expect(svc.updateProject).toHaveBeenCalledWith('p1', { clips }, undefined);
+    });
+
+    it('rejects non-uuid clipId', async () => {
+      const r = await request(app).patch('/api/video-timeline/projects/p1').send({
+        clips: [{ clipId: 'not-a-uuid', inSec: 0, outSec: 1 }],
+      });
+      expect(r.status).toBe(400);
+    });
+
+    it('rejects outSec <= inSec', async () => {
+      const r = await request(app).patch('/api/video-timeline/projects/p1').send({
+        clips: [{ clipId: '11111111-1111-4111-8111-111111111111', inSec: 2, outSec: 2 }],
+      });
+      expect(r.status).toBe(400);
     });
   });
 

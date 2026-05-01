@@ -16,12 +16,12 @@
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
-import { join, basename } from 'path';
+import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory, saveHistory } from '../videoGen/local.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
@@ -131,8 +131,8 @@ export async function deleteProject(id) {
 
 // ffprobe a clip to find out whether it has an audio stream. Used to decide
 // whether to wire the clip's audio through trim/aresample chain or to insert
-// an anullsrc silent input. Returns null when ffprobe is missing — caller
-// treats that as "no audio" so the render still succeeds.
+// an anullsrc silent input. Falls back to false when ffprobe is missing so
+// the render can still proceed (silent track inserted for every clip).
 const probeAudio = async (videoPath) => {
   const ffprobe = await findFfprobe();
   if (!ffprobe) return false;
@@ -379,7 +379,8 @@ export async function renderProject(projectId) {
       return;
     }
     job.status = 'complete';
-    await optimizeForStreaming(outputPath);
+    // The encode args already include -movflags +faststart, so no separate
+    // remux pass is needed here.
     const thumb = await generateThumbnail(outputPath, jobId);
 
     // Push to existing video history with a timelineProjectId flag so the
