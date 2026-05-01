@@ -81,14 +81,29 @@ const seedIfMissing = () => {
 
 // Merge user-edited registry over DEFAULT_REGISTRY so missing top-level keys
 // (e.g. someone deletes `video` or saves `{}`) don't blow up consumers that
-// assume `reg.video.macos`. We don't deep-merge arrays — if the user defines
-// `video.macos`, that's their list, full stop.
+// assume `reg.video.macos`. We also coerce array-shaped fields back to the
+// defaults when the user's JSON is parseable but wrong-shape (e.g.
+// `image: {}` or `video.macos: "ltx"`) — otherwise getImageModels /
+// getVideoModels / buildAppModels would throw at module import-time and
+// take down server startup. If a user supplies a real array, that's their
+// list, full stop — we don't deep-merge entries.
+const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const arrayOrDefault = (v, fallback) => (Array.isArray(v) ? v : fallback);
+
 const normalizeRegistry = (parsed) => {
-  const safe = parsed && typeof parsed === 'object' ? parsed : {};
+  const safe = isPlainObject(parsed) ? parsed : {};
+  const safeVideo = isPlainObject(safe.video) ? safe.video : {};
   return {
     ...DEFAULT_REGISTRY,
     ...safe,
-    video: { ...DEFAULT_REGISTRY.video, ...(safe.video || {}) },
+    image: arrayOrDefault(safe.image, DEFAULT_REGISTRY.image),
+    textEncoders: arrayOrDefault(safe.textEncoders, DEFAULT_REGISTRY.textEncoders),
+    video: {
+      ...DEFAULT_REGISTRY.video,
+      ...safeVideo,
+      macos: arrayOrDefault(safeVideo.macos, DEFAULT_REGISTRY.video.macos),
+      windows: arrayOrDefault(safeVideo.windows, DEFAULT_REGISTRY.video.windows),
+    },
   };
 };
 

@@ -149,6 +149,26 @@ describe('mediaModels registry', () => {
     expect(typeof getDefaultVideoModelId()).toBe('string');
   });
 
+  it('coerces wrong-type fields back to defaults', async () => {
+    // Parseable JSON but with non-array values where the consumers expect
+    // arrays — without coercion, getImageModels()/getVideoModels() throw at
+    // module import-time.
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: 'ltx', windows: { id: 'oops' } },
+      image: {},
+      textEncoders: 'gemma',
+      selectedTextEncoder: 'gemma-bf16',
+    }));
+    const { loadMediaModels, getVideoModels, getImageModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    expect(Array.isArray(reg.video.macos)).toBe(true);
+    expect(Array.isArray(reg.video.windows)).toBe(true);
+    expect(Array.isArray(reg.image)).toBe(true);
+    expect(Array.isArray(reg.textEncoders)).toBe(true);
+    expect(() => getVideoModels()).not.toThrow();
+    expect(() => getImageModels()).not.toThrow();
+  });
+
   it('normalizes an empty object registry by merging defaults', async () => {
     writeFileSync(registryFile, JSON.stringify({}));
     const { loadMediaModels } = await import('./mediaModels.js');

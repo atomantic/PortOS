@@ -11,7 +11,7 @@
  */
 
 import { execFile, spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { unlink, rename, writeFile } from 'fs/promises';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { tmpdir } from 'os';
@@ -442,8 +442,15 @@ export async function extractLastFrame(historyId) {
   // so a file already on disk is reusable. UI clicks "Continue" repeatedly
   // (palette → continue, gallery → continue, etc.) and re-extracting on
   // every click was wasting 1–2s per click + spawning ffmpeg children.
+  // Validate non-zero size — a prior ffmpeg crash could leave a 0-byte
+  // placeholder, which would otherwise be served as a broken image
+  // forever. statSync errors fall through to re-extraction.
   if (existsSync(framePath)) {
-    return { filename: frameFilename, path: `/data/images/${frameFilename}` };
+    const cached = statSync(framePath, { throwIfNoEntry: false });
+    if (cached && cached.size > 0) {
+      return { filename: frameFilename, path: `/data/images/${frameFilename}` };
+    }
+    await unlink(framePath).catch(() => {});
   }
 
   return new Promise((resolve, reject) => {
@@ -454,8 +461,13 @@ export async function extractLastFrame(historyId) {
     // file. The output file gets a -update 1 flag so ffmpeg overwrites
     // any partial file from a prior failed run instead of erroring.
     const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], { stdio: 'ignore' });
-    proc.on('close', (code) => {
-      if (code !== 0 || !existsSync(framePath)) {
+    proc.on('close', async (code) => {
+      const written = existsSync(framePath) ? statSync(framePath, { throwIfNoEntry: false }) : null;
+      if (code !== 0 || !written || written.size === 0) {
+        // A 0-byte file is a partial extraction, not a cache-worthy result —
+        // delete it so the next call retries instead of returning a broken
+        // image from the cache hit above.
+        if (written && written.size === 0) await unlink(framePath).catch(() => {});
         return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
       }
       console.log(`🎞️ Extracted last frame: ${frameFilename}`);
