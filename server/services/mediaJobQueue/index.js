@@ -115,14 +115,17 @@ export async function initMediaJobQueue() {
     await ensureDir(PATHS.data);
     const data = await readJSONFile(JOBS_FILE, { jobs: [] });
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+    const restartedFailedIds = [];
     for (const j of persistedJobs) {
       if (j.status === 'running') {
-        archive.push({
+        const failed = {
           ...j,
           status: 'failed',
           error: 'interrupted by restart',
           completedAt: new Date().toISOString(),
-        });
+        };
+        archive.push(failed);
+        restartedFailedIds.push(failed.id);
       } else if (j.status === 'queued') {
         queue.push({ ...j });
       } else {
@@ -136,6 +139,15 @@ export async function initMediaJobQueue() {
     queue.forEach((q, i) => { q.position = i + 1; });
     if (persistedJobs.length) {
       console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
+    }
+    // Pre-seed terminal SSE payloads for each restart-failed job so that any
+    // client that reconnects to /:jobId/events after a restart (the route
+    // attaches via attachSseClient → attachSse, which replays lastPayload)
+    // gets an immediate error event instead of a silent stream.
+    for (const id of restartedFailedIds) {
+      const entry = ensureSseEntry(id);
+      broadcastSse(entry, { type: 'error', error: 'interrupted by restart' });
+      closeJobAfterDelay(sseJobs, id);
     }
     await persist();
     startWorker();
@@ -172,6 +184,10 @@ async function drainLoop() {
     await runJob(job);
     running = null;
     archive.push(job);
+    // Now that running is cleared, every queued job has shifted up one slot.
+    // Recompute immediately so /api/media-jobs and any subsequent persist()
+    // see accurate positions even before the next dequeue.
+    queue.forEach((q, i) => { q.position = i + 1; });
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on done failed: ${e.message}`));
   }
 }
@@ -237,6 +253,18 @@ async function runJob(job) {
       console.log(`✅ media-job [${job.id.slice(0, 8)}] completed`);
     },
     failed: (payload) => {
+      // If cancelJob() flagged this job before the underlying gen reported
+      // failure, treat the SIGTERM-induced failure as a clean cancel rather
+      // than an error so /api/media-jobs?status=canceled works.
+      if (job.cancelRequested) {
+        job.status = 'canceled';
+        job.completedAt = new Date().toISOString();
+        broadcastSse(sseEntry, { type: 'canceled' });
+        closeJobAfterDelay(sseJobs, job.id);
+        mediaJobEvents.emit('canceled', job);
+        console.log(`🛑 media-job [${job.id.slice(0, 8)}] canceled (was running)`);
+        return;
+      }
       job.status = 'failed';
       job.error = payload.error || 'unknown error';
       job.completedAt = new Date().toISOString();
@@ -331,6 +359,11 @@ export async function cancelJob(jobId) {
     return { ok: true, status: 'canceled' };
   }
   if (running && running.id === jobId) {
+    // Flag the job so the dispatcher's `failed` handler treats the SIGTERM-
+    // induced failure as `canceled` rather than `failed`. Without this the
+    // job would land in archive with status='failed' and listing by
+    // status='canceled' would be empty for running cancels.
+    running.cancelRequested = true;
     if (running.kind === 'video') {
       const { cancel } = await import('../videoGen/local.js');
       cancel();

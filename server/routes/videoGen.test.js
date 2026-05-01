@@ -11,6 +11,9 @@ vi.mock('../services/videoGen/local.js', () => ({
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
+  // The route imports setHistoryItemHidden too — without this entry, ESM
+  // module linking fails when the route is loaded inside the test process.
+  setHistoryItemHidden: vi.fn(async (id, hidden) => ({ ok: true, id, hidden })),
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
 }));

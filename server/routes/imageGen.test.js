@@ -136,6 +136,49 @@ describe('Image Gen Routes', () => {
         expect.objectContaining({ prompt: 'test', width: 512, height: 768, steps: 30, cfgScale: 7, seed: 42 })
       );
     });
+
+    // Local mode goes through the mediaJobQueue rather than calling
+    // generateImage synchronously; the route returns immediately with
+    // { jobId, status: 'queued', position } so the UI can attach SSE.
+    it('local mode enqueues through mediaJobQueue and returns queued status', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-job-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.position).toBe(1);
+      expect(response.body.mode).toBe('local');
+      expect(response.body.jobId).toBe('queued-job-001');
+      expect(response.body.generationId).toBe('queued-job-001');
+      expect(response.body.path).toBe('/data/images/queued-job-001.png');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({ prompt: 'a fox in a forest', pythonPath: '/usr/bin/python3' }),
+      }));
+      // Synchronous generateImage MUST NOT be called in local mode — the
+      // queue takes ownership of the job lifecycle.
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // The per-request `mode` override flips into queue mode even when the
+    // saved default is external — protects against future regressions where
+    // someone hard-codes settings.imageGen.mode as the only mode source.
+    it('per-request mode=local override enqueues even when settings default is external', async () => {
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-job-002', position: 2, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a wizard tower', mode: 'local' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/image-gen/avatar', () => {

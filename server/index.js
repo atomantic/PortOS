@@ -326,9 +326,9 @@ app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/ask', askRoutes);
 
-// Initialize the media job queue (recovers persisted jobs, marks stale
-// 'running' as failed-by-restart, starts the worker loop).
-initMediaJobQueue().catch(err => console.error(`❌ mediaJobQueue init failed: ${err.message}`));
+// initMediaJobQueue is awaited as part of the startup chain below so that
+// data/ exists and the worker loop is running before /api/video-gen or
+// /api/image-gen can enqueue (otherwise persist() can race with ensureDir).
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
@@ -448,8 +448,9 @@ app.use(errorMiddleware);
 // race conditions where brain mutations arrive before the sync log is ready
 ensureSelf()
   .then(() => initSyncLog())
+  .then(() => initMediaJobQueue().catch(err => console.error(`❌ mediaJobQueue init failed: ${err instanceof Error ? err.message : String(err)}`)))
   .then(() => {
-    // Start server only after sync log is initialized
+    // Start server only after sync log + media job queue are initialized
     httpServer.listen(PORT, HOST, () => {
       // One canonical "where do I open this" banner — :5555 is always user-facing
       // (HTTP or HTTPS), :PORTOS_HTTP_PORT (default 5553) is the loopback HTTP

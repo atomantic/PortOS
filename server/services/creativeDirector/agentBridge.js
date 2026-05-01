@@ -16,9 +16,11 @@ import { randomUUID } from 'crypto';
 import { addTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildScenePrompt, buildStitchPrompt } from '../../lib/creativeDirectorPrompts.js';
 import { nextPendingScene } from './orchestrator.js';
+import { recordRun } from './local.js';
 
 function buildTask(project, kind) {
   const taskId = `cd-${project.id}-${kind}-${Date.now().toString(36)}`;
+  const runId = randomUUID();
   let context;
   let sceneId = null;
   if (kind === 'treatment') {
@@ -41,7 +43,7 @@ function buildTask(project, kind) {
     priorityValue: 2,
     description: `Creative Director — ${kind} for "${project.name}"`,
     metadata: {
-      creativeDirector: { projectId: project.id, kind, sceneId, runId: randomUUID() },
+      creativeDirector: { projectId: project.id, kind, sceneId, runId },
       context,
       useWorktree: false,
       readOnly: false,
@@ -54,6 +56,17 @@ function buildTask(project, kind) {
 
 export async function enqueueCreativeDirectorTask(project, kind) {
   const task = buildTask(project, kind);
+  // Record the run as `running` up-front so the Runs tab shows in-flight
+  // state immediately. completionHook updates the same runId on finish via
+  // updateRun (matched by runId stored in task metadata).
+  const meta = task.metadata.creativeDirector;
+  await recordRun(project.id, {
+    runId: meta.runId,
+    taskId: task.id,
+    kind: meta.kind,
+    sceneId: meta.sceneId || null,
+    status: 'running',
+  }).catch((err) => console.log(`⚠️ CD recordRun(running) failed: ${err.message}`));
   await addTask(task, 'internal', { raw: true });
   cosEvents.emit('task:ready', task);
   console.log(`📤 CD task enqueued: ${task.id} (${kind} for ${project.id})`);
