@@ -23,7 +23,6 @@
  */
 
 import { getProject, updateProject, updateRun, recordRun } from './local.js';
-import { nextPendingScene } from './orchestrator.js';
 import { enqueueTreatmentTask } from './agentBridge.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';

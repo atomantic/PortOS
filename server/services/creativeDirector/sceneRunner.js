@@ -28,7 +28,7 @@
  * isolated anyway.
  */
 
-import { join } from 'path';
+import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { existsSync } from 'fs';
 import { PATHS } from '../../lib/fileUtils.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
@@ -83,12 +83,28 @@ export async function runSceneRender(project, scene) {
   }
 
   // Resolve sourceImageFile to an absolute path if it's a basename in the
-  // gallery. Path-traversal guard via existsSync + safe join.
+  // gallery. Two-layer guard:
+  //  1. basename() strips any path segments (so `../../etc/passwd` →
+  //     `passwd`); reject `.`/`..` outright.
+  //  2. resolve + prefix-check against the images root so a unicode trick
+  //     can't escape PATHS.images.
+  // Without these, `sourceImageFile: '..'` from a malicious / mistaken
+  // payload could resolve to PATHS.images's parent and feed an arbitrary
+  // local path into the renderer.
   let sourceImagePath = null;
   if (sourceImageFile) {
-    const candidate = join(PATHS.images, sourceImageFile);
-    if (existsSync(candidate)) sourceImagePath = candidate;
-    else console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile not found on disk: ${sourceImageFile}`);
+    const safe = basename(sourceImageFile);
+    if (!safe || safe === '.' || safe === '..') {
+      console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile rejected (dot segment): ${sourceImageFile}`);
+    } else {
+      const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+      const localPath = resolvePath(join(PATHS.images, safe));
+      if (localPath.startsWith(imagesRoot) && existsSync(localPath)) {
+        sourceImagePath = localPath;
+      } else {
+        console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile not found on disk: ${sourceImageFile}`);
+      }
+    }
   }
 
   const renderParams = presetToRenderParams({
@@ -118,7 +134,10 @@ export async function runSceneRender(project, scene) {
 
   // Wire one-shot listeners scoped to this jobId so we can hand off to the
   // evaluator on success or schedule a retry on failure. mediaJobEvents
-  // fires `completed` and `failed` from the queue's runJob handlers.
+  // fires `completed`, `failed`, and `canceled` from the queue's runJob /
+  // cancelJob handlers — we MUST listen for all three or a user-initiated
+  // cancel via the Render Queue UI would leave the scene stuck in
+  // `rendering` forever and leak listeners.
   const onCompleted = async (job) => {
     if (job.id !== jobId) return;
     cleanup();
@@ -129,12 +148,24 @@ export async function runSceneRender(project, scene) {
     cleanup();
     await handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed');
   };
+  const onCanceled = async (job) => {
+    if (job.id !== jobId) return;
+    cleanup();
+    // Treat user-initiated cancel as a terminal stop for this scene — do
+    // NOT route through handleRenderFailed (which would retry up to
+    // MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
+    // failed and let the completionHook flag the project so the user can
+    // resume from the UI.
+    await handleRenderCanceled(project.id, scene.sceneId);
+  };
   function cleanup() {
     mediaJobEvents.off('completed', onCompleted);
     mediaJobEvents.off('failed', onFailed);
+    mediaJobEvents.off('canceled', onCanceled);
   }
   mediaJobEvents.on('completed', onCompleted);
   mediaJobEvents.on('failed', onFailed);
+  mediaJobEvents.on('canceled', onCanceled);
 
   return jobId;
 }
@@ -150,6 +181,20 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene) return;
   await enqueueEvaluateTask(fresh, scene);
+}
+
+async function handleRenderCanceled(projectId, sceneId) {
+  console.log(`🛑 CD scene ${sceneId} render canceled by user`);
+  await updateScene(projectId, sceneId, {
+    status: 'failed',
+    evaluation: {
+      accepted: false,
+      notes: 'Render canceled by user',
+      sampledAt: new Date().toISOString(),
+    },
+  });
+  const { advanceAfterSceneSettled } = await import('./completionHook.js');
+  await advanceAfterSceneSettled(projectId);
 }
 
 async function handleRenderFailed(projectId, sceneId, errorMsg) {

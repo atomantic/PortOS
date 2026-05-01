@@ -612,6 +612,16 @@ export const creativeDirectorQualitySchema = z.enum(QUALITIES);
 // has a different speed/VRAM/quality profile and the project locks it at
 // creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
 // — much beyond that and the agent's treatment quality drifts hard.
+// Strict basename: no path separators, no `.`/`..` segments, no embedded
+// `..`. Used for both startingImageFile (project create) and sourceImageFile
+// (per-scene) since both feed into `join(PATHS.images, ...)` later — without
+// this guard, a value like `..` would resolve outside the images directory.
+const safeBasename = z.string()
+  .max(256)
+  .regex(/^[^/\\]+$/, 'must be a basename (no path separators)')
+  .refine((v) => v !== '.' && v !== '..' && !v.includes('..'),
+    'must not contain `.` or `..` traversal segments');
+
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
@@ -619,7 +629,7 @@ export const creativeDirectorProjectCreateSchema = z.object({
   modelId: z.string().min(1).max(64),
   targetDurationSeconds: z.number().int().min(5).max(600),
   styleSpec: z.string().max(5000).default(''),
-  startingImageFile: z.string().max(256).regex(/^[^/\\]+$/, 'must be a basename').nullable().optional(),
+  startingImageFile: safeBasename.nullable().optional(),
   userStory: z.string().max(10000).nullable().optional(),
 });
 
@@ -644,7 +654,7 @@ export const creativeDirectorSceneSchema = z.object({
   negativePrompt: z.string().max(2000).optional().default(''),
   durationSeconds: z.number().min(1).max(10),
   useContinuationFromPrior: z.boolean().default(false),
-  sourceImageFile: z.string().max(256).regex(/^[^/\\]+$/, 'must be a basename').nullable().optional(),
+  sourceImageFile: safeBasename.nullable().optional(),
   status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
   renderedJobId: z.string().max(64).nullable().optional(),
