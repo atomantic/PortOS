@@ -38,6 +38,11 @@ const sanitizeItem = (raw) => {
   if (typeof raw.ref !== 'string') return null;
   const ref = raw.ref.trim();
   if (!ref || ref.length > REF_MAX_LENGTH) return null;
+  // The DELETE-item route key is `<kind>:<ref>` split on the first `:`. A
+  // ref that contains `:` would be unambiguously persisted but ambiguously
+  // addressable via the REST surface — reject it here so persisted data
+  // always round-trips.
+  if (ref.includes(':')) return null;
   // A hand-edited or corrupted `addedAt` would feed NaN into the cover
   // resolver's Date sort — replace anything unparseable with now().
   const parsed = typeof raw.addedAt === 'string' ? Date.parse(raw.addedAt) : NaN;

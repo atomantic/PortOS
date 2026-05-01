@@ -47,7 +47,7 @@ router.get('/projects', asyncHandler(async (_req, res) => {
 
 router.post('/projects', asyncHandler(async (req, res) => {
   const data = validateRequest(createBodySchema, req.body);
-  res.json(await createProject(data.name));
+  res.status(201).json(await createProject(data.name));
 }));
 
 router.get('/projects/:id', asyncHandler(async (req, res) => {

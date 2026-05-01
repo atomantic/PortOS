@@ -30,7 +30,9 @@ const mapServiceError = (err) => {
 
 const nameSchema = z.string().trim().min(1).max(svc.NAME_MAX_LENGTH);
 const descriptionSchema = z.string().trim().max(svc.DESCRIPTION_MAX_LENGTH);
-const refSchema = z.string().trim().min(1).max(svc.REF_MAX_LENGTH);
+// `:` is the API key separator (`<kind>:<ref>` is split on first `:`), so a
+// ref containing one would be unaddressable for DELETE/coverKey lookups.
+const refSchema = z.string().trim().min(1).max(svc.REF_MAX_LENGTH).refine((s) => !s.includes(':'), { message: 'ref may not contain ":"' });
 const kindSchema = z.enum(['image', 'video']);
 
 const createSchema = z.object({

@@ -43,7 +43,7 @@ describe('videoTimeline routes', () => {
     it('creates a project and returns it', async () => {
       svc.createProject.mockResolvedValue({ id: 'p1', name: 'My Edit', clips: [] });
       const r = await request(app).post('/api/video-timeline/projects').send({ name: 'My Edit' });
-      expect(r.status).toBe(200);
+      expect(r.status).toBe(201);
       expect(r.body.id).toBe('p1');
       expect(svc.createProject).toHaveBeenCalledWith('My Edit');
     });
