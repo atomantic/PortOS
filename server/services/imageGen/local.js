@@ -74,6 +74,12 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       );
     }
     const quantization = model.quantization || 'sdnq';
+    if (quantization !== 'sdnq' && quantization !== 'int8') {
+      throw new ServerError(
+        `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8)`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
     if (quantization === 'sdnq' && !model.tokenizerRepo) {
       throw new ServerError(
         `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,

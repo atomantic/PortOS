@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+
+// Point the registry at a temp dir so importing local.js (which calls
+// getImageModels() at module load and triggers seedIfMissing in
+// mediaModels.js) doesn't write to the repo's data/media-models.json.
+const tmpRegistryDir = mkdtempSync(join(tmpdir(), 'portos-imagegen-local-test-'));
+process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
 
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
@@ -13,6 +22,9 @@ const { buildArgs } = await import('./local.js');
 describe('imageGen local.buildArgs flux2 dispatch', () => {
   beforeEach(() => {
     mockResolveFlux2Python.mockReset();
+  });
+  afterAll(() => {
+    rmSync(tmpRegistryDir, { recursive: true, force: true });
   });
 
   const baseInput = {

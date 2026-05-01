@@ -280,10 +280,15 @@ export default function ImageGen() {
 
   useEffect(() => {
     if (!isFlux2Model) { setFlux2Status(null); return; }
-    fetch('/api/image-gen/setup/flux2-status')
+    // Abort the in-flight request when the user switches models before it
+    // resolves — otherwise a stale response could re-show the banner for
+    // a non-flux2 selection.
+    const controller = new AbortController();
+    fetch('/api/image-gen/setup/flux2-status', { signal: controller.signal })
       .then((r) => r.ok ? r.json() : null)
       .then((s) => { if (s) setFlux2Status(s); })
       .catch(() => {});
+    return () => controller.abort();
   }, [isFlux2Model, modelId]);
 
   const flux2Issue = isFlux2Model && flux2Status
