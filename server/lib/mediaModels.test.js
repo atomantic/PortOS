@@ -112,7 +112,7 @@ describe('mediaModels registry', () => {
     const reg = loadMediaModels();
     expect(reg.video).toBeDefined();
     expect(reg.selectedTextEncoder).toBe('gemma-bf16');
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to parse'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to load'));
     logSpy.mockRestore();
   });
 
@@ -180,6 +180,34 @@ describe('mediaModels registry', () => {
     const { getDefaultVideoModelId } = await import('./mediaModels.js');
     expect(getDefaultVideoModelId()).toBe('real-model');
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('falling back'));
+    logSpy.mockRestore();
+  });
+
+  it('getTextEncoderRepo falls back when entry has no repo string', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [],
+      textEncoders: [{ id: 't', label: 't' }], // no repo field
+      selectedTextEncoder: 't',
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { getTextEncoderRepo } = await import('./mediaModels.js');
+    const repo = getTextEncoderRepo();
+    expect(typeof repo).toBe('string');
+    expect(repo.length).toBeGreaterThan(0);
+    logSpy.mockRestore();
+  });
+
+  it('falls back to defaults when registry file read fails (e.g., permissions)', async () => {
+    // Point at a path that exists as a directory — readFileSync will throw
+    // EISDIR rather than parse-fail, exercising the read error path.
+    process.env.PORTOS_MEDIA_MODELS_FILE = tmpDir;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    expect(reg.video).toBeDefined();
+    expect(reg.selectedTextEncoder).toBe('gemma-bf16');
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to load'));
     logSpy.mockRestore();
   });
 

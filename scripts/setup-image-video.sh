@@ -53,6 +53,10 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
     # Pin >=0.1.35 — earlier versions silently broke I2V on split-format /
     # quantized models like LTX-2.3 distilled-Q4 by failing to load the VAE
     # encoder, causing the conditioned frame to render as gray fog.
+    # Both packages provide an `import mlx_video` module, so a prior install
+    # of the wrong one shadows the right one. Uninstall first to remove the
+    # ambiguity for users upgrading from earlier setup-image-video.sh runs.
+    "$PYTHON_BIN" -m pip uninstall --yes mlx_video >/dev/null 2>&1 || true
     "$PYTHON_BIN" -m pip install --upgrade --user \
       mlx \
       mlx_vlm \

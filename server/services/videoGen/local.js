@@ -126,10 +126,14 @@ const optimizeForStreaming = async (videoPath) => {
     proc.on('error', () => resolve(false));
   });
   if (!ok) { await unlink(tmpPath).catch(() => {}); return; }
-  // Atomic single-syscall replace — no window where the file is missing.
-  // If rename fails (cross-device, permissions, file-in-use) we'd otherwise
-  // leak the tmp file silently and slowly fill data/videos with .fs.mp4s.
+  // POSIX rename atomically replaces an existing dest in one syscall. On
+  // Windows, fs.rename fails when the destination already exists, so every
+  // successful render would log a warning and skip faststart. Unlink first
+  // there — non-atomic (brief window with no file) but preserves the
+  // optimization. If the eventual rename still fails, clean up the tmp file
+  // so we don't slowly fill data/videos with .fs.mp4 leaks.
   try {
+    if (IS_WIN) await unlink(videoPath).catch((err) => { if (err?.code !== 'ENOENT') throw err; });
     await rename(tmpPath, videoPath);
   } catch (err) {
     await unlink(tmpPath).catch(() => {});
@@ -202,6 +206,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   const model = VIDEO_MODELS[modelId];
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  // macOS/mlx_video requires a HuggingFace repo id — Windows doesn't (the
+  // diffusers wrapper hardcodes Lightricks/LTX-Video). A user-edited registry
+  // entry missing `repo` would otherwise pass `undefined` into spawn args.
+  if (!IS_WIN && (typeof model.repo !== 'string' || model.repo.length === 0)) {
+    throw new ServerError(`Video model "${modelId}" is missing the required \`repo\` field in data/media-models.json`, { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' });
+  }
 
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
@@ -276,8 +286,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // 90s+ render doesn't get aborted by display/system sleep on a laptop. -w
   // makes caffeinate self-exit when our pid does, so no manual cleanup is
   // needed and a server crash mid-render still releases the assertion.
-  // macOS-only — `caffeinate` doesn't exist on Windows/Linux.
-  if (!IS_WIN && proc.pid) {
+  // macOS-only — `caffeinate` is a darwin binary; gating on `!IS_WIN` would
+  // also fire on Linux and emit a pointless ENOENT every render.
+  if (process.platform === 'darwin' && proc.pid) {
     spawn('caffeinate', ['-i', '-w', String(proc.pid)], { stdio: 'ignore', detached: false }).on('error', () => {});
   }
   // Without an 'error' handler, a missing/non-executable pythonPath would

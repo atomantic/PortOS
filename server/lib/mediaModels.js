@@ -95,17 +95,16 @@ const normalizeRegistry = (parsed) => {
 export const loadMediaModels = () => {
   if (cached) return cached;
   seedIfMissing();
-  // Catch parse failures so a malformed user edit doesn't crash server boot
-  // — the loader is invoked at module import-time from videoGen/imageGen, so
-  // an exception here aborts startup. Fall back to the in-memory defaults
-  // and surface the error in logs so the operator can fix the file.
-  const raw = readFileSync(REGISTRY_FILE, 'utf-8');
-  let parsed;
+  // Catch read AND parse failures — both can happen at module import-time
+  // (videoGen/imageGen import this synchronously), so an unhandled throw
+  // here aborts server startup. Permissions, broken symlink, transient I/O
+  // all surface from readFileSync; malformed JSON from JSON.parse.
+  let parsed = DEFAULT_REGISTRY;
   try {
+    const raw = readFileSync(REGISTRY_FILE, 'utf-8');
     parsed = JSON.parse(raw);
   } catch (err) {
-    console.log(`⚠️ Failed to parse ${REGISTRY_FILE} (${err.message}) — using built-in defaults`);
-    parsed = DEFAULT_REGISTRY;
+    console.log(`⚠️ Failed to load ${REGISTRY_FILE} (${err.message}) — using built-in defaults`);
   }
   cached = normalizeRegistry(parsed);
   return cached;
@@ -146,17 +145,28 @@ export const getImageModels = () => {
 // --text-encoder-repo. Prefers `localPath` (e.g. an existing LM Studio
 // install) when it exists; otherwise returns the HF repo id which mlx_video
 // will resolve via the HF cache (downloading on first run).
+const FALLBACK_TEXT_ENCODER_REPO = 'mlx-community/gemma-3-12b-it-4bit';
+const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
+
 export const getTextEncoderRepo = () => {
   const reg = loadMediaModels();
   const id = reg.selectedTextEncoder;
   const entry = (reg.textEncoders || []).find((t) => t.id === id);
   if (!entry) {
     console.log(`⚠️ Unknown selectedTextEncoder "${id}"; falling back to first entry`);
-    return reg.textEncoders?.[0]?.repo || 'mlx-community/gemma-3-12b-it-4bit';
+    const firstRepo = reg.textEncoders?.[0]?.repo;
+    return isNonEmptyString(firstRepo) ? firstRepo : FALLBACK_TEXT_ENCODER_REPO;
   }
   if (entry.localPath) {
     const expanded = expandHome(entry.localPath);
     if (existsSync(expanded)) return expanded;
+  }
+  // Spawn args must be non-empty strings — a malformed registry entry
+  // (missing/empty `repo`) would otherwise reach mlx_video as undefined and
+  // surface as a confusing TypeError or downstream CLI error.
+  if (!isNonEmptyString(entry.repo)) {
+    console.log(`⚠️ Text encoder "${id}" has no repo; falling back to "${FALLBACK_TEXT_ENCODER_REPO}"`);
+    return FALLBACK_TEXT_ENCODER_REPO;
   }
   return entry.repo;
 };
