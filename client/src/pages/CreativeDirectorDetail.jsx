@@ -33,9 +33,13 @@ export default function CreativeDirectorDetail() {
   const [activeAgents, setActiveAgents] = useState([]);
 
   const fetchProject = useCallback(() => {
+    // Reset state on every fetch so navigating between project IDs (or a
+    // failed fetch) doesn't leave the previous project's data on screen.
+    setLoading(true);
+    setProject(null);
     getCreativeDirectorProject(id)
       .then((p) => { setProject(p); setLoading(false); })
-      .catch(() => { setLoading(false); });
+      .catch(() => { setProject(null); setLoading(false); });
   }, [id]);
 
   // Poll CoS agents in parallel so the Segments tab can flag the scene that's

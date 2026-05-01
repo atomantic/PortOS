@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe('createSmokeTestProject', () => {
-  it('creates a deterministic 3-scene project with audio + auto-accept knobs set', async () => {
+  it('creates a deterministic 3-scene project with disableAudio=true and autoAcceptScenes=true', async () => {
     const project = await createSmokeTestProject();
     expect(project.disableAudio).toBe(true);
     expect(project.autoAcceptScenes).toBe(true);
