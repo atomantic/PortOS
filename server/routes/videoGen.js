@@ -213,10 +213,13 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       imageStrength: body.imageStrength,
     },
   });
-  // Match the legacy response shape (jobId, generationId, filename, mode) so
-  // existing client code keeps working; add status+position for the queue.
-  // filename is jobId.mp4 — generated deterministically by the worker.
-  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, mode: 'local', status, position });
+  // Match the legacy response shape (jobId, generationId, filename, model,
+  // mode) so existing client code keeps working; add status+position for
+  // the queue. Resolve the effective model NOW — when modelId is omitted
+  // the worker will default it inside generateVideo, but the response
+  // needs to surface what the gallery / history will record.
+  const effectiveModel = body.modelId || defaultVideoModelId();
+  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModel, mode: 'local', status, position });
 }));
 
 router.get('/:jobId/events', (req, res) => {

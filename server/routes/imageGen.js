@@ -176,13 +176,19 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
       kind: 'image',
       params: { pythonPath: py, ...data },
     });
+    // Surface the effective model so the response matches the
+    // non-queued path's `model` field. data.modelId may be undefined
+    // when the caller omits it; mirror generateImage's default ('dev')
+    // so the gallery/history record agrees with what the worker will
+    // actually run.
+    const effectiveModel = data.modelId || 'dev';
     return res.json({
       jobId,
       generationId: jobId,
       filename: `${jobId}.png`,
       path: `/data/images/${jobId}.png`,
       mode: 'local',
-      model: data.modelId,
+      model: effectiveModel,
       status,
       position,
     });
