@@ -96,8 +96,15 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
     from diffusers import Flux2KleinPipeline
     from transformers import AutoTokenizer
 
+    # STAGE markers are parsed by server/services/imageGen/local.js#handleLine
+    # and emitted as `stage` SSE events so the UI can show "Downloading model
+    # weights (~8 GB on first run)" instead of a misleading "step 0/8". The
+    # tokenizer is small (a few MB), the pipeline + transformer is the big
+    # ~8 GB SDNQ-quantized weights download — flagged as `download-pipeline`.
+    print(f"STAGE:download-tokenizer:{tokenizer_repo}", file=sys.stderr, flush=True)
     print(f"🔧 sdnq: tokenizer ← {tokenizer_repo}", file=sys.stderr)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False)
+    print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 sdnq: pipeline ← {repo}", file=sys.stderr)
     pipe = Flux2KleinPipeline.from_pretrained(
         repo,
@@ -105,6 +112,7 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
         torch_dtype=dtype,
         low_cpu_mem_usage=True,
     )
+    print("STAGE:move-to-device", file=sys.stderr, flush=True)
     pipe.to(device)
     return pipe
 
@@ -120,13 +128,16 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from flux2_quantized import QuantizedFlux2Transformer2DModel
 
+    print(f"STAGE:download-int8-snapshot:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 int8: snapshot ← {repo}", file=sys.stderr)
     model_path = snapshot_download(repo)
 
+    print("STAGE:load-transformer", file=sys.stderr, flush=True)
     print("🔧 int8: transformer …", file=sys.stderr)
     qtransformer = QuantizedFlux2Transformer2DModel.from_pretrained(model_path)
     qtransformer.to(device=device, dtype=dtype)
 
+    print("STAGE:load-text-encoder", file=sys.stderr, flush=True)
     print("🔧 int8: text encoder …", file=sys.stderr)
     # AutoModelForCausalLM picks the right class from the config
     # (Qwen3ForCausalLM here). transformers>=4.51 ships Qwen3 in-tree so we
@@ -171,12 +182,33 @@ def apply_memory_optimizations(pipe) -> None:
         vae.enable_tiling()
 
 
-def make_stepwise_callback(stepwise_dir: str, pipe):
+def _unpack_flux2_latents(latents, height: int, width: int, vae_scale: int = 8, patch: int = 2):
+    """Convert Flux2 transformer-packed latents `(B, num_patches, C*P*P)` back
+    to the VAE-friendly `(B, C, H_lat, W_lat)` layout.
+
+    For 1024×576 with vae_scale=8 patch=2: `(1, 2304, 128)` → `(1, 16, 72, 128)`
+    (2304 = 36×64 patches, 128 = 16 channels × 2×2 patch). diffusers' own
+    `_unpack_latents_with_ids` requires an `x_ids` tensor not exposed to the
+    callback, so we do the math ourselves.
+    """
+    bsz, num_patches, ch_packed = latents.shape
+    h = height // vae_scale // patch
+    w = width // vae_scale // patch
+    c = ch_packed // (patch * patch)
+    if h * w != num_patches or c * patch * patch != ch_packed:
+        raise ValueError(
+            f"unpack mismatch: latents={tuple(latents.shape)} expected "
+            f"num_patches={h*w} channels_packed={c*patch*patch} for {height}x{width}"
+        )
+    latents = latents.view(bsz, h, w, c, patch, patch)
+    latents = latents.permute(0, 3, 1, 4, 2, 5)
+    return latents.reshape(bsz, c, h * patch, w * patch)
+
+
+def make_stepwise_callback(stepwise_dir: str, pipe, height: int, width: int):
     """Return a `callback_on_step_end` that decodes the running latent into a
     small preview PNG. local.js's `processLatestFrame` watches this dir and
-    streams the freshest frame to the SSE client. Match mflux's filename
-    shape (`step_<N>.png`, no zero padding) so the existing parser sorts
-    by mtime and picks the latest correctly."""
+    streams the freshest frame to the SSE client."""
 
     if not stepwise_dir:
         return None
@@ -205,12 +237,14 @@ def make_stepwise_callback(stepwise_dir: str, pipe):
         # Best-effort decode. Errors here must not abort generation — the
         # final image is still produced after the last step.
         try:
+            # Flux2 latents arrive packed (B, num_patches, C*p*p). VAE expects
+            # (B, C, H, W). Skip unpack if it's already 4-D (future-proof).
+            if latents.dim() == 3:
+                latents = _unpack_flux2_latents(latents, height, width)
             decoded = vae.decode(latents / scaling + shift, return_dict=False)[0]
             decoded = (decoded.clamp(-1, 1) + 1) / 2
             arr = (decoded[0].float().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
             img = Image.fromarray(arr)
-            # Cap preview size — fs.watch + base64 encode every step is fine
-            # for 256px thumbnails but wasteful at 1024px.
             img.thumbnail((512, 512), Image.LANCZOS)
             img.save(out / f"step_{step_index + 1}.png", "PNG", optimize=False)
             fired["saved"] += 1
@@ -283,7 +317,7 @@ def main() -> None:
             (int(args.width), int(args.height)), Image.LANCZOS
         )
 
-    callback = make_stepwise_callback(args.stepwise_image_output_dir, pipe)
+    callback = make_stepwise_callback(args.stepwise_image_output_dir, pipe, int(args.height), int(args.width))
     # Flux2KleinPipeline.__call__ doesn't always accept negative_prompt or
     # strength — passing an unsupported kwarg raises TypeError. Filter to
     # what the live signature actually accepts.
@@ -314,6 +348,7 @@ def main() -> None:
         if args.image_strength is not None and "strength" in accepted:
             pipe_kwargs["strength"] = float(args.image_strength)
 
+    print("STAGE:inference", file=sys.stderr, flush=True)
     print(
         f"🎨 flux2 generate seed={seed} {args.width}x{args.height} steps={args.steps} "
         f"guidance={args.guidance} device={device}",
@@ -362,5 +397,84 @@ def main() -> None:
     print(f"✅ flux2 saved {args.output} (seed={seed})", file=sys.stderr)
 
 
+def _emit_user_error(kind: str, message: str, repo: str = "") -> None:
+    """Emit a structured single-line error the server's stderr parser picks up
+    for the SSE error event. `kind` is a stable identifier the UI maps to a
+    friendly heading; `message` is the human prose; `repo` (optional) is the
+    HF repo to deep-link the user to so they can request access / check token."""
+    line = f"USER_ERROR:{kind}"
+    if repo:
+        line += f":{repo}"
+    print(line, file=sys.stderr, flush=True)
+    print(f"❌ {message}", file=sys.stderr, flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as err:
+        # Top-level safety net — every error type we recognise gets a friendly
+        # USER_ERROR: line so the UI can surface "request access at <link>"
+        # instead of bare "Exit code 1". Anything we don't recognise still
+        # falls through to a printed traceback above + a generic USER_ERROR
+        # below, so the user sees *something* actionable.
+        from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, HfHubHTTPError
+        # Walk the cause chain — diffusers wraps HF errors in OSError, so the
+        # innermost exception is what tells us the real story.
+        chain = []
+        cur = err
+        while cur is not None:
+            chain.append(cur)
+            cur = cur.__cause__ or cur.__context__
+        def _repo_from_hf_error(hf_err):
+            """huggingface_hub doesn't always populate `repo_id` on the error.
+            Fall back to parsing the failing URL — `/<owner>/<repo>/resolve/...`
+            for file downloads or `/api/models/<owner>/<repo>` for API hits."""
+            repo = getattr(hf_err, "repo_id", None) or ""
+            if repo:
+                return repo
+            url = getattr(getattr(hf_err, "response", None), "url", None) or \
+                  getattr(getattr(hf_err, "request", None), "url", None)
+            if url is None:
+                return ""
+            path = str(url).split("huggingface.co", 1)[-1].lstrip("/")
+            parts = path.split("/")
+            if parts[:1] == ["api"] and len(parts) >= 4 and parts[1] in {"models", "datasets", "spaces"}:
+                return f"{parts[2]}/{parts[3]}"
+            if len(parts) >= 2 and parts[0] not in {"api", "settings", "join"}:
+                return f"{parts[0]}/{parts[1]}"
+            return ""
+
+        gated = next((e for e in chain if isinstance(e, GatedRepoError)), None)
+        notfound = next((e for e in chain if isinstance(e, RepositoryNotFoundError)), None)
+        http = next((e for e in chain if isinstance(e, HfHubHTTPError)), None)
+        if gated is not None:
+            repo = _repo_from_hf_error(gated)
+            url = f"https://huggingface.co/{repo}" if repo else "https://huggingface.co/"
+            _emit_user_error(
+                "gated_repo",
+                f"Access to {repo or 'the model repo'} is restricted. Visit {url} "
+                f"to request access, then make sure your HF token is set in PortOS.",
+                repo,
+            )
+            sys.exit(2)
+        status = getattr(getattr(http, "response", None), "status_code", None) if http else None
+        if status == 401:
+            _emit_user_error(
+                "hf_unauthorized",
+                "HuggingFace rejected the token (401). Check that the token is valid "
+                "and has read access, then re-paste it in PortOS.",
+            )
+            sys.exit(2)
+        if notfound is not None:
+            repo = _repo_from_hf_error(notfound)
+            _emit_user_error("repo_not_found", f"HF repo not found: {repo or '(unknown)'}", repo)
+            sys.exit(2)
+        # Unknown failure — emit the original traceback (already printed above)
+        # plus a generic structured marker so the UI shows something useful.
+        _emit_user_error("unknown", f"{type(err).__name__}: {err}")
+        raise

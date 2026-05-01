@@ -27,7 +27,7 @@ import { useImageGenProgress } from '../hooks/useImageGenProgress';
 import {
   getImageGenStatus, generateImage, listImageModels, listLoras, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, getActiveImageJob, getSettings,
-  buildFormData,
+  buildFormData, listMediaJobs,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
 
@@ -44,6 +44,31 @@ const RESOLUTIONS = [
 ];
 
 const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
+
+// User-facing labels for STAGE markers emitted by FLUX.2 (and any future
+// runner). The keys match what `flux2_macos.py` prints; unknown stages fall
+// through to the prettified id so adding a new STAGE in Python doesn't
+// require a client change to be at least readable.
+const STAGE_LABELS = {
+  'starting': 'Starting…',
+  'download-tokenizer': 'Loading tokenizer…',
+  'download-pipeline': 'Downloading model weights (~8 GB on first run)…',
+  'download-snapshot': 'Downloading model weights…',
+  'download-int8-snapshot': 'Downloading model weights (~16 GB on first run)…',
+  'load-transformer': 'Loading transformer…',
+  'load-text-encoder': 'Loading text encoder…',
+  'move-to-device': 'Moving model to GPU…',
+  'inference': 'Running diffusion…',
+};
+
+// Headings for typed errors emitted via USER_ERROR: lines. Keys match `kind`
+// from the SSE error event. Unknown/missing kinds fall through to the
+// generic 'Generation failed' heading.
+const ERROR_HEADINGS = {
+  gated_repo: 'Model access required',
+  hf_unauthorized: 'HuggingFace token rejected',
+  repo_not_found: 'Model repo not found',
+};
 
 export default function ImageGen() {
   const navigate = useNavigate();
@@ -87,7 +112,18 @@ export default function ImageGen() {
 
   const [generating, setGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const [errorMeta, setErrorMeta] = useState(null); // { kind, repo } for typed-error guidance
   const [localProgress, setLocalProgress] = useState(null); // local mode SSE-driven 0..1
+  // Count of additional submits stacked behind the in-flight render. Drains
+  // back to 0 every time the active render completes (refreshGallery picks
+  // up everything finished server-side). Just a visual signal for the user;
+  // the real queue lives in mediaJobQueue on the server.
+  const [pendingQueued, setPendingQueued] = useState(0);
+  // FLUX.2 (and any future runner that emits `STAGE:` markers) flips this
+  // through phases like 'download-pipeline' → 'move-to-device' → 'inference'.
+  // Drives the loading-card label so a multi-minute first-run model download
+  // doesn't look like a frozen "step 0/8".
+  const [stage, setStage] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const eventSourceRef = useRef(null);
@@ -307,6 +343,39 @@ export default function ImageGen() {
     return () => controller.abort();
   }, [isFlux2Model, modelId, refreshFlux2Status]);
 
+  // While the user has additional renders queued behind the active one, poll
+  // `/api/media-jobs` to keep `pendingQueued` in sync with the server's
+  // actual queue depth and refresh the gallery when a job transitions
+  // running → done. The effect intentionally depends only on `pendingQueued
+  // > 0` (a boolean) — using `pendingQueued` directly would tear down and
+  // recreate the interval every tick the count changes, never letting the
+  // 4s clock settle.
+  const queueActive = pendingQueued > 0;
+  const lastBusyRef = useRef(0);
+  useEffect(() => {
+    if (!queueActive) return;
+    let cancelled = false;
+    const tick = async () => {
+      const jobs = await listMediaJobs({ kind: 'image' }).catch(() => null);
+      if (cancelled || !jobs) return;
+      const stillBusy = jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
+      // Subtract 1 for the actively-tracked render (when generating). Floor
+      // at 0 so a transient counting glitch doesn't show "−1 queued".
+      const next = Math.max(0, stillBusy - (generating ? 1 : 0));
+      // Only refresh gallery on a busy-count drop — that's the signal a
+      // queued job just completed. Otherwise polling re-fetches the gallery
+      // every 4s for nothing.
+      if (stillBusy < lastBusyRef.current) refreshGallery();
+      lastBusyRef.current = stillBusy;
+      // No-op guard: same value setState would still trigger a render, so
+      // explicitly skip when nothing changed.
+      setPendingQueued((prev) => (prev === next ? prev : next));
+    };
+    tick();
+    const interval = setInterval(tick, 4000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [queueActive, generating]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const flux2Issue = isFlux2Model && flux2Status
     ? (!flux2Status.venvInstalled ? 'venv' : !flux2Status.hfTokenPresent ? 'token' : null)
     : null;
@@ -322,12 +391,13 @@ export default function ImageGen() {
 
   const handleRandomSeed = () => setSeed(randomSeed());
 
-  const startLocalGeneration = async () => {
-    setLocalProgress({ progress: 0 });
-    // Codex shares the SSE-driven async pipeline with local. The codex
-    // payload below intentionally omits local-only knobs (model, LoRAs,
-    // quantize, guidance, steps, seed) — the codex provider only consumes
-    // prompt/negative/width/height, so we don't bother sending the rest.
+  // Snapshots current form state into a server payload + POSTs it to the
+  // mediaJobQueue. Returns the queue's response ({ jobId, position, ... }).
+  // Shared between startLocalGeneration (which then opens SSE for the job)
+  // and the "queue another while one is running" path which only needs the
+  // POST — the user keeps watching the active render and the new submission
+  // sits in the server queue until the active one finishes.
+  const submitGenerationPayload = async () => {
     const payload = isCodexMode ? {
       prompt: prompt.trim(),
       negativePrompt: negativePrompt.trim() || undefined,
@@ -346,11 +416,7 @@ export default function ImageGen() {
       loraScales: selectedLoras.map((l) => l.scale),
       mode: 'local',
     };
-    // i2i (local Flux): switch to multipart so the init image travels with
-    // the prompt payload. The route's optional-multipart middleware accepts
-    // both shapes against the same endpoint.
     const hasInitImage = isLocalMode && initImage.source != null;
-    let data;
     if (hasInitImage) {
       const fd = buildFormData({
         ...payload,
@@ -362,11 +428,14 @@ export default function ImageGen() {
         const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      data = await res.json();
-    } else {
-      data = await generateImage(payload);
+      return { payload, data: await res.json() };
     }
+    return { payload, data: await generateImage(payload) };
+  };
 
+  const startLocalGeneration = async () => {
+    setLocalProgress({ progress: 0 });
+    const { payload, data } = await submitGenerationPayload();
     return new Promise((resolve, reject) => {
       const jobId = data.jobId || data.generationId;
       const es = new EventSource(`/api/image-gen/${jobId}/events`);
@@ -375,9 +444,10 @@ export default function ImageGen() {
       es.onmessage = (ev) => {
         const msg = safeParseJSON(ev.data);
         if (!msg) return;
+        if (msg.type === 'stage') setStage({ name: msg.stage, detail: msg.detail });
         if (msg.type === 'status') setStatusMsg(msg.message);
         if (msg.type === 'progress') {
-          setLocalProgress({ progress: msg.progress });
+          setLocalProgress({ progress: msg.progress, phase: msg.phase });
           setStatusMsg(msg.message);
         }
         if (msg.type === 'complete') {
@@ -404,7 +474,13 @@ export default function ImageGen() {
         }
         if (msg.type === 'error') {
           es.close();
-          reject(new Error(msg.error));
+          // The server may attach `kind` (e.g. 'gated_repo', 'hf_unauthorized')
+          // and `repo` for the UI to deep-link to the HF access page. Carry
+          // them on the Error so handleGenerate's catch can render guidance.
+          const err = new Error(msg.error);
+          if (msg.kind) err.kind = msg.kind;
+          if (msg.repo) err.repo = msg.repo;
+          reject(err);
         }
         if (msg.type === 'canceled') {
           es.close();
@@ -418,13 +494,33 @@ export default function ImageGen() {
     });
   };
 
+  // Queue a render without taking over the active SSE/preview. Used when the
+  // user submits while one is already rendering — they get to keep watching
+  // the in-flight render, and the new payload lands in mediaJobQueue (server
+  // FIFO). When the active render finishes, refreshGallery() pulls all
+  // completed images so the queued ones become visible as they land.
+  const handleQueueAdditional = async () => {
+    if (!prompt.trim()) return;
+    const { data } = await submitGenerationPayload().catch((err) => {
+      toast.error(err.message || 'Failed to queue render');
+      return {};
+    });
+    if (!data) return;
+    setPendingQueued((n) => n + 1);
+    const pos = typeof data.position === 'number' ? data.position : null;
+    toast.success(pos ? `Queued (${pos} ahead in queue)` : 'Queued');
+  };
+
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
-    if (!prompt.trim() || generating) return;
+    if (!prompt.trim()) return;
+    if (generating) return handleQueueAdditional();
     setGenerating(true);
     setStatusMsg('Starting...');
     setError(null);
+    setErrorMeta(null);
     setResult(null);
+    setStage(null);
     // Both modes go through the socket-driven progress hook now — local mflux
     // emits stepwise frames via the imageGenEvents bus the same way external
     // SD API does, so the same hook drives the live preview for both.
@@ -450,11 +546,20 @@ export default function ImageGen() {
       refreshGallery();
     } catch (err) {
       setError(err.message || 'Image generation failed');
-      toast.error(err.message || 'Image generation failed');
+      // Typed kind from a USER_ERROR: line lets the UI render guidance
+      // (request access link, re-paste token CTA) instead of just the prose.
+      if (err.kind) setErrorMeta({ kind: err.kind, repo: err.repo });
+      // Toast a one-line summary; the inline error card carries full prose.
+      const firstLine = String(err.message || 'Image generation failed').split('\n')[0];
+      toast.error(firstLine);
     } finally {
       setGenerating(false);
       setLocalProgress(null);
+      setStage(null);
       endGenerate();
+      // pendingQueued is reconciled by the polling effect (source of truth
+      // is /api/media-jobs). Decrementing here would briefly undercount
+      // before the next 4s tick reconciles.
     }
   };
 
@@ -550,7 +655,7 @@ export default function ImageGen() {
                   key={id}
                   type="button"
                   onClick={() => setSelectedMode(id)}
-                  disabled={generating}
+                  disabled={statusLoading}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs transition-colors disabled:opacity-50 ${effectiveMode === id ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white hover:bg-port-border/40'}`}
                   title={`Use ${label} for the next render`}
                 >
@@ -590,7 +695,7 @@ export default function ImageGen() {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
-                disabled={generating}
+                disabled={statusLoading}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="Describe the image you want to generate..."
               />
@@ -601,7 +706,7 @@ export default function ImageGen() {
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 rows={3}
-                disabled={generating}
+                disabled={statusLoading}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="What to avoid..."
               />
@@ -617,7 +722,7 @@ export default function ImageGen() {
               <button
                 type="button"
                 onClick={() => setFlux2InstallOpen(true)}
-                disabled={generating}
+                disabled={statusLoading}
                 className="self-start sm:self-auto whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80 disabled:opacity-50"
               >
                 <Sparkles size={14} />
@@ -639,7 +744,7 @@ export default function ImageGen() {
                 <select
                   value={modelId}
                   onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidance(''); }}
-                  disabled={generating}
+                  disabled={statusLoading}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 >
                   {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -652,7 +757,7 @@ export default function ImageGen() {
               <select
                 value={resolutionLabel}
                 onChange={handleResolutionChange}
-                disabled={generating}
+                disabled={statusLoading}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
                 {RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
@@ -671,14 +776,14 @@ export default function ImageGen() {
                     type="number"
                     value={seed}
                     onChange={(e) => setSeed(e.target.value)}
-                    disabled={generating}
+                    disabled={statusLoading}
                     placeholder="Random"
                     className="flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                   />
                   <button
                     type="button"
                     onClick={handleRandomSeed}
-                    disabled={generating}
+                    disabled={statusLoading}
                     className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
                     title="Randomize seed"
                   >
@@ -698,7 +803,7 @@ export default function ImageGen() {
                   value={steps}
                   onChange={(e) => setSteps(e.target.value)}
                   placeholder={String(currentModel?.steps || 25)}
-                  disabled={generating}
+                  disabled={statusLoading}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 />
               </div>
@@ -715,7 +820,7 @@ export default function ImageGen() {
                     value={guidance}
                     onChange={(e) => setGuidance(e.target.value)}
                     placeholder={String(currentModel?.guidance ?? '')}
-                    disabled={generating}
+                    disabled={statusLoading}
                     className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                   />
                 </div>
@@ -725,7 +830,7 @@ export default function ImageGen() {
                     <select
                       value={quantize}
                       onChange={(e) => setQuantize(e.target.value)}
-                      disabled={generating}
+                      disabled={statusLoading}
                       className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                     >
                       {['3', '4', '5', '6', '8'].map((q) => <option key={q} value={q}>{q}-bit{q === '8' ? ' (default)' : q === '4' ? ' (fast)' : ''}</option>)}
@@ -739,7 +844,7 @@ export default function ImageGen() {
                 <input
                   type="range" min={1} max={20} step={0.5}
                   value={cfgScale}
-                  disabled={generating}
+                  disabled={statusLoading}
                   onChange={(e) => setCfgScale(Number(e.target.value))}
                   className="w-full accent-port-accent"
                 />
@@ -759,7 +864,7 @@ export default function ImageGen() {
                         <input
                           type="checkbox"
                           checked={!!selected}
-                          disabled={generating}
+                          disabled={statusLoading}
                           onChange={(e) => {
                             if (e.target.checked) setSelectedLoras((p) => [...p, { filename: lora.filename, name: lora.name, scale: 1.0 }]);
                             else setSelectedLoras((p) => p.filter((s) => s.filename !== lora.filename));
@@ -774,7 +879,7 @@ export default function ImageGen() {
                           <input
                             type="number" min={0} max={2} step={0.1}
                             value={selected.scale}
-                            disabled={generating}
+                            disabled={statusLoading}
                             onChange={(e) => {
                               const scale = parseFloat(e.target.value) || 0;
                               setSelectedLoras((p) => p.map((s) => s.filename === lora.filename ? { ...s, scale } : s));
@@ -806,7 +911,7 @@ export default function ImageGen() {
                     <button
                       type="button"
                       onClick={handleClearInitImage}
-                      disabled={generating}
+                      disabled={statusLoading}
                       className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
                       title="Remove init image"
                     >
@@ -820,7 +925,7 @@ export default function ImageGen() {
                       <input
                         type="range" min={0} max={1} step={0.05}
                         value={initImageStrength}
-                        disabled={generating}
+                        disabled={statusLoading}
                         onChange={(e) => setInitImageStrength(Number(e.target.value))}
                         className="w-full accent-port-accent mt-1"
                       />
@@ -831,37 +936,67 @@ export default function ImageGen() {
                 <label className="flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed border-port-border rounded-lg text-xs text-gray-400 hover:text-white hover:border-port-accent cursor-pointer transition-colors">
                   <ImageIcon className="w-4 h-4" />
                   Upload image to remix (PNG/JPG/WebP)
-                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handlePickInitImage} disabled={generating} />
+                  <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handlePickInitImage} disabled={statusLoading} />
                 </label>
               )}
             </div>
           )}
 
-          <div className="flex items-center gap-2 pt-1">
-            {generating ? (
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
+            <button
+              type="submit"
+              disabled={!prompt.trim() || notConnected}
+              className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
+            >
+              <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
+            </button>
+            {generating && (
               <button
                 type="button"
                 onClick={handleCancel}
-                className="flex items-center gap-2 px-4 py-2 bg-port-error hover:bg-port-error/80 text-white text-sm font-medium rounded-lg min-h-[40px]"
+                className="flex items-center gap-2 px-3 py-2 bg-port-error hover:bg-port-error/80 text-white text-sm font-medium rounded-lg min-h-[40px]"
               >
-                <X className="w-4 h-4" /> Cancel
+                <X className="w-4 h-4" /> Cancel current
               </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!prompt.trim() || notConnected}
-                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
-              >
-                <Sparkles className="w-4 h-4" /> Generate
-              </button>
+            )}
+            {pendingQueued > 0 && (
+              <span className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
+                +{pendingQueued} queued
+              </span>
             )}
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (
               <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
-                {error || statusMsg || 'Working...'}
+                {error ? String(error).split('\n')[0] : (stage ? (STAGE_LABELS[stage.name] || stage.name) : statusMsg) || 'Working...'}
               </span>
             )}
           </div>
+
+          {error && (
+            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
+              <div className="font-semibold text-sm">
+                {ERROR_HEADINGS[errorMeta?.kind] || 'Generation failed'}
+              </div>
+              <div className="whitespace-pre-wrap break-words text-port-warning/90">
+                {String(error)}
+              </div>
+              {errorMeta?.kind === 'gated_repo' && errorMeta?.repo && (
+                <a
+                  href={`https://huggingface.co/${errorMeta.repo}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
+                >
+                  Request access to {errorMeta.repo} ↗
+                </a>
+              )}
+              {errorMeta?.kind === 'hf_unauthorized' && (
+                <div className="text-port-warning/80">
+                  Paste a fresh token in the FLUX.2 banner above (it appears when the model needs one).
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
@@ -880,9 +1015,14 @@ export default function ImageGen() {
             ) : result ? (
               <img src={result.path} alt={result.prompt} decoding="async" className="w-full h-full object-contain" />
             ) : generating ? (
-              <div className="text-gray-500 text-sm flex flex-col items-center gap-2">
+              <div className="text-gray-500 text-sm flex flex-col items-center gap-2 px-4 text-center">
                 <BrailleSpinner />
-                <span>{statusMsg || 'Starting diffusion...'}</span>
+                <span className="font-medium text-gray-300">
+                  {stage ? (STAGE_LABELS[stage.name] || stage.name) : (statusMsg || 'Starting diffusion…')}
+                </span>
+                {stage?.detail && (
+                  <span className="text-[10px] text-gray-500 truncate max-w-[280px]">{stage.detail}</span>
+                )}
               </div>
             ) : (
               <div className="text-gray-600 text-xs flex flex-col items-center gap-1.5">

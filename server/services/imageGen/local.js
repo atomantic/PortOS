@@ -305,35 +305,70 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // would grow this buffer for the full duration of a long render.
   const STDERR_TAIL_BYTES = 64 * 1024;
   let stderrBuffer = '';
+  // Returns true when the line drove a progress event (so the pm2-log echo
+  // below skips it — progress bars are spammy and already visible in the UI).
+  // Status / debug / error lines fall through to console.log so a stuck render
+  // (model download, HF auth probe, weight load) shows up in pm2 logs instead
+  // of vanishing into the SSE channel only the browser ever sees.
+  // Phase tracking. Lifecycle events from the runner (STAGE:download-pipeline,
+  // STAGE:inference, etc.) flip the phase so the UI can show "Downloading
+  // model weights" instead of misleading "step 0/8" while HF pulls multi-GB
+  // shards. Inference progress events also tag themselves with the current
+  // phase so the client knows whether `step/total` reflects download chunks
+  // (out of N safetensors files) or actual generation steps.
+  let currentPhase = 'starting';
   const handleLine = (line) => {
     const trimmed = line.trim();
-    if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return;
-    // mflux progress: "100%|████| 8/8 [00:05<00:00,  1.43it/s]"
+    if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return true;
+
+    if (trimmed.startsWith('STAGE:')) {
+      const rest = trimmed.slice(6); // strip 'STAGE:'
+      const colon = rest.indexOf(':');
+      const stage = colon === -1 ? rest : rest.slice(0, colon);
+      const detail = colon === -1 ? '' : rest.slice(colon + 1);
+      currentPhase = stage;
+      broadcastSse(job, { type: 'stage', stage, detail });
+      return true;
+    }
+
     const m = trimmed.match(/(\d+)%\|.*?(\d+)\/(\d+)/);
     if (m) {
       const pct = parseInt(m[1], 10) / 100;
       const step = parseInt(m[2], 10);
       const total = parseInt(m[3], 10);
-      broadcastSse(job, { type: 'progress', progress: pct, message: trimmed });
-      imageGenEvents.emit('progress', { generationId: jobId, progress: pct, step, totalSteps: total });
-      if (activeJob && activeJob.generationId === jobId) {
-        activeJob.progress = pct; activeJob.step = step; activeJob.totalSteps = total;
+      broadcastSse(job, { type: 'progress', progress: pct, message: trimmed, phase: currentPhase });
+      // Only forward to imageGenEvents (which drives the UI step counter)
+      // when we're actually in the inference phase — download tqdm bars
+      // count safetensors files, not diffusion steps.
+      if (currentPhase === 'inference') {
+        imageGenEvents.emit('progress', { generationId: jobId, progress: pct, step, totalSteps: total });
+        if (activeJob && activeJob.generationId === jobId) {
+          activeJob.progress = pct; activeJob.step = step; activeJob.totalSteps = total;
+        }
       }
-    } else {
-      broadcastSse(job, { type: 'status', message: trimmed });
+      return true;
     }
+    broadcastSse(job, { type: 'status', message: trimmed });
+    return false;
   };
 
+  const shortId = jobId.slice(0, 8);
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString();
     stderrBuffer += text;
     if (stderrBuffer.length > STDERR_TAIL_BYTES) {
       stderrBuffer = stderrBuffer.slice(-STDERR_TAIL_BYTES);
     }
-    for (const line of text.split(/[\n\r]+/)) handleLine(line);
+    for (const line of text.split(/[\n\r]+/)) {
+      const trimmed = line.trim();
+      if (!handleLine(line) && trimmed) console.log(`🐍 [${shortId}] ${trimmed}`);
+    }
   });
   proc.stdout.on('data', (chunk) => {
-    for (const line of chunk.toString().split(/[\n\r]+/)) handleLine(line);
+    for (const line of chunk.toString().split(/[\n\r]+/)) {
+      const trimmed = line.trim();
+      if (!handleLine(line) && trimmed) console.log(`🐍-out [${shortId}] ${trimmed}`);
+    }
   });
 
   proc.on('close', async (code, signal) => {
@@ -344,10 +379,35 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
     if (code !== 0) {
       job.status = 'error';
       const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
-      const tail = stderrBuffer.trim().split('\n').slice(-10).join('\n');
-      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}\n${tail}` });
-      imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+      // Extract a structured user-error if the runner emitted one
+      // (USER_ERROR:gated_repo:black-forest-labs/FLUX.2-klein-9B), and find
+      // the matching `❌ …` prose line that follows it. Fall back to the last
+      // 10 stderr lines if no structured error was emitted (unknown crash).
+      const lines = stderrBuffer.split('\n').map((l) => l.trim()).filter(Boolean);
+      const structIdx = lines.findIndex((l) => l.startsWith('USER_ERROR:'));
+      let userMessage = null;
+      let userKind = null;
+      let userRepo = null;
+      if (structIdx >= 0) {
+        // Split with limit=2 so a kind containing colons can't shred the repo.
+        const [kind, ...rest] = lines[structIdx].slice('USER_ERROR:'.length).split(':');
+        userKind = kind;
+        userRepo = rest.join(':') || null;
+        const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
+        userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
+      }
+      const tail = lines.slice(-10).join('\n');
+      const errorText = userMessage
+        ? `${userMessage}\n\n(diagnostic) ${reason}`
+        : `Generation failed: ${reason}\n${tail}`;
+      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
+      job.error = userMessage || reason;
+      job.errorKind = userKind;
+      job.errorRepo = userRepo;
+      broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
+      // Propagate the friendly message (not the raw "Exit code 1") to the
+      // job queue so its `failed` log line and future SSE replays carry it.
+      imageGenEvents.emit('failed', { generationId: jobId, error: userMessage || reason });
     } else {
       job.status = 'complete';
       // Sidecar: persist a metadata record next to the PNG so the gallery

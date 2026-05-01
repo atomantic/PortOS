@@ -36,6 +36,7 @@ export * from './apiPalette.js';
 export * from './apiDashboard.js';
 export * from './apiAsk.js';
 export * from './apiImageVideo.js';
+export * from './apiMediaJobs.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';
