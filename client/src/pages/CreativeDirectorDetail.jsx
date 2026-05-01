@@ -64,15 +64,21 @@ export default function CreativeDirectorDetail() {
   }, [fetchProject, fetchAgents, project?.status]);
 
   const handleAction = async (kind) => {
-    // Map action → past-tense label up-front so concat doesn't produce
-    // grammatically wrong strings like "Startd" / "Paused" / "Resumed".
+    // Map action → past-tense label and optimistic status up-front.
     const successMessages = { start: 'Started', pause: 'Paused', resume: 'Resumed' };
+    // Optimistic status: start kicks off planning or rendering depending on
+    // whether a treatment exists; the 5s poll will correct it if the server
+    // resolves to a different status (e.g. planning → rendering).
+    const optimisticStatus = kind === 'pause' ? 'paused'
+      : kind === 'resume' ? (project?.treatment ? 'rendering' : 'planning')
+      : kind === 'start' ? (project?.treatment ? 'rendering' : 'planning')
+      : null;
     try {
       if (kind === 'start') await startCreativeDirectorProject(id);
       else if (kind === 'pause') await pauseCreativeDirectorProject(id);
       else if (kind === 'resume') await resumeCreativeDirectorProject(id);
       toast.success(successMessages[kind] || kind);
-      fetchProject();
+      if (optimisticStatus) setProject((p) => p ? { ...p, status: optimisticStatus } : p);
     } catch (err) {
       toast.error(err.message || `Failed to ${kind}`);
     }

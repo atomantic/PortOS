@@ -34,6 +34,19 @@ const projectRenders = new Map(); // projectId → jobId
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
+/**
+ * Return the current status of a render job, or null if unknown.
+ * Lets external callers (e.g. stitchRunner) detect ffmpeg failures fast
+ * instead of waiting for a polling timeout.
+ * @param {string} jobId
+ * @returns {{ status: string, error?: string } | null}
+ */
+export function getRenderJobStatus(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  return { status: job.status, error: job.lastError };
+}
+
 // =====================================================================
 // Project CRUD
 // =====================================================================
@@ -394,6 +407,7 @@ export async function renderProject(projectId) {
   proc.on('error', (err) => {
     job.status = 'error';
     const reason = `Failed to spawn ffmpeg: ${err.message}`;
+    job.lastError = reason;
     console.log(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     projectRenders.delete(projectId);
@@ -408,6 +422,7 @@ export async function renderProject(projectId) {
       const reason = cancelled
         ? 'Render cancelled'
         : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
+      job.lastError = reason;
       console.log(`${cancelled ? '🛑' : '❌'} Timeline render ${cancelled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       await unlink(outputPath).catch(() => {});
       broadcastSse(job, { type: cancelled ? 'cancelled' : 'error', error: reason });

@@ -72,13 +72,11 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
   if (!fresh) return;
   if (fresh.status === 'paused' || fresh.status === 'failed') return;
 
-  if (meta.kind === 'treatment') {
-    return advanceAfterSceneSettled(fresh.id);
-  }
-  if (meta.kind === 'evaluate') {
-    return advanceAfterSceneSettled(fresh.id);
-  }
-  // Unknown kind — nothing to do.
+  // Always advance — advanceAfterSceneSettled is idempotent and inspects
+  // project state to decide what comes next. Calling it for unknown kinds
+  // (e.g. legacy 'scene' tasks from before the treatment/evaluate split)
+  // makes the system self-healing rather than silently getting stuck.
+  return advanceAfterSceneSettled(fresh.id);
 }
 
 /**

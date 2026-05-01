@@ -1,6 +1,30 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { nextPendingScene, nextTaskKind, buildTimelineClips } from './orchestrator.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
+
+// Mocks for advanceAfterSceneSettled integration test.
+const mockRunSceneRender = vi.fn(async () => undefined);
+const mockUpdateProject = vi.fn(async () => undefined);
+
+vi.mock('./local.js', () => ({
+  getProject: vi.fn(),
+  updateProject: (...args) => mockUpdateProject(...args),
+}));
+
+vi.mock('./sceneRunner.js', () => ({
+  runSceneRender: (...args) => mockRunSceneRender(...args),
+}));
+
+vi.mock('./stitchRunner.js', () => ({
+  runStitch: vi.fn(async () => undefined),
+}));
+
+vi.mock('./agentBridge.js', () => ({
+  enqueueTreatmentTask: vi.fn(async () => undefined),
+}));
+
+import * as localMod from './local.js';
+import { advanceAfterSceneSettled } from './completionHook.js';
 
 const baseProject = {
   id: 'cd-1',
@@ -174,5 +198,43 @@ describe('presetToRenderParams', () => {
   it('throws on unknown quality preset', () => {
     expect(() => presetToRenderParams({ aspectRatio: '16:9', quality: 'ultra', durationSeconds: 1 }))
       .toThrow(/quality/);
+  });
+});
+
+describe('advanceAfterSceneSettled', () => {
+  const makeProject = (overrides = {}) => ({
+    id: 'cd-test',
+    status: 'rendering',
+    finalVideoId: null,
+    treatment: {
+      scenes: [
+        { sceneId: 'scene-1', order: 0, status: 'accepted', renderedJobId: 'job-1' },
+        { sceneId: 'scene-2', order: 1, status: 'pending' },
+        { sceneId: 'scene-3', order: 2, status: 'pending' },
+        { sceneId: 'scene-4', order: 3, status: 'pending' },
+        { sceneId: 'scene-5', order: 4, status: 'pending' },
+        { sceneId: 'scene-6', order: 5, status: 'pending' },
+      ],
+    },
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    mockRunSceneRender.mockClear();
+    mockUpdateProject.mockClear();
+  });
+
+  it('picks scene-2 (lowest-order pending) when scene-1 is accepted and scenes 2-6 are pending', async () => {
+    const project = makeProject();
+    // getProject called twice: initial fetch + fresh fetch before runSceneRender.
+    localMod.getProject
+      .mockResolvedValueOnce(project)
+      .mockResolvedValueOnce(project);
+
+    await advanceAfterSceneSettled(project.id);
+
+    expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+    const [, sceneArg] = mockRunSceneRender.mock.calls[0];
+    expect(sceneArg.sceneId).toBe('scene-2');
   });
 });

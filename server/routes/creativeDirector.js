@@ -67,6 +67,12 @@ router.patch('/:id/treatment', asyncHandler(async (req, res) => {
 router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorSceneUpdateSchema, req.body);
   const updated = await updateScene(req.params.id, req.params.sceneId, data);
+  if (data.status === 'accepted' || data.status === 'failed') {
+    // Fire-and-forget — agent or user just settled a scene; nudge the
+    // orchestrator so the next scene (or stitch) starts.
+    const { advanceAfterSceneSettled } = await import('../services/creativeDirector/completionHook.js');
+    advanceAfterSceneSettled(req.params.id).catch((e) => console.log(`⚠️ CD scene advance failed: ${e.message}`));
+  }
   res.json(updated);
 }));
 

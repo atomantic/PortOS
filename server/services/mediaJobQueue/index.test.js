@@ -232,6 +232,43 @@ describe('mediaJobQueue', () => {
     expect(failed.error).toBe('OOM');
   });
 
+  it('pre-gen sanitizer nulls uploadedTempPath that resolves outside PATHS.uploads', async () => {
+    // Any path that is not under the uploads root should be nulled out so the
+    // gen module never sees it (defense-in-depth against corrupted job params).
+    const job = mediaJobQueue.enqueueJob({
+      kind: 'video',
+      params: { prompt: 'x', uploadedTempPath: '/etc/passwd' },
+    });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const callArgs = stubs.generateVideo.mock.calls[0][0];
+    // The gen module must receive a nulled path, not the original dangerous one.
+    expect(callArgs.uploadedTempPath).toBeNull();
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('watchdog fires and marks the job failed when gen never emits a terminal event', async () => {
+    // Use a very short watchdog for this test by overriding the env var before
+    // the module is loaded. Re-import the module with MEDIA_JOB_WATCHDOG_VIDEO_MS=50.
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
+    await importFresh();
+    // generateVideo hangs forever — never emits completed/failed.
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hang' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // The watchdog should fire within 50 ms and fail the job.
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'failed', { timeoutMs: 2000 });
+
+    const failed = mediaJobQueue.getJob(job.jobId);
+    expect(failed.status).toBe('failed');
+    expect(failed.error).toMatch(/watchdog timeout/);
+
+    delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+  });
+
   // Regression: a client that reconnects to /:jobId/events for a queued job
   // recovered from media-jobs.json (or one that never had an SSE entry for
   // any reason) must NOT receive a synthetic terminal `error` frame just

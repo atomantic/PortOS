@@ -14,6 +14,7 @@ vi.mock('../services/creativeDirector/local.js', () => ({
 
 vi.mock('../services/creativeDirector/completionHook.js', () => ({
   startCreativeDirectorProject: vi.fn(async () => undefined),
+  advanceAfterSceneSettled: vi.fn(async () => undefined),
 }));
 
 import * as cdService from '../services/creativeDirector/local.js';
@@ -161,6 +162,36 @@ describe('creativeDirector routes', () => {
       expect(r.body.ok).toBe(true);
       expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'rendering' });
       expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
+    });
+  });
+
+  describe('PATCH /:id/scene/:sceneId', () => {
+    it('returns the updated scene and does not nudge orchestrator for non-terminal status', async () => {
+      cdService.updateScene.mockResolvedValue({ sceneId: 'scene-1', status: 'rendering' });
+      const r = await request(app)
+        .patch('/api/creative-director/cd-1/scene/scene-1')
+        .send({ status: 'rendering' });
+      expect(r.status).toBe(200);
+      expect(cdService.updateScene).toHaveBeenCalledWith('cd-1', 'scene-1', { status: 'rendering' });
+      expect(hook.advanceAfterSceneSettled).not.toHaveBeenCalled();
+    });
+
+    it('nudges the orchestrator when a scene is accepted', async () => {
+      cdService.updateScene.mockResolvedValue({ sceneId: 'scene-1', status: 'accepted' });
+      const r = await request(app)
+        .patch('/api/creative-director/cd-1/scene/scene-1')
+        .send({ status: 'accepted' });
+      expect(r.status).toBe(200);
+      expect(hook.advanceAfterSceneSettled).toHaveBeenCalledWith('cd-1');
+    });
+
+    it('nudges the orchestrator when a scene is failed', async () => {
+      cdService.updateScene.mockResolvedValue({ sceneId: 'scene-1', status: 'failed' });
+      const r = await request(app)
+        .patch('/api/creative-director/cd-1/scene/scene-1')
+        .send({ status: 'failed' });
+      expect(r.status).toBe(200);
+      expect(hook.advanceAfterSceneSettled).toHaveBeenCalledWith('cd-1');
     });
   });
 });

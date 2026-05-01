@@ -36,6 +36,15 @@ import { imageGenEvents } from '../imageGenEvents.js';
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_ARCHIVE = 500;
+const WATCHDOG_VIDEO_MS = Number(process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS ?? 30 * 60 * 1000);
+const WATCHDOG_IMAGE_MS = Number(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS ?? 5 * 60 * 1000);
+
+// Returns true if `p` resolves strictly under PATHS.uploads. Shared by
+// safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
+function isUnderUploadsRoot(p) {
+  const uploadsRoot = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
+  return pathResolve(p).startsWith(uploadsRoot);
+}
 
 // Defense-in-depth helper for cleaning up staged multipart uploads. Job
 // params are persisted (and replayed on boot), so a corrupted media-jobs.json
@@ -45,8 +54,7 @@ const MAX_PERSISTED_ARCHIVE = 500;
 // any legitimate `uploadedTempPath` is under that root.
 async function safeUnlinkUpload(path) {
   if (!path) return;
-  const uploadsRoot = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
-  if (!pathResolve(path).startsWith(uploadsRoot)) {
+  if (!isUnderUploadsRoot(path)) {
     console.log(`⚠️ mediaJobQueue refused to unlink path outside PATHS.uploads: ${path}`);
     return;
   }
@@ -368,17 +376,56 @@ async function runJob(job) {
     },
   };
 
+  // Thread #1: sanitize uploadedTempPath before passing params to the gen
+  // module. Even though safeUnlinkUpload guards the *delete* path, the gen
+  // module receives the raw job.params spread and could itself act on a
+  // corrupted path from a hand-edited media-jobs.json. Null it out here if
+  // it doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
+  const safeParams = { ...job.params };
+  if (safeParams.uploadedTempPath && !isUnderUploadsRoot(safeParams.uploadedTempPath)) {
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPath outside PATHS.uploads — nulled before gen invoke: ${safeParams.uploadedTempPath}`);
+    safeParams.uploadedTempPath = null;
+  }
+
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();
 
+  // Thread #2: per-job watchdog — fires if the gen never emits a terminal
+  // event (hung child process or emitter regression). On trigger it marks
+  // the job failed via the normal handlers path (SSE + mediaJobEvents +
+  // persistence all fire) and best-effort cancels the underlying process
+  // so the queue can make forward progress.
+  const watchdogMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
+  let watchdogTimer = setTimeout(async () => {
+    if (job.status !== 'running') return;
+    console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogMs}ms — marking failed`);
+    handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogMs}ms` });
+    // Best-effort cancel the underlying child process.
+    if (job.kind === 'video') {
+      const { cancel } = await import('../videoGen/local.js');
+      cancel();
+    } else if (job.kind === 'image') {
+      const { cancel } = await import('../imageGen/local.js');
+      cancel();
+    }
+  }, watchdogMs);
+  // Ensure the timer doesn't keep Node alive after the job settles.
+  watchdogTimer.unref?.();
+
+  // Wrap handlers to clear the watchdog on any terminal event.
+  const origCompleted = handlers.completed;
+  const origFailed = handlers.failed;
+  handlers.completed = (payload) => { clearTimeout(watchdogTimer); origCompleted(payload); };
+  handlers.failed = (payload) => { clearTimeout(watchdogTimer); origFailed(payload); };
+
   try {
     if (job.kind === 'video') {
       const { generateVideo } = await import('../videoGen/local.js');
-      await generateVideo({ ...job.params, jobId: job.id });
+      await generateVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'image') {
       const { generateImage } = await import('../imageGen/local.js');
-      await generateImage({ ...job.params, jobId: job.id });
+      await generateImage({ ...safeParams, jobId: job.id });
     } else {
       throw new Error(`Unknown job kind: ${job.kind}`);
     }

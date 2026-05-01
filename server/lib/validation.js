@@ -648,6 +648,7 @@ export const creativeDirectorProjectUpdateSchema = z.object({
   status: z.enum(PROJECT_STATUSES).optional(),
   finalVideoId: z.string().max(64).nullable().optional(),
   timelineProjectId: z.string().max(64).nullable().optional(),
+  failureReason: z.string().max(500).nullable().optional(),
 }).strict();
 
 // One scene in the treatment, written by the agent on the treatment task.

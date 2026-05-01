@@ -11,6 +11,7 @@
  */
 
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from './creativeDirectorPresets.js';
+import { PORTOS_API_URL } from './ports.js';
 
 // Common header. Project context the agent always needs to know.
 function projectBlock(project) {
@@ -56,7 +57,7 @@ export function buildTreatmentPrompt(project) {
     `Issue ONE HTTP request to update the project with the treatment, then exit:`,
     ``,
     `\`\`\``,
-    `PATCH http://localhost:5555/api/creative-director/${project.id}/treatment`,
+    `PATCH ${PORTOS_API_URL}/api/creative-director/${project.id}/treatment`,
     `Content-Type: application/json`,
     ``,
     `{`,
@@ -123,7 +124,7 @@ export function buildEvaluatePrompt(project, scene) {
     `Issue ONE PATCH to record your verdict, then exit. Do not request renders, do not call last-frame, do not create follow-up tasks — the server handles all of that.`,
     ``,
     `\`\`\``,
-    `PATCH http://localhost:5555/api/creative-director/${project.id}/scene/${scene.sceneId}`,
+    `PATCH ${PORTOS_API_URL}/api/creative-director/${project.id}/scene/${scene.sceneId}`,
     `Content-Type: application/json`,
     `\`\`\``,
     ``,
@@ -142,7 +143,7 @@ export function buildEvaluatePrompt(project, scene) {
     ``,
     `Then (and ONLY in the accepted case) add the rendered video to the project's collection:`,
     `\`\`\``,
-    `POST http://localhost:5555/api/media/collections/${project.collectionId}/items`,
+    `POST ${PORTOS_API_URL}/api/media/collections/${project.collectionId}/items`,
     `Content-Type: application/json`,
     ``,
     `{ "kind": "video", "ref": "${renderedId}" }`,

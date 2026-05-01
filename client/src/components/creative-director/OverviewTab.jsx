@@ -35,6 +35,13 @@ export default function OverviewTab({ project }) {
           <pre className="whitespace-pre-wrap text-sm text-port-text font-mono">{project.userStory}</pre>
         </section>
       )}
+
+      {project.failureReason && (
+        <section className="bg-port-card border border-port-error rounded p-4">
+          <h2 className="text-sm font-semibold text-port-error uppercase tracking-wide mb-2">Failure reason</h2>
+          <p className="text-sm text-port-text break-all">{project.failureReason}</p>
+        </section>
+      )}
     </div>
   );
 }
