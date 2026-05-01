@@ -90,6 +90,15 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
  *   - completionHook on `treatment` and `evaluate` task completion.
  *   - sceneRunner when a render fails terminally (no evaluate task spawned).
  */
+// In-memory dedup. The status field doesn't fully cover this — `planning`
+// gets set just before enqueueing the treatment task, and `stitching` just
+// before runStitch starts the timeline render. A second concurrent
+// invocation between updateProject and enqueue/runStitch would bypass the
+// status guard. These per-projectId Sets close the window. Cleared after
+// the corresponding async work returns or on failure.
+const inflightTreatment = new Set();
+const inflightStitch = new Set();
+
 export async function advanceAfterSceneSettled(projectId) {
   const project = await getProject(projectId);
   if (!project) return;
@@ -97,9 +106,17 @@ export async function advanceAfterSceneSettled(projectId) {
 
   // No treatment yet → enqueue treatment task.
   if (!project.treatment) {
-    await updateProject(project.id, { status: 'planning' });
+    // Skip if status is already `planning` (a treatment task is in flight)
+    // OR our in-memory dedup set has this project (covers the
+    // updateProject→enqueueTreatmentTask window between two concurrent
+    // advance calls).
+    if (project.status === 'planning' || inflightTreatment.has(projectId)) return;
+    inflightTreatment.add(projectId);
+    await updateProject(project.id, { status: 'planning' })
+      .catch((e) => { inflightTreatment.delete(projectId); throw e; });
     const fresh = await getProject(project.id);
-    await enqueueTreatmentTask(fresh);
+    await enqueueTreatmentTask(fresh)
+      .finally(() => inflightTreatment.delete(projectId));
     return;
   }
 
@@ -143,8 +160,13 @@ export async function advanceAfterSceneSettled(projectId) {
     }
     return;
   }
-  // Run stitch (programmatic, no agent task).
-  await runStitch(projectId);
+  // Run stitch (programmatic, no agent task). Skip if already stitching
+  // OR if a stitch is in flight from a concurrent advance call (the
+  // status flip to 'stitching' happens inside runStitch, leaving a window
+  // where two callers could both reach this line).
+  if (project.status === 'stitching' || inflightStitch.has(projectId)) return;
+  inflightStitch.add(projectId);
+  await runStitch(projectId).finally(() => inflightStitch.delete(projectId));
 }
 
 /**
