@@ -87,6 +87,8 @@ export default function VideoGen() {
   const incomingSourceImage = searchParams.get('sourceImageFile');
   const incomingPrompt = searchParams.get('prompt');
   const incomingNegativePrompt = searchParams.get('negativePrompt');
+  const incomingWidth = searchParams.get('w');
+  const incomingHeight = searchParams.get('h');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
@@ -132,6 +134,15 @@ export default function VideoGen() {
   useEffect(() => {
     if (incomingNegativePrompt) setNegativePrompt(incomingNegativePrompt);
   }, [incomingNegativePrompt]);
+  // When "Continue" pipes a video's last frame here, also sync the resolution
+  // so the new render matches the source. Width/height get rounded to the
+  // model's 64-pixel grid server-side, so off-grid sources still work.
+  useEffect(() => {
+    const w = Number(incomingWidth);
+    const h = Number(incomingHeight);
+    if (Number.isFinite(w) && w > 0) setWidth(w);
+    if (Number.isFinite(h) && h > 0) setHeight(h);
+  }, [incomingWidth, incomingHeight]);
 
   const [history, setHistory] = useState([]);
   const [preview, setPreview] = useState(null);
@@ -179,7 +190,11 @@ export default function VideoGen() {
       toast.error(err.message || 'Failed to extract last frame');
       return {};
     });
-    if (filename) navigate(`/media/video?sourceImageFile=${encodeURIComponent(filename)}`);
+    if (!filename) return;
+    const params = new URLSearchParams({ sourceImageFile: filename });
+    if (item?.width) params.set('w', String(item.width));
+    if (item?.height) params.set('h', String(item.height));
+    navigate(`/media/video?${params.toString()}`);
   };
 
   const [generating, setGenerating] = useState(false);
@@ -750,6 +765,9 @@ export default function VideoGen() {
                 onChange={handleResolutionChange}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               >
+                {!matchedResolution && (
+                  <option value={resolutionLabel}>{`${width}×${height} (custom)`}</option>
+                )}
                 {RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
               </select>
             </div>

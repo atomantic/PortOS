@@ -49,7 +49,11 @@ const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
 const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
+const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
+const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
+const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
+const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
 const Templates = lazyWithReload(() => import('./pages/Templates'));
 const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
@@ -185,6 +189,10 @@ export default function App() {
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="history" element={<MediaHistory />} />
+            <Route path="collections" element={<MediaCollections />} />
+            <Route path="collections/:id" element={<MediaCollectionDetail />} />
+            <Route path="timeline" element={<VideoTimeline />} />
+            <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
