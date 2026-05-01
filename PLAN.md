@@ -12,6 +12,19 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Backlog
 
+### Creative Director follow-ups (post-#191 merge)
+
+The PR landed with full pipeline mechanics + auto-recovery + smoke-test fixture, but the first real E2E run (1 of 6 scenes accepted on subjective grounds, 3 of 6 rejected, terminated cleanly) surfaced concrete improvement targets:
+
+- [ ] **Multi-frame evaluator sampling.** The cognitive evaluator currently reads only the rendered video's thumbnail (typically frame 0). For 5s i2v clips, scene intent that develops mid-or-late (archway appearing, light bloom, particles) gets missed and the evaluator rejects renders that actually delivered. Sample 3–5 frames evenly across the video at render-completion time (extract via ffmpeg `select='eq(n,0)+eq(n,N/4)+eq(n,N/2)+eq(n,3*N/4)+eq(n,N-1)'`), save as `<jobId>-f1.jpg ... -f5.jpg`, and update `buildEvaluatePrompt` to instruct the agent to Read all of them and judge intent across the timeline. Most-impactful single change.
+- [ ] **i2v continuity fidelity.** `useContinuationFromPrior: true` currently feeds the prior scene's last frame as `sourceImagePath` but doesn't pin `imageStrength`. Renders sometimes drift hard from the seed (a "blue ball" continuation generates a totally new scene that loosely starts from the seed). Surface `imageStrength` as a per-scene knob in the treatment schema (default ~0.85 for continuation scenes, lower if the prompt deliberately changes the subject) and pipe it through `sceneRunner.params`.
+- [ ] **Audio continuity across scenes.** mlx-video-with-audio generates audio per-clip; concatenated scenes have audible cuts at scene boundaries. Either render scenes silently and add a single backing audio pass at stitch time, or apply a short crossfade in `videoTimeline/local.js#buildFfmpegArgs` (already does video crossfades — extend to audio with `acrossfade`).
+- [ ] **Duplicate evaluator spawn dedup.** During the long E2E run, server logs showed `Task already being spawned, skipping duplicate` followed seconds later by a *second* agent spawning for the exact same task id. The CoS task lane logic ends up double-acquiring. Reproduce in a unit test against `taskSchedule` / `agentLifecycle` and fix the de-dup window.
+- [ ] **Render slowness on long sessions.** Per-scene render time degraded from ~3.5 min (early) to 10–30 min (late) within one project — likely accumulated listeners + queue races. Profile after sustained use; the round-22 dedup work probably already helps; verify.
+- [ ] **Auto-accept watchdog.** `autoAcceptScenes: true` skips the Claude evaluator entirely. Add a server-side sanity check (file exists, file size > 0, ffprobe can read at least 1 frame) before writing the synthetic accepted evaluation — without it a black/zero-frame render would still be marked accepted.
+
+### Other backlog
+
 - [ ] **Voice CoS tool expansion** — `calendar_today` / `calendar_next` (Google Calendar via existing MCP), `meatspace_log_workout` (wraps `meatspaceHealth.js`), `weather_now` (needs API choice — OpenWeather / WeatherKit / NWS), `timer_set` (reuses `agentActionExecutor.js` scheduled actions).
 - [ ] **Voice agent vision fallback** — `ui_describe_visually` tool: screenshot the current tab (or a named canvas/chart) and send to a vision-capable model so "what's on this chart?" works on non-DOM content (CyberCity, graph views). Depends on a vision provider in `portos-ai-toolkit`.
 - [ ] **Voice agent — explicit long-term memory routing** — On "remember that …", auto-route to `brain_capture` and inject top-N relevant memories into the voice turn's system prompt via `brain_search`. Some of this is ambient today; make it explicit and self-improving.
