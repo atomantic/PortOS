@@ -47,11 +47,14 @@ export default function CreativeDirectorDetail() {
   }, [fetchProject, project?.status]);
 
   const handleAction = async (kind) => {
+    // Map action → past-tense label up-front so concat doesn't produce
+    // grammatically wrong strings like "Startd" / "Paused" / "Resumed".
+    const successMessages = { start: 'Started', pause: 'Paused', resume: 'Resumed' };
     try {
       if (kind === 'start') await startCreativeDirectorProject(id);
       else if (kind === 'pause') await pauseCreativeDirectorProject(id);
       else if (kind === 'resume') await resumeCreativeDirectorProject(id);
-      toast.success(`${kind[0].toUpperCase()}${kind.slice(1)}d`);
+      toast.success(successMessages[kind] || kind);
       fetchProject();
     } catch (err) {
       toast.error(err.message || `Failed to ${kind}`);

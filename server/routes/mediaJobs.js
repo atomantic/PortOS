@@ -22,10 +22,12 @@ const listQuerySchema = z.object({
 router.get('/', asyncHandler(async (req, res) => {
   const filters = validateRequest(listQuerySchema, req.query);
   // Most-recent first across all statuses. Live (queued/running) jobs land
-  // at the top by virtue of having the freshest `queuedAt`/`startedAt`.
+  // at the top by virtue of having the freshest `startedAt`/`queuedAt`. We
+  // prefer `startedAt` so a long-queued job that just started outranks a
+  // newer, still-queued job (matches the "most-recent activity" intent).
   const sorted = [...listJobs(filters)].sort((a, b) => {
-    const ta = new Date(a.queuedAt || a.startedAt || a.completedAt || 0).getTime();
-    const tb = new Date(b.queuedAt || b.startedAt || b.completedAt || 0).getTime();
+    const ta = new Date(a.startedAt || a.queuedAt || a.completedAt || 0).getTime();
+    const tb = new Date(b.startedAt || b.queuedAt || b.completedAt || 0).getTime();
     return tb - ta;
   });
   res.json(sorted);

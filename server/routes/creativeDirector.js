@@ -76,10 +76,24 @@ router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
 // project state, decides what kind of task is next, and enqueues it via the
 // CoS task queue. Idempotent — calling start on an already-running project
 // just enqueues whatever the next-task-kind is, which may be nothing.
+//
+// Failed projects are recoverable: any failed scenes are reset to pending so
+// the orchestrator can retry them, and the project status flips back to
+// planning/rendering. This matches the PR's "you can resume from the UI"
+// promise — without it, a single failed scene would leave Start a no-op.
 router.post('/:id/start', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  if (project.status === 'paused') {
+  if (project.status === 'failed') {
+    // Reset every failed scene back to pending so nextTaskKind picks it up.
+    const scenes = project.treatment?.scenes || [];
+    for (const s of scenes) {
+      if (s.status === 'failed') {
+        await updateScene(project.id, s.sceneId, { status: 'pending' });
+      }
+    }
+    await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
+  } else if (project.status === 'paused') {
     await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
   } else if (project.status === 'draft') {
     await updateProject(project.id, { status: 'planning' });

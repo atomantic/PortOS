@@ -129,6 +129,11 @@ export async function initMediaJobQueue() {
         archive.push(j);
       }
     }
+    // The persisted `position` reflects the previous process' queue layout
+    // (which may have included a now-failed running job). Recompute against
+    // the current queue so /api/media-jobs and the initial SSE `queued`
+    // event report accurate slots.
+    queue.forEach((q, i) => { q.position = i + 1; });
     if (persistedJobs.length) {
       console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
     }
@@ -175,10 +180,30 @@ async function drainLoop() {
 // them into SSE-wire payloads + queue-status transitions. Returns
 // `{ attach, detach }` so runJob can deterministically clean up listeners
 // even on the throw path.
+//
+// Event shapes (match the underlying gens):
+//   videoGen.progress  → { generationId, progress: number, step?, totalSteps? }
+//   imageGen.progress  → { generationId, progress: number, step?, totalSteps? }
+//   imageGen.progress  → { generationId, currentImage } (preview-only frames)
+// Neither gen module emits `message`, so we don't pass it through (passing
+// `undefined` clobbers any prior status text on the client).
 function makeGenDispatcher(emitter, job, handlers) {
   const onProgress = (e) => {
     if (e.generationId !== job.id) return;
-    handlers.progress({ type: 'progress', progress: e.progress, message: e.message });
+    const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
+    const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
+    if (hasProgress) {
+      const payload = { type: 'progress', progress: e.progress };
+      if (hasCurrentImage) payload.currentImage = e.currentImage;
+      if (e.message !== undefined) payload.message = e.message;
+      handlers.progress(payload);
+      return;
+    }
+    if (hasCurrentImage) {
+      // Preview-only frame (imageGen step thumbnail) — distinct SSE type so
+      // existing consumers can keep their progress-bar value untouched.
+      handlers.progress({ type: 'preview', currentImage: e.currentImage });
+    }
   };
   const onCompleted = (e) => { if (e.generationId === job.id) handlers.completed(e); };
   const onFailed = (e) => { if (e.generationId === job.id) handlers.failed({ error: e.error }); };
@@ -287,6 +312,12 @@ export async function cancelJob(jobId) {
   const queueIdx = queue.findIndex((j) => j.id === jobId);
   if (queueIdx >= 0) {
     const [job] = queue.splice(queueIdx, 1);
+    // Multipart uploads (e.g. /api/video-gen with an image) hand us a path
+    // in the OS temp dir. If we drop the job before it starts, runJob never
+    // gets a chance to delete it — clean up here so /tmp doesn't accumulate.
+    if (job.params?.uploadedTempPath) {
+      await unlink(job.params.uploadedTempPath).catch(() => {});
+    }
     job.status = 'canceled';
     job.completedAt = new Date().toISOString();
     archive.push(job);
