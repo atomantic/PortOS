@@ -431,21 +431,25 @@ async function runJob(job) {
   // so the queue can make forward progress.
   const watchdogMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
   watchdogTimer = setTimeout(async () => {
-    // If the gen emitted a terminal event between the timer firing and now,
-    // job.status is already non-running. Skip both the failed-handler call
-    // (terminate is idempotent, but logging would still mislead) AND the
-    // cancel() — calling cancel() here could SIGTERM the *next* gen run
-    // since cancel() targets whatever child is currently spawned.
+    // Two-stage status guard: first check stops us if the gen settled
+    // before the timer fired. The await on the dynamic import below opens
+    // a window during which a natural completion / failure could land —
+    // re-check after the await so we don't fire `handlers.failed` and
+    // SIGTERM the *next* job's child (cancel() targets the gen module's
+    // current activeProcess; once handlers.failed marks this job
+    // terminal, runJob's await exits and the worker advances).
+    if (job.status !== 'running') return;
+    const importer = job.kind === 'video'
+      ? import('../videoGen/local.js')
+      : job.kind === 'image' ? import('../imageGen/local.js') : null;
+    const mod = importer ? await importer : null;
     if (job.status !== 'running') return;
     console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogMs}ms — marking failed`);
+    // Cancel BEFORE marking failed — that ordering keeps the SIGTERM
+    // pointed at *this* job's child. The gen module will then emit its
+    // own 'failed' event, but the terminate() guard makes it a no-op.
+    if (mod?.cancel) mod.cancel();
     handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogMs}ms` });
-    if (job.kind === 'video') {
-      const { cancel } = await import('../videoGen/local.js');
-      cancel();
-    } else if (job.kind === 'image') {
-      const { cancel } = await import('../imageGen/local.js');
-      cancel();
-    }
   }, watchdogMs);
   // Ensure the timer doesn't keep Node alive after the job settles.
   watchdogTimer.unref?.();

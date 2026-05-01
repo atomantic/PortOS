@@ -7,9 +7,15 @@
  */
 
 /**
- * Pick the next scene that needs rendering. Returns null when every scene
- * is in a terminal state (accepted or failed). Order is treatment.scenes
- * sorted by `order`.
+ * Pick the next non-terminal scene by `order`. Returns the lowest-order
+ * scene that's `pending`, `rendering`, or `evaluating` (i.e. not yet in a
+ * terminal `accepted`/`failed` state). Returns null when every scene is
+ * terminal.
+ *
+ * The caller treats `rendering`/`evaluating` as "currently in flight" —
+ * surfacing them here lets a re-enqueue pick up where work left off
+ * rather than skip ahead. `advanceAfterSceneSettled` separately filters
+ * to status === 'pending' before kicking off a fresh render.
  */
 export function nextPendingScene(project) {
   if (!project?.treatment?.scenes?.length) return null;
