@@ -12,8 +12,8 @@
 
 import { execFile, spawn } from 'child_process';
 import { existsSync, statSync } from 'fs';
-import { unlink, rename, writeFile } from 'fs/promises';
-import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { unlink, writeFile } from 'fs/promises';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
@@ -22,6 +22,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
+import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,16 +37,6 @@ export const listVideoModels = () => getVideoModels();
 export const defaultVideoModelId = () => getDefaultVideoModelId();
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
-
-// Validate that a sidecar/history-supplied filename is a safe basename under
-// the expected directory — guards against tampered history entries with
-// path-traversal segments (`../etc/passwd`) leaking into ffmpeg or unlink.
-const safeUnder = (root, name) => {
-  if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\\') || name.includes('..')) return null;
-  const rootResolved = resolvePath(root) + PATH_SEP;
-  const fullPath = resolvePath(join(root, name));
-  return fullPath.startsWith(rootResolved) ? fullPath : null;
-};
 
 const jobs = new Map();
 let activeProcess = null;
@@ -70,85 +61,6 @@ export const cancel = () => {
     }
   }, 8000);
   return true;
-};
-
-// ffmpeg discovery is async (which/where takes ~10ms+) and the result is
-// stable for the process lifetime — cache the first hit so subsequent video
-// generations don't re-shell-out and don't block the event loop.
-let cachedFfmpegPath;
-const findFfmpeg = async () => {
-  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
-  const candidates = IS_WIN
-    ? ['C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe']
-    : ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg'];
-  for (const p of candidates) {
-    if (existsSync(p)) { cachedFfmpegPath = p; return p; }
-  }
-  const cmd = IS_WIN ? 'where' : 'which';
-  const { stdout } = await execFileAsync(cmd, ['ffmpeg'], { timeout: 5000 }).catch(() => ({ stdout: '' }));
-  cachedFfmpegPath = stdout.trim().split(/\r?\n/)[0] || null;
-  return cachedFfmpegPath;
-};
-
-const generateThumbnail = async (videoPath, jobId) => {
-  await ensureDir(PATHS.videoThumbnails);
-  const thumbFilename = `${jobId}.jpg`;
-  const thumbPath = join(PATHS.videoThumbnails, thumbFilename);
-  const ffmpeg = await findFfmpeg();
-  if (!ffmpeg) return null;
-  return new Promise((resolve) => {
-    const proc = spawn(ffmpeg, ['-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0 ? thumbFilename : null));
-    // Without this, a stale ffmpeg path or permission error emits 'error'
-    // (never 'close') and the Promise never settles — the entire video gen
-    // close handler that awaits this would hang forever.
-    proc.on('error', (err) => {
-      console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${err.message}`);
-      resolve(null);
-    });
-  });
-};
-
-// mlx-video-with-audio writes mp4s with the moov atom at the END (cv2's
-// VideoWriter default). Browsers loading the gallery with preload="metadata"
-// then have to download the entire file before they can render the
-// first-frame poster, so video tiles flash black until clicked. Remuxing
-// with `-movflags +faststart` rewrites the moov atom to the front of the
-// file. Pure stream copy — no re-encoding, takes a few hundred ms even on
-// long clips. Idea borrowed from mrbizarro/phosphene's codec patch.
-const optimizeForStreaming = async (videoPath) => {
-  const ffmpeg = await findFfmpeg();
-  if (!ffmpeg) return;
-  const tmpPath = `${videoPath}.fs.mp4`;
-  const ok = await new Promise((resolve) => {
-    const proc = spawn(ffmpeg, ['-i', videoPath, '-c', 'copy', '-movflags', '+faststart', '-y', tmpPath], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
-  });
-  if (!ok) { await unlink(tmpPath).catch(() => {}); return; }
-  // POSIX rename atomically replaces an existing dest in one syscall. On
-  // Windows, fs.rename fails when the destination already exists — but a
-  // simple unlink-first would destroy the rendered video if the subsequent
-  // rename failed (locked file, AV scan, transient permissions). Move the
-  // original aside to a .bak first, then install the optimized file, and
-  // restore the backup on any failure so the worst case is "faststart
-  // skipped", not "rendered video lost".
-  let backupPath = null;
-  try {
-    if (IS_WIN) {
-      backupPath = `${videoPath}.bak.${randomUUID()}`;
-      await rename(videoPath, backupPath).catch((err) => {
-        if (err?.code === 'ENOENT') { backupPath = null; return; }
-        throw err;
-      });
-    }
-    await rename(tmpPath, videoPath);
-    if (backupPath) await unlink(backupPath).catch(() => {});
-  } catch (err) {
-    if (backupPath) await rename(backupPath, videoPath).catch(() => {});
-    await unlink(tmpPath).catch(() => {});
-    console.log(`⚠️ Failed to install streaming-optimized video at ${videoPath}: ${err.message}`);
-  }
 };
 
 export const loadHistory = () => readJSONFile(HISTORY_FILE, []);

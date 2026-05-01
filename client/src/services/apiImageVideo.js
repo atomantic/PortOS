@@ -60,6 +60,51 @@ export async function generateVideo(fields) {
   return res.json();
 }
 
+// Video timeline projects (non-linear editor)
+export const listTimelineProjects = () => request('/video-timeline/projects');
+export const getTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}`);
+export const createTimelineProject = (name) => request('/video-timeline/projects', {
+  method: 'POST',
+  body: JSON.stringify({ name }),
+});
+export const updateTimelineProject = (id, patch) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
+});
+export const deleteTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+});
+export const renderTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}/render`, {
+  method: 'POST',
+});
+export const cancelTimelineRender = (jobId) => request(`/video-timeline/${encodeURIComponent(jobId)}/cancel`, {
+  method: 'POST',
+});
+
+// Media collections — user-named buckets that can hold any mix of images
+// and videos. An item key is "<kind>:<ref>" (e.g. "image:foo.png" or
+// "video:<uuid>"); cover keys use the same format.
+export const listMediaCollections = () => request('/media/collections');
+export const getMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`);
+export const createMediaCollection = ({ name, description = '' }) => request('/media/collections', {
+  method: 'POST',
+  body: JSON.stringify({ name, description }),
+});
+export const updateMediaCollection = (id, patch) => request(`/media/collections/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
+});
+export const deleteMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+});
+export const addMediaCollectionItem = (id, { kind, ref }) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
+  method: 'POST',
+  body: JSON.stringify({ kind, ref }),
+});
+export const removeMediaCollectionItem = (id, key) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {
+  method: 'DELETE',
+});
+
 // Models management (HF cache + LoRAs)
 export const listCachedModels = () => request('/image-video/models');
 export const deleteCachedModel = (dirName) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE' });

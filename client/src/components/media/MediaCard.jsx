@@ -1,4 +1,5 @@
 import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff } from 'lucide-react';
+import AddToCollectionMenu from './AddToCollectionMenu';
 
 // Single card used everywhere a generated image/video appears in a grid:
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
@@ -18,6 +19,7 @@ export default function MediaCard({
   selected = false,
   disabled = false,
   hideActions = false,
+  showCollectionMenu = true,
 }) {
   const { kind, prompt, modelId, previewUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
@@ -92,6 +94,7 @@ export default function MediaCard({
                 <ImageIcon className="w-3 h-3" /> Continue
               </button>
             )}
+            {showCollectionMenu && <AddToCollectionMenu item={item} />}
             <a
               href={downloadUrl}
               download
