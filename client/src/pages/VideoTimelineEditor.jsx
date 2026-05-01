@@ -257,10 +257,14 @@ export default function VideoTimelineEditor() {
       if (c._key !== selectedKey) return c;
       const meta = metaFor(c.clipId);
       const sourceDur = meta?.numFrames && meta?.fps ? meta.numFrames / meta.fps : Infinity;
+      // Match the server's CLIP_TOO_SHORT guard (1/fps). Hardcoded 0.04 was
+      // too lenient at 24fps and would let the UI build a project that the
+      // render rejected with 400 CLIP_TOO_SHORT.
+      const minDur = meta?.fps && meta.fps > 0 ? 1 / meta.fps : 0.04;
       let inSec = patch.inSec != null ? patch.inSec : c.inSec;
       let outSec = patch.outSec != null ? patch.outSec : c.outSec;
-      inSec = Math.max(0, Math.min(inSec, sourceDur - 0.04));
-      outSec = Math.max(inSec + 0.04, Math.min(outSec, sourceDur));
+      inSec = Math.max(0, Math.min(inSec, sourceDur - minDur));
+      outSec = Math.max(inSec + minDur, Math.min(outSec, sourceDur));
       return { ...c, inSec, outSec };
     }));
   };
@@ -311,18 +315,24 @@ export default function VideoTimelineEditor() {
     const src = `/data/videos/${meta.filename}`;
     const video = videoRef.current;
     if (!video) return;
+    const wantTime = clip.inSec + within;
     if (lastSrcRef.current !== src) {
       lastSrcRef.current = src;
       video.src = src;
       // Wait for metadata before seeking — seek-before-load silently no-ops
       // and the user sees frame 0 of the clip instead of `inSec + within`.
       video.onloadedmetadata = () => {
-        video.currentTime = clip.inSec + within;
+        video.currentTime = wantTime;
         if (playing) video.play().catch(() => {});
       };
     } else if (index !== playClipIndexRef.current) {
-      // Same src is re-used by adjacent same-clip uses; just seek.
-      video.currentTime = clip.inSec + within;
+      video.currentTime = wantTime;
+    } else if (!playing && Math.abs(video.currentTime - wantTime) > 0.05) {
+      // Scrubbing while paused or moving the playhead within the same clip:
+      // the rAF loop only fires while playing, so we need to drive the
+      // element manually. During playback the video element advances on its
+      // own — re-seeking on every rAF tick would cause buffering stutter.
+      video.currentTime = wantTime;
     }
     playClipIndexRef.current = index;
   }, [clips, t, metaFor, playing]);

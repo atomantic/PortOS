@@ -38,7 +38,10 @@ const sanitizeItem = (raw) => {
   if (typeof raw.ref !== 'string') return null;
   const ref = raw.ref.trim();
   if (!ref || ref.length > REF_MAX_LENGTH) return null;
-  const addedAt = typeof raw.addedAt === 'string' ? raw.addedAt : new Date().toISOString();
+  // A hand-edited or corrupted `addedAt` would feed NaN into the cover
+  // resolver's Date sort — replace anything unparseable with now().
+  const parsed = typeof raw.addedAt === 'string' ? Date.parse(raw.addedAt) : NaN;
+  const addedAt = Number.isFinite(parsed) ? raw.addedAt : new Date().toISOString();
   return { kind: raw.kind, ref, addedAt };
 };
 

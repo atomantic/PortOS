@@ -92,10 +92,16 @@ export async function updateProject(id, patch, expectedUpdatedAt) {
   const idx = projects.findIndex((p) => p.id === id);
   if (idx === -1) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const project = projects[idx];
-  if (expectedUpdatedAt && project.updatedAt !== expectedUpdatedAt) {
-    throw new ServerError('Project was modified by another writer', {
-      status: 409, code: 'CONFLICT', context: { current: project.updatedAt },
-    });
+  // Treat any explicitly-provided value (including '' or wrong type) as a
+  // concurrency assertion — only `undefined` skips the check. A truthy guard
+  // would silently let an empty-string `expectedUpdatedAt` clobber a
+  // newer-than-claimed project.
+  if (expectedUpdatedAt !== undefined) {
+    if (typeof expectedUpdatedAt !== 'string' || project.updatedAt !== expectedUpdatedAt) {
+      throw new ServerError('Project was modified by another writer', {
+        status: 409, code: 'CONFLICT', context: { current: project.updatedAt },
+      });
+    }
   }
   if (patch.name != null) {
     const trimmed = String(patch.name).trim();
