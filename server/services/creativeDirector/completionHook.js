@@ -133,7 +133,15 @@ export async function advanceAfterSceneSettled(projectId) {
       await updateProject(project.id, { status: 'rendering' });
     }
     const updated = await getProject(project.id);
-    const sceneFresh = updated.treatment.scenes.find((s) => s.sceneId === nextPending.sceneId);
+    // Re-read may return null if the project was deleted between calls,
+    // or sceneFresh may be undefined if the treatment was rewritten
+    // concurrently. Bail rather than passing null/undefined into
+    // runSceneRender (which would crash on the first .property access).
+    const sceneFresh = updated?.treatment?.scenes?.find((s) => s.sceneId === nextPending.sceneId);
+    if (!updated || !sceneFresh) {
+      console.log(`⚠️ CD advance: project ${projectId} or scene ${nextPending.sceneId} disappeared between reads — bailing`);
+      return;
+    }
     await runSceneRender(updated, sceneFresh);
     return;
   }
