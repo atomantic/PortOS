@@ -21,6 +21,7 @@ import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
+import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
@@ -149,6 +150,19 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   const mode = data.mode || settings.imageGen?.mode || 'external';
   if (mode === 'local') {
     const py = settings.imageGen?.local?.pythonPath || null;
+    // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
+    // (it uses its own bundled venv). Without this guard, the queue would
+    // accept the job and only surface the failure async over SSE.
+    const allModels = getImageModels();
+    const selectedModel = allModels.find((m) => m.id === data.modelId)
+      ?? allModels.find((m) => m.id === 'dev')
+      ?? allModels[0];
+    if (selectedModel && !isFlux2(selectedModel) && !py) {
+      throw new ServerError(
+        'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
+        { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
+      );
+    }
     const { jobId, position, status } = enqueueJob({
       kind: 'image',
       params: { pythonPath: py, ...data },
@@ -196,14 +210,24 @@ router.get('/:jobId/events', (req, res) => {
   res.status(404).json({ error: 'Job not found or expired' });
 });
 
-router.post('/cancel', asyncHandler(async (_req, res) => {
-  // Prefer cancelling a queued/running local render via the queue (so the
-  // queue's job state stays in sync); fall through to the dispatcher's
-  // cancel for codex-mode jobs that bypass the queue.
-  const running = listJobs({ kind: 'image', status: 'running' });
-  if (running.length) {
-    const result = await cancelJob(running[0].id);
-    return res.json(result);
+router.post('/cancel', asyncHandler(async (req, res) => {
+  // Cancel selection rules, in priority order:
+  //   1. Explicit body.jobId — cancel that queued/running local image job.
+  //      Required for users with multiple in-flight renders.
+  //   2. No jobId — cancel the newest queued/running local image job (most
+  //      recent activity wins, matching the user's last "submit" gesture).
+  //   3. No queue match — fall through to the codex-mode cancel.
+  const requestedJobId = typeof req.body?.jobId === 'string' && req.body.jobId.trim()
+    ? req.body.jobId.trim()
+    : undefined;
+  const cancellable = listJobs({ kind: 'image' })
+    .filter((j) => j.status === 'queued' || j.status === 'running');
+  if (requestedJobId) {
+    const target = cancellable.find((j) => j.id === requestedJobId);
+    if (target) return res.json(await cancelJob(target.id));
+    // jobId not in our queue — fall through (could be a codex job).
+  } else if (cancellable.length) {
+    return res.json(await cancelJob(cancellable[cancellable.length - 1].id));
   }
   const cancelled = imageGen.cancel();
   res.json({ ok: cancelled });

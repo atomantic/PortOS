@@ -35,7 +35,19 @@ export default function RenderQueue() {
   const handleCancel = async (id) => {
     try {
       await cancelMediaJob(id);
-      setJobs((prev) => prev.map((j) => j.id === id ? { ...j, status: j.status === 'queued' ? 'canceled' : 'canceling' } : j));
+      // Optimistic update: queued jobs flip straight to 'canceled' (the worker
+      // never picks them up so the next poll will show the same). For running
+      // jobs we leave the server status as-is and track a UI-only
+      // `cancelRequested` flag so the badge stays valid (the server status
+      // model only knows queued|running|completed|failed|canceled — using a
+      // synthetic 'canceling' here would render an unstyled badge until the
+      // next poll). The next /jobs poll resolves the row to 'canceled' once
+      // the worker observes the cancellation.
+      setJobs((prev) => prev.map((j) => {
+        if (j.id !== id) return j;
+        if (j.status === 'queued') return { ...j, status: 'canceled', cancelRequested: false };
+        return { ...j, cancelRequested: true };
+      }));
       toast.success('Cancel requested');
     } catch (err) {
       toast.error(err.message || 'Cancel failed');
@@ -107,7 +119,10 @@ function JobRow({ job, onCancel }) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className={`text-xs px-2 py-0.5 rounded ${STATUS_BADGE[job.status] || ''}`}>{job.status}</span>
-          {canCancel && (
+          {job.cancelRequested && (
+            <span className="text-xs text-port-warning" title="Cancellation requested — waiting for worker">cancelling…</span>
+          )}
+          {canCancel && !job.cancelRequested && (
             <button
               onClick={() => onCancel(job.id)}
               className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error"

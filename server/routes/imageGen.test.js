@@ -168,6 +168,11 @@ describe('Image Gen Routes', () => {
     // saved default is external — protects against future regressions where
     // someone hard-codes settings.imageGen.mode as the only mode source.
     it('per-request mode=local override enqueues even when settings default is external', async () => {
+      // Local mode now validates pythonPath up-front (mflux model needs it),
+      // so the test must supply a configured local section. The override
+      // contract — explicit `mode: 'local'` flips into queue mode regardless
+      // of the saved default — is still what's being asserted here.
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'external', local: { pythonPath: '/usr/bin/python3' } } });
       mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-job-002', position: 2, status: 'queued' });
 
       const response = await request(app)
@@ -178,6 +183,21 @@ describe('Image Gen Routes', () => {
       expect(response.body.status).toBe('queued');
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
       expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // Local mode without a configured pythonPath now rejects up-front (400)
+    // rather than enqueueing a job that can never run. The queue is meant to
+    // serialize concurrent renders, not to absorb hard configuration errors.
+    it('local mode with missing pythonPath returns 400 IMAGE_GEN_NOT_CONFIGURED', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // no `local.pythonPath`
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/not configured/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 

@@ -160,6 +160,18 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/mode/i);
     });
+
+    // Pre-enqueue config validation: without pythonPath the queue would
+    // accept the job, return 200/queued, then fail asynchronously over SSE
+    // and pollute the persisted queue with a doomed entry.
+    it('rejects 400 VIDEO_GEN_NOT_CONFIGURED when pythonPath is missing', async () => {
+      const settingsMock = await import('../services/settings.js');
+      settingsMock.getSettings.mockResolvedValueOnce({ imageGen: { local: {} } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/not configured/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /:jobId/events', () => {
@@ -186,6 +198,45 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('running-job');
+    });
+
+    // jobId in the body cancels a specific job, even if it's still queued.
+    it('cancels a specific queued job when jobId is supplied', async () => {
+      const jobs = [
+        { id: 'running-1', kind: 'video', status: 'running' },
+        { id: 'queued-2',  kind: 'video', status: 'queued' },
+      ];
+      // The route calls listJobs({ kind: 'video' }) — replicate the production
+      // queue's filter semantics (status filter is optional).
+      mediaJobQueue.listJobs.mockImplementation(({ status, kind } = {}) => jobs.filter((j) => {
+        if (status && j.status !== status) return false;
+        if (kind && j.kind !== kind) return false;
+        return true;
+      }));
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: true, status: 'canceled' });
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'queued-2' });
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('queued-2');
+    });
+
+    // No running job and no jobId — fall back to newest queued so the user
+    // can pull back a recent submission before it starts.
+    it('falls back to newest queued video when no jobId and nothing is running', async () => {
+      const jobs = [
+        { id: 'queued-old', kind: 'video', status: 'queued' },
+        { id: 'queued-new', kind: 'video', status: 'queued' },
+      ];
+      mediaJobQueue.listJobs.mockImplementation(({ status, kind } = {}) => jobs.filter((j) => {
+        if (status && j.status !== status) return false;
+        if (kind && j.kind !== kind) return false;
+        return true;
+      }));
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: true, status: 'canceled' });
+      const r = await request(app).post('/api/video-gen/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('queued-new');
     });
   });
 
