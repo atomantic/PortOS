@@ -84,6 +84,7 @@ import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
+import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
@@ -449,6 +450,14 @@ app.use(errorMiddleware);
 ensureSelf()
   .then(() => initSyncLog())
   .then(() => initMediaJobQueue())
+  .then(() => {
+    // Fire-and-forget — resume any Creative Director projects that were mid-
+    // flight when the server died. The queue reload above just reclassified
+    // their renders as 'failed (interrupted by restart)'; this nudges the
+    // orchestrator so projects don't sit frozen waiting for listeners that
+    // no longer exist. Doesn't block startup.
+    recoverInFlightProjects().catch((e) => console.log(`⚠️ CD boot recovery failed: ${e.message}`));
+  })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.
     // initMediaJobQueue failure is fatal: the queue owns persistence + SSE
