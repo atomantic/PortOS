@@ -33,13 +33,19 @@ export default function CreativeDirectorDetail() {
   const [activeAgents, setActiveAgents] = useState([]);
 
   const fetchProject = useCallback(() => {
-    // Reset state on every fetch so navigating between project IDs (or a
-    // failed fetch) doesn't leave the previous project's data on screen.
-    setLoading(true);
-    setProject(null);
     getCreativeDirectorProject(id)
       .then((p) => { setProject(p); setLoading(false); })
       .catch(() => { setProject(null); setLoading(false); });
+  }, [id]);
+
+  // Reset state ONLY when the route id changes, so navigating between
+  // projects (or hitting an error fetch) clears the prior project — but
+  // the 5s poll interval below doesn't keep nulling-and-re-setting the
+  // same project (which previously coupled with the `project?.status`
+  // dep on the polling effect to produce a tight refetch loop).
+  useEffect(() => {
+    setLoading(true);
+    setProject(null);
   }, [id]);
 
   // Poll CoS agents in parallel so the Segments tab can flag the scene that's

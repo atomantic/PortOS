@@ -62,7 +62,12 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
   }
 
   if (!success) {
-    await updateProject(project.id, { status: 'failed' })
+    // Surface a concrete reason on the project so the UI's failure banner
+    // has actionable context. Without this, a project flips to 'failed'
+    // with whatever stale failureReason it had before (often null), and
+    // the user has no idea what happened.
+    const reason = `${meta.kind} agent task failed (taskId=${task.id || '?'}, agent=${agentId || '?'})`;
+    await updateProject(project.id, { status: 'failed', failureReason: reason })
       .catch((e) => console.log(`⚠️ CD updateProject(failed) for ${project.id} failed: ${e.message}`));
     console.log(`❌ CD project ${project.id} marked failed (task ${meta.kind} failed)`);
     return;
