@@ -231,6 +231,56 @@ describe('mediaJobQueue', () => {
     expect(failed.status).toBe('failed');
     expect(failed.error).toBe('OOM');
   });
+
+  // Regression: a client that reconnects to /:jobId/events for a queued job
+  // recovered from media-jobs.json (or one that never had an SSE entry for
+  // any reason) must NOT receive a synthetic terminal `error` frame just
+  // because no SSE entry exists yet. The fix pre-seeds an entry on boot and
+  // attachSseClient creates one on the fly for live (queued/running) jobs.
+  it('attachSseClient on a recovered queued job seeds an SSE entry instead of terminating', async () => {
+    // Block the worker so the recovered queued job stays queued for the
+    // duration of the test (we want to assert the queued-attach path, not
+    // the running-attach path).
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    const queuedId = '00000000-0000-4000-8000-000000000003';
+    const persisted = {
+      jobs: [
+        {
+          id: queuedId,
+          kind: 'video',
+          status: 'queued',
+          queuedAt: '2026-04-30T10:00:00.000Z',
+          params: { prompt: 'hi' },
+        },
+      ],
+    };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    // Fake response that captures writeHead/write/end calls so we can assert
+    // the route did NOT short-circuit with a terminal `error` frame. `req.on`
+    // is required by lib/sseUtils.js#attachSseClient (it wires a 'close'
+    // listener to clean up the client list).
+    const writes = [];
+    const fakeRes = {
+      writeHead: vi.fn(),
+      write: vi.fn((s) => writes.push(s)),
+      end: vi.fn(),
+      req: { on: vi.fn() },
+    };
+    const ok = mediaJobQueue.attachSseClient(queuedId, fakeRes);
+    expect(ok).toBe(true);
+    // The seeded payload is `queued`, OR `started` if the worker raced ahead
+    // and picked the job before we attached. Either way is a valid replay of
+    // real lifecycle state — the regression we're guarding against is the
+    // pre-fix path that terminated the response with .end() and emitted no
+    // payload at all.
+    const written = writes.join('');
+    expect(written).toMatch(/"type":"(queued|started)"/);
+    expect(written).not.toMatch(/"type":"error"/);
+    expect(fakeRes.end).not.toHaveBeenCalled();
+  });
 });
 
 async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {
