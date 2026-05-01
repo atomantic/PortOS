@@ -12,6 +12,8 @@ import OverviewTab from '../components/creative-director/OverviewTab.jsx';
 import TreatmentTab from '../components/creative-director/TreatmentTab.jsx';
 import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
+import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
+import { getCosAgents } from '../services/apiAgents.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -28,6 +30,7 @@ export default function CreativeDirectorDetail() {
   const activeTab = VALID_TAB_IDS.has(tab) ? tab : 'overview';
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [activeAgents, setActiveAgents] = useState([]);
 
   const fetchProject = useCallback(() => {
     getCreativeDirectorProject(id)
@@ -35,16 +38,30 @@ export default function CreativeDirectorDetail() {
       .catch(() => { setLoading(false); });
   }, [id]);
 
+  // Poll CoS agents in parallel so the Segments tab can flag the scene that's
+  // currently being worked on, even before the agent PATCHes its status.
+  // Filter by `taskId` prefix `cd-<projectId>-` (agentBridge's id scheme).
+  const fetchAgents = useCallback(() => {
+    getCosAgents()
+      .then((data) => {
+        const prefix = `cd-${id}-`;
+        const mine = (data || []).filter((a) => a.status === 'running' && (a.taskId || '').startsWith(prefix));
+        setActiveAgents(mine);
+      })
+      .catch(() => setActiveAgents([]));
+  }, [id]);
+
   useEffect(() => {
     fetchProject();
+    fetchAgents();
     // Only poll while the agent could still mutate the project. Once the
     // status reaches a terminal state, skip the interval entirely so we're
     // not constantly tearing down and rebuilding it on every refetch.
     const status = project?.status;
     if (status && ['complete', 'failed', 'paused', 'draft'].includes(status)) return;
-    const interval = setInterval(fetchProject, 5000);
+    const interval = setInterval(() => { fetchProject(); fetchAgents(); }, 5000);
     return () => clearInterval(interval);
-  }, [fetchProject, project?.status]);
+  }, [fetchProject, fetchAgents, project?.status]);
 
   const handleAction = async (kind) => {
     // Map action → past-tense label up-front so concat doesn't produce
@@ -114,9 +131,10 @@ export default function CreativeDirectorDetail() {
       </div>
 
       <div className="flex-1 overflow-auto p-6">
+        <ActiveAgentsBanner agents={activeAgents} />
         {activeTab === 'overview' && <OverviewTab project={project} />}
         {activeTab === 'treatment' && <TreatmentTab project={project} />}
-        {activeTab === 'segments' && <SegmentsTab project={project} />}
+        {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} />}
         {activeTab === 'runs' && <RunsTab project={project} />}
       </div>
     </div>
