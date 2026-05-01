@@ -412,6 +412,15 @@ export default function VideoGen() {
           toast.error(msg.error);
           settleReject(new Error(msg.error));
         }
+        if (msg.type === 'canceled') {
+          // Queue-driven cancellation (different from gen-side error). Mark
+          // the UI terminal so the spinner clears and the user can resubmit.
+          setGenerating(false);
+          setStatusMsg(msg.reason || 'Canceled');
+          es.close();
+          toast.info?.(msg.reason || 'Render canceled');
+          settleReject(new Error(msg.reason || 'Canceled'));
+        }
       };
       es.onerror = () => {
         if (!isCurrent()) { es.close(); return; }

@@ -36,8 +36,16 @@ import { imageGenEvents } from '../imageGenEvents.js';
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_ARCHIVE = 500;
-const WATCHDOG_VIDEO_MS = Number(process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS ?? 30 * 60 * 1000);
-const WATCHDOG_IMAGE_MS = Number(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS ?? 5 * 60 * 1000);
+// Defaults (env-overridable). `Number(non-numeric)` → NaN, and
+// `setTimeout(NaN)` fires immediately — that would fail every job at boot
+// if MEDIA_JOB_WATCHDOG_*_MS were set to garbage. Fall back to the default
+// when the parsed value isn't a positive finite number.
+const watchdogMs = (envValue, defaultMs) => {
+  const n = Number(envValue);
+  return Number.isFinite(n) && n > 0 ? n : defaultMs;
+};
+const WATCHDOG_VIDEO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS, 30 * 60 * 1000);
+const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 * 60 * 1000);
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
 // safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).

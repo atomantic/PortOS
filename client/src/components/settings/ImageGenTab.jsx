@@ -226,6 +226,9 @@ export function ImageGenTab() {
             } else if (msg.type === 'error') {
               closeEs();
               reject(new Error(msg.error || 'Generation failed'));
+            } else if (msg.type === 'canceled') {
+              closeEs();
+              reject(new Error(msg.reason || 'Canceled'));
             }
           };
           es.onerror = () => { closeEs(); reject(new Error('Lost connection during test render')); };

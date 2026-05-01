@@ -397,6 +397,25 @@ describe('mediaJobQueue', () => {
     videoGenEvents.emit('completed', { generationId: jobId, filename: `${jobId}.mp4` });
     await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'completed');
   });
+
+  it('watchdog falls back to default when env var is non-numeric (does not fire immediately)', async () => {
+    // setTimeout(NaN) effectively fires synchronously, which would fail every
+    // job at boot. Confirm the parser rejects non-numeric strings and falls
+    // back to the default — by checking the job is still 'running' shortly
+    // after enqueue, despite the deliberately bogus env var.
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = 'not-a-number';
+    await importFresh();
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {})); // hang forever
+
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'guard' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Wait a beat — long enough that a NaN-driven watchdog would have fired.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mediaJobQueue.getJob(job.jobId)?.status).toBe('running');
+
+    delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+  });
 });
 
 async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {

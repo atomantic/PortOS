@@ -196,7 +196,7 @@ export default function ImageGen() {
         if (!msg) return;
         if (msg.type === 'status') setStatusMsg(msg.message);
         if (msg.type === 'progress') setLocalProgress({ progress: msg.progress });
-        if (msg.type === 'complete' || msg.type === 'error') {
+        if (msg.type === 'complete' || msg.type === 'error' || msg.type === 'canceled') {
           setGenerating(false);
           es.close();
         }
@@ -389,6 +389,10 @@ export default function ImageGen() {
         if (msg.type === 'error') {
           es.close();
           reject(new Error(msg.error));
+        }
+        if (msg.type === 'canceled') {
+          es.close();
+          reject(new Error(msg.reason || 'Canceled'));
         }
       };
       es.onerror = () => {
