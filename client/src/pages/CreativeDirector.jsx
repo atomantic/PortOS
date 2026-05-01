@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Film, Trash2, Play, Pause } from 'lucide-react';
+import { Plus, Film, Trash2, Play, Pause, FlaskConical } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCreativeDirectorProjects,
   createCreativeDirectorProject,
+  createSmokeTestCreativeDirectorProject,
   deleteCreativeDirectorProject,
   startCreativeDirectorProject,
   pauseCreativeDirectorProject,
@@ -132,13 +133,31 @@ export default function CreativeDirector() {
               <p className="text-sm text-port-text-muted">Long-form video projects driven by an autonomous CoS agent</p>
             </div>
           </div>
-          <button
-            onClick={() => setShowForm((s) => !s)}
-            className="flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 text-white px-3 py-2 rounded text-sm"
-          >
-            <Plus className="w-4 h-4" />
-            New project
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                const created = await createSmokeTestCreativeDirectorProject().catch((e) => {
+                  toast.error(e?.message || 'Smoke test failed to start');
+                  return null;
+                });
+                if (!created) return;
+                toast.success('Smoke test project started');
+                setProjects((prev) => [created, ...prev]);
+              }}
+              className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
+              title="Create + start a deterministic 3-scene colored-ball project (auto-accept, no audio)"
+            >
+              <FlaskConical className="w-4 h-4" />
+              Run smoke test
+            </button>
+            <button
+              onClick={() => setShowForm((s) => !s)}
+              className="flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 text-white px-3 py-2 rounded text-sm"
+            >
+              <Plus className="w-4 h-4" />
+              New project
+            </button>
+          </div>
         </div>
       </div>
 

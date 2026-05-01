@@ -147,6 +147,10 @@ export async function runSceneRender(project, scene) {
     tiling: 'auto',
     sourceImagePath,
     mode: sourceImagePath ? 'image' : 'text',
+    // Smoke-test / dev knob: skips the mlx_video audio-gen pass to cut
+    // wall-clock per scene roughly in half. Project-level so every scene
+    // in the project inherits the same setting.
+    disableAudio: project.disableAudio === true,
   };
 
   const owner = `cd:${project.id}:${scene.sceneId}`;
@@ -192,14 +196,38 @@ export async function runSceneRender(project, scene) {
 
 async function handleRenderCompleted(projectId, sceneId, jobId) {
   console.log(`✅ CD scene render done: ${projectId} / ${sceneId} → ${jobId.slice(0, 8)}`);
-  await updateScene(projectId, sceneId, {
-    status: 'evaluating',
-    renderedJobId: jobId,
-  });
   const fresh = await getProject(projectId);
   if (!fresh) return;
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene) return;
+  // autoAcceptScenes — smoke-test path that bypasses the cognitive evaluator.
+  // Mark the scene accepted with a synthetic evaluation, drop the rendered
+  // video into the project's collection, and let the orchestrator advance.
+  // No Claude task spawned, so a smoke run completes in render time only.
+  if (fresh.autoAcceptScenes === true) {
+    await updateScene(projectId, sceneId, {
+      status: 'accepted',
+      renderedJobId: jobId,
+      evaluation: {
+        accepted: true,
+        score: 1,
+        notes: 'auto-accepted (autoAcceptScenes)',
+        sampledAt: new Date().toISOString(),
+      },
+    });
+    if (fresh.collectionId) {
+      const { addItem } = await import('../mediaCollections.js');
+      await addItem(fresh.collectionId, { kind: 'video', ref: jobId })
+        .catch((e) => console.log(`⚠️ CD auto-accept addItem failed: ${e.message}`));
+    }
+    const { advanceAfterSceneSettled } = await import('./completionHook.js');
+    await advanceAfterSceneSettled(projectId);
+    return;
+  }
+  await updateScene(projectId, sceneId, {
+    status: 'evaluating',
+    renderedJobId: jobId,
+  });
   await enqueueEvaluateTask(fresh, scene);
 }
 

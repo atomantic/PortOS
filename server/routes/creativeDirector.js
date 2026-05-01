@@ -26,6 +26,7 @@ import {
   updateScene,
 } from '../services/creativeDirector/local.js';
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
+import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 
 const router = Router();
 
@@ -116,6 +117,16 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
 router.post('/:id/pause', asyncHandler(async (req, res) => {
   const updated = await updateProject(req.params.id, { status: 'paused' });
   res.json(updated);
+}));
+
+// Dev/test fixture: create a deterministic 3-scene "colored ball" project
+// (autoAcceptScenes + disableAudio) and immediately kick it off. Used as
+// the fast E2E health check after pipeline changes — completes in render
+// time only, no Claude in the loop.
+router.post('/smoke-test', asyncHandler(async (_req, res) => {
+  const project = await createSmokeTestProject();
+  startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD smoke start failed: ${e.message}`));
+  res.status(201).json(project);
 }));
 
 router.post('/:id/resume', asyncHandler(async (req, res) => {

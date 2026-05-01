@@ -636,6 +636,9 @@ export const creativeDirectorProjectCreateSchema = z.object({
   styleSpec: z.string().max(5000).default(''),
   startingImageFile: safeBasename.nullable().optional(),
   userStory: z.string().max(10000).nullable().optional(),
+  // Test/dev knobs. Both default false. Smoke-test fixtures set these.
+  disableAudio: z.boolean().optional().default(false),
+  autoAcceptScenes: z.boolean().optional().default(false),
 });
 
 // Update is restricted to a few editable fields. modelId / aspectRatio /

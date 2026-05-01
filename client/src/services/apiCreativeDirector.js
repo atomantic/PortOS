@@ -22,3 +22,6 @@ export const pauseCreativeDirectorProject = (id) => request(`/creative-director/
 export const resumeCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}/resume`, {
   method: 'POST',
 });
+export const createSmokeTestCreativeDirectorProject = () => request('/creative-director/smoke-test', {
+  method: 'POST',
+});
