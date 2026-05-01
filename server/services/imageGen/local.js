@@ -156,12 +156,12 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null }) {
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, jobId: providedJobId = null }) {
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  // Enforce the single-activeProcess invariant the rest of this module relies
-  // on — without this, a double-click on Generate would orphan the first
-  // child (cancel() can only kill the one stored in activeProcess).
-  if (activeProcess) throw new ServerError('A generation is already in progress — cancel it before starting another', { status: 409, code: 'IMAGE_GEN_BUSY' });
+  // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
+  // callers that bypass the queue must not run two concurrent renders — the
+  // activeProcess handle below would be clobbered and cancel() would orphan
+  // the first child.
   // Use the registry cache view (which applies the per-platform `broken`
   // filter via getImageModels) rather than the module-load IMAGE_MODELS
   // snapshot. Note: loadMediaModels memoizes on first read — on-disk edits
@@ -187,7 +187,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.loras);
 
-  const jobId = randomUUID();
+  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);

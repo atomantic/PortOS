@@ -9,13 +9,19 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/videoGen/local.js', () => ({
   listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
-  generateVideo: vi.fn(),
-  attachSseClient: vi.fn(() => false),
-  cancel: vi.fn(() => true),
   loadHistory: vi.fn(async () => []),
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
+}));
+
+// Render submissions go through the mediaJobQueue. Mock its surface so the
+// route tests stay synchronous and don't kick off the worker loop.
+vi.mock('../services/mediaJobQueue/index.js', () => ({
+  enqueueJob: vi.fn(({ kind, params }) => ({ jobId: `mock-${kind}-job`, position: 1, status: 'queued' })),
+  attachSseClient: vi.fn(() => false),
+  cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
+  listJobs: vi.fn(() => []),
 }));
 
 vi.mock('../lib/multipart.js', () => ({
@@ -38,6 +44,7 @@ vi.mock('fs', () => ({
 vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
 
 import * as videoGenService from '../services/videoGen/local.js';
+import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import videoGenRoutes from './videoGen.js';
 
 describe('videoGen routes', () => {
@@ -87,7 +94,6 @@ describe('videoGen routes', () => {
     });
 
     it('accepts empty-string numerics as undefined (multipart preprocess fix)', async () => {
-      videoGenService.generateVideo.mockResolvedValue({ jobId: 'j1', filename: 'j1.mp4' });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
         width: '',
@@ -95,16 +101,19 @@ describe('videoGen routes', () => {
         seed: '',
       });
       expect(r.status).toBe(200);
-      expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        prompt: 'a cat',
-        width: undefined,
-        height: undefined,
-        seed: undefined,
+      expect(r.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          prompt: 'a cat',
+          width: undefined,
+          height: undefined,
+          seed: undefined,
+        }),
       }));
     });
 
     it('strips path-traversal segments from sourceImageFile via basename + prefix-check', async () => {
-      videoGenService.generateVideo.mockResolvedValue({ jobId: 'j2', filename: 'j2.mp4' });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
         sourceImageFile: '../../etc/passwd',
@@ -113,15 +122,15 @@ describe('videoGen routes', () => {
       // path is `/mock/images/passwd` (under PATHS.images). The route does
       // NOT 400 — it just consumes whatever's safely under the images root.
       // What this test really locks in: the request succeeds + the route
-      // never reads outside PATHS.images.
+      // never enqueues a job that points outside PATHS.images.
       expect(r.status).toBe(200);
-      expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        prompt: 'a cat',
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({ prompt: 'a cat' }),
       }));
     });
 
     it('forwards lastImageFile + mode for FFLF', async () => {
-      videoGenService.generateVideo.mockResolvedValue({ jobId: 'j3', filename: 'j3.mp4' });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'morph between two scenes',
         sourceImageFile: 'first.png',
@@ -129,15 +138,14 @@ describe('videoGen routes', () => {
         mode: 'fflf',
       });
       expect(r.status).toBe(200);
-      // Locks in the new request-field plumbing: lastImageFile becomes
-      // lastImagePath resolved under PATHS.images, and the mode hint flows
-      // through to the service. existsSync + PATHS.images are mocked so the
-      // resolver returns deterministic paths.
-      expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        prompt: 'morph between two scenes',
-        sourceImagePath: '/mock/images/first.png',
-        lastImagePath: '/mock/images/last.png',
-        mode: 'fflf',
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          prompt: 'morph between two scenes',
+          sourceImagePath: '/mock/images/first.png',
+          lastImagePath: '/mock/images/last.png',
+          mode: 'fflf',
+        }),
       }));
     });
 
@@ -153,7 +161,7 @@ describe('videoGen routes', () => {
 
   describe('GET /:jobId/events', () => {
     it('returns 404 when the job is unknown', async () => {
-      videoGenService.attachSseClient.mockReturnValue(false);
+      mediaJobQueue.attachSseClient.mockReturnValue(false);
       const r = await request(app).get('/api/video-gen/unknown-job/events');
       expect(r.status).toBe(404);
       expect(r.body.error).toMatch(/not found/i);
@@ -161,11 +169,20 @@ describe('videoGen routes', () => {
   });
 
   describe('POST /cancel', () => {
-    it('returns the cancel result', async () => {
-      videoGenService.cancel.mockReturnValue(true);
+    it('reports nothing to cancel when no video render is running', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([]);
+      const r = await request(app).post('/api/video-gen/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(false);
+    });
+
+    it('cancels the running video render through the queue', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-job', kind: 'video', status: 'running' }]);
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: true, status: 'canceling' });
       const r = await request(app).post('/api/video-gen/cancel').send({});
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('running-job');
     });
   });
 

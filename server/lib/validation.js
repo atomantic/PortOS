@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
+import { ASPECT_RATIOS, QUALITIES } from './creativeDirectorPresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -598,3 +599,80 @@ export function sanitizeTaskMetadata(raw) {
   }
   return hasKeys ? { ...clean } : null;
 }
+
+
+// =============================================================================
+// CREATIVE DIRECTOR SCHEMAS
+// =============================================================================
+
+export const creativeDirectorAspectRatioSchema = z.enum(ASPECT_RATIOS);
+export const creativeDirectorQualitySchema = z.enum(QUALITIES);
+
+// Top-level project create. modelId is required because each LTX variant
+// has a different speed/VRAM/quality profile and the project locks it at
+// creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
+// — much beyond that and the agent's treatment quality drifts hard.
+export const creativeDirectorProjectCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  aspectRatio: creativeDirectorAspectRatioSchema,
+  quality: creativeDirectorQualitySchema,
+  modelId: z.string().min(1).max(64),
+  targetDurationSeconds: z.number().int().min(5).max(600),
+  styleSpec: z.string().max(5000).default(''),
+  startingImageFile: z.string().max(256).regex(/^[^/\\]+$/, 'must be a basename').nullable().optional(),
+  userStory: z.string().max(10000).nullable().optional(),
+});
+
+// Update is restricted to a few editable fields. modelId / aspectRatio /
+// quality / targetDurationSeconds are locked at creation — changing them
+// mid-project would invalidate already-rendered segments.
+export const creativeDirectorProjectUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  styleSpec: z.string().max(5000).optional(),
+  userStory: z.string().max(10000).nullable().optional(),
+  status: z.enum(['draft', 'planning', 'rendering', 'stitching', 'complete', 'paused', 'failed']).optional(),
+  finalVideoId: z.string().max(64).nullable().optional(),
+  timelineProjectId: z.string().max(64).nullable().optional(),
+}).strict();
+
+// One scene in the treatment, written by the agent on the treatment task.
+export const creativeDirectorSceneSchema = z.object({
+  sceneId: z.string().min(1).max(64),
+  order: z.number().int().min(0),
+  intent: z.string().min(1).max(1000),
+  prompt: z.string().min(1).max(2000),
+  negativePrompt: z.string().max(2000).optional().default(''),
+  durationSeconds: z.number().min(1).max(10),
+  useContinuationFromPrior: z.boolean().default(false),
+  sourceImageFile: z.string().max(256).regex(/^[^/\\]+$/, 'must be a basename').nullable().optional(),
+  status: z.enum(['pending', 'rendering', 'evaluating', 'accepted', 'failed']).default('pending'),
+  retryCount: z.number().int().min(0).max(10).default(0),
+  renderedJobId: z.string().max(64).nullable().optional(),
+  evaluation: z.object({
+    score: z.number().min(0).max(1).optional(),
+    notes: z.string().max(2000).optional(),
+    accepted: z.boolean(),
+    sampledAt: z.string().optional(),
+  }).nullable().optional(),
+});
+
+// The full treatment doc the agent writes after the planning task.
+export const creativeDirectorTreatmentSchema = z.object({
+  logline: z.string().min(1).max(500),
+  synopsis: z.string().min(1).max(5000),
+  scenes: z.array(creativeDirectorSceneSchema).min(1).max(120),
+});
+
+// Used by the agent when finishing a scene render.
+export const creativeDirectorSceneUpdateSchema = z.object({
+  status: z.enum(['rendering', 'evaluating', 'accepted', 'failed']).optional(),
+  retryCount: z.number().int().min(0).max(10).optional(),
+  renderedJobId: z.string().max(64).nullable().optional(),
+  prompt: z.string().min(1).max(2000).optional(),
+  evaluation: z.object({
+    score: z.number().min(0).max(1).optional(),
+    notes: z.string().max(2000).optional(),
+    accepted: z.boolean(),
+    sampledAt: z.string().optional(),
+  }).nullable().optional(),
+}).strict();

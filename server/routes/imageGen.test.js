@@ -18,7 +18,22 @@ vi.mock('../services/imageGen/index.js', () => ({
   },
 }));
 
+// Default to external mode in tests so /generate goes through the dispatcher.
+// Local-mode tests below override the settings mock to flip into queue mode.
+vi.mock('../services/settings.js', () => ({
+  getSettings: vi.fn(async () => ({ imageGen: { mode: 'external' } })),
+}));
+
+vi.mock('../services/mediaJobQueue/index.js', () => ({
+  enqueueJob: vi.fn(({ kind }) => ({ jobId: `mock-${kind}-job`, position: 1, status: 'queued' })),
+  attachSseClient: vi.fn(() => false),
+  cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
+  listJobs: vi.fn(() => []),
+}));
+
 import * as imageGen from '../services/imageGen/index.js';
+import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
+import { getSettings } from '../services/settings.js';
 
 describe('Image Gen Routes', () => {
   let app;

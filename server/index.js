@@ -81,6 +81,9 @@ import toolsRoutes from './routes/tools.js';
 import imageGenRoutes from './routes/imageGen.js';
 import videoGenRoutes from './routes/videoGen.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
+import mediaJobsRoutes from './routes/mediaJobs.js';
+import creativeDirectorRoutes from './routes/creativeDirector.js';
+import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
@@ -314,12 +317,18 @@ app.use('/api/tools', toolsRoutes);
 app.use('/api/image-gen', imageGenRoutes);
 app.use('/api/video-gen', videoGenRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
+app.use('/api/media-jobs', mediaJobsRoutes);
+app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/ask', askRoutes);
+
+// Initialize the media job queue (recovers persisted jobs, marks stale
+// 'running' as failed-by-restart, starts the worker loop).
+initMediaJobQueue().catch(err => console.error(`❌ mediaJobQueue init failed: ${err.message}`));
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));

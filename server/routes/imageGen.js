@@ -19,6 +19,8 @@ import { validateRequest } from '../lib/validation.js';
 import { optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
+import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { getSettings } from '../services/settings.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
@@ -139,6 +141,29 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   if (uploadedInitTempPath) {
     res.on('close', () => { unlink(uploadedInitTempPath).catch(() => {}); });
   }
+  // Mode resolution: explicit per-request override > settings default. Only
+  // local-mode goes through the mediaJobQueue (it's the GPU-bound backend that
+  // used to throw BUSY). External and Codex backends remain synchronous —
+  // they don't share Metal/MLX resources so no queue is needed.
+  const settings = await getSettings();
+  const mode = data.mode || settings.imageGen?.mode || 'external';
+  if (mode === 'local') {
+    const py = settings.imageGen?.local?.pythonPath || null;
+    const { jobId, position, status } = enqueueJob({
+      kind: 'image',
+      params: { pythonPath: py, ...data },
+    });
+    return res.json({
+      jobId,
+      generationId: jobId,
+      filename: `${jobId}.png`,
+      path: `/data/images/${jobId}.png`,
+      mode: 'local',
+      model: data.modelId,
+      status,
+      position,
+    });
+  }
   res.json(await imageGen.generateImage(data));
 }));
 
@@ -160,17 +185,29 @@ router.get('/gallery', asyncHandler(async (_req, res) => {
   res.json(await local.listGallery());
 }));
 
-// SSE progress stream. Local + Codex both produce job-keyed SSE; the
-// dispatcher picks the right provider for whichever owns the job.
+// SSE progress stream. Local renders run via the mediaJobQueue and emit
+// `queued` → `started` → `progress` → `complete` events; the queue owns the
+// SSE attachment for those. Codex still produces job-keyed SSE through its
+// own provider — fall through to the dispatcher when the queue doesn't know
+// the job. External backend has no SSE (it's blocking).
 router.get('/:jobId/events', (req, res) => {
-  const ok = imageGen.attachSseClient(req.params.jobId, res);
-  if (!ok) res.status(404).json({ error: 'Job not found or expired' });
+  if (attachQueueSseClient(req.params.jobId, res)) return;
+  if (imageGen.attachSseClient(req.params.jobId, res)) return;
+  res.status(404).json({ error: 'Job not found or expired' });
 });
 
-router.post('/cancel', (_req, res) => {
+router.post('/cancel', asyncHandler(async (_req, res) => {
+  // Prefer cancelling a queued/running local render via the queue (so the
+  // queue's job state stays in sync); fall through to the dispatcher's
+  // cancel for codex-mode jobs that bypass the queue.
+  const running = listJobs({ kind: 'image', status: 'running' });
+  if (running.length) {
+    const result = await cancelJob(running[0].id);
+    return res.json(result);
+  }
   const cancelled = imageGen.cancel();
   res.json({ ok: cancelled });
-});
+}));
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
   res.json(await local.deleteImage(req.params.filename));

@@ -119,12 +119,13 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   return { bin: pythonPath, args };
 };
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, lastImagePath = null, mode = null, imageStrength = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, lastImagePath = null, mode = null, imageStrength = null, jobId: providedJobId = null }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  // Enforce the single-activeProcess invariant — without this a double-submit
-  // would orphan the first child (cancel() only kills the one in activeProcess).
-  if (activeProcess) throw new ServerError('A video generation is already in progress — cancel it before starting another', { status: 409, code: 'VIDEO_GEN_BUSY' });
+  // Single-flight is now enforced by the mediaJobQueue worker upstream — only
+  // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
+  // callers (legacy / tests) bypass the queue and would clobber activeProcess
+  // on concurrent calls; that's an explicit "don't do that" contract.
 
   const model = VIDEO_MODELS[modelId];
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
@@ -138,7 +139,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
 
-  const jobId = randomUUID();
+  // jobId may be supplied by the queue so SSE clients (which attached against
+  // the queue's id) reach the same generation events.
+  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
   const outputPath = join(PATHS.videos, filename);
   const w = Math.floor(Number(width) / 64) * 64;

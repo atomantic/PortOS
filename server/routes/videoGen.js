@@ -8,7 +8,6 @@
 
 import { Router } from 'express';
 import { existsSync, statSync } from 'fs';
-import { unlink } from 'fs/promises';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -18,15 +17,13 @@ import { getSettings } from '../services/settings.js';
 import {
   listVideoModels,
   defaultVideoModelId,
-  generateVideo,
-  attachSseClient,
-  cancel,
   loadHistory,
   deleteHistoryItem,
   setHistoryItemHidden,
   extractLastFrame,
   stitchVideos,
 } from '../services/videoGen/local.js';
+import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 
 const router = Router();
 
@@ -138,8 +135,11 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   // FFLF end-frame: gallery-pick only. Same path-traversal guard.
   const lastImagePath = body.lastImageFile ? resolveGalleryImage(body.lastImageFile) : null;
 
-  try {
-    const result = await generateVideo({
+  // Enqueue rather than spawn synchronously — the mediaJobQueue worker will
+  // run this when no other render is in flight. Caller never sees BUSY.
+  const { jobId, position, status } = enqueueJob({
+    kind: 'video',
+    params: {
       pythonPath,
       prompt: body.prompt,
       negativePrompt: body.negativePrompt || '',
@@ -158,14 +158,12 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       lastImagePath,
       mode: body.mode,
       imageStrength: body.imageStrength,
-    });
-    res.json(result);
-  } catch (err) {
-    // generateVideo threw before scheduling the proc.on('close') cleanup
-    // (e.g. PYTHON not configured, BUSY, validation) — drop the upload now.
-    if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
-    throw err;
-  }
+    },
+  });
+  // Match the legacy response shape (jobId, generationId, filename, mode) so
+  // existing client code keeps working; add status+position for the queue.
+  // filename is jobId.mp4 — generated deterministically by the worker.
+  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, mode: 'local', status, position });
 }));
 
 router.get('/:jobId/events', (req, res) => {
@@ -173,10 +171,14 @@ router.get('/:jobId/events', (req, res) => {
   if (!ok) res.status(404).json({ error: 'Job not found or expired' });
 });
 
-router.post('/cancel', (_req, res) => {
-  const cancelled = cancel();
-  res.json({ ok: cancelled });
-});
+router.post('/cancel', asyncHandler(async (_req, res) => {
+  // Find the currently-running video job (if any) and cancel it. Backwards-
+  // compatible with the legacy "cancel the active video" semantics.
+  const running = listJobs({ kind: 'video', status: 'running' });
+  if (!running.length) return res.json({ ok: false, reason: 'no active video render' });
+  const result = await cancelJob(running[0].id);
+  res.json(result);
+}));
 
 router.get('/history', asyncHandler(async (_req, res) => {
   res.json(await loadHistory());

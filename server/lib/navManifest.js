@@ -14,6 +14,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.media.video', path: '/media/video', label: 'Video', section: 'AI', aliases: ['video-gen', 'videogen', 'generate-video', 'ltx'], keywords: ['video', 'animate', 'movie', 'clip', 'ltx'] },
   { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'AI', aliases: ['media-history', 'video-history'], keywords: ['videos', 'gallery', 'stitch'] },
   { id: 'nav.media.collections', path: '/media/collections', label: 'Collections', section: 'AI', aliases: ['collections', 'media-collections', 'stacks', 'projects'], keywords: ['bucket', 'group', 'project', 'album', 'organize'] },
+  { id: 'nav.media.creative-director', path: '/media/creative-director', label: 'Creative Director', section: 'AI', aliases: ['creative-director', 'creative', 'director', 'long-form', 'episode'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form'] },
   { id: 'nav.media.timeline', path: '/media/timeline', label: 'Timeline', section: 'AI', aliases: ['timeline', 'video-timeline', 'editor'], keywords: ['edit', 'trim', 'composite', 'stitch', 'cut', 'compose'] },
   { id: 'nav.media.models', path: '/media/models', label: 'Media Models', section: 'AI', aliases: ['media-models', 'image-models', 'video-models', 'huggingface', 'loras'], keywords: ['hf cache', 'lora', 'model storage', 'disk'] },
   { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'AI', aliases: ['media-settings', 'image-gen-settings', 'sd-settings', 'video-gen-settings'] },
