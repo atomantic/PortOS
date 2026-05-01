@@ -25,16 +25,20 @@ import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import {
+  broadcastSse,
+  attachSseClient as attachSse,
+  closeJobAfterDelay,
+} from '../../lib/sseUtils.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_ARCHIVE = 500;
-// Mirrors sseUtils.SSE_CLEANUP_DELAY_MS — late EventSource clients that
-// reconnect within this window after a terminal event still see the final
-// frame replayed from `lastPayload`.
-const SSE_CLEANUP_DELAY_MS = 5000;
+
+export const JOB_KINDS = Object.freeze(['video', 'image']);
+export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 export const mediaJobEvents = new EventEmitter();
 
@@ -45,10 +49,13 @@ const queue = [];
 let running = null;
 const archive = [];
 
-// jobId → SSE response objects + lastPayload cache. Survives the queued→
-// running transition so a client that attached during queue can keep its
-// stream open through the render and final completion.
-const sseRegistry = new Map();
+// jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
+// closeJobAfterDelay}. Each entry carries `clients: []` and `lastPayload`,
+// so we can hand it directly to those helpers. Survives the queued→running
+// transition so a client that attached during queue keeps its stream open
+// through the render and final completion. Entries are removed after
+// SSE_CLEANUP_DELAY_MS by closeJobAfterDelay on terminal events.
+const sseJobs = new Map();
 
 let workerStarted = false;
 let initPromise = null;
@@ -79,7 +86,6 @@ export function listJobs({ status, kind, owner } = {}) {
 }
 
 async function persist() {
-  await ensureDir(PATHS.data);
   const cutoff = Date.now() - COMPLETED_TTL_MS;
   const trimmedArchive = archive
     .filter((j) => {
@@ -105,6 +111,8 @@ async function persist() {
 export async function initMediaJobQueue() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
+    // Once-at-boot: subsequent persist() calls assume the data dir exists.
+    await ensureDir(PATHS.data);
     const data = await readJSONFile(JOBS_FILE, { jobs: [] });
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     for (const j of persistedJobs) {
@@ -153,7 +161,7 @@ async function drainLoop() {
     // Recompute positions for everyone still queued.
     queue.forEach((q, i) => { q.position = i + 1 + (running ? 1 : 0); });
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on start failed: ${e.message}`));
-    broadcastToSse(job.id, { type: 'started', kind: job.kind });
+    broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
     mediaJobEvents.emit('started', job);
     console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${job.kind} started`);
     await runJob(job);
@@ -163,18 +171,43 @@ async function drainLoop() {
   }
 }
 
+// Filter videoGenEvents/imageGenEvents down to a single jobId and translate
+// them into SSE-wire payloads + queue-status transitions. Returns
+// `{ attach, detach }` so runJob can deterministically clean up listeners
+// even on the throw path.
+function makeGenDispatcher(emitter, job, handlers) {
+  const onProgress = (e) => {
+    if (e.generationId !== job.id) return;
+    handlers.progress({ type: 'progress', progress: e.progress, message: e.message });
+  };
+  const onCompleted = (e) => { if (e.generationId === job.id) handlers.completed(e); };
+  const onFailed = (e) => { if (e.generationId === job.id) handlers.failed({ error: e.error }); };
+  return {
+    attach() {
+      emitter.on('progress', onProgress);
+      emitter.on('completed', onCompleted);
+      emitter.on('failed', onFailed);
+    },
+    detach() {
+      emitter.off('progress', onProgress);
+      emitter.off('completed', onCompleted);
+      emitter.off('failed', onFailed);
+    },
+  };
+}
+
 async function runJob(job) {
+  const sseEntry = ensureSseEntry(job.id);
   const handlers = {
     progress: (payload) => {
-      // The gen module's per-frame progress also drives the SSE stream we own.
-      broadcastToSse(job.id, payload);
+      broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
       job.status = 'completed';
       job.result = payload;
       job.completedAt = new Date().toISOString();
-      broadcastToSse(job.id, { type: 'complete', result: payload });
-      closeSseAfterDelay(job.id);
+      broadcastSse(sseEntry, { type: 'complete', result: payload });
+      closeJobAfterDelay(sseJobs, job.id);
       mediaJobEvents.emit('completed', job);
       console.log(`✅ media-job [${job.id.slice(0, 8)}] completed`);
     },
@@ -182,16 +215,15 @@ async function runJob(job) {
       job.status = 'failed';
       job.error = payload.error || 'unknown error';
       job.completedAt = new Date().toISOString();
-      broadcastToSse(job.id, { type: 'error', error: job.error });
-      closeSseAfterDelay(job.id);
+      broadcastSse(sseEntry, { type: 'error', error: job.error });
+      closeJobAfterDelay(sseJobs, job.id);
       mediaJobEvents.emit('failed', job);
       console.log(`❌ media-job [${job.id.slice(0, 8)}] failed: ${job.error}`);
     },
   };
 
-  const dispatcher = job.kind === 'video'
-    ? new GenDispatcher(videoGenEvents, job.id, handlers)
-    : new GenDispatcher(imageGenEvents, job.id, handlers);
+  const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
+  const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();
 
   try {
@@ -212,61 +244,19 @@ async function runJob(job) {
     if (job.params?.uploadedTempPath) {
       await unlink(job.params.uploadedTempPath).catch(() => {});
     }
-    if (job.status === 'running') {
-      handlers.failed({ error: err.message });
-    }
+    if (job.status === 'running') handlers.failed({ error: err.message });
   }
 
   // Wait for the underlying gen to settle (the gen modules emit completed/
   // failed asynchronously after the proc closes — runJob's await above only
-  // gates the spawn, not the render finish). The handlers above flip job.status
-  // to a terminal state; loop with a short sleep so we don't busy-spin.
+  // gates the spawn, not the render finish). Handlers flip job.status to a
+  // terminal state; short-sleep poll so we don't busy-spin.
   while (job.status === 'running') await sleep(100);
   dispatcher.detach();
 }
 
-// Adapter that translates videoGenEvents/imageGenEvents into the queue's
-// per-job SSE wire format, filtering by generationId to a specific job.
-class GenDispatcher {
-  constructor(emitter, jobId, handlers) {
-    this.emitter = emitter;
-    this.jobId = jobId;
-    this.handlers = handlers;
-    this.bound = {
-      progress: (e) => this.onProgress(e),
-      completed: (e) => this.onCompleted(e),
-      failed: (e) => this.onFailed(e),
-      started: () => {}, // queue emits its own `started`; ignore the gen's.
-    };
-  }
-  attach() {
-    this.emitter.on('progress', this.bound.progress);
-    this.emitter.on('completed', this.bound.completed);
-    this.emitter.on('failed', this.bound.failed);
-    this.emitter.on('started', this.bound.started);
-  }
-  detach() {
-    this.emitter.off('progress', this.bound.progress);
-    this.emitter.off('completed', this.bound.completed);
-    this.emitter.off('failed', this.bound.failed);
-    this.emitter.off('started', this.bound.started);
-  }
-  onProgress(e) {
-    if (e.generationId !== this.jobId) return;
-    this.handlers.progress({ type: 'progress', progress: e.progress, message: e.message });
-  }
-  onCompleted(e) {
-    if (e.generationId !== this.jobId) return;
-    this.handlers.completed(e);
-  }
-  onFailed(e) {
-    if (e.generationId !== this.jobId) return;
-    this.handlers.failed({ error: e.error });
-  }
-}
-
 export function enqueueJob({ kind, params, owner = null }) {
-  if (!['video', 'image'].includes(kind)) {
+  if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }
   const id = randomUUID();
@@ -283,10 +273,8 @@ export function enqueueJob({ kind, params, owner = null }) {
     position: queue.length + (running ? 1 : 0) + 1,
   };
   queue.push(job);
-  // Pre-create SSE registry so a client that races and attaches before the
-  // queued event fires still gets it replayed via lastPayload.
-  ensureSseEntry(id);
-  broadcastToSse(id, { type: 'queued', position: job.position });
+  const sseEntry = ensureSseEntry(id);
+  broadcastSse(sseEntry, { type: 'queued', position: job.position });
   mediaJobEvents.emit('enqueued', job);
   persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on enqueue failed: ${e.message}`));
   startWorker();
@@ -303,8 +291,9 @@ export async function cancelJob(jobId) {
     job.completedAt = new Date().toISOString();
     archive.push(job);
     queue.forEach((q, i) => { q.position = i + 1 + (running ? 1 : 0); });
-    broadcastToSse(jobId, { type: 'error', error: 'Canceled before start' });
-    closeSseAfterDelay(jobId);
+    const sseEntry = ensureSseEntry(jobId);
+    broadcastSse(sseEntry, { type: 'error', error: 'Canceled before start' });
+    closeJobAfterDelay(sseJobs, jobId);
     mediaJobEvents.emit('canceled', job);
     persist().catch(() => {});
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] canceled (was queued)`);
@@ -324,58 +313,19 @@ export async function cancelJob(jobId) {
   return { ok: false, error: 'Job not found or already finished' };
 }
 
-// SSE plumbing -------------------------------------------------------------
-
 function ensureSseEntry(jobId) {
-  if (!sseRegistry.has(jobId)) {
-    sseRegistry.set(jobId, { clients: [], lastPayload: null, closed: false });
+  if (!sseJobs.has(jobId)) {
+    // Shape required by lib/sseUtils.js#{broadcastSse,attachSseClient}.
+    sseJobs.set(jobId, { clients: [], lastPayload: null });
   }
-  return sseRegistry.get(jobId);
+  return sseJobs.get(jobId);
 }
 
-function broadcastToSse(jobId, payload) {
-  const entry = sseRegistry.get(jobId);
-  if (!entry) return;
-  entry.lastPayload = payload;
-  const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const c of entry.clients) c.write(msg);
-}
-
-function closeSseAfterDelay(jobId, delay = SSE_CLEANUP_DELAY_MS) {
-  const entry = sseRegistry.get(jobId);
-  if (!entry) return;
-  entry.closed = true;
-  setTimeout(() => {
-    const e = sseRegistry.get(jobId);
-    if (!e) return;
-    for (const c of e.clients) {
-      try { c.end(); } catch { /* response already ended */ }
-    }
-    sseRegistry.delete(jobId);
-  }, delay);
-}
-
+// Routes call this. Returns false when the jobId is unknown to the queue.
 export function attachSseClient(jobId, res) {
-  const job = findJob(jobId);
-  if (!job) return false;
-  const entry = ensureSseEntry(jobId);
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  entry.clients.push(res);
-  // Replay the last payload so a client that connected mid-event sees state.
-  if (entry.lastPayload) {
-    res.write(`data: ${JSON.stringify(entry.lastPayload)}\n\n`);
-  } else if (job.status === 'queued') {
-    // First-attach for a queued job that hasn't broadcast yet.
-    res.write(`data: ${JSON.stringify({ type: 'queued', position: job.position })}\n\n`);
-  }
-  res.req.on('close', () => {
-    entry.clients = entry.clients.filter((c) => c !== res);
-  });
-  return true;
+  if (!findJob(jobId)) return false;
+  ensureSseEntry(jobId);
+  return attachSse(sseJobs, jobId, res);
 }
 
 function sleep(ms) {
@@ -387,7 +337,7 @@ export function __resetForTests() {
   queue.length = 0;
   running = null;
   archive.length = 0;
-  sseRegistry.clear();
+  sseJobs.clear();
   workerStarted = false;
   initPromise = null;
 }

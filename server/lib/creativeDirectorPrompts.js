@@ -12,6 +12,17 @@
 
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from './creativeDirectorPresets.js';
 
+function renderPriorRefBlock(scene, priorScene) {
+  if (scene.useContinuationFromPrior && priorScene) {
+    return `### Continuation from prior scene\n\nPrior accepted scene: ${priorScene.sceneId} (renderedJobId: ${priorScene.renderedJobId}).\n\nFirst, extract its last frame:\n\n\`\`\`\nPOST http://localhost:5555/api/video-gen/last-frame/${priorScene.renderedJobId}\n\`\`\`\n\nThe response gives you \`{ filename }\`. Use that as the \`sourceImageFile\` in the render request below.\n`;
+  }
+  if (scene.useContinuationFromPrior) {
+    return `### Continuation requested but no prior scene available\n\nFalling back to text-to-video for this scene. Do NOT call last-frame.\n`;
+  }
+  if (scene.sourceImageFile) return `### Starts from image: \`${scene.sourceImageFile}\``;
+  return `### Text-to-video (no source image)`;
+}
+
 // Common header. Project context the agent always needs to know.
 function projectBlock(project) {
   const aspect = ASPECT_PRESETS[project.aspectRatio];
@@ -93,13 +104,7 @@ export function buildScenePrompt(project, scene) {
   const priorScene = project.treatment?.scenes
     ?.filter((s) => s.order < scene.order && s.status === 'accepted')
     ?.sort((a, b) => b.order - a.order)?.[0] || null;
-  const priorRefBlock = scene.useContinuationFromPrior
-    ? priorScene
-      ? `### Continuation from prior scene\n\nPrior accepted scene: ${priorScene.sceneId} (renderedJobId: ${priorScene.renderedJobId}).\n\nFirst, extract its last frame:\n\n\`\`\`\nPOST http://localhost:5555/api/video-gen/last-frame/${priorScene.renderedJobId}\n\`\`\`\n\nThe response gives you \`{ filename }\`. Use that as the \`sourceImageFile\` in the render request below.\n`
-      : `### Continuation requested but no prior scene available\n\nFalling back to text-to-video for this scene. Do NOT call last-frame.\n`
-    : scene.sourceImageFile
-      ? `### Starts from image: \`${scene.sourceImageFile}\``
-      : `### Text-to-video (no source image)`;
+  const priorRefBlock = renderPriorRefBlock(scene, priorScene);
 
   return [
     `# Creative Director — Scene task`,

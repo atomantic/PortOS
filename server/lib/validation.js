@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
-import { ASPECT_RATIOS, QUALITIES } from './creativeDirectorPresets.js';
+import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -630,7 +630,7 @@ export const creativeDirectorProjectUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   styleSpec: z.string().max(5000).optional(),
   userStory: z.string().max(10000).nullable().optional(),
-  status: z.enum(['draft', 'planning', 'rendering', 'stitching', 'complete', 'paused', 'failed']).optional(),
+  status: z.enum(PROJECT_STATUSES).optional(),
   finalVideoId: z.string().max(64).nullable().optional(),
   timelineProjectId: z.string().max(64).nullable().optional(),
 }).strict();
@@ -645,7 +645,7 @@ export const creativeDirectorSceneSchema = z.object({
   durationSeconds: z.number().min(1).max(10),
   useContinuationFromPrior: z.boolean().default(false),
   sourceImageFile: z.string().max(256).regex(/^[^/\\]+$/, 'must be a basename').nullable().optional(),
-  status: z.enum(['pending', 'rendering', 'evaluating', 'accepted', 'failed']).default('pending'),
+  status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
   renderedJobId: z.string().max(64).nullable().optional(),
   evaluation: z.object({
@@ -665,7 +665,9 @@ export const creativeDirectorTreatmentSchema = z.object({
 
 // Used by the agent when finishing a scene render.
 export const creativeDirectorSceneUpdateSchema = z.object({
-  status: z.enum(['rendering', 'evaluating', 'accepted', 'failed']).optional(),
+  // Subset of SCENE_STATUSES — agents update via this endpoint and shouldn't
+  // be allowed to flip a scene back to 'pending'.
+  status: z.enum(SCENE_STATUSES.filter((s) => s !== 'pending')).optional(),
   retryCount: z.number().int().min(0).max(10).optional(),
   renderedJobId: z.string().max(64).nullable().optional(),
   prompt: z.string().min(1).max(2000).optional(),

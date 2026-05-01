@@ -50,7 +50,8 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
   }
 
   if (!success) {
-    await updateProject(project.id, { status: 'failed' }).catch(() => {});
+    await updateProject(project.id, { status: 'failed' })
+      .catch((e) => console.log(`⚠️ CD updateProject(failed) for ${project.id} failed: ${e.message}`));
     console.log(`❌ CD project ${project.id} marked failed (task ${meta.kind} failed)`);
     return;
   }
@@ -68,16 +69,17 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
     // mark it complete here as a fallback (e.g. all scenes accepted but
     // somehow no stitch needed).
     if (fresh.status !== 'complete') {
-      await updateProject(project.id, { status: 'complete' }).catch(() => {});
+      await updateProject(project.id, { status: 'complete' })
+        .catch((e) => console.log(`⚠️ CD updateProject(complete) for ${project.id} failed: ${e.message}`));
     }
     console.log(`✅ CD project ${project.id} pipeline complete`);
     return;
   }
 
-  if (kind === 'stitch' && fresh.status !== 'stitching') {
-    await updateProject(project.id, { status: 'stitching' });
-  }
-  // Re-fetch one more time so the prompt builder gets accurate status.
-  const final = await getProject(project.id);
+  // updateProject returns the post-mutation record, so we don't need a third
+  // getProject call just to feed the prompt builder.
+  const final = (kind === 'stitch' && fresh.status !== 'stitching')
+    ? await updateProject(project.id, { status: 'stitching' })
+    : fresh;
   await enqueueCreativeDirectorTask(final, kind);
 }

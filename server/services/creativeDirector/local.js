@@ -13,14 +13,13 @@
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { creativeDirectorTreatmentSchema } from '../../lib/validation.js';
+import { PROJECT_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import { createCollection } from '../mediaCollections.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'creative-director-projects.json');
-
-const STATUSES = ['draft', 'planning', 'rendering', 'stitching', 'complete', 'paused', 'failed'];
 
 async function loadAll() {
   const raw = await readJSONFile(PROJECTS_FILE, []);
@@ -28,6 +27,9 @@ async function loadAll() {
 }
 
 async function saveAll(projects) {
+  // Defense for first-run on a fresh checkout where data/ may not exist yet.
+  // Mirrors videoTimeline/local.js#saveProjects.
+  await ensureDir(PATHS.data);
   await atomicWrite(PROJECTS_FILE, projects);
 }
 
@@ -59,8 +61,8 @@ export async function createProject({ name, aspectRatio, quality, modelId, targe
     modelId,
     targetDurationSeconds,
     styleSpec,
-    startingImageFile: startingImageFile || null,
-    userStory: userStory || null,
+    startingImageFile,
+    userStory,
     collectionId: collection.id,
     timelineProjectId: null,
     finalVideoId: null,
@@ -78,7 +80,7 @@ export async function updateProject(id, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
   if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  if (patch.status && !STATUSES.includes(patch.status)) {
+  if (patch.status && !PROJECT_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   const updated = { ...all[idx], ...patch, updatedAt: new Date().toISOString() };
@@ -147,7 +149,7 @@ export async function recordRun(id, runEntry) {
   const idx = all.findIndex((p) => p.id === id);
   if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const project = all[idx];
-  const run = { runId: randomUUID(), startedAt: new Date().toISOString(), ...runEntry };
+  const run = { startedAt: new Date().toISOString(), ...runEntry, runId: runEntry.runId || randomUUID() };
   project.runs = [...(project.runs || []), run];
   project.updatedAt = new Date().toISOString();
   all[idx] = project;

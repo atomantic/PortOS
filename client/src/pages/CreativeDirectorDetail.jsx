@@ -37,14 +37,14 @@ export default function CreativeDirectorDetail() {
 
   useEffect(() => {
     fetchProject();
-    // Poll every 5s while in non-terminal state — segments/runs update as
-    // the agent works. Stop polling once complete/failed/paused.
-    const interval = setInterval(() => {
-      if (project && ['complete', 'failed', 'paused', 'draft'].includes(project.status)) return;
-      fetchProject();
-    }, 5000);
+    // Only poll while the agent could still mutate the project. Once the
+    // status reaches a terminal state, skip the interval entirely so we're
+    // not constantly tearing down and rebuilding it on every refetch.
+    const status = project?.status;
+    if (status && ['complete', 'failed', 'paused', 'draft'].includes(status)) return;
+    const interval = setInterval(fetchProject, 5000);
     return () => clearInterval(interval);
-  }, [fetchProject, project?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchProject, project?.status]);
 
   const handleAction = async (kind) => {
     try {

@@ -7,15 +7,15 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, getJob, cancelJob } from '../services/mediaJobQueue/index.js';
+import { listJobs, getJob, cancelJob, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 
 const router = Router();
 
 const listQuerySchema = z.object({
-  status: z.enum(['queued', 'running', 'completed', 'failed', 'canceled']).optional(),
-  kind: z.enum(['video', 'image']).optional(),
+  status: z.enum(JOB_STATUSES).optional(),
+  kind: z.enum(JOB_KINDS).optional(),
   owner: z.string().max(256).optional(),
 });
 
@@ -33,13 +33,13 @@ router.get('/', asyncHandler(async (req, res) => {
 
 router.get('/:id', asyncHandler(async (req, res) => {
   const job = getJob(req.params.id);
-  if (!job) return res.status(404).json({ error: 'Not found' });
+  if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
 }));
 
 router.post('/:id/cancel', asyncHandler(async (req, res) => {
   const result = await cancelJob(req.params.id);
-  if (!result.ok) return res.status(404).json(result);
+  if (!result.ok) throw new ServerError(result.error || 'Not found', { status: 404, code: 'NOT_FOUND' });
   res.json(result);
 }));
 

@@ -29,6 +29,18 @@ export const QUALITY_PRESETS = Object.freeze({
 export const ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
 export const QUALITIES = Object.freeze(['draft', 'standard', 'high']);
 
+// Project lifecycle states. Single source of truth for both validation
+// (Zod enum) and runtime guards in the service layer.
+export const PROJECT_STATUSES = Object.freeze([
+  'draft', 'planning', 'rendering', 'stitching', 'complete', 'paused', 'failed',
+]);
+
+// Per-scene lifecycle states. Used by the validation schemas + the
+// orchestrator's "next pending scene" logic.
+export const SCENE_STATUSES = Object.freeze([
+  'pending', 'rendering', 'evaluating', 'accepted', 'failed',
+]);
+
 /**
  * Map a project's aspectRatio + quality + scene durationSeconds to the
  * concrete render-API body.
