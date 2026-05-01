@@ -42,6 +42,7 @@ const WATCHDOG_IMAGE_MS = Number(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS ?? 5 * 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
 // safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
 function isUnderUploadsRoot(p) {
+  if (typeof p !== 'string') return false;
   const uploadsRoot = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
   return pathResolve(p).startsWith(uploadsRoot);
 }
@@ -53,7 +54,7 @@ function isUnderUploadsRoot(p) {
 // always copy multipart uploads into that directory before enqueueing, so
 // any legitimate `uploadedTempPath` is under that root.
 async function safeUnlinkUpload(path) {
-  if (!path) return;
+  if (!path || typeof path !== 'string') return;
   if (!isUnderUploadsRoot(path)) {
     console.log(`⚠️ mediaJobQueue refused to unlink path outside PATHS.uploads: ${path}`);
     return;
@@ -336,43 +337,51 @@ function makeGenDispatcher(emitter, job, handlers) {
 
 async function runJob(job) {
   const sseEntry = ensureSseEntry(job.id);
+
+  // Single idempotent terminal sink. All terminal paths (completed, failed,
+  // canceled, watchdog) funnel through here. The status check at the top
+  // ensures only the first caller wins; any subsequent call (e.g. watchdog
+  // fired and then the gen emits 'completed') is a no-op.
+  let watchdogTimer;
+  function terminate(state, apply) {
+    if (job.status !== 'running') return;
+    clearTimeout(watchdogTimer);
+    apply(job);
+    job.status = state;
+    job.completedAt = new Date().toISOString();
+    const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
+    const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
+    console.log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${state}${logSuffix}`);
+    const ssePayload =
+      state === 'completed' ? { type: 'complete', result: job.result }
+      : state === 'canceled' ? { type: 'canceled', reason: job.error }
+      : { type: 'error', error: job.error };
+    broadcastSse(sseEntry, ssePayload);
+    closeJobAfterDelay(sseJobs, job.id);
+    mediaJobEvents.emit(state, job);
+  }
+
   const handlers = {
     progress: (payload) => {
       broadcastSse(sseEntry, payload);
     },
     completed: (payload) => {
-      job.status = 'completed';
-      job.result = payload;
-      job.completedAt = new Date().toISOString();
-      broadcastSse(sseEntry, { type: 'complete', result: payload });
-      closeJobAfterDelay(sseJobs, job.id);
-      mediaJobEvents.emit('completed', job);
-      console.log(`✅ media-job [${job.id.slice(0, 8)}] completed`);
+      terminate('completed', (j) => { j.result = payload; });
     },
     failed: (payload) => {
       // If cancelJob() flagged this job before the underlying gen reported
       // failure, treat the SIGTERM-induced failure as a clean cancel rather
       // than an error so /api/media-jobs?status=canceled works.
       if (job.cancelRequested) {
-        job.status = 'canceled';
-        // Persist the reason so a late SSE reconnect after the live entry
-        // is cleaned up still gets a meaningful terminal frame from the
-        // archived state, rather than the generic "Canceled" fallback.
-        job.error = 'Canceled while running';
-        job.completedAt = new Date().toISOString();
-        broadcastSse(sseEntry, { type: 'canceled', reason: job.error });
-        closeJobAfterDelay(sseJobs, job.id);
-        mediaJobEvents.emit('canceled', job);
-        console.log(`🛑 media-job [${job.id.slice(0, 8)}] canceled (was running)`);
+        terminate('canceled', (j) => {
+          // Persist the reason so a late SSE reconnect after the live entry
+          // is cleaned up still gets a meaningful terminal frame from the
+          // archived state, rather than the generic "Canceled" fallback.
+          j.error = 'Canceled while running';
+        });
         return;
       }
-      job.status = 'failed';
-      job.error = payload.error || 'unknown error';
-      job.completedAt = new Date().toISOString();
-      broadcastSse(sseEntry, { type: 'error', error: job.error });
-      closeJobAfterDelay(sseJobs, job.id);
-      mediaJobEvents.emit('failed', job);
-      console.log(`❌ media-job [${job.id.slice(0, 8)}] failed: ${job.error}`);
+      terminate('failed', (j) => { j.error = payload.error || 'unknown error'; });
     },
   };
 
@@ -382,7 +391,7 @@ async function runJob(job) {
   // corrupted path from a hand-edited media-jobs.json. Null it out here if
   // it doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
   const safeParams = { ...job.params };
-  if (safeParams.uploadedTempPath && !isUnderUploadsRoot(safeParams.uploadedTempPath)) {
+  if (safeParams.uploadedTempPath && (typeof safeParams.uploadedTempPath !== 'string' || !isUnderUploadsRoot(safeParams.uploadedTempPath))) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPath outside PATHS.uploads — nulled before gen invoke: ${safeParams.uploadedTempPath}`);
     safeParams.uploadedTempPath = null;
   }
@@ -397,8 +406,7 @@ async function runJob(job) {
   // persistence all fire) and best-effort cancels the underlying process
   // so the queue can make forward progress.
   const watchdogMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
-  let watchdogTimer = setTimeout(async () => {
-    if (job.status !== 'running') return;
+  watchdogTimer = setTimeout(async () => {
     console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogMs}ms — marking failed`);
     handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogMs}ms` });
     // Best-effort cancel the underlying child process.
@@ -412,12 +420,6 @@ async function runJob(job) {
   }, watchdogMs);
   // Ensure the timer doesn't keep Node alive after the job settles.
   watchdogTimer.unref?.();
-
-  // Wrap handlers to clear the watchdog on any terminal event.
-  const origCompleted = handlers.completed;
-  const origFailed = handlers.failed;
-  handlers.completed = (payload) => { clearTimeout(watchdogTimer); origCompleted(payload); };
-  handlers.failed = (payload) => { clearTimeout(watchdogTimer); origFailed(payload); };
 
   try {
     if (job.kind === 'video') {
@@ -436,7 +438,7 @@ async function runJob(job) {
     // under data/uploads. safeUnlinkUpload constrains the delete to
     // PATHS.uploads as defense-in-depth against corrupted persisted params.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
-    if (job.status === 'running') handlers.failed({ error: err.message });
+    handlers.failed({ error: err.message });
   }
 
   // Wait for the underlying gen to settle (the gen modules emit completed/

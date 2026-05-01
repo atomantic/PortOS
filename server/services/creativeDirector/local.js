@@ -116,10 +116,13 @@ export async function setTreatment(id, treatmentInput) {
     renderedJobId: s.renderedJobId ?? null,
     evaluation: s.evaluation ?? null,
   }));
+  const nextStatus = (all[idx].status === 'paused' || all[idx].status === 'failed')
+    ? all[idx].status
+    : 'rendering';
   all[idx] = {
     ...all[idx],
     treatment: { logline: parsed.data.logline, synopsis: parsed.data.synopsis, scenes },
-    status: 'rendering',
+    status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
   await saveAll(all);

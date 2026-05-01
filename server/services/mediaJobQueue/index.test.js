@@ -269,6 +269,38 @@ describe('mediaJobQueue', () => {
     delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
   });
 
+  it('terminal handlers are idempotent: watchdog then gen emit causes only one mediaJobEvents.failed', async () => {
+    // Short watchdog so we can trigger it quickly in tests.
+    process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '50';
+    await importFresh();
+
+    // generateVideo hangs so watchdog fires first.
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+
+    const failedEmits = [];
+    const completedEmits = [];
+    mediaJobQueue.mediaJobEvents.on('failed', (j) => failedEmits.push(j.id));
+    mediaJobQueue.mediaJobEvents.on('completed', (j) => completedEmits.push(j.id));
+
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'double-terminal' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // Let the watchdog fire and confirm the job lands as failed.
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'failed', { timeoutMs: 2000 });
+    expect(failedEmits).toHaveLength(1);
+
+    // Now the underlying gen (late) emits completed — must be a no-op.
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await flush();
+
+    // Still only one failed emit, zero completed emits, status unchanged.
+    expect(failedEmits).toHaveLength(1);
+    expect(completedEmits).toHaveLength(0);
+    expect(mediaJobQueue.getJob(job.jobId).status).toBe('failed');
+
+    delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
+  });
+
   // Regression: a client that reconnects to /:jobId/events for a queued job
   // recovered from media-jobs.json (or one that never had an SSE entry for
   // any reason) must NOT receive a synthetic terminal `error` frame just
@@ -317,6 +349,53 @@ describe('mediaJobQueue', () => {
     expect(written).toMatch(/"type":"(queued|started)"/);
     expect(written).not.toMatch(/"type":"error"/);
     expect(fakeRes.end).not.toHaveBeenCalled();
+  });
+
+  it('non-string uploadedTempPath (number) on a persisted job does not throw on enqueue', async () => {
+    const jobId = '00000000-0000-4000-8000-000000000010';
+    const persisted = {
+      jobs: [
+        {
+          id: jobId,
+          kind: 'video',
+          status: 'queued',
+          queuedAt: '2026-04-30T10:00:00.000Z',
+          params: { prompt: 'corrupted', uploadedTempPath: 12345 },
+        },
+      ],
+    };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
+    await importFresh();
+    await expect(mediaJobQueue.initMediaJobQueue()).resolves.not.toThrow();
+    // Worker should call generateVideo with uploadedTempPath nulled out (sanitizer fired).
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const callArgs = stubs.generateVideo.mock.calls[0][0];
+    expect(callArgs.uploadedTempPath).toBeNull();
+    videoGenEvents.emit('completed', { generationId: jobId, filename: `${jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'completed');
+  });
+
+  it('non-string uploadedTempPath (object) on a persisted job does not throw on enqueue', async () => {
+    const jobId = '00000000-0000-4000-8000-000000000011';
+    const persisted = {
+      jobs: [
+        {
+          id: jobId,
+          kind: 'video',
+          status: 'queued',
+          queuedAt: '2026-04-30T10:00:00.000Z',
+          params: { prompt: 'corrupted', uploadedTempPath: { evil: true } },
+        },
+      ],
+    };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
+    await importFresh();
+    await expect(mediaJobQueue.initMediaJobQueue()).resolves.not.toThrow();
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const callArgs = stubs.generateVideo.mock.calls[0][0];
+    expect(callArgs.uploadedTempPath).toBeNull();
+    videoGenEvents.emit('completed', { generationId: jobId, filename: `${jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'completed');
   });
 });
 

@@ -1075,12 +1075,9 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   // never reach this hook directly. Failure marks the project failed; the
   // user can resume from the UI.
   if (task?.metadata?.creativeDirector) {
-    try {
-      const { handleCreativeDirectorCompletion } = await import('./creativeDirector/completionHook.js');
-      await handleCreativeDirectorCompletion(task, agentId, effectiveSuccess);
-    } catch (err) {
-      console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`);
-    }
+    const { handleCreativeDirectorCompletion } = await import('./creativeDirector/completionHook.js');
+    handleCreativeDirectorCompletion(task, agentId, effectiveSuccess)
+      .catch((err) => console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`));
   }
 
   // Clean up ephemeral BTW.md before worktree removal
