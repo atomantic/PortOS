@@ -28,7 +28,7 @@ const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
 
 // Catalog comes from data/media-models.json (see server/lib/mediaModels.js).
-// Cached as a Map at boot for O(1) lookup by id, matching the prior shape.
+// Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
 
 export const listVideoModels = () => getVideoModels();
@@ -127,7 +127,14 @@ const optimizeForStreaming = async (videoPath) => {
   });
   if (!ok) { await unlink(tmpPath).catch(() => {}); return; }
   // Atomic single-syscall replace — no window where the file is missing.
-  await rename(tmpPath, videoPath).catch(() => {});
+  // If rename fails (cross-device, permissions, file-in-use) we'd otherwise
+  // leak the tmp file silently and slowly fill data/videos with .fs.mp4s.
+  try {
+    await rename(tmpPath, videoPath);
+  } catch (err) {
+    await unlink(tmpPath).catch(() => {});
+    console.log(`⚠️ Failed to install streaming-optimized video at ${videoPath}: ${err.message}`);
+  }
 };
 
 export const loadHistory = () => readJSONFile(HISTORY_FILE, []);
@@ -401,6 +408,13 @@ export async function extractLastFrame(historyId) {
   if (!existsSync(videoPath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
 
   await ensureDir(PATHS.images);
+  // Same path-traversal concern as `item.filename` above — `item.id` could
+  // contain path separators or `..` if history.json was tampered with.
+  // generateVideo writes ids via randomUUID() (matches /^[a-f0-9-]{36}$/),
+  // so reject anything else outright.
+  if (!/^[a-f0-9-]{36}$/i.test(item.id)) {
+    throw new ServerError('Invalid history id', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   const frameFilename = `lastframe-${item.id}.png`;
   const framePath = join(PATHS.images, frameFilename);
   // Cache hit: ffmpeg-extracted frames are deterministic for a given video,

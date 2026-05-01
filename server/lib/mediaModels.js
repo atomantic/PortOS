@@ -23,7 +23,9 @@ import { PATHS } from './fileUtils.js';
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
 
-const REGISTRY_FILE = join(PATHS.data, 'media-models.json');
+// Allow tests + non-standard deployments to point at a different file
+// without monkey-patching PATHS. Defaults to data/media-models.json.
+const REGISTRY_FILE = process.env.PORTOS_MEDIA_MODELS_FILE || join(PATHS.data, 'media-models.json');
 const IS_WIN = process.platform === 'win32';
 
 const DEFAULT_REGISTRY = {
@@ -47,14 +49,21 @@ const DEFAULT_REGISTRY = {
     { id: 'flux2-klein-9b',   name: 'Flux 2 Klein 9B', steps: 8,  guidance: 3.5, broken: 'macos' },
   ],
   textEncoders: [
-    { id: 'gemma-4bit',     label: 'Gemma 3 12B 4-bit (default, ~7 GB)',                 repo: 'mlx-community/gemma-3-12b-it-4bit' },
+    { id: 'gemma-4bit',     label: 'Gemma 3 12B 4-bit (smallest, ~7 GB)',                repo: 'mlx-community/gemma-3-12b-it-4bit' },
     { id: 'gemma-qat-4bit', label: 'Gemma 3 12B QAT 4-bit (better, ~8 GB, LM Studio)',   repo: 'mlx-community/gemma-3-12b-it-qat-4bit', localPath: '~/.lmstudio/models/mlx-community/gemma-3-12b-it-qat-4bit' },
-    { id: 'gemma-bf16',     label: 'Gemma 3 12B bf16 (best, ~24 GB, large download)',    repo: 'mlx-community/gemma-3-12b-it-bf16' },
+    { id: 'gemma-bf16',     label: 'Gemma 3 12B bf16 (default, best quality, ~24 GB)',   repo: 'mlx-community/gemma-3-12b-it-bf16' },
   ],
-  selectedTextEncoder: 'gemma-4bit',
+  selectedTextEncoder: 'gemma-bf16',
 };
 
-const expandHome = (p) => (p && p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
+// `path.join(homedir(), '/.foo')` discards the homedir because of the
+// leading slash, so we have to strip the `~/` prefix (or `~`) before joining.
+const expandHome = (p) => {
+  if (!p || !p.startsWith('~')) return p;
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  return p;
+};
 
 let cached = null;
 
@@ -73,8 +82,17 @@ const seedIfMissing = () => {
 export const loadMediaModels = () => {
   if (cached) return cached;
   seedIfMissing();
+  // Catch parse failures so a malformed user edit doesn't crash server boot
+  // — the loader is invoked at module import-time from videoGen/imageGen, so
+  // an exception here aborts startup. Fall back to the in-memory defaults
+  // and surface the error in logs so the operator can fix the file.
   const raw = readFileSync(REGISTRY_FILE, 'utf-8');
-  cached = JSON.parse(raw);
+  try {
+    cached = JSON.parse(raw);
+  } catch (err) {
+    console.log(`⚠️ Failed to parse ${REGISTRY_FILE} (${err.message}) — using built-in defaults`);
+    cached = DEFAULT_REGISTRY;
+  }
   return cached;
 };
 
