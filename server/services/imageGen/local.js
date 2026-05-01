@@ -156,8 +156,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // Re-read on each call so flux2 entries the registry's first-boot seed
   // wrote into a stale data/media-models.json show up without requiring the
   // server's IMAGE_MODELS module-load snapshot to be in sync.
+  // getImageModels() already filters out entries marked broken on the current
+  // platform — checking model.broken again here would also reject entries
+  // marked broken on the OTHER platform (e.g. 'windows' on a macOS box).
   const model = getImageModels().find((m) => m.id === modelId);
-  if (!model || model.broken) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   if (!isFlux2(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }

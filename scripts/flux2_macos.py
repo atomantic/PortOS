@@ -287,7 +287,10 @@ def main() -> None:
         pipe_kwargs["negative_prompt"] = args.negative_prompt
     if callback is not None and "callback_on_step_end" in accepted:
         pipe_kwargs["callback_on_step_end"] = callback
-        pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+        # Some pipelines accept the callback but not the explicit input list;
+        # only set when supported.
+        if "callback_on_step_end_tensor_inputs" in accepted:
+            pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
     if init_image is not None and "image" in accepted:
         pipe_kwargs["image"] = init_image
         # Disable VAE tiling for i2i — tiled encode of a small image

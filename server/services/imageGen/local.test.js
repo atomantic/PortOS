@@ -47,7 +47,7 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
     // First arg is the script path
-    expect(args[0]).toMatch(/scripts\/flux2_macos\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]flux2_macos\.py$/);
     // Required CLI fields land in the args list (order isn't important here,
     // but we want presence + the exact repo/tokenizer values).
     expect(args).toContain('--quantization');

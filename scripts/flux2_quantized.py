@@ -146,9 +146,10 @@ class QuantizedDiffusersModel(ModelHubMixin):
             json.dump(qmap, f, indent=4)
 
 
-# Imported lazily so this module can be imported on systems without diffusers
-# installed (e.g. when checking syntax in CI). The runner imports the class
-# *after* the venv is active.
+# Top-level diffusers import. This whole module uses diffusers internals
+# (ModelMixin, load_state_dict, etc.), so it can only be imported with
+# diffusers on the path — that's expected: callers run inside the flux2
+# venv that setup-image-video.sh provisions.
 from diffusers.models.transformers.transformer_flux2 import Flux2Transformer2DModel
 
 
