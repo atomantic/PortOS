@@ -154,6 +154,15 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
     // (it uses its own bundled venv). Without this guard, the queue would
     // accept the job and only surface the failure async over SSE.
     const allModels = getImageModels();
+    // Reject a typo'd modelId synchronously rather than enqueueing a doomed
+    // job. When omitted, fall through to the default ('dev'-ish) — the
+    // worker does the same lookup so behavior stays consistent.
+    if (data.modelId && !allModels.some((m) => m.id === data.modelId)) {
+      throw new ServerError(
+        `Unknown modelId: ${data.modelId}`,
+        { status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL' },
+      );
+    }
     const selectedModel = allModels.find((m) => m.id === data.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];

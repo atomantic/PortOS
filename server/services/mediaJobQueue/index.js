@@ -85,7 +85,17 @@ export function listJobs({ status, kind, owner } = {}) {
   });
 }
 
-async function persist() {
+// Serialize persist() calls through a single chain. atomicWrite rename can
+// finish out-of-order under concurrent calls, so a slow "start" persist
+// landing after a fast "done" persist would regress the on-disk snapshot
+// (e.g. completed→running). Chaining ensures every snapshot reflects the
+// state at its enqueue time, in submission order.
+let persistChain = Promise.resolve();
+function persist() {
+  persistChain = persistChain.then(persistImpl, persistImpl);
+  return persistChain;
+}
+async function persistImpl() {
   const cutoff = Date.now() - COMPLETED_TTL_MS;
   const trimmedArchive = archive
     .filter((j) => {
@@ -148,6 +158,17 @@ export async function initMediaJobQueue() {
       const entry = ensureSseEntry(id);
       broadcastSse(entry, { type: 'error', error: 'interrupted by restart' });
       closeJobAfterDelay(sseJobs, id);
+    }
+    // Pre-seed SSE entries for recovered queued jobs too. Without this, a
+    // client reconnecting to /:jobId/events between boot and the worker
+    // dequeueing the job would hit attachSseClient's "no sse entry" branch
+    // and synthesize a terminal `error` frame from a still-`queued` archive
+    // miss (since the job is in `queue`, not `archive`). The pre-seeded
+    // payload also gives the client an immediate `queued` heartbeat with the
+    // recomputed position.
+    for (const j of queue) {
+      const entry = ensureSseEntry(j.id);
+      broadcastSse(entry, { type: 'queued', position: j.position });
     }
     await persist();
     startWorker();
@@ -405,6 +426,20 @@ export function attachSseClient(jobId, res) {
   if (sseJobs.has(jobId)) {
     return attachSse(sseJobs, jobId, res);
   }
+  // No SSE entry but the job is still live (queued/running) — the entry was
+  // dropped or never created (e.g. crash recovery). Create one on the fly
+  // and attach so the client receives subsequent progress/terminal events
+  // rather than a synthetic `error` frame for a job that is still running.
+  if (job.status === 'queued' || job.status === 'running') {
+    const entry = ensureSseEntry(jobId);
+    // Seed a heartbeat so the freshly-attached client sees the current
+    // status immediately instead of waiting for the next worker emit.
+    const heartbeat = job.status === 'queued'
+      ? { type: 'queued', position: job.position }
+      : { type: 'started', kind: job.kind };
+    broadcastSse(entry, heartbeat);
+    return attachSse(sseJobs, jobId, res);
+  }
   // Terminal job whose SSE entry was already cleaned up. Synthesize the
   // expected terminal payload from the archived state and end immediately.
   const terminal =
@@ -433,4 +468,7 @@ export function __resetForTests() {
   sseJobs.clear();
   workerStarted = false;
   initPromise = null;
+  // Reset the persist chain so a leftover rejection from a previous test's
+  // ENOENT writes doesn't poison subsequent persist() calls.
+  persistChain = Promise.resolve();
 }

@@ -128,6 +128,18 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
+  // Validate modelId synchronously (when supplied). Without this the queue
+  // would happily accept a typo'd modelId and fail asynchronously inside
+  // the worker — leaving a persisted, doomed queue entry.
+  if (body.modelId) {
+    const known = listVideoModels();
+    if (!known.some((m) => m.id === body.modelId)) {
+      throw new ServerError(
+        `Unknown modelId: ${body.modelId}`,
+        { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+      );
+    }
+  }
 
   let sourceImagePath = null;
   let uploadedTempPath = null;

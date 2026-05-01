@@ -8,7 +8,6 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
