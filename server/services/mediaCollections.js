@@ -111,12 +111,22 @@ const writeAll = async (collections) => {
 };
 
 export async function createCollection({ name, description = '' }) {
+  // Service-layer guards mirror sanitizeCollection so a direct caller
+  // (tests, future internal usage) can't persist a record that the next
+  // listCollections() read would silently drop.
+  const trimmedName = typeof name === 'string' ? name.trim() : '';
+  if (!trimmedName || trimmedName.length > NAME_MAX_LENGTH) {
+    throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
+  }
+  const trimmedDescription = typeof description === 'string'
+    ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+    : '';
   const all = await listCollections();
   const now = new Date().toISOString();
   const next = {
     id: randomUUID(),
-    name,
-    description,
+    name: trimmedName,
+    description: trimmedDescription,
     coverKey: null,
     items: [],
     createdAt: now,
@@ -158,11 +168,20 @@ export async function deleteCollection(id) {
 }
 
 export async function addItem(id, item) {
+  // Mirror sanitizeItem so direct callers can't write a record that the
+  // next listCollections() would drop (silent add).
+  if (!item || !ITEM_KIND.has(item.kind)) {
+    throw makeErr('item.kind must be "image" or "video"', ERR_VALIDATION);
+  }
+  const ref = typeof item.ref === 'string' ? item.ref.trim() : '';
+  if (!ref || ref.length > REF_MAX_LENGTH || ref.includes(':')) {
+    throw makeErr('item.ref invalid (empty, too long, or contains ":")', ERR_VALIDATION);
+  }
   const all = await listCollections();
   const idx = all.findIndex((c) => c.id === id);
   if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
   const cur = all[idx];
-  const key = itemKey(item);
+  const key = `${item.kind}:${ref}`;
   if (cur.items.find((it) => itemKey(it) === key)) {
     throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
   }
@@ -171,7 +190,7 @@ export async function addItem(id, item) {
   }
   const merged = {
     ...cur,
-    items: [...cur.items, { kind: item.kind, ref: item.ref, addedAt: new Date().toISOString() }],
+    items: [...cur.items, { kind: item.kind, ref, addedAt: new Date().toISOString() }],
     updatedAt: new Date().toISOString(),
   };
   const next = [...all];

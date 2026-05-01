@@ -178,7 +178,10 @@ export async function resolveClips(project) {
     throw new ServerError('Project has no clips', { status: 400, code: 'EMPTY_PROJECT' });
   }
   const history = await loadHistory();
-  const historyMap = new Map(history.map((h) => [h.id, h]));
+  // loadHistory comes from the JSON state file; defend against corruption so
+  // a non-array root degrades to "all clips missing" rather than crashing.
+  const historyList = Array.isArray(history) ? history : [];
+  const historyMap = new Map(historyList.map((h) => [h.id, h]));
   const missing = [];
   const prepared = [];
   for (let i = 0; i < project.clips.length; i++) {
@@ -434,7 +437,8 @@ export async function renderProject(projectId) {
       createdAt: new Date().toISOString(),
       timelineProjectId: projectId,
     };
-    const history = await loadHistory();
+    const loadedHistory = await loadHistory();
+    const history = Array.isArray(loadedHistory) ? loadedHistory : [];
     history.unshift(meta);
     await saveHistory(history);
     console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
