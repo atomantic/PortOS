@@ -428,6 +428,18 @@ html[data-port-theme="blueprint-ops"] header :is(h1, h2, h3) {
   outline-offset: 2px;
 }
 
+/* Soften focus on text-entry fields — the bright 2px ring at offset 2 reads
+   as a thick blue border around prose textareas, which is harsh when you're
+   reading a long draft. Form fields already have a visible cursor + the
+   field's own border, so a 1px low-alpha indicator flush against the border
+   is enough. Buttons/links keep the strong indicator below for keyboard
+   navigation. */
+:is(input, textarea, select, [contenteditable="true"], [contenteditable=""]):focus-visible {
+  outline: 1px solid rgb(var(--port-focus-ring) / 0.35);
+  outline-offset: 0;
+  box-shadow: none;
+}
+
 /* Accessibility: Remove focus outline for mouse users while keeping it for keyboard */
 *:focus:not(:focus-visible) {
   outline: none;
