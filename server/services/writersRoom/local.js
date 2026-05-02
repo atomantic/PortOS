@@ -181,9 +181,13 @@ async function loadManifest(workId) {
   // SyntaxError bubbling out of JSON.parse.
   const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
   if (parsed === null) {
-    throw new ServerError(`Corrupted writers-room manifest at ${path}`, {
+    // Don't leak the on-disk path to the client; keep it in context for the
+    // server logs (errorHandler emits context to logs but only message + code
+    // to the response body).
+    throw new ServerError(`Corrupted writers-room manifest for ${workId}`, {
       status: 500,
       code: 'CORRUPTED_MANIFEST',
+      context: { workId, path },
     });
   }
   return parsed;
