@@ -79,16 +79,26 @@ of corrupting large prose drafts.
 The "write for 10" section can live as a tab in Writers Room and as a quick action
 from any work.
 
-MVP behavior:
+MVP behavior (ships in **Phase 1**):
 
-- 10-minute timer with start, pause, resume, finish, and discard.
-- Live word count, words added since session start, and optional target progress.
-- Session can start from a blank prompt, a selected work, or a selected prose
-  segment.
-- On finish, save as an exercise session and optionally append/promote it into a
-  work draft.
+- Configurable timer (5/10/15/25-min presets) with start, finish, and discard.
+- Live word count of the sprint buffer, words added since session start.
+- Session can start from a blank prompt or a selected work (free-write the
+  current work's title appears as the implicit prompt).
+- On finish, save the exercise session with starting/ending word counts and
+  the appended sprint text.
 - Track session history: date, duration, starting words, ending words, words
   added, linked work, and prompt.
+
+Deferred to **Phase 2+** (NOT in Phase 1):
+
+- Pause / resume mid-session (today's MVP is start/finish/discard only).
+- Promote / append the sprint text into the active work's draft on finish
+  (today the appendedText is logged with the session but not merged into the
+  work). The session metadata already carries everything needed to wire this
+  up later — surface a "Promote to draft" button on the recent-sessions list.
+- Session can start from a selected prose segment (currently scopes to the
+  whole work).
 
 Do not blend this into POST yet. POST has creative writing drills, but Writers
 Room needs an authoring-grade exercise log tied to works and drafts.
