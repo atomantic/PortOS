@@ -237,7 +237,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
                       ? 'opacity-100 text-port-error'
                       : 'opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error'
                   }`}
-                  aria-label="Delete folder"
+                  aria-label={`Delete folder ${folder.name}`}
                   title={armedDelete === `folder:${folder.id}` ? 'Click again to confirm' : 'Delete folder'}
                 >
                   <Trash2 size={12} />

@@ -29,8 +29,14 @@ export default function ExercisePanel({ activeWork, onClose }) {
   useEffect(() => () => { mountedRef.current = false; }, []);
 
   const refresh = useCallback(async () => {
-    const all = await listWritersRoomExercises(activeWork?.id).catch(() => []);
-    if (mountedRef.current) setHistory(all);
+    // Capture the workId we asked for so a slow response from the previous
+    // work can't overwrite the just-loaded history when the user switches
+    // works rapidly.
+    const requestedFor = activeWork?.id ?? null;
+    const all = await listWritersRoomExercises(requestedFor).catch(() => []);
+    if (!mountedRef.current) return;
+    if (requestedFor !== (activeWork?.id ?? null)) return; // stale response
+    setHistory(all);
   }, [activeWork?.id]);
 
   useEffect(() => { refresh(); }, [refresh]);

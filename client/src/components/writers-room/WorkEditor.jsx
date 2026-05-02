@@ -35,10 +35,14 @@ export default function WorkEditor({ work, onChange }) {
     setTitle(work.title);
   }, [work.id, work.activeDraftVersionId, work.activeDraftBody, work.title]);
 
-  // Keep the optimistic status in sync with the source of truth — separate
-  // from the rehydration effect so a status PATCH that comes back via the
-  // parent's onChange still updates the dropdown even if no other field moved.
+  // Keep the optimistic status + title in sync with the source of truth —
+  // separate from the rehydration effect so a PATCH that comes back via the
+  // parent's onChange still updates the input even if no other field moved.
+  // The "is the user actively editing" guard isn't needed for status (single
+  // click) but title commits on blur, so the user can never be mid-edit when
+  // a title prop change arrives.
   useEffect(() => { setStatus(work.status); }, [work.status]);
+  useEffect(() => { setTitle(work.title); }, [work.title]);
 
   const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
@@ -104,7 +108,12 @@ export default function WorkEditor({ work, onChange }) {
       if (mountedRef.current) toast.error(`Title save failed: ${err.message}`);
       return null;
     });
-    if (updated && mountedRef.current) onChange?.({ ...updated, activeDraftBody: body });
+    if (!updated || !mountedRef.current) return;
+    // Adopt the server-normalized title (e.g. trim() applied by the Zod
+    // schema) — otherwise `title !== work.title` stays true on every blur
+    // and the next focus-out re-PATCHes with the same un-normalized value.
+    if (updated.title !== title) setTitle(updated.title);
+    onChange?.({ ...updated, activeDraftBody: body });
   };
 
   const commitStatus = async (next) => {
@@ -121,6 +130,14 @@ export default function WorkEditor({ work, onChange }) {
   };
 
   const switchToDraft = async (draftId) => {
+    if (draftId === work.activeDraftVersionId) return;
+    if (dirty) {
+      // Switching versions while the editor has unsaved edits would discard
+      // them when the rehydration effect replaces `body` with the server
+      // version. Block the switch and ask the user to settle the buffer.
+      toast('Save or snapshot before switching versions', { icon: '⚠️' });
+      return;
+    }
     const updated = await setWritersRoomActiveDraft(work.id, draftId).catch((err) => {
       if (mountedRef.current) toast.error(`Switch failed: ${err.message}`);
       return null;
