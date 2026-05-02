@@ -212,7 +212,7 @@ export function VoiceTab() {
   const voices = voiceList.voices || [];
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-6">
+    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-6">
       <div className="flex items-center gap-2 text-white">
         <Mic size={18} />
         <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
@@ -223,30 +223,34 @@ export function VoiceTab() {
         digests, time, and more). Everything runs on this machine — no external API calls.
       </p>
 
-      <label className="flex items-center gap-3 cursor-pointer">
+      <label className="flex items-start gap-3 cursor-pointer">
         <input
           type="checkbox"
           checked={cfg.enabled}
           onChange={(e) => patch('enabled', e.target.checked)}
-          className="w-4 h-4"
+          className="w-4 h-4 mt-0.5 shrink-0"
         />
-        <span className="text-sm text-white">Enable voice mode</span>
-        <span className="text-xs text-gray-500">
-          (toggling on installs missing binaries + downloads selected models)
-        </span>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+          <span className="text-sm text-white">Enable voice mode</span>
+          <span className="text-xs text-gray-500">
+            (toggling on installs missing binaries + downloads selected models)
+          </span>
+        </div>
       </label>
 
-      <label className="flex items-center gap-3 cursor-pointer">
+      <label className="flex items-start gap-3 cursor-pointer">
         <input
           type="checkbox"
           checked={!widgetHidden}
           onChange={(e) => toggleWidgetHidden(!e.target.checked)}
-          className="w-4 h-4"
+          className="w-4 h-4 mt-0.5 shrink-0"
         />
-        <span className="text-sm text-white">Show floating voice widget</span>
-        <span className="text-xs text-gray-500">
-          (per-browser preference — Safari on iPhone does not support the mic APIs this widget uses)
-        </span>
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+          <span className="text-sm text-white">Show floating voice widget</span>
+          <span className="text-xs text-gray-500">
+            (per-browser preference — Safari on iPhone does not support the mic APIs this widget uses)
+          </span>
+        </div>
       </label>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -400,17 +404,19 @@ export function VoiceTab() {
           />
         </Field>
 
-        <label className="flex items-center gap-3 cursor-pointer md:col-span-2">
+        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
           <input
             type="checkbox"
             checked={cfg.llm.usePersonality !== false}
             onChange={(e) => patch('llm.usePersonality', e.target.checked)}
-            className="w-4 h-4"
+            className="w-4 h-4 mt-0.5 shrink-0"
           />
-          <span className="text-sm text-white">Use Chief-of-Staff personality (recommended)</span>
-          <span className="text-xs text-gray-500">
-            Composes the system prompt from the fields below. Turn off to use the raw prompt.
-          </span>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+            <span className="text-sm text-white">Use Chief-of-Staff personality (recommended)</span>
+            <span className="text-xs text-gray-500">
+              Composes the system prompt from the fields below. Turn off to use the raw prompt.
+            </span>
+          </div>
         </label>
 
         {cfg.llm.usePersonality !== false ? (
@@ -468,38 +474,42 @@ export function VoiceTab() {
           </Field>
         )}
 
-        <label className="flex items-center gap-3 cursor-pointer md:col-span-2">
+        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
           <input
             type="checkbox"
             checked={cfg.llm.tools?.enabled === true}
             onChange={(e) => patch('llm.tools.enabled', e.target.checked)}
-            className="w-4 h-4"
+            className="w-4 h-4 mt-0.5 shrink-0"
           />
-          <span className="text-sm text-white">Enable tools (brain, goals, PM2, feeds, time…)</span>
-          <span className="text-xs text-gray-500">
-            Needs a tool-use-capable model (Qwen2.5, Hermes-3, etc.).
-          </span>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+            <span className="text-sm text-white">Enable tools (brain, goals, PM2, feeds, time…)</span>
+            <span className="text-xs text-gray-500">
+              Needs a tool-use-capable model (Qwen2.5, Hermes-3, etc.).
+            </span>
+          </div>
         </label>
 
         {sttEngine === 'whisper' && (
-          <label className="flex items-center gap-3 cursor-pointer md:col-span-2">
+          <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
             <input
               type="checkbox"
               checked={!!cfg.stt.coreml}
               onChange={(e) => patch('stt.coreml', e.target.checked)}
-              className="w-4 h-4"
+              className="w-4 h-4 mt-0.5 shrink-0"
             />
-            <span className="text-sm text-white">Use CoreML encoder for Whisper (macOS only)</span>
-            <span className="text-xs text-gray-500">2–3× faster STT on Apple Silicon.</span>
+            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+              <span className="text-sm text-white">Use CoreML encoder for Whisper (macOS only)</span>
+              <span className="text-xs text-gray-500">2–3× faster STT on Apple Silicon.</span>
+            </div>
           </label>
         )}
       </div>
 
-      <div className="flex items-center gap-3 pt-2">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-2">
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
         >
           {saving ? <BrailleSpinner /> : <Save size={14} />}
           Save & Reconcile
@@ -507,7 +517,7 @@ export function VoiceTab() {
         <button
           onClick={handleTest}
           disabled={testing}
-          className="flex items-center gap-2 px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
           title="Synthesize a test phrase with the active TTS engine"
         >
           {testing ? <BrailleSpinner /> : <Play size={14} />}
@@ -515,7 +525,7 @@ export function VoiceTab() {
         </button>
         <button
           onClick={refreshStatus}
-          className="flex items-center gap-2 px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors"
+          className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors"
         >
           <Zap size={14} />
           Refresh

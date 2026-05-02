@@ -90,7 +90,7 @@ export function MortalLoomTab() {
 
   return (
     <div className="space-y-5">
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-5">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
         <div>
           <h3 className="text-lg font-semibold text-white mb-1">MortalLoom iCloud Sync</h3>
           <p className="text-sm text-gray-400">
@@ -108,15 +108,16 @@ export function MortalLoomTab() {
           </a>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <label className="text-sm text-gray-400">Enabled</label>
           <button
             onClick={() => setEnabled(!enabled)}
-            className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
+            aria-pressed={enabled}
+            className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
           >
             <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : ''}`} />
           </button>
-          <span className="text-xs text-gray-500">
+          <span className="basis-full sm:basis-auto text-xs text-gray-500">
             When enabled, Goals and Meatspace views surface MortalLoom data.
           </span>
         </div>
@@ -135,11 +136,11 @@ export function MortalLoomTab() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50"
+            className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50"
           >
             <Save size={14} className="inline mr-1" />
             {saving ? 'Saving…' : 'Save'}
@@ -147,7 +148,7 @@ export function MortalLoomTab() {
           <button
             onClick={handleImport}
             disabled={importing || !status?.exists || !enabled}
-            className="px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-white rounded-lg text-sm transition-colors disabled:opacity-50"
+            className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-white rounded-lg text-sm transition-colors disabled:opacity-50"
             title={!enabled ? 'Enable sync first' : !status?.exists ? 'MortalLoom.json not found' : 'Import into PortOS'}
           >
             <Download size={14} className="inline mr-1" />
@@ -160,7 +161,7 @@ export function MortalLoomTab() {
         </p>
       </div>
 
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-3">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
         <h3 className="text-sm font-semibold text-white">iCloud file status</h3>
         <div className="text-xs text-gray-400 space-y-1 font-mono">
           <div className="flex items-start gap-2">
