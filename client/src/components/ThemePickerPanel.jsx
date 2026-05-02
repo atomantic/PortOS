@@ -69,6 +69,9 @@ export default function ThemePickerPanel({ compact = false }) {
 
 function ModeSwitch({ group, activeMode, onPick }) {
   const has = (mode) => Boolean(group[mode]);
+  // Buttons are 40x40 minimum so the seam in the middle of the pill is still
+  // a comfortable mobile tap target. >=sm collapses to the original compact pill.
+  const buttonClass = 'inline-flex items-center justify-center rounded-full transition-colors min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5';
   return (
     <div
       role="group"
@@ -81,13 +84,13 @@ function ModeSwitch({ group, activeMode, onPick }) {
         aria-label={`Use ${group.night?.label ?? 'night'} mode`}
         aria-pressed={activeMode === 'night'}
         disabled={!has('night')}
-        className={`p-1.5 rounded-full transition-colors ${
+        className={`${buttonClass} ${
           activeMode === 'night'
             ? 'bg-port-accent text-port-on-accent'
             : 'text-port-text-muted hover:text-port-text disabled:opacity-40'
         }`}
       >
-        <Moon size={14} />
+        <Moon size={14} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -95,13 +98,13 @@ function ModeSwitch({ group, activeMode, onPick }) {
         aria-label={`Use ${group.day?.label ?? 'day'} mode`}
         aria-pressed={activeMode === 'day'}
         disabled={!has('day')}
-        className={`p-1.5 rounded-full transition-colors ${
+        className={`${buttonClass} ${
           activeMode === 'day'
             ? 'bg-port-accent text-port-on-accent'
             : 'text-port-text-muted hover:text-port-text disabled:opacity-40'
         }`}
       >
-        <Sun size={14} />
+        <Sun size={14} aria-hidden="true" />
       </button>
     </div>
   );

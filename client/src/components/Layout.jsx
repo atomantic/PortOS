@@ -104,9 +104,9 @@ function ThemeModeToggle({ className = '' }) {
       onClick={toggleMode}
       title={`${theme?.label ?? 'Theme'}${pairLabel}`}
       aria-label={`Toggle day/night mode${pairLabel}`}
-      className={`p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
+      className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
     >
-      <Icon size={18} />
+      <Icon size={18} aria-hidden="true" />
     </button>
   );
 }
