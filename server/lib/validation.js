@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
-import { WORK_KINDS, WORK_STATUSES } from './writersRoomPresets.js';
+import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -517,6 +517,10 @@ export const writersRoomExerciseCreateSchema = z.object({
 export const writersRoomExerciseFinishSchema = z.object({
   endingWords: z.number().int().min(0).optional(),
   appendedText: z.string().max(100000).nullable().optional()
+}).strict();
+
+export const writersRoomAnalysisCreateSchema = z.object({
+  kind: z.enum(ANALYSIS_KINDS)
 }).strict();
 
 // =============================================================================

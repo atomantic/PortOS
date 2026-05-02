@@ -40,6 +40,17 @@ export const setWritersRoomActiveDraft = (id, draftId) => request(`/writers-room
   method: 'PATCH',
 });
 
+// Analysis (AI passes — evaluate / format / script)
+export const listWritersRoomAnalyses = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/analysis`);
+export const runWritersRoomAnalysis = (workId, data) =>
+  request(`/writers-room/works/${enc(workId)}/analysis`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+export const getWritersRoomAnalysis = (workId, analysisId) =>
+  request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`);
+
 // Exercises
 export const listWritersRoomExercises = (workId) => {
   const qs = workId ? `?workId=${enc(workId)}` : '';

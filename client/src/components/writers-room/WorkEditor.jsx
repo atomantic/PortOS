@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Save, GitCommit, Clock, FileText } from 'lucide-react';
+import { Save, GitCommit, Clock, FileText, Sparkles, ListTree } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   saveWritersRoomDraft,
@@ -9,10 +9,18 @@ import {
 } from '../../services/apiWritersRoom';
 import { KIND_LABELS, STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
+import AiPanel from './AiPanel';
+
+const SIDEBAR_TABS = [
+  { id: 'ai', label: 'AI', Icon: Sparkles },
+  { id: 'outline', label: 'Outline', Icon: ListTree },
+  { id: 'versions', label: 'Versions', Icon: Clock },
+];
 
 export default function WorkEditor({ work, onChange }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
+  const [sidebarTab, setSidebarTab] = useState('ai');
   // Optimistic mirror of work.status — the dropdown reads this so a status
   // change shows immediately, even before the PATCH round-trip resolves and
   // the parent re-renders with the new prop. Synced from the prop whenever
@@ -209,48 +217,74 @@ export default function WorkEditor({ work, onChange }) {
           </div>
         </div>
 
-        <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/60 px-3 py-3 overflow-y-auto text-xs space-y-4">
-          <div>
-            <h3 className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Outline</h3>
-            <ul className="space-y-0.5">
-              {(activeDraft?.segmentIndex || []).map((seg) => (
-                <li key={seg.id} className="flex items-center gap-1 text-gray-400 truncate">
-                  <FileText size={10} className="shrink-0" />
-                  <span className={`truncate ${seg.kind === 'chapter' ? 'text-white' : seg.kind === 'scene' ? 'text-gray-300' : 'pl-3'}`}>
-                    {seg.heading}
-                  </span>
-                  <span className="ml-auto text-[10px] text-gray-600">{seg.wordCount}</span>
-                </li>
-              ))}
-              {(!activeDraft?.segmentIndex || activeDraft.segmentIndex.length === 0) && (
-                <li className="text-gray-600 italic">No segments yet</li>
-              )}
-            </ul>
+        <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/60 flex flex-col text-xs min-h-0">
+          <div className="flex border-b border-port-border bg-port-bg/40">
+            {SIDEBAR_TABS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                onClick={() => setSidebarTab(id)}
+                className={`flex-1 flex items-center justify-center gap-1 px-2 py-2 text-[11px] border-b-2 ${
+                  sidebarTab === id
+                    ? 'border-port-accent text-white'
+                    : 'border-transparent text-gray-500 hover:text-gray-300'
+                }`}
+                aria-pressed={sidebarTab === id}
+              >
+                <Icon size={11} /> {label}
+              </button>
+            ))}
           </div>
-
-          <div>
-            <h3 className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Versions</h3>
-            <ul className="space-y-1">
-              {(work.drafts || []).slice().reverse().map((draft) => {
-                const isActive = draft.id === work.activeDraftVersionId;
-                return (
-                  <li key={draft.id}>
-                    <button
-                      onClick={() => switchToDraft(draft.id)}
-                      className={`w-full flex items-center justify-between gap-2 px-2 py-1 rounded text-left ${
-                        isActive ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:bg-port-bg hover:text-white'
-                      }`}
-                    >
-                      <span className="flex items-center gap-1 truncate">
-                        <Clock size={10} />
-                        {draft.label}
-                      </span>
-                      <span className="text-[10px] text-gray-500">{draft.wordCount}w</span>
-                    </button>
+          <div className="flex-1 overflow-y-auto px-3 py-3">
+            {sidebarTab === 'ai' && (
+              <AiPanel
+                work={work}
+                onApplyFormat={(text) => {
+                  // Don't autosave — keeps a bad format pass from overwriting
+                  // the on-disk draft without an explicit Save.
+                  setBody(text);
+                  toast('Applied to editor — save to persist', { icon: '💾' });
+                }}
+              />
+            )}
+            {sidebarTab === 'outline' && (
+              <ul className="space-y-0.5">
+                {(activeDraft?.segmentIndex || []).map((seg) => (
+                  <li key={seg.id} className="flex items-center gap-1 text-gray-400 truncate">
+                    <FileText size={10} className="shrink-0" />
+                    <span className={`truncate ${seg.kind === 'chapter' ? 'text-white' : seg.kind === 'scene' ? 'text-gray-300' : 'pl-3'}`}>
+                      {seg.heading}
+                    </span>
+                    <span className="ml-auto text-[10px] text-gray-600">{seg.wordCount}</span>
                   </li>
-                );
-              })}
-            </ul>
+                ))}
+                {(!activeDraft?.segmentIndex || activeDraft.segmentIndex.length === 0) && (
+                  <li className="text-gray-600 italic">No segments yet — use # Chapter / ## Scene headings to outline.</li>
+                )}
+              </ul>
+            )}
+            {sidebarTab === 'versions' && (
+              <ul className="space-y-1">
+                {(work.drafts || []).slice().reverse().map((draft) => {
+                  const isActive = draft.id === work.activeDraftVersionId;
+                  return (
+                    <li key={draft.id}>
+                      <button
+                        onClick={() => switchToDraft(draft.id)}
+                        className={`w-full flex items-center justify-between gap-2 px-2 py-1 rounded text-left ${
+                          isActive ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:bg-port-bg hover:text-white'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1 truncate">
+                          <Clock size={10} />
+                          {draft.label}
+                        </span>
+                        <span className="text-[10px] text-gray-500">{draft.wordCount}w</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </aside>
       </div>

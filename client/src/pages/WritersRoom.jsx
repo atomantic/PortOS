@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { NotebookPen, Timer } from 'lucide-react';
+import { NotebookPen, Timer, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
@@ -10,6 +10,8 @@ import {
   getWritersRoomWork,
 } from '../services/apiWritersRoom';
 
+const LIBRARY_COLLAPSED_KEY = 'wr.libraryCollapsed';
+
 export default function WritersRoom() {
   const { workId } = useParams();
   const navigate = useNavigate();
@@ -18,6 +20,18 @@ export default function WritersRoom() {
   const [activeWork, setActiveWork] = useState(null);
   const [loadingWork, setLoadingWork] = useState(false);
   const [showExercise, setShowExercise] = useState(false);
+  // Library collapsed state — desktop only; mobile keeps the library inline
+  // because there's no editor-vs-library tradeoff to make on a small screen.
+  const [libraryCollapsed, setLibraryCollapsed] = useState(() => {
+    try { return localStorage.getItem(LIBRARY_COLLAPSED_KEY) === '1'; } catch { return false; }
+  });
+  const toggleLibrary = useCallback(() => {
+    setLibraryCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(LIBRARY_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* sandboxed storage */ }
+      return next;
+    });
+  }, []);
 
   // Skip setState when an in-flight library or work fetch resolves after the
   // page unmounts (rapid nav across pages).
@@ -92,9 +106,24 @@ export default function WritersRoom() {
     });
   };
 
+  // Inline gridTemplateColumns is a no-op while the container is `display: flex`
+  // (mobile) and takes effect once `md:grid` flips display at the breakpoint.
+  const libraryTrack = libraryCollapsed ? '32px' : '260px';
+  const exerciseSuffix = showExercise ? ' 320px' : '';
+  const desktopGridCols = `${libraryTrack} minmax(0, 1fr)${exerciseSuffix}`;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card">
+        <button
+          onClick={toggleLibrary}
+          className="hidden md:inline-flex items-center justify-center w-6 h-6 text-gray-400 hover:text-white"
+          title={libraryCollapsed ? 'Show library' : 'Hide library'}
+          aria-label={libraryCollapsed ? 'Show library' : 'Hide library'}
+          aria-expanded={!libraryCollapsed}
+        >
+          {libraryCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
         <NotebookPen className="w-5 h-5 text-port-accent" />
         <h1 className="text-xl font-bold text-white">Writers Room</h1>
         <span className="text-xs text-gray-500 hidden md:inline">Folders, works, drafts, and write-for-10 sprints</span>
@@ -111,16 +140,32 @@ export default function WritersRoom() {
         </button>
       </div>
 
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[260px_1fr] lg:grid-cols-[260px_1fr_320px] min-h-0">
-        <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
-          <LibraryPane
-            folders={folders}
-            works={works}
-            activeWorkId={activeWork?.id}
-            onSelectWork={selectWork}
-            onRefresh={refreshLibrary}
-          />
-        </aside>
+      <div
+        className="flex-1 flex flex-col md:grid min-h-0"
+        style={{ gridTemplateColumns: desktopGridCols }}
+      >
+        {libraryCollapsed ? (
+          <aside className="hidden md:flex border-r border-port-border bg-port-card/40 items-start justify-center pt-3">
+            <button
+              onClick={toggleLibrary}
+              className="p-1.5 text-gray-500 hover:text-white"
+              title="Show library"
+              aria-label="Show library"
+            >
+              <PanelLeftOpen size={14} />
+            </button>
+          </aside>
+        ) : (
+          <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
+            <LibraryPane
+              folders={folders}
+              works={works}
+              activeWorkId={activeWork?.id}
+              onSelectWork={selectWork}
+              onRefresh={refreshLibrary}
+            />
+          </aside>
+        )}
 
         <main className="min-h-0 flex flex-col">
           {loadingWork && <div className="p-6 text-sm text-gray-500">Loading work…</div>}

@@ -14,6 +14,7 @@ import {
   writersRoomSnapshotSchema,
   writersRoomExerciseCreateSchema,
   writersRoomExerciseFinishSchema,
+  writersRoomAnalysisCreateSchema,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
@@ -21,6 +22,9 @@ import {
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
 } from '../services/writersRoom/local.js';
+import {
+  runAnalysis, listAnalyses, getAnalysis,
+} from '../services/writersRoom/evaluator.js';
 
 const router = Router();
 
@@ -118,6 +122,22 @@ router.post('/exercises/:id/finish', asyncHandler(async (req, res) => {
 
 router.post('/exercises/:id/discard', asyncHandler(async (req, res) => {
   res.json(await discardExercise(req.params.id));
+}));
+
+// ---------- analysis ----------
+
+router.get('/works/:id/analysis', asyncHandler(async (req, res) => {
+  res.json(await listAnalyses(req.params.id));
+}));
+
+router.post('/works/:id/analysis', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomAnalysisCreateSchema, req.body || {});
+  const snapshot = await runAnalysis(req.params.id, data);
+  res.status(snapshot.status === 'succeeded' ? 201 : 200).json(snapshot);
+}));
+
+router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
+  res.json(await getAnalysis(req.params.id, req.params.analysisId));
 }));
 
 export default router;
