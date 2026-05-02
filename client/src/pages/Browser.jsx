@@ -3,12 +3,13 @@ import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
   FileText, ChevronDown, ChevronRight, ExternalLink,
-  Mail, MessageSquare, Download, FolderOpen
+  Mail, MessageSquare, Download, FolderOpen, Trash2
 } from 'lucide-react';
 import {
   getBrowserStatus, getBrowserConfig, updateBrowserConfig,
   launchBrowser, stopBrowser, restartBrowser,
-  getBrowserLogs, navigateBrowser
+  getBrowserLogs, navigateBrowser,
+  browserDownloadUrl, deleteBrowserDownload
 } from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatBytes } from '../utils/formatters';
@@ -109,6 +110,19 @@ export default function BrowserPage() {
       toast.success('Browser config saved — restart browser to apply changes');
     }
   }, [configDraft]);
+
+  const handleDeleteDownload = useCallback(async (name) => {
+    const ok = await deleteBrowserDownload(name).then(() => true).catch(err => {
+      toast.error(`Failed to delete: ${err.message}`);
+      return false;
+    });
+    if (ok) {
+      setStatus(prev => ({
+        ...prev,
+        downloads: { ...prev.downloads, files: prev.downloads.files.filter(f => f.name !== name) }
+      }));
+    }
+  }, []);
 
   const handleNavigate = useCallback(async () => {
     const trimmed = navUrl.trim();
@@ -525,12 +539,37 @@ export default function BrowserPage() {
                   <div className="divide-y divide-port-border">
                     {status.downloads.files.map(file => (
                       <div key={file.name} className="p-3 hover:bg-port-border/20 transition-colors">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-white truncate">{file.name}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <a
+                            href={browserDownloadUrl(file.name)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="min-w-0 flex-1 group"
+                            title="Open in new tab"
+                          >
+                            <div className="text-sm font-medium text-white truncate group-hover:text-port-accent">
+                              {file.name}
+                            </div>
                             <div className="text-xs text-gray-500 mt-0.5">
                               {formatBytes(file.size)} &middot; {new Date(file.modified).toLocaleString()}
                             </div>
+                          </a>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <a
+                              href={`${browserDownloadUrl(file.name)}?attachment=1`}
+                              download={file.name}
+                              className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-port-border/50 transition-colors"
+                              title="Save to device"
+                            >
+                              <Download size={16} />
+                            </a>
+                            <button
+                              onClick={() => handleDeleteDownload(file.name)}
+                              className="p-1.5 rounded-md text-gray-400 hover:text-port-error hover:bg-port-border/50 transition-colors"
+                              title="Delete file"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </div>
                         </div>
                       </div>
