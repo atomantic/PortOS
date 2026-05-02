@@ -313,9 +313,6 @@ function SceneCard({ scene, workTitle }) {
     };
     const onCompleted = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
-      // The route response already gave us the canonical /data/images/<jobId>.png
-      // path, so we keep using `generated` as the source of truth and just flip
-      // status. data.path may be present on completion — adopt it if so.
       setGenerated((prev) => prev ? { ...prev, path: data.path || prev.path } : prev);
       setGenStatus('done');
       setProgress(null);
@@ -359,22 +356,26 @@ function SceneCard({ scene, workTitle }) {
       return null;
     });
     if (!res) return;
-    // For local mode the route returns immediately with a queued/running
-    // status and the canonical path. The actual PNG lands at that path when
-    // the queue's worker emits `image-gen:completed`. For external/codex
-    // mode the response is synchronous and we already have the image —
-    // jump straight to `done` with the path.
+    // Local mode returns a queued/running status and the canonical path; the
+    // PNG lands there once the queue worker emits `image-gen:completed`.
+    // External/codex modes return synchronously with the image already on disk.
     jobIdRef.current = res.jobId || res.generationId || null;
     setGenerated({ path: res.path, jobId: res.jobId, prompt });
-    if (res.status === 'queued' || res.status === 'running') {
-      // stay in `running` — socket events drive completion
-    } else {
+    if (res.status !== 'queued' && res.status !== 'running') {
       setGenStatus('done');
     }
   };
 
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
-  const showPreviewArea = genStatus === 'running' || genStatus === 'done' || genStatus === 'error';
+  // `view` collapses the (genStatus, progress, generated) tuple to a single
+  // discriminator so the preview-area JSX is one switch instead of nested
+  // ternaries.
+  const view = progress?.currentImage ? 'live'
+    : genStatus === 'done' && generated?.path ? 'final'
+    : genStatus === 'running' ? 'spinner'
+    : genStatus === 'error' ? 'error'
+    : null;
+  const showPreviewArea = view !== null;
 
   return (
     <div className="border border-port-border rounded p-2 space-y-1.5 bg-port-card/40">
@@ -396,14 +397,15 @@ function SceneCard({ scene, workTitle }) {
 
       {showPreviewArea && (
         <div className="aspect-square w-full bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
-          {progress?.currentImage ? (
+          {view === 'live' && (
             <img
               src={`data:image/png;base64,${progress.currentImage}`}
               alt="Diffusing…"
               decoding="async"
               className="w-full h-full object-contain"
             />
-          ) : genStatus === 'done' && generated?.path ? (
+          )}
+          {view === 'final' && (
             <a href={generated.path} target="_blank" rel="noreferrer" className="block w-full h-full">
               <img
                 src={generated.path}
@@ -413,7 +415,8 @@ function SceneCard({ scene, workTitle }) {
                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
             </a>
-          ) : genStatus === 'running' ? (
+          )}
+          {view === 'spinner' && (
             <div className="text-gray-500 text-xs flex flex-col items-center gap-2 px-3 text-center">
               <Loader2 size={20} className="animate-spin text-port-accent" />
               <span className="font-medium text-gray-300">
@@ -425,11 +428,12 @@ function SceneCard({ scene, workTitle }) {
                 <span className="text-[10px] text-gray-500">~{Math.max(0, Math.round(progress.eta))}s remaining</span>
               )}
             </div>
-          ) : genStatus === 'error' ? (
+          )}
+          {view === 'error' && (
             <div className="text-port-error text-xs px-3 text-center break-words">
               {error || 'Generation failed'}
             </div>
-          ) : null}
+          )}
 
           {genStatus === 'running' && progressPct != null && (
             <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">

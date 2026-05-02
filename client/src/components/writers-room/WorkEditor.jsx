@@ -29,6 +29,10 @@ function readSidebarWidth() {
   return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT;
 }
 
+function persistSidebarWidth(width) {
+  try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch {}
+}
+
 export default function WorkEditor({ work, onChange }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
@@ -178,17 +182,20 @@ export default function WorkEditor({ work, onChange }) {
   // sidebarWidth (the aside renders as a row beneath the editor).
   const splitRef = useRef(null);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  // Mirror sidebarWidth into a ref so the once-bound mousemove/mouseup effect
+  // reads the freshest value at release time without re-registering on every
+  // pixel of drag (200px drag = ~200 add/remove pairs otherwise).
+  const sidebarWidthRef = useRef(sidebarWidth);
+  useEffect(() => { sidebarWidthRef.current = sidebarWidth; }, [sidebarWidth]);
   const dragStartRef = useRef(null);
 
   const onSplitMouseDown = useCallback((e) => {
     e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = sidebarWidth;
     const containerWidth = splitRef.current?.getBoundingClientRect().width ?? 0;
-    dragStartRef.current = { startX, startWidth, containerWidth };
+    dragStartRef.current = { startX: e.clientX, startWidth: sidebarWidthRef.current, containerWidth };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-  }, [sidebarWidth]);
+  }, []);
 
   useEffect(() => {
     const onMove = (e) => {
@@ -204,16 +211,22 @@ export default function WorkEditor({ work, onChange }) {
       dragStartRef.current = null;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      // Persist on release rather than every frame — avoids hammering localStorage.
-      try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(sidebarWidth))); } catch {}
+      persistSidebarWidth(sidebarWidthRef.current);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      // If the component unmounts mid-drag, restore body styles so the page
+      // doesn't keep the col-resize cursor / no-select state forever.
+      if (dragStartRef.current) {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        dragStartRef.current = null;
+      }
     };
-  }, [sidebarWidth]);
+  }, []);
 
   return (
     <div className="flex flex-col h-full">
@@ -275,7 +288,7 @@ export default function WorkEditor({ work, onChange }) {
           onMouseDown={onSplitMouseDown}
           onDoubleClick={() => {
             setSidebarWidth(SIDEBAR_DEFAULT);
-            try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_DEFAULT)); } catch {}
+            persistSidebarWidth(SIDEBAR_DEFAULT);
           }}
           role="separator"
           aria-label="Resize AI sidebar"
