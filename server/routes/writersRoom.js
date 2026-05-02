@@ -21,10 +21,12 @@ import {
   listWorks, getWorkWithBody, createWork, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
+  ensureWorkMediaCollection,
 } from '../services/writersRoom/local.js';
 import {
-  runAnalysis, listAnalyses, getAnalysis,
+  runAnalysis, listAnalyses, getAnalysis, attachSceneImage,
 } from '../services/writersRoom/evaluator.js';
+import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 
 const router = Router();
 
@@ -138,6 +140,21 @@ router.post('/works/:id/analysis', asyncHandler(async (req, res) => {
 
 router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
   res.json(await getAnalysis(req.params.id, req.params.analysisId));
+}));
+
+// Persist a scene→generated-image link on the analysis snapshot, AND mirror
+// the image into the work's auto-collection so it appears in MediaGen's
+// Collections view. Called by SceneCard when image-gen:completed fires.
+router.post('/works/:id/analysis/:analysisId/scene-image', asyncHandler(async (req, res) => {
+  const { sceneId, filename, jobId, prompt } = req.body || {};
+  const updated = await attachSceneImage(req.params.id, req.params.analysisId, { sceneId, filename, jobId, prompt });
+  // Add to the per-work collection. Best-effort — a duplicate (same render
+  // already in the collection) is a no-op, not an error.
+  const collection = await ensureWorkMediaCollection(req.params.id);
+  await addCollectionItem(collection.id, { kind: 'image', ref: filename }).catch((err) => {
+    if (err?.code !== ERR_DUPLICATE) throw err;
+  });
+  res.json({ analysis: updated, collectionId: collection.id });
 }));
 
 export default router;

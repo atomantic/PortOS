@@ -50,6 +50,11 @@ export const runWritersRoomAnalysis = (workId, data) =>
   });
 export const getWritersRoomAnalysis = (workId, analysisId) =>
   request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`);
+export const attachWritersRoomSceneImage = (workId, analysisId, payload) =>
+  request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}/scene-image`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 
 // Exercises
 export const listWritersRoomExercises = (workId) => {

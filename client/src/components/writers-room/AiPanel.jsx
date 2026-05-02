@@ -5,6 +5,7 @@ import {
   listWritersRoomAnalyses,
   runWritersRoomAnalysis,
   getWritersRoomAnalysis,
+  attachWritersRoomSceneImage,
 } from '../../services/apiWritersRoom';
 import { generateImage, getSettings, updateSettings } from '../../services/apiSystem';
 import { listImageModels } from '../../services/apiImageVideo';
@@ -43,7 +44,7 @@ const SEVERITY_COLOR = {
   minor: 'text-gray-400 border-port-border',
 };
 
-export default function AiPanel({ work, onApplyFormat }) {
+export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) {
   const [analyses, setAnalyses] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [running, setRunning] = useState(null);
@@ -197,7 +198,14 @@ export default function AiPanel({ work, onApplyFormat }) {
                       <FormatResult result={full.result} onApply={(text) => onApplyFormat?.(text)} />
                     )}
                     {full?.status === 'succeeded' && full.kind === 'script' && (
-                      <ScriptResult result={full.result} workTitle={work.title} />
+                      <ScriptResult
+                        result={full.result}
+                        workId={work.id}
+                        analysisId={full.id}
+                        sceneImages={full.sceneImages || {}}
+                        workTitle={work.title}
+                        readingTheme={readingTheme}
+                      />
                     )}
                   </div>
                 )}
@@ -283,7 +291,7 @@ function FormatResult({ result, onApply }) {
   );
 }
 
-function ScriptResult({ result, workTitle }) {
+function ScriptResult({ result, workId, analysisId, sceneImages = {}, workTitle, readingTheme = 'dark' }) {
   // Image-gen settings are scoped to the Writers Room (not the global Image Gen
   // page) so a writer can pick a fast/small model + 3:2 aspect without
   // disrupting the dedicated Image Gen workflow.
@@ -329,9 +337,21 @@ function ScriptResult({ result, workTitle }) {
       {showSettings && (
         <ImageGenSettingsRow cfg={imageCfg} models={models} onChange={persistCfg} />
       )}
-      {result.scenes.map((scene, i) => (
-        <SceneCard key={scene.id || i} scene={scene} workTitle={workTitle} imageCfg={imageCfg} />
-      ))}
+      {result.scenes.map((scene, i) => {
+        const sceneId = scene.id || `scene-${i}`;
+        return (
+          <SceneCard
+            key={sceneId}
+            scene={{ ...scene, id: sceneId }}
+            workId={workId}
+            analysisId={analysisId}
+            workTitle={workTitle}
+            imageCfg={imageCfg}
+            initialImage={sceneImages[sceneId] || null}
+            readingTheme={readingTheme}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -385,14 +405,19 @@ function ImageGenSettingsRow({ cfg, models, onChange }) {
   );
 }
 
-function SceneCard({ scene, workTitle, imageCfg = WR_IMAGE_DEFAULTS }) {
+function SceneCard({ scene, workId, analysisId, workTitle, imageCfg = WR_IMAGE_DEFAULTS, initialImage = null, readingTheme = 'dark' }) {
+  const light = readingTheme === 'light';
   // genStatus drives the button + preview overlay:
   //   idle    → no preview area shown
   //   running → preview area shows spinner / live diffusion frame from socket
   //   done    → preview area shows the final rendered image
   //   error   → preview area shows the error
-  const [genStatus, setGenStatus] = useState('idle');
-  const [generated, setGenerated] = useState(null);
+  // Seed from initialImage so a previously-rendered scene shows its image
+  // immediately on remount (e.g. after navigating back to the work).
+  const [genStatus, setGenStatus] = useState(initialImage ? 'done' : 'idle');
+  const [generated, setGenerated] = useState(initialImage
+    ? { path: `/data/images/${initialImage.filename}`, jobId: initialImage.jobId, prompt: initialImage.prompt }
+    : null);
   const [error, setError] = useState(null);
   // Live diffusion progress for THIS scene's job, filtered by the jobId we
   // got back from generateImage. Each SceneCard tracks its own job, so two
@@ -424,10 +449,24 @@ function SceneCard({ scene, workTitle, imageCfg = WR_IMAGE_DEFAULTS }) {
     };
     const onCompleted = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      const completedJobId = jobIdRef.current;
       setGenerated((prev) => prev ? { ...prev, path: data.path || prev.path } : prev);
       setGenStatus('done');
       setProgress(null);
       jobIdRef.current = null;
+      // Persist the scene→image link so the user sees the same image when
+      // they navigate back. The image filename is `<jobId>.png` per the local
+      // image-gen route's response shape.
+      if (workId && analysisId && scene.id) {
+        attachWritersRoomSceneImage(workId, analysisId, {
+          sceneId: scene.id,
+          filename: `${completedJobId}.png`,
+          jobId: completedJobId,
+          prompt: data.prompt || null,
+        }).catch((err) => {
+          console.warn(`scene-image persist failed: ${err.message}`);
+        });
+      }
     };
     const onFailed = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
@@ -446,7 +485,7 @@ function SceneCard({ scene, workTitle, imageCfg = WR_IMAGE_DEFAULTS }) {
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
     };
-  }, []);
+  }, [workId, analysisId, scene.id]);
 
   const generate = async () => {
     if (genStatus === 'running') return;
@@ -495,10 +534,12 @@ function SceneCard({ scene, workTitle, imageCfg = WR_IMAGE_DEFAULTS }) {
   const showPreviewArea = view !== null;
 
   return (
-    <div className="border border-port-border rounded p-2 space-y-1.5 bg-port-card/40">
+    <div className={`border rounded p-2 space-y-1.5 ${
+      light ? 'border-gray-300 bg-[#f5f1e8] text-gray-900' : 'border-port-border bg-port-card/40'
+    }`}>
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-white truncate">{scene.heading}</div>
+          <div className={`font-semibold truncate ${light ? 'text-gray-900' : 'text-white'}`}>{scene.heading}</div>
           {scene.slugline && <div className="text-[10px] text-port-accent uppercase tracking-wide">{scene.slugline}</div>}
         </div>
         <button
@@ -565,19 +606,25 @@ function SceneCard({ scene, workTitle, imageCfg = WR_IMAGE_DEFAULTS }) {
         <div className="text-[9px] text-gray-500 truncate">job {generated.jobId}</div>
       )}
 
-      {scene.summary && <div className="text-gray-400">{scene.summary}</div>}
+      {scene.summary && <div className={light ? 'text-gray-700' : 'text-gray-400'}>{scene.summary}</div>}
       {scene.characters?.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {scene.characters.map((c, i) => <span key={i} className="px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-[9px] uppercase tracking-wider">{c}</span>)}
+          {scene.characters.map((c, i) => (
+            <span key={i} className={`px-1.5 py-0.5 border rounded text-[9px] uppercase tracking-wider ${
+              light ? 'bg-white border-gray-300 text-gray-700' : 'bg-port-bg border-port-border'
+            }`}>{c}</span>
+          ))}
         </div>
       )}
-      {scene.action && <div className="text-gray-300 whitespace-pre-wrap font-serif">{scene.action}</div>}
+      {scene.action && (
+        <div className={`whitespace-pre-wrap font-serif ${light ? 'text-gray-900' : 'text-gray-300'}`}>{scene.action}</div>
+      )}
       {scene.dialogue?.length > 0 && (
-        <div className="space-y-1 pl-3 border-l border-port-border">
+        <div className={`space-y-1 pl-3 border-l ${light ? 'border-gray-400' : 'border-port-border'}`}>
           {scene.dialogue.map((d, i) => (
             <div key={i}>
-              <div className="text-[9px] uppercase tracking-wider text-gray-500">{d.character}</div>
-              <div className="text-gray-300 italic">"{d.line}"</div>
+              <div className={`text-[9px] uppercase tracking-wider ${light ? 'text-gray-600' : 'text-gray-500'}`}>{d.character}</div>
+              <div className={`italic ${light ? 'text-gray-900' : 'text-gray-300'}`}>"{d.line}"</div>
             </div>
           ))}
         </div>

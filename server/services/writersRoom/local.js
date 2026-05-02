@@ -202,6 +202,28 @@ async function saveManifest(workId, manifest) {
   await atomicWrite(manifestPath(workId), manifest);
 }
 
+// Lazy-import to break a circular dep (mediaCollections doesn't import us, but
+// importing it at module-top would still be fine; the function-level import
+// just keeps this helper self-contained next to its caller).
+export async function ensureWorkMediaCollection(workId) {
+  const manifest = await getWork(workId);
+  const { getCollection, createCollection, ERR_NOT_FOUND } = await import('../mediaCollections.js');
+  if (manifest.mediaCollectionId) {
+    const existing = await getCollection(manifest.mediaCollectionId).catch((err) => {
+      // The collection was deleted out-of-band — drop the stale id and recreate.
+      if (err?.code === ERR_NOT_FOUND) return null;
+      throw err;
+    });
+    if (existing) return existing;
+  }
+  const collection = await createCollection({
+    name: `Writers Room: ${manifest.title}`.slice(0, 80),
+    description: `Auto-generated images for "${manifest.title}"`,
+  });
+  await saveManifest(workId, { ...manifest, mediaCollectionId: collection.id, updatedAt: nowIso() });
+  return collection;
+}
+
 async function listWorkIds() {
   await ensureDir(worksDir());
   const entries = await readdir(worksDir(), { withFileTypes: true });

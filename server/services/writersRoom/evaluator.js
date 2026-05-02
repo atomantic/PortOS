@@ -228,6 +228,33 @@ export async function getAnalysis(workId, id) {
   return a;
 }
 
+// Persist the per-scene generated-image reference on the analysis snapshot so
+// the UI can re-show the image after navigation/reload. Scenes are keyed by
+// their `result.scenes[i].id`; we don't validate the id against the scene
+// list because the LLM occasionally drifts (regenerated analyses can have
+// different scene ids) and overwriting an old key is harmless.
+export async function attachSceneImage(workId, id, { sceneId, filename, jobId, prompt }) {
+  if (!ANALYSIS_ID_RE.test(id)) throw badRequest('Invalid analysis id');
+  if (typeof sceneId !== 'string' || !sceneId.trim()) throw badRequest('sceneId required');
+  if (typeof filename !== 'string' || !filename.trim()) throw badRequest('filename required');
+  const a = await loadAnalysis(workId, id);
+  if (!a) throw notFound('Analysis');
+  const next = {
+    ...a,
+    sceneImages: {
+      ...(a.sceneImages || {}),
+      [sceneId]: {
+        filename: filename.trim(),
+        jobId: typeof jobId === 'string' ? jobId : null,
+        prompt: typeof prompt === 'string' ? prompt : null,
+        generatedAt: nowIso(),
+      },
+    },
+  };
+  await saveAnalysis(workId, next);
+  return next;
+}
+
 // ---------- startup recovery ----------
 
 /**

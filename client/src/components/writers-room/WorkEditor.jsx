@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Save, GitCommit, Clock, FileText, Sparkles, ListTree } from 'lucide-react';
+import { Save, GitCommit, Clock, FileText, Sparkles, ListTree, Sun, Moon } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   saveWritersRoomDraft,
@@ -21,6 +21,12 @@ const SIDEBAR_WIDTH_KEY = 'wr.sidebarWidth';
 const SIDEBAR_DEFAULT = 480;
 const SIDEBAR_MIN = 280;
 const SIDEBAR_MAX_FRACTION = 0.7; // never let the sidebar eat more than 70% of the work area
+const READING_THEME_KEY = 'wr.readingTheme';
+function readReadingTheme() {
+  if (typeof window === 'undefined') return 'dark';
+  const v = window.localStorage.getItem(READING_THEME_KEY);
+  return v === 'light' ? 'light' : 'dark';
+}
 
 function readSidebarWidth() {
   if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
@@ -182,6 +188,14 @@ export default function WorkEditor({ work, onChange }) {
   // sidebarWidth (the aside renders as a row beneath the editor).
   const splitRef = useRef(null);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const [readingTheme, setReadingTheme] = useState(readReadingTheme);
+  const toggleReadingTheme = useCallback(() => {
+    setReadingTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      try { window.localStorage.setItem(READING_THEME_KEY, next); } catch {}
+      return next;
+    });
+  }, []);
   // Mirror sidebarWidth into a ref so the once-bound mousemove/mouseup effect
   // reads the freshest value at release time without re-registering on every
   // pixel of drag (200px drag = ~200 add/remove pairs otherwise).
@@ -266,6 +280,15 @@ export default function WorkEditor({ work, onChange }) {
         >
           <GitCommit size={12} /> Snapshot
         </button>
+        <button
+          onClick={toggleReadingTheme}
+          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
+          title={readingTheme === 'dark' ? 'Switch to light reading theme' : 'Switch to dark reading theme'}
+          aria-label="Toggle reading theme"
+          aria-pressed={readingTheme === 'light'}
+        >
+          {readingTheme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
+        </button>
       </div>
 
       <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
@@ -275,10 +298,14 @@ export default function WorkEditor({ work, onChange }) {
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder="Start writing… Use # Chapter, ## Scene, ### Beat headings to outline."
-            className="w-full h-full resize-none bg-port-bg text-gray-100 px-6 py-6 font-serif text-base leading-relaxed focus:outline-none"
+            className={`w-full h-full resize-none px-6 py-6 font-serif text-base leading-relaxed focus:outline-none ${
+              readingTheme === 'light' ? 'bg-[#f5f1e8] text-gray-900' : 'bg-port-bg text-gray-100'
+            }`}
             spellCheck
           />
-          <div className="absolute bottom-2 right-3 flex items-center gap-3 text-[11px] text-gray-500 bg-port-bg/80 px-2 py-1 rounded">
+          <div className={`absolute bottom-2 right-3 flex items-center gap-3 text-[11px] px-2 py-1 rounded ${
+            readingTheme === 'light' ? 'text-gray-600 bg-[#f5f1e8]/80' : 'text-gray-500 bg-port-bg/80'
+          }`}>
             <span>{wordCount.toLocaleString()} words</span>
             {dirty && <span className="text-port-warning">● unsaved</span>}
           </div>
@@ -320,6 +347,7 @@ export default function WorkEditor({ work, onChange }) {
             {sidebarTab === 'ai' && (
               <AiPanel
                 work={work}
+                readingTheme={readingTheme}
                 onApplyFormat={(text) => {
                   // Don't autosave — keeps a bad format pass from overwriting
                   // the on-disk draft without an explicit Save.
