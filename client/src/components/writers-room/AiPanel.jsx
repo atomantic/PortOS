@@ -8,6 +8,7 @@ import {
 } from '../../services/apiWritersRoom';
 import { generateImage } from '../../services/apiSystem';
 import { timeAgo } from '../../utils/formatters';
+import socket from '../../services/socket';
 
 const KIND_META = {
   evaluate: { label: 'Evaluate', icon: Sparkles, hint: 'Editorial critique: logline, themes, issues, suggestions' },
@@ -274,9 +275,70 @@ function ScriptResult({ result, workTitle }) {
 }
 
 function SceneCard({ scene, workTitle }) {
+  // genStatus drives the button + preview overlay:
+  //   idle    → no preview area shown
+  //   running → preview area shows spinner / live diffusion frame from socket
+  //   done    → preview area shows the final rendered image
+  //   error   → preview area shows the error
   const [genStatus, setGenStatus] = useState('idle');
   const [generated, setGenerated] = useState(null);
   const [error, setError] = useState(null);
+  // Live diffusion progress for THIS scene's job, filtered by the jobId we
+  // got back from generateImage. Each SceneCard tracks its own job, so two
+  // cards rendering at once don't fight over a shared progress hook.
+  const [progress, setProgress] = useState(null);
+  const jobIdRef = useRef(null);
+
+  useEffect(() => {
+    const onStarted = (data) => {
+      if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      setProgress((prev) => ({
+        ...(prev || {}),
+        progress: 0,
+        step: 0,
+        totalSteps: data.totalSteps ?? prev?.totalSteps ?? null,
+        currentImage: null,
+      }));
+    };
+    const onProgress = (data) => {
+      if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      setProgress((prev) => ({
+        ...(prev || {}),
+        progress: data.progress ?? prev?.progress ?? 0,
+        step: data.step ?? prev?.step ?? 0,
+        totalSteps: data.totalSteps ?? prev?.totalSteps ?? null,
+        eta: data.eta ?? prev?.eta ?? null,
+        currentImage: data.currentImage ?? prev?.currentImage ?? null,
+      }));
+    };
+    const onCompleted = (data) => {
+      if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      // The route response already gave us the canonical /data/images/<jobId>.png
+      // path, so we keep using `generated` as the source of truth and just flip
+      // status. data.path may be present on completion — adopt it if so.
+      setGenerated((prev) => prev ? { ...prev, path: data.path || prev.path } : prev);
+      setGenStatus('done');
+      setProgress(null);
+      jobIdRef.current = null;
+    };
+    const onFailed = (data) => {
+      if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      setError(data.error || data.message || 'Generation failed');
+      setGenStatus('error');
+      setProgress(null);
+      jobIdRef.current = null;
+    };
+    socket.on('image-gen:started', onStarted);
+    socket.on('image-gen:progress', onProgress);
+    socket.on('image-gen:completed', onCompleted);
+    socket.on('image-gen:failed', onFailed);
+    return () => {
+      socket.off('image-gen:started', onStarted);
+      socket.off('image-gen:progress', onProgress);
+      socket.off('image-gen:completed', onCompleted);
+      socket.off('image-gen:failed', onFailed);
+    };
+  }, []);
 
   const generate = async () => {
     if (genStatus === 'running') return;
@@ -286,6 +348,8 @@ function SceneCard({ scene, workTitle }) {
     }
     setGenStatus('running');
     setError(null);
+    setProgress(null);
+    setGenerated(null);
     // Truncate at 1900 chars to stay under the 2000-char API limit even when
     // the model returns a chatty visualPrompt.
     const prompt = `${workTitle ? `${workTitle}. ` : ''}${scene.visualPrompt}`.slice(0, 1900);
@@ -295,9 +359,22 @@ function SceneCard({ scene, workTitle }) {
       return null;
     });
     if (!res) return;
+    // For local mode the route returns immediately with a queued/running
+    // status and the canonical path. The actual PNG lands at that path when
+    // the queue's worker emits `image-gen:completed`. For external/codex
+    // mode the response is synchronous and we already have the image —
+    // jump straight to `done` with the path.
+    jobIdRef.current = res.jobId || res.generationId || null;
     setGenerated({ path: res.path, jobId: res.jobId, prompt });
-    setGenStatus('done');
+    if (res.status === 'queued' || res.status === 'running') {
+      // stay in `running` — socket events drive completion
+    } else {
+      setGenStatus('done');
+    }
   };
+
+  const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
+  const showPreviewArea = genStatus === 'running' || genStatus === 'done' || genStatus === 'error';
 
   return (
     <div className="border border-port-border rounded p-2 space-y-1.5 bg-port-card/40">
@@ -313,9 +390,58 @@ function SceneCard({ scene, workTitle }) {
           title="Queue an image render using this scene's visual prompt"
         >
           {genStatus === 'running' ? <Loader2 size={10} className="animate-spin" /> : <ImageIcon size={10} />}
-          {genStatus === 'running' ? 'Queuing…' : 'Image'}
+          {genStatus === 'running' ? 'Rendering…' : genStatus === 'done' ? 'Re-render' : 'Image'}
         </button>
       </div>
+
+      {showPreviewArea && (
+        <div className="aspect-square w-full bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
+          {progress?.currentImage ? (
+            <img
+              src={`data:image/png;base64,${progress.currentImage}`}
+              alt="Diffusing…"
+              decoding="async"
+              className="w-full h-full object-contain"
+            />
+          ) : genStatus === 'done' && generated?.path ? (
+            <a href={generated.path} target="_blank" rel="noreferrer" className="block w-full h-full">
+              <img
+                src={generated.path}
+                alt={scene.heading}
+                loading="lazy"
+                className="w-full h-full object-contain"
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              />
+            </a>
+          ) : genStatus === 'running' ? (
+            <div className="text-gray-500 text-xs flex flex-col items-center gap-2 px-3 text-center">
+              <Loader2 size={20} className="animate-spin text-port-accent" />
+              <span className="font-medium text-gray-300">
+                {progress?.step != null && progress?.totalSteps
+                  ? `Step ${progress.step}/${progress.totalSteps}`
+                  : 'Queued — waiting for first preview…'}
+              </span>
+              {progress?.eta != null && (
+                <span className="text-[10px] text-gray-500">~{Math.max(0, Math.round(progress.eta))}s remaining</span>
+              )}
+            </div>
+          ) : genStatus === 'error' ? (
+            <div className="text-port-error text-xs px-3 text-center break-words">
+              {error || 'Generation failed'}
+            </div>
+          ) : null}
+
+          {genStatus === 'running' && progressPct != null && (
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+              <div className="h-full bg-port-accent transition-all" style={{ width: `${progressPct}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+      {genStatus === 'done' && generated?.jobId && (
+        <div className="text-[9px] text-gray-500 truncate">job {generated.jobId}</div>
+      )}
+
       {scene.summary && <div className="text-gray-400">{scene.summary}</div>}
       {scene.characters?.length > 0 && (
         <div className="flex flex-wrap gap-1">
@@ -339,21 +465,6 @@ function SceneCard({ scene, workTitle }) {
           <div className="mt-1 italic">{scene.visualPrompt}</div>
         </details>
       )}
-      {generated && (
-        <div className="mt-1 space-y-1">
-          <a href={generated.path} target="_blank" rel="noreferrer" className="block">
-            <img
-              src={generated.path}
-              alt={scene.heading}
-              loading="lazy"
-              className="w-full rounded border border-port-border"
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
-          </a>
-          <div className="text-[9px] text-gray-500 truncate">job {generated.jobId}</div>
-        </div>
-      )}
-      {error && <div className="text-[10px] text-port-error">{error}</div>}
     </div>
   );
 }

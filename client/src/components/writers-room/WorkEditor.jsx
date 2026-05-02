@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Save, GitCommit, Clock, FileText, Sparkles, ListTree } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -16,6 +16,18 @@ const SIDEBAR_TABS = [
   { id: 'outline', label: 'Outline', Icon: ListTree },
   { id: 'versions', label: 'Versions', Icon: Clock },
 ];
+
+const SIDEBAR_WIDTH_KEY = 'wr.sidebarWidth';
+const SIDEBAR_DEFAULT = 480;
+const SIDEBAR_MIN = 280;
+const SIDEBAR_MAX_FRACTION = 0.7; // never let the sidebar eat more than 70% of the work area
+
+function readSidebarWidth() {
+  if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
+  const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT;
+}
 
 export default function WorkEditor({ work, onChange }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
@@ -161,6 +173,48 @@ export default function WorkEditor({ work, onChange }) {
     [work.drafts, work.activeDraftVersionId]
   );
 
+  // Drag-to-resize sidebar — width is per-user via localStorage so the choice
+  // sticks across reloads. The handle is desktop-only; the mobile stack ignores
+  // sidebarWidth (the aside renders as a row beneath the editor).
+  const splitRef = useRef(null);
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const dragStartRef = useRef(null);
+
+  const onSplitMouseDown = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const containerWidth = splitRef.current?.getBoundingClientRect().width ?? 0;
+    dragStartRef.current = { startX, startWidth, containerWidth };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragStartRef.current) return;
+      const { startX, startWidth, containerWidth } = dragStartRef.current;
+      const max = Math.max(SIDEBAR_MIN + 1, containerWidth * SIDEBAR_MAX_FRACTION);
+      // Dragging left grows the right-hand sidebar; dragging right shrinks it.
+      const next = Math.min(max, Math.max(SIDEBAR_MIN, startWidth - (e.clientX - startX)));
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      if (!dragStartRef.current) return;
+      dragStartRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Persist on release rather than every frame — avoids hammering localStorage.
+      try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(sidebarWidth))); } catch {}
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [sidebarWidth]);
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-port-border bg-port-card">
@@ -201,8 +255,8 @@ export default function WorkEditor({ work, onChange }) {
         </button>
       </div>
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_240px] min-h-0">
-        <div className="relative min-h-0">
+      <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
+        <div className="relative min-h-0 flex-1">
           <textarea
             ref={textareaRef}
             value={body}
@@ -217,7 +271,22 @@ export default function WorkEditor({ work, onChange }) {
           </div>
         </div>
 
-        <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/60 flex flex-col text-xs min-h-0">
+        <div
+          onMouseDown={onSplitMouseDown}
+          onDoubleClick={() => {
+            setSidebarWidth(SIDEBAR_DEFAULT);
+            try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(SIDEBAR_DEFAULT)); } catch {}
+          }}
+          role="separator"
+          aria-label="Resize AI sidebar"
+          aria-orientation="vertical"
+          title="Drag to resize · double-click to reset"
+          className="hidden lg:block w-1 shrink-0 cursor-col-resize bg-port-border hover:bg-port-accent/60 active:bg-port-accent transition-colors"
+        />
+
+        <aside
+          style={{ '--sidebar-w': `${sidebarWidth}px` }}
+          className="border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full lg:w-[var(--sidebar-w)] lg:shrink-0">
           <div className="flex border-b border-port-border bg-port-bg/40">
             {SIDEBAR_TABS.map(({ id, label, Icon }) => (
               <button
