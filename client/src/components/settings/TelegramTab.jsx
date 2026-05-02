@@ -123,7 +123,7 @@ export function TelegramTab() {
   return (
     <div className="space-y-4">
       {/* Method Selector */}
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <label className="block text-sm text-gray-400">Integration Method</label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button
@@ -160,23 +160,23 @@ export function TelegramTab() {
 
       {/* Method-specific config */}
       {method === 'manual' ? (
-        <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-5">
-          <div className="flex items-center justify-between">
+        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
+          {(tgStatus?.connected || (tgStatus && !tgStatus.connected && tgStatus.hasToken)) && (
             <div className="text-sm">
               {tgStatus?.connected && (
-                <span className="flex items-center gap-2 text-port-success">
-                  <span className="w-2 h-2 rounded-full bg-port-success" />
+                <span className="flex items-center gap-2 text-port-success break-all">
+                  <span className="w-2 h-2 rounded-full bg-port-success shrink-0" />
                   @{tgStatus.botUsername}
                 </span>
               )}
               {tgStatus && !tgStatus.connected && tgStatus.hasToken && (
                 <span className="flex items-center gap-2 text-port-error">
-                  <span className="w-2 h-2 rounded-full bg-port-error" />
+                  <span className="w-2 h-2 rounded-full bg-port-error shrink-0" />
                   Disconnected
                 </span>
               )}
             </div>
-          </div>
+          )}
 
           <div className="space-y-1">
             <label className="block text-sm text-gray-400">Bot Token</label>
@@ -185,12 +185,13 @@ export function TelegramTab() {
                 type={tgShowToken ? 'text' : 'password'}
                 value={tgToken}
                 onChange={e => setTgToken(e.target.value)}
-                className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
                 placeholder={tgStatus?.hasToken ? '••••••••••• (configured)' : 'Paste bot token from @BotFather'}
               />
               <button
                 onClick={() => setTgShowToken(!tgShowToken)}
-                className="px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors"
+                aria-label={tgShowToken ? 'Hide bot token' : 'Show bot token'}
+                className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors shrink-0"
               >
                 {tgShowToken ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
@@ -214,11 +215,11 @@ export function TelegramTab() {
             3. Paste the Chat ID above and click Save & Test.
           </p>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <button
               onClick={handleTelegramSave}
               disabled={tgSaving || (!tgToken && !tgStatus?.hasToken)}
-              className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
             >
               {tgSaving ? <BrailleSpinner /> : <Save size={16} />}
               {tgStatus?.connected && tgChatId ? 'Save & Test' : 'Save'}
@@ -227,7 +228,7 @@ export function TelegramTab() {
               <button
                 onClick={handleTelegramTest}
                 disabled={tgTesting}
-                className="flex items-center gap-2 px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
               >
                 {tgTesting ? <BrailleSpinner /> : <Send size={16} />}
                 Send Test
@@ -237,7 +238,7 @@ export function TelegramTab() {
               <button
                 onClick={handleTelegramDisconnect}
                 disabled={tgDisconnecting}
-                className="flex items-center gap-2 px-4 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
               >
                 {tgDisconnecting ? <BrailleSpinner /> : <Trash2 size={16} />}
                 Disconnect
@@ -246,7 +247,7 @@ export function TelegramTab() {
           </div>
         </div>
       ) : (
-        <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-5">
+        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
           <div className="flex items-center justify-between">
             <div className="text-sm">
               {tgStatus?.connected ? (
@@ -298,7 +299,7 @@ export function TelegramTab() {
 
       {/* Forward types (shared between both methods) */}
       {tgStatus?.connected && (
-        <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-2">
+        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-2">
           <label className="block text-sm text-gray-400">Forward Notification Types</label>
           <p className="text-xs text-gray-500">When all are unchecked, all types are forwarded</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

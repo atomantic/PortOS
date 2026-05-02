@@ -18,7 +18,22 @@ vi.mock('../services/imageGen/index.js', () => ({
   },
 }));
 
+// Default to external mode in tests so /generate goes through the dispatcher.
+// Local-mode tests below override the settings mock to flip into queue mode.
+vi.mock('../services/settings.js', () => ({
+  getSettings: vi.fn(async () => ({ imageGen: { mode: 'external' } })),
+}));
+
+vi.mock('../services/mediaJobQueue/index.js', () => ({
+  enqueueJob: vi.fn(({ kind }) => ({ jobId: `mock-${kind}-job`, position: 1, status: 'queued' })),
+  attachSseClient: vi.fn(() => false),
+  cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
+  listJobs: vi.fn(() => []),
+}));
+
 import * as imageGen from '../services/imageGen/index.js';
+import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
+import { getSettings } from '../services/settings.js';
 
 describe('Image Gen Routes', () => {
   let app;
@@ -120,6 +135,69 @@ describe('Image Gen Routes', () => {
       expect(imageGen.generateImage).toHaveBeenCalledWith(
         expect.objectContaining({ prompt: 'test', width: 512, height: 768, steps: 30, cfgScale: 7, seed: 42 })
       );
+    });
+
+    // Local mode goes through the mediaJobQueue rather than calling
+    // generateImage synchronously; the route returns immediately with
+    // { jobId, status: 'queued', position } so the UI can attach SSE.
+    it('local mode enqueues through mediaJobQueue and returns queued status', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-job-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.position).toBe(1);
+      expect(response.body.mode).toBe('local');
+      expect(response.body.jobId).toBe('queued-job-001');
+      expect(response.body.generationId).toBe('queued-job-001');
+      expect(response.body.path).toBe('/data/images/queued-job-001.png');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({ prompt: 'a fox in a forest', pythonPath: '/usr/bin/python3' }),
+      }));
+      // Synchronous generateImage MUST NOT be called in local mode — the
+      // queue takes ownership of the job lifecycle.
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // The per-request `mode` override flips into queue mode even when the
+    // saved default is external — protects against future regressions where
+    // someone hard-codes settings.imageGen.mode as the only mode source.
+    it('per-request mode=local override enqueues even when settings default is external', async () => {
+      // Local mode now validates pythonPath up-front (mflux model needs it),
+      // so the test must supply a configured local section. The override
+      // contract — explicit `mode: 'local'` flips into queue mode regardless
+      // of the saved default — is still what's being asserted here.
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'external', local: { pythonPath: '/usr/bin/python3' } } });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-job-002', position: 2, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a wizard tower', mode: 'local' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // Local mode without a configured pythonPath now rejects up-front (400)
+    // rather than enqueueing a job that can never run. The queue is meant to
+    // serialize concurrent renders, not to absorb hard configuration errors.
+    it('local mode with missing pythonPath returns 400 IMAGE_GEN_NOT_CONFIGURED', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // no `local.pythonPath`
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/not configured/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 

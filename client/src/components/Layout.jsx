@@ -75,7 +75,9 @@ import {
   Search,
   Mic,
   Rss,
-  Archive
+  Archive,
+  Sun,
+  Moon
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -84,11 +86,30 @@ import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
+import { useThemeContext } from './ThemeContext';
 import NotificationDropdown from './NotificationDropdown';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
 import VoiceWidget from './voice/VoiceWidget';
+
+function ThemeModeToggle({ className = '' }) {
+  const { theme, toggleMode } = useThemeContext();
+  const isDay = theme?.mode === 'day';
+  const Icon = isDay ? Sun : Moon;
+  const pairLabel = theme?.pair ? ` (${isDay ? 'switch to night' : 'switch to day'})` : '';
+  return (
+    <button
+      type="button"
+      onClick={toggleMode}
+      title={`${theme?.label ?? 'Theme'}${pairLabel}`}
+      aria-label={`Toggle day/night mode${pairLabel}`}
+      className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
+    >
+      <Icon size={18} aria-hidden="true" />
+    </button>
+  );
+}
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -97,15 +118,6 @@ const navItems = [
   { to: '/review', label: 'Review Hub', icon: ClipboardList, single: true },
   { to: '/city', label: 'CyberCity', icon: Building2, single: true },
   { separator: true },
-  {
-    label: 'AI',
-    icon: Bot,
-    children: [
-      { to: '/media', label: 'Media Gen', icon: Layers },
-      { to: '/prompts', label: 'Prompts', icon: FileText },
-      { to: '/ai', label: 'Providers', icon: Bot }
-    ]
-  },
   { label: 'Apps', icon: Package, dynamic: 'apps', defaultTo: '/apps', children: [] },
   {
     label: 'Brain',
@@ -170,6 +182,15 @@ const navItems = [
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/agents', label: 'Social Agents', icon: Users },
       { to: '/messages/sync', label: 'Sync', icon: RefreshCw }
+    ]
+  },
+  {
+    label: 'Create',
+    icon: Sparkles,
+    defaultTo: '/media',
+    children: [
+      { to: '/media', label: 'Media Gen', icon: Layers },
+      { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
   },
   {
@@ -252,6 +273,8 @@ const navItems = [
       { to: '/settings/database', label: 'Database', icon: Database },
       { to: '/settings/general', label: 'General', icon: Settings },
       { to: '/settings/mortalloom', label: 'MortalLoom', icon: Activity },
+      { to: '/prompts', label: 'Prompts', icon: FileText },
+      { to: '/ai', label: 'Providers', icon: Bot },
       { to: '/settings/telegram', label: 'Telegram', icon: MessageSquare },
       { to: '/settings/voice', label: 'Voice', icon: Mic }
     ]
@@ -688,6 +711,7 @@ export default function Layout() {
               >
                 <Monitor size={18} />
               </NavLink>
+              <ThemeModeToggle />
               <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
               <NotificationDropdown
                 notifications={notifications}
@@ -730,6 +754,7 @@ export default function Layout() {
             >
               <Monitor size={16} />
             </NavLink>
+            <ThemeModeToggle />
             <VoiceToggleButton />
             <NotificationDropdown
               notifications={notifications}
@@ -756,19 +781,20 @@ export default function Layout() {
             location.pathname.startsWith('/goals') ||
             location.pathname.startsWith('/insights') ||
             location.pathname.startsWith('/meatspace') ||
+            location.pathname.startsWith('/media') ||
             location.pathname.startsWith('/messages') ||
             location.pathname.startsWith('/post') ||
             location.pathname === '/review' ||
+            location.pathname.startsWith('/settings') ||
             location.pathname.startsWith('/wiki') ||
+            location.pathname.startsWith('/writers-room') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||
             location.pathname.startsWith('/city') ||
             /^\/apps\/[^/]+/.test(location.pathname);
-          // Dashboard's grid widgets flex across the full content area; skip the max-w-7xl cap so wide monitors don't show huge side margins.
-          const isFluid = location.pathname === '/';
           return (
             <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
-              {isFullWidth || isFluid ? <Outlet /> : <div className="max-w-7xl mx-auto"><Outlet /></div>}
+              <Outlet />
             </main>
           );
         })()}

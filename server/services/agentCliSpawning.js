@@ -581,8 +581,10 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
     }
 
     // Clean up worktree if agent was using one
+    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
     await cleanupWorktreeFn(agentId, success, {
-      openPR: isTruthyMetaFn(task.metadata?.openPR),
+      openPR: directOpenPR,
+      requestCopilotReview: directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
       description: task.description,
       agentOutput: outputBuffer
     });

@@ -111,4 +111,38 @@ router.get('/downloads', asyncHandler(async (req, res) => {
   res.json(downloads);
 }));
 
+// Extensions that could execute scripts when served inline at the same origin —
+// always force attachment to keep XSS via a downloaded asset off the table.
+const RISKY_DOWNLOAD_EXTS = new Set(['.html', '.htm', '.svg', '.js', '.mjs', '.xml']);
+
+// GET /api/browser/downloads/:name - Stream a downloaded file to the client.
+// Inline by default so previewable types (images, PDFs, videos) open in the
+// browser; the listing UI passes ?attachment=1 + HTML5 `download` for save-to-disk.
+router.get('/downloads/:name', asyncHandler(async (req, res) => {
+  const file = await browserService.resolveDownload(req.params.name);
+  if (!file) return res.status(404).json({ error: 'File not found' });
+  res.set('X-Content-Type-Options', 'nosniff');
+  // Files of the same name can be replaced by a fresh Chrome download; bypass
+  // any aggressive client/intermediary caching so the user always sees current.
+  res.set('Cache-Control', 'no-cache, must-revalidate');
+  const forceAttachment = RISKY_DOWNLOAD_EXTS.has(file.ext) || req.query.attachment === '1';
+  if (forceAttachment) {
+    // RFC 5987: ASCII-safe fallback + utf-8 form for non-ASCII names.
+    const ascii = file.name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+    res.set(
+      'Content-Disposition',
+      `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`
+    );
+  }
+  res.type(file.mime).sendFile(file.absPath);
+}));
+
+// DELETE /api/browser/downloads/:name - Remove a downloaded file
+router.delete('/downloads/:name', asyncHandler(async (req, res) => {
+  const removed = await browserService.deleteDownload(req.params.name);
+  if (!removed) return res.status(404).json({ error: 'File not found' });
+  console.log(`🗑️ Browser download deleted: ${req.params.name}`);
+  res.json({ success: true });
+}));
+
 export default router;

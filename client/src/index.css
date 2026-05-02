@@ -31,6 +31,10 @@
   --port-text-muted: 163 163 163;
   --port-control-text: 212 212 216;
   --port-focus-ring: 59 130 246;
+  /* Writers Room "light reading" theme — sepia paper tone used by the prose
+     textarea, the AI panel's Evaluate/Format/Adapt result containers, and
+     the per-scene cards. Centralized so the shade can be tweaked once. */
+  --wr-reading-paper: #f5f1e8;
   --port-bg-alpha: 1;
   --port-card-alpha: 1;
   --port-border-alpha: 1;
@@ -422,10 +426,199 @@ html[data-port-theme="blueprint-ops"] header :is(h1, h2, h3) {
   padding-left: 0;
 }
 
+/* === Day mode: remap hardcoded Tailwind dark utilities onto theme tokens. */
+html[data-port-theme-mode="day"] :is(.text-white, .text-zinc-50, .text-zinc-100, .text-neutral-50, .text-neutral-100, .text-gray-50, .text-gray-100, .text-slate-50, .text-slate-100) {
+  color: rgb(var(--port-text)) !important;
+}
+
+html[data-port-theme-mode="day"] :is(.text-zinc-200, .text-zinc-300, .text-neutral-200, .text-neutral-300, .text-gray-200, .text-gray-300, .text-slate-200, .text-slate-300) {
+  color: rgb(var(--port-text) / 0.85) !important;
+}
+
+html[data-port-theme-mode="day"] :is(.text-zinc-400, .text-zinc-500, .text-neutral-400, .text-neutral-500, .text-gray-400, .text-gray-500, .text-slate-400, .text-slate-500) {
+  color: rgb(var(--port-text-muted)) !important;
+}
+
+html[data-port-theme-mode="day"] :is(.bg-white, .bg-zinc-50, .bg-neutral-50, .bg-gray-50, .bg-slate-50) {
+  background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="bg-slate-900/40"],
+html[data-port-theme-mode="day"] [class~="bg-slate-900/60"],
+html[data-port-theme-mode="day"] [class~="bg-slate-900/80"],
+html[data-port-theme-mode="day"] [class~="bg-slate-950/40"],
+html[data-port-theme-mode="day"] [class~="bg-gray-900/50"],
+html[data-port-theme-mode="day"] [class~="bg-zinc-950/40"],
+html[data-port-theme-mode="day"] [class~="bg-stone-950/40"],
+html[data-port-theme-mode="day"] [class~="bg-indigo-950/40"] {
+  background-color: rgb(var(--port-card) / 0.6) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="bg-slate-800/80"]:hover {
+  background-color: rgb(var(--port-card) / 0.85) !important;
+}
+
+/* Tailwind gradient utilities resolve to --tw-gradient-from/-to; override
+ * the resolved values, not the class. */
+html[data-port-theme-mode="day"] [class~="from-slate-900/80"] {
+  --tw-gradient-from: rgb(var(--port-card) / 0.6) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to, rgb(var(--port-card) / 0)) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="to-slate-900/40"] {
+  --tw-gradient-to: rgb(var(--port-card) / 0.3) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="border-gray-700"],
+html[data-port-theme-mode="day"] [class~="border-gray-700/40"],
+html[data-port-theme-mode="day"] [class~="border-gray-700/50"],
+html[data-port-theme-mode="day"] [class~="border-slate-700/50"] {
+  border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 1.4)) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="border-indigo-500/20"],
+html[data-port-theme-mode="day"] [class~="border-indigo-500/30"],
+html[data-port-theme-mode="day"] [class~="border-indigo-500/40"] {
+  border-color: rgb(var(--port-accent) / 0.32) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="bg-indigo-500/10"] {
+  background-color: rgb(var(--port-accent) / 0.1) !important;
+}
+html[data-port-theme-mode="day"] [class~="bg-indigo-500/15"] {
+  background-color: rgb(var(--port-accent) / 0.14) !important;
+}
+html[data-port-theme-mode="day"] [class~="bg-indigo-500/20"] {
+  background-color: rgb(var(--port-accent) / 0.18) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="text-indigo-400"],
+html[data-port-theme-mode="day"] [class~="text-indigo-400/70"] {
+  color: rgb(var(--port-accent)) !important;
+}
+
+/* === Lumen Glass Day === */
+html[data-port-theme="lumen-glass-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  border-color: rgb(var(--port-border) / 0.22) !important;
+  box-shadow: var(--port-shadow-card);
+}
+
+html[data-port-theme="lumen-glass-day"] :is(input, textarea, select):focus,
+html[data-port-theme="lumen-glass-day"] button:focus-visible,
+html[data-port-theme="lumen-glass-day"] a:focus-visible {
+  box-shadow: 0 0 0 3px rgb(var(--port-focus-ring) / 0.22), 0 0 24px rgb(var(--port-focus-ring) / 0.16);
+}
+
+html[data-port-theme="lumen-glass-day"] aside nav [aria-current="page"] {
+  background: rgb(var(--port-accent) / 0.16);
+  color: rgb(var(--port-accent));
+}
+
+html[data-port-theme="lumen-glass-day"] body::before {
+  background-attachment: fixed;
+  animation: portos-glass-drift-a 32s ease-in-out infinite alternate;
+  will-change: background-position;
+}
+
+html[data-port-theme="lumen-glass-day"] body::after {
+  content: "";
+  position: fixed;
+  inset: -10vh -10vw;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(40vw 40vw at 30vw 70vh, rgb(var(--port-accent) / 0.16) 0%, transparent 60%);
+  filter: blur(80px);
+  opacity: 0.7;
+  animation: portos-glass-drift-b 44s ease-in-out -8s infinite alternate;
+  will-change: transform;
+}
+
+@keyframes portos-glass-drift-a {
+  0%   { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
+  100% { background-position: 0 0, 0 0, 0 0, 10vw -5vh, -8vw 6vh; }
+}
+
+@keyframes portos-glass-drift-b {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(8vw, -4vh) scale(1.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-port-theme="lumen-glass-day"] body::before,
+  html[data-port-theme="lumen-glass-day"] body::after {
+    animation: none;
+  }
+}
+
+/* === Phosphor Paper (Black ICE Day) === */
+html[data-port-theme="black-ice-terminal-day"] body {
+  text-shadow: 0 0 8px rgb(var(--port-accent) / 0.04);
+}
+
+html[data-port-theme="black-ice-terminal-day"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    rgb(10 60 30 / 0.04) 0,
+    rgb(10 60 30 / 0.04) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.4;
+}
+
+html[data-port-theme="black-ice-terminal-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  border-color: rgb(var(--port-border) / 0.32) !important;
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.5), transparent 38px);
+}
+
+html[data-port-theme="black-ice-terminal-day"] :is(pre, code, textarea, input) {
+  text-shadow: 0 0 6px rgb(var(--port-accent) / 0.06);
+}
+
+html[data-port-theme="black-ice-terminal-day"] aside nav [aria-current="page"] {
+  border-left: 2px solid rgb(var(--port-accent));
+}
+
+/* === Drafting Paper (Blueprint Day) === */
+html[data-port-theme="blueprint-ops-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  background-image:
+    linear-gradient(90deg, rgb(var(--port-border) / 0.05) 1px, transparent 1px),
+    linear-gradient(180deg, rgb(var(--port-border) / 0.04) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+html[data-port-theme="blueprint-ops-day"] :is(h1, h2, h3) {
+  border-left: 3px solid rgb(var(--port-accent) / 0.72);
+  padding-left: 0.55rem;
+}
+
+html[data-port-theme="blueprint-ops-day"] aside :is(h1, h2, h3),
+html[data-port-theme="blueprint-ops-day"] header :is(h1, h2, h3) {
+  border-left: 0;
+  padding-left: 0;
+}
+
 /* Accessibility: Global focus styles for keyboard navigation */
 *:focus-visible {
   outline: 2px solid rgb(var(--port-focus-ring));
   outline-offset: 2px;
+}
+
+/* Soften focus on text-entry fields — the bright 2px ring at offset 2 reads
+   as a thick blue border around prose textareas, which is harsh when you're
+   reading a long draft. Form fields already have a visible cursor + the
+   field's own border, so a 1px low-alpha indicator flush against the border
+   is enough. Buttons/links keep the strong indicator below for keyboard
+   navigation. */
+:is(input, textarea, select, [contenteditable="true"], [contenteditable=""]):focus-visible {
+  outline: 1px solid rgb(var(--port-focus-ring) / 0.35);
+  outline-offset: 0;
 }
 
 /* Accessibility: Remove focus outline for mouse users while keeping it for keyboard */

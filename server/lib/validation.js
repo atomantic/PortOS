@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
+import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
+import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -144,10 +146,13 @@ export const automationScheduleUpdateSchema = automationScheduleSchema.partial()
 // EXISTING SCHEMAS
 // =============================================================================
 
-// Process definition schema (for PM2 processes with ports)
+// `ports` is an open-ended label→port map so app-specific keys derived from
+// *_PORT env vars (coinbaseIpc, geminiIpc, etc.) survive validation alongside
+// the well-known labels (api, ui, devUi, cdp, health).
 export const processSchema = z.object({
   name: z.string().min(1),
   port: z.number().int().min(1).max(65535).nullable().optional(),
+  ports: z.record(z.number().int().min(1).max(65535)).optional(),
   description: z.string().optional()
 });
 
@@ -462,6 +467,63 @@ export const restoreRequestSchema = z.object({
 });
 
 // =============================================================================
+// WRITERS ROOM SCHEMAS
+// =============================================================================
+
+export const writersRoomWorkKindSchema = z.enum(WORK_KINDS);
+export const writersRoomWorkStatusSchema = z.enum(WORK_STATUSES);
+
+// IDs are either null (unfiled / unattached) or a non-empty trimmed string.
+// Zod runs chain steps in declared order, so .trim() MUST come before .min(1)
+// — otherwise a whitespace-only string passes min(1), then trim() collapses
+// it to '' after the guard already accepted it. Same gotcha applies to all
+// the .min(1).trim() pairs below.
+const wrIdNullable = z.string().trim().min(1).max(100).nullable();
+
+export const writersRoomFolderCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  parentId: wrIdNullable.optional(),
+  sortOrder: z.number().int().optional()
+}).strict();
+
+export const writersRoomWorkCreateSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  kind: writersRoomWorkKindSchema.optional().default('short-story'),
+  folderId: wrIdNullable.optional()
+}).strict();
+
+export const writersRoomWorkUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(300).optional(),
+  kind: writersRoomWorkKindSchema.optional(),
+  status: writersRoomWorkStatusSchema.optional(),
+  folderId: wrIdNullable.optional()
+}).strict();
+
+export const writersRoomDraftSaveSchema = z.object({
+  body: z.string().max(5_000_000) // 5 MB ceiling — well over a long novel in plain text
+}).strict();
+
+export const writersRoomSnapshotSchema = z.object({
+  label: z.string().trim().min(1).max(100).optional()
+}).strict();
+
+export const writersRoomExerciseCreateSchema = z.object({
+  workId: wrIdNullable.optional(),
+  prompt: z.string().max(2000).optional().default(''),
+  durationSeconds: z.number().int().min(60).max(3600).default(600),
+  startingWords: z.number().int().min(0).default(0)
+}).strict();
+
+export const writersRoomExerciseFinishSchema = z.object({
+  endingWords: z.number().int().min(0).optional(),
+  appendedText: z.string().max(100000).nullable().optional()
+}).strict();
+
+export const writersRoomAnalysisCreateSchema = z.object({
+  kind: z.enum(ANALYSIS_KINDS)
+}).strict();
+
+// =============================================================================
 // FEATURE AGENT SCHEMAS
 // =============================================================================
 
@@ -595,3 +657,106 @@ export function sanitizeTaskMetadata(raw) {
   }
   return hasKeys ? { ...clean } : null;
 }
+
+
+// =============================================================================
+// CREATIVE DIRECTOR SCHEMAS
+// =============================================================================
+
+export const creativeDirectorAspectRatioSchema = z.enum(ASPECT_RATIOS);
+export const creativeDirectorQualitySchema = z.enum(QUALITIES);
+
+// Top-level project create. modelId is required because each LTX variant
+// has a different speed/VRAM/quality profile and the project locks it at
+// creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
+// — much beyond that and the agent's treatment quality drifts hard.
+// Strict basename: rejects path separators and the exact `.`/`..` segments.
+// Used for both startingImageFile (project create) and sourceImageFile
+// (per-scene) since both feed into `join(PATHS.images, ...)` later. The
+// downstream consumers also do a resolve+prefix-check against PATHS.images
+// (sceneRunner.js) — that's the real traversal guard; this validator just
+// catches the obvious bad values at the route boundary. Note: a substring
+// check on `..` would over-reject legitimate names like `my..image.png`,
+// so we only reject the exact dot segments and rely on prefix-checks for
+// the actual escape protection.
+const safeBasename = z.string()
+  .max(256)
+  .regex(/^[^/\\]+$/, 'must be a basename (no path separators)')
+  .refine((v) => v !== '.' && v !== '..',
+    'must not be `.` or `..`');
+
+export const creativeDirectorProjectCreateSchema = z.object({
+  name: z.string().min(1).max(200),
+  aspectRatio: creativeDirectorAspectRatioSchema,
+  quality: creativeDirectorQualitySchema,
+  modelId: z.string().min(1).max(64),
+  targetDurationSeconds: z.number().int().min(5).max(600),
+  styleSpec: z.string().max(5000).default(''),
+  startingImageFile: safeBasename.nullable().optional(),
+  userStory: z.string().max(10000).nullable().optional(),
+  // Audio defaults OFF for CD projects — current model audio output is
+  // inconsistent across renders and the user can re-enable per-project.
+  // (videoGen one-offs still default to enabled.)
+  disableAudio: z.boolean().optional().default(true),
+  autoAcceptScenes: z.boolean().optional().default(false),
+});
+
+// Update is restricted to a few editable fields. modelId / aspectRatio /
+// quality / targetDurationSeconds are locked at creation — changing them
+// mid-project would invalidate already-rendered segments.
+export const creativeDirectorProjectUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  styleSpec: z.string().max(5000).optional(),
+  userStory: z.string().max(10000).nullable().optional(),
+  status: z.enum(PROJECT_STATUSES).optional(),
+  finalVideoId: z.string().max(64).nullable().optional(),
+  timelineProjectId: z.string().max(64).nullable().optional(),
+  failureReason: z.string().max(500).nullable().optional(),
+  // Toggleable post-creation — only affects future scene renders.
+  disableAudio: z.boolean().optional(),
+}).strict();
+
+// One scene in the treatment, written by the agent on the treatment task.
+export const creativeDirectorSceneSchema = z.object({
+  sceneId: z.string().min(1).max(64),
+  order: z.number().int().min(0),
+  intent: z.string().min(1).max(1000),
+  prompt: z.string().min(1).max(2000),
+  negativePrompt: z.string().max(2000).optional().default(''),
+  durationSeconds: z.number().min(1).max(10),
+  useContinuationFromPrior: z.boolean().default(false),
+  sourceImageFile: safeBasename.nullable().optional(),
+  status: z.enum(SCENE_STATUSES).default('pending'),
+  retryCount: z.number().int().min(0).max(10).default(0),
+  renderedJobId: z.string().max(64).nullable().optional(),
+  evaluation: z.object({
+    score: z.number().min(0).max(1).optional(),
+    notes: z.string().max(2000).optional(),
+    accepted: z.boolean(),
+    sampledAt: z.string().optional(),
+  }).nullable().optional(),
+});
+
+// The full treatment doc the agent writes after the planning task.
+export const creativeDirectorTreatmentSchema = z.object({
+  logline: z.string().min(1).max(500),
+  synopsis: z.string().min(1).max(5000),
+  scenes: z.array(creativeDirectorSceneSchema).min(1).max(120),
+});
+
+// Used by the agent when finishing a scene render.
+export const creativeDirectorSceneUpdateSchema = z.object({
+  // Full SCENE_STATUSES — the evaluator agent flips a scene back to 'pending'
+  // (with an updated prompt + bumped retryCount) to request a re-render; see
+  // creativeDirectorPrompts.js and completionHook.js's advanceAfterSceneSettled.
+  status: z.enum(SCENE_STATUSES).optional(),
+  retryCount: z.number().int().min(0).max(10).optional(),
+  renderedJobId: z.string().max(64).nullable().optional(),
+  prompt: z.string().min(1).max(2000).optional(),
+  evaluation: z.object({
+    score: z.number().min(0).max(1).optional(),
+    notes: z.string().max(2000).optional(),
+    accepted: z.boolean(),
+    sampledAt: z.string().optional(),
+  }).nullable().optional(),
+}).strict();

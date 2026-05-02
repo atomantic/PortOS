@@ -49,7 +49,14 @@ const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
 const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
+const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
+const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
+const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
+const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
+const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
+const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDirectorDetail'));
+const RenderQueue = lazyWithReload(() => import('./pages/RenderQueue'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
 const Templates = lazyWithReload(() => import('./pages/Templates'));
 const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
@@ -74,6 +81,7 @@ const Loops = lazyWithReload(() => import('./pages/Loops'));
 const CharacterSheet = lazyWithReload(() => import('./pages/CharacterSheet'));
 const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
+const WritersRoom = lazyWithReload(() => import('./pages/WritersRoom'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -185,6 +193,14 @@ export default function App() {
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="history" element={<MediaHistory />} />
+            <Route path="collections" element={<MediaCollections />} />
+            <Route path="collections/:id" element={<MediaCollectionDetail />} />
+            <Route path="creative-director" element={<CreativeDirector />} />
+            <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
+            <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+            <Route path="queue" element={<RenderQueue />} />
+            <Route path="timeline" element={<VideoTimeline />} />
+            <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
@@ -194,6 +210,8 @@ export default function App() {
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
+          <Route path="writers-room" element={<WritersRoom />} />
+          <Route path="writers-room/works/:workId" element={<WritersRoom />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />

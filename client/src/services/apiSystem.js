@@ -99,6 +99,10 @@ export const getBrowserPages = () => request('/browser/pages');
 export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
 export const getBrowserDownloads = () => request('/browser/downloads');
+export const deleteBrowserDownload = (name) =>
+  request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const browserDownloadUrl = (name) =>
+  `/api/browser/downloads/${encodeURIComponent(name)}`;
 export const navigateBrowser = (url) => request('/browser/navigate', {
   method: 'POST',
   body: JSON.stringify({ url })

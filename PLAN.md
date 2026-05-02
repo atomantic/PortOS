@@ -12,6 +12,21 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Backlog
 
+### Creative Director follow-ups (post-#191 merge)
+
+The PR landed with full pipeline mechanics + auto-recovery + smoke-test fixture, but the first real E2E run (1 of 6 scenes accepted on subjective grounds, 3 of 6 rejected, terminated cleanly) surfaced concrete improvement targets:
+
+- [x] ~~**Multi-frame evaluator sampling.**~~ Done — `extractEvaluationFrames` in `server/lib/ffmpeg.js` probes total frames and uses ffmpeg `select='eq(n,0)+...'` to write `<jobId>-f1.jpg ... -f5.jpg`; `sceneRunner.handleRenderCompleted` calls it before enqueuing the evaluator and persists the basenames to `scene.evaluationFrames`; `buildEvaluatePrompt` now lists every sampled frame with timeline tags ("start (0%)", "~50% through", "end (~100%)") and instructs the agent to Read each one with explicit late-intent guidance. Falls back to single thumbnail when extraction fails.
+- [ ] **i2v continuity fidelity.** `useContinuationFromPrior: true` currently feeds the prior scene's last frame as `sourceImagePath` but doesn't pin `imageStrength`. Renders sometimes drift hard from the seed (a "blue ball" continuation generates a totally new scene that loosely starts from the seed). Surface `imageStrength` as a per-scene knob in the treatment schema (default ~0.85 for continuation scenes, lower if the prompt deliberately changes the subject) and pipe it through `sceneRunner.params`.
+- [ ] **Audio continuity across scenes.** mlx-video-with-audio generates audio per-clip; concatenated scenes have audible cuts at scene boundaries. Either render scenes silently and add a single backing audio pass at stitch time, or apply a short crossfade in `videoTimeline/local.js#buildFfmpegArgs` (already does video crossfades — extend to audio with `acrossfade`).
+- [ ] **Duplicate evaluator spawn dedup.** During the long E2E run, server logs showed `Task already being spawned, skipping duplicate` followed seconds later by a *second* agent spawning for the exact same task id. The CoS task lane logic ends up double-acquiring. Reproduce in a unit test against `taskSchedule` / `agentLifecycle` and fix the de-dup window.
+- [ ] **Render slowness on long sessions.** Per-scene render time degraded from ~3.5 min (early) to 10–30 min (late) within one project — likely accumulated listeners + queue races. Profile after sustained use; the round-22 dedup work probably already helps; verify.
+- [ ] **Auto-accept watchdog.** `autoAcceptScenes: true` skips the Claude evaluator entirely. Add a server-side sanity check (file exists, file size > 0, ffprobe can read at least 1 frame) before writing the synthetic accepted evaluation — without it a black/zero-frame render would still be marked accepted.
+- [x] ~~**Smoke-test cost reduction.**~~ Done — dropped `durationSeconds` 3s→2s, added a hidden `1:1-small` (384×384) aspect preset for the smoke fixture only (kept out of `ASPECT_RATIOS` so the user-facing dropdown is unchanged). Smoke run now ~63% cheaper in pixel-frame terms. Lets pipeline health checks complete in render time only.
+
+### Other backlog
+
+- [ ] **Writers Room (Phase 2+)** — Phase 1 ships the authoring core (folders/works/drafts, "write for 10" exercise, version snapshots) under a new top-level `Create` sidebar group alongside Media Gen. Phases 2-5 cover manual AI analysis, Creative Director handoff, synced prose/script/media review, and realtime CD feedback. See [writers-room.md](./docs/features/writers-room.md).
 - [ ] **Voice CoS tool expansion** — `calendar_today` / `calendar_next` (Google Calendar via existing MCP), `meatspace_log_workout` (wraps `meatspaceHealth.js`), `weather_now` (needs API choice — OpenWeather / WeatherKit / NWS), `timer_set` (reuses `agentActionExecutor.js` scheduled actions).
 - [ ] **Voice agent vision fallback** — `ui_describe_visually` tool: screenshot the current tab (or a named canvas/chart) and send to a vision-capable model so "what's on this chart?" works on non-DOM content (CyberCity, graph views). Depends on a vision provider in `portos-ai-toolkit`.
 - [ ] **Voice agent — explicit long-term memory routing** — On "remember that …", auto-route to `brain_capture` and inject top-N relevant memories into the voice turn's system prompt via `brain_search`. Some of this is ambient today; make it explicit and self-improving.
@@ -19,6 +34,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **M50 P9 — CoS Automation & Rules** — Automated email classification, rule-based pre-filtering, email-to-task pipeline.
 - [ ] **M50 P10 — Auto-Send with AI Review Gate** — Per-account/per-recipient trust level + dual-LLM review (drafter + reviewer). Only auto-send when both approve or trust ≥ 0.9. See [Messages Security](./docs/features/messages-security.md).
 - [ ] **M34 P5-P7 — Digital Twin** — Multi-modal capture (voice/video/image identity sources), advanced testing, personas. Ties to GOALS.md secondary "Multi-Modal Identity Capture".
+- [ ] **Multi-reference image editing for FLUX.2** — Add a UI on the Image Gen page that accepts 2+ reference images plus an edit prompt (e.g. "put the subject from image A into the scene from image B"). When this lands, swap the model registry's 9B entry to [`black-forest-labs/FLUX.2-klein-9B-kv`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B-kv) — KV-cache optimization computes reference-image KV pairs once and reuses them across edits, giving up to 2.5× speedup on multi-reference workflows. Single-prompt / single-init paths see no benefit, which is why standard 9B is fine until then. Work involves: schema for multi-image payload (`referenceImages: [...]`), client multi-uploader, server FormData parsing, and adapting `flux2_macos.py` to call the multi-reference pipeline API. Separately-gated repo on HF — user must request access.
 
 ### Depfree Audit — 2026-04-28
 

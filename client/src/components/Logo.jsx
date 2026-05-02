@@ -11,6 +11,7 @@ export function PortOSMark({ size = 24, className = '', ariaLabel = null }) {
         height: size,
         minWidth: size,
         minHeight: size,
+        borderRadius: Math.max(4, Math.round(size * 0.22)),
       }}
     />
   );

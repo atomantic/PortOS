@@ -1,4 +1,5 @@
 import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff } from 'lucide-react';
+import AddToCollectionMenu from './AddToCollectionMenu';
 
 // Single card used everywhere a generated image/video appears in a grid:
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
@@ -18,18 +19,19 @@ export default function MediaCard({
   selected = false,
   disabled = false,
   hideActions = false,
+  showCollectionMenu = true,
 }) {
   const { kind, prompt, modelId, previewUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
   const handleTileClick = onClick || (() => onPreview?.(item));
 
   return (
-    <div className={`bg-port-card border rounded-xl overflow-hidden ${selected ? 'border-port-accent' : 'border-port-border'}`}>
+    <div className={`bg-port-card border rounded-xl ${selected ? 'border-port-accent' : 'border-port-border'}`}>
       <button
         type="button"
         onClick={() => handleTileClick(item)}
         disabled={disabled}
-        className="block w-full aspect-square bg-port-bg relative disabled:cursor-not-allowed disabled:opacity-40"
+        className="block w-full aspect-square bg-port-bg relative rounded-t-xl overflow-hidden disabled:cursor-not-allowed disabled:opacity-40"
       >
         {previewUrl ? (
           <img src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
@@ -92,6 +94,7 @@ export default function MediaCard({
                 <ImageIcon className="w-3 h-3" /> Continue
               </button>
             )}
+            {showCollectionMenu && <AddToCollectionMenu item={item} />}
             <a
               href={downloadUrl}
               download

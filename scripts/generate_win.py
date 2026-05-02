@@ -68,7 +68,34 @@ def main():
     p.add_argument('--seed',           type=int, default=None)
     p.add_argument('--output',         required=True)
     p.add_argument('--image',          default=None)
+    p.add_argument('--last-image',     default=None,
+                   help='Optional end-frame target (FFLF). Currently advisory — '
+                        'LTX-Video 0.9.5 diffusers pipeline does not natively '
+                        'consume two keyframes; flag is accepted for forward '
+                        'compatibility with multi-keyframe pipelines.')
     args = p.parse_args()
+    # The current LTX-Video 0.9.5 diffusers pipelines only accept a single
+    # conditioning image, so --last-image is forward-compat only. Tailor the
+    # STATUS log to the actual branch the script will take based on whether
+    # --image was also provided, so users/logs aren't misled into thinking we
+    # ran an I2V flow when we're really running T2V.
+    #
+    # STATUS lines are forwarded over SSE to the browser, so log just the
+    # basename rather than the absolute server path to avoid leaking
+    # filesystem layout to the client.
+    if args.last_image:
+        last_image_name = os.path.basename(args.last_image)
+        if args.image:
+            log(
+                f'STATUS:Last-frame image supplied ({last_image_name}) — '
+                'currently advisory; using single-image I2V with --image as '
+                'the only conditioning frame'
+            )
+        else:
+            log(
+                f'STATUS:Last-frame image supplied ({last_image_name}) without --image — '
+                'currently advisory and ignored for mode selection; continuing with T2V'
+            )
 
     dtype = torch.bfloat16
     generator = torch.Generator('cuda').manual_seed(args.seed) if args.seed is not None else None
@@ -136,7 +163,10 @@ def main():
 
     log('STATUS:Saving video...')
     save_video(result.frames[0], args.output, args.fps)
-    log(f'STATUS:Saved to {args.output}')
+    # Log only the basename — STATUS lines are forwarded over SSE to the
+    # browser, and emitting the absolute server path would leak filesystem
+    # layout. The Node side already knows the full path from the --output arg.
+    log(f'STATUS:Saved to {os.path.basename(args.output)}')
     log('STATUS:Done')
 
 

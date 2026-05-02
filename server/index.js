@@ -64,6 +64,7 @@ import databaseRoutes from './routes/database.js';
 import searchRoutes from './routes/search.js';
 import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
+import mediaCollectionsRoutes from './routes/mediaCollections.js';
 import dataSyncRoutes from './routes/dataSync.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
@@ -79,6 +80,12 @@ import characterRoutes from './routes/character.js';
 import toolsRoutes from './routes/tools.js';
 import imageGenRoutes from './routes/imageGen.js';
 import videoGenRoutes from './routes/videoGen.js';
+import videoTimelineRoutes from './routes/videoTimeline.js';
+import mediaJobsRoutes from './routes/mediaJobs.js';
+import creativeDirectorRoutes from './routes/creativeDirector.js';
+import writersRoomRoutes from './routes/writersRoom.js';
+import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
+import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
@@ -106,6 +113,7 @@ import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, g
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
+import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
@@ -256,6 +264,7 @@ app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/palette', paletteRoutes);
 app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
+app.use('/api/media/collections', mediaCollectionsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/database', databaseRoutes);
@@ -310,12 +319,20 @@ app.use('/api/character', characterRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/image-gen', imageGenRoutes);
 app.use('/api/video-gen', videoGenRoutes);
+app.use('/api/video-timeline', videoTimelineRoutes);
+app.use('/api/media-jobs', mediaJobsRoutes);
+app.use('/api/creative-director', creativeDirectorRoutes);
+app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/ask', askRoutes);
+
+// initMediaJobQueue is awaited as part of the startup chain below so that
+// data/ exists and the worker loop is running before /api/video-gen or
+// /api/image-gen can enqueue (otherwise persist() can race with ensureDir).
 
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
@@ -329,6 +346,7 @@ try {
 
 // Recover any inbox entries stuck in 'classifying' from a previous crash/restart
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
+recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
@@ -435,8 +453,22 @@ app.use(errorMiddleware);
 // race conditions where brain mutations arrive before the sync log is ready
 ensureSelf()
   .then(() => initSyncLog())
+  .then(() => initMediaJobQueue())
   .then(() => {
-    // Start server only after sync log is initialized
+    // Fire-and-forget — resume any Creative Director projects that were mid-
+    // flight when the server died. The queue reload above just reclassified
+    // their renders as 'failed (interrupted by restart)'; this nudges the
+    // orchestrator so projects don't sit frozen waiting for listeners that
+    // no longer exist. Doesn't block startup.
+    recoverInFlightProjects().catch((e) => console.log(`⚠️ CD boot recovery failed: ${e.message}`));
+  })
+  .then(() => {
+    // Start server only after sync log + media job queue are initialized.
+    // initMediaJobQueue failure is fatal: the queue owns persistence + SSE
+    // + temp-file cleanup for /api/video-gen and local /api/image-gen, and
+    // accepting requests with a half-init queue silently corrupts state
+    // (persist() throws, SSE streams degrade). Catch + crash via the
+    // outer .catch(...process.exit) below.
     httpServer.listen(PORT, HOST, () => {
       // One canonical "where do I open this" banner — :5555 is always user-facing
       // (HTTP or HTTPS), :PORTOS_HTTP_PORT (default 5553) is the loopback HTTP

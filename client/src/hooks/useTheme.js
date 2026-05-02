@@ -3,6 +3,7 @@ import {
   THEMES,
   THEME_LIST,
   getTheme,
+  getPairedThemeId,
   normalizeThemeId,
 } from '../themes/portosThemes';
 
@@ -18,6 +19,7 @@ const applyTheme = (id) => {
   document.documentElement.dataset.portTheme = theme.id;
   document.documentElement.dataset.portThemeFamily = theme.family;
   document.documentElement.dataset.portThemeDensity = theme.density;
+  document.documentElement.dataset.portThemeMode = theme.mode;
   document.documentElement.style.colorScheme = theme.colorScheme ?? 'dark';
   return theme.id;
 };
@@ -66,5 +68,11 @@ export default function useTheme() {
     }).catch(() => console.warn('Theme sync to server failed'));
   }, []);
 
-  return { themeId, theme: THEMES[themeId], themeList: THEME_LIST, setTheme };
+  const toggleMode = useCallback(() => {
+    const paired = getPairedThemeId(themeId);
+    if (paired === themeId) return;
+    setTheme(paired);
+  }, [themeId, setTheme]);
+
+  return { themeId, theme: THEMES[themeId], themeList: THEME_LIST, setTheme, toggleMode };
 }

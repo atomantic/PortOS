@@ -22,21 +22,16 @@ import { ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
+import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
+import { hfTokenEnv } from '../../lib/hfToken.js';
 
-const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
-// Model catalog. `broken: true` hides a model on a platform where it doesn't
-// run (e.g. Flux 2 Klein needs CUDA, so we mark it broken on macOS).
-export const IMAGE_MODELS = {
-  dev:               { id: 'dev',               name: 'Flux 1 Dev',         steps: 20, guidance: 3.5 },
-  schnell:           { id: 'schnell',           name: 'Flux 1 Schnell',     steps: 4,  guidance: 0   },
-  'flux2-klein-4b':  { id: 'flux2-klein-4b',    name: 'Flux 2 Klein 4B',    steps: 8,  guidance: 3.5, broken: IS_MAC },
-  'flux2-klein-9b':  { id: 'flux2-klein-9b',    name: 'Flux 2 Klein 9B',    steps: 8,  guidance: 3.5, broken: IS_MAC },
-};
+import { getImageModels, isFlux2 } from '../../lib/mediaModels.js';
 
-export const listImageModels = () =>
-  Object.values(IMAGE_MODELS).filter((m) => !m.broken);
+export const IMAGE_MODELS = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
+
+export const listImageModels = () => getImageModels();
 
 // Per-job clients: jobId -> { clients, status, meta, broadcast }
 const jobs = new Map();
@@ -70,7 +65,68 @@ export const cancel = () => {
   return true;
 };
 
-const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
+export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
+  const modelId = model?.id;
+  if (isFlux2(model)) {
+    if (!model.repo) {
+      throw new ServerError(
+        `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
+    const quantization = model.quantization || 'sdnq';
+    if (quantization !== 'sdnq' && quantization !== 'int8') {
+      throw new ServerError(
+        `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8)`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
+    if (quantization === 'sdnq' && !model.tokenizerRepo) {
+      throw new ServerError(
+        `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
+    if (quantization === 'int8' && !model.basePipelineRepo) {
+      throw new ServerError(
+        `FLUX.2 Int8 model "${modelId}" requires 'basePipelineRepo' (the gated base repo for VAE/scheduler)`,
+        { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
+      );
+    }
+    const flux2Python = resolveFlux2Python();
+    if (!flux2Python) {
+      throw new ServerError(
+        `FLUX.2 venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}).`,
+        { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
+      );
+    }
+    const scriptPath = join(PATHS.root, 'scripts', 'flux2_macos.py');
+    // No --metadata flag: local.js's proc.on('close') already writes the
+    // canonical sidecar at <jobId>.metadata.json after a successful exit.
+    // Letting the runner write its own would duplicate work and the JS
+    // sidecar would clobber any flux2-specific fields anyway.
+    const args = [
+      scriptPath,
+      '--model', modelId,
+      '--quantization', quantization,
+      '--repo', model.repo,
+      '--prompt', prompt,
+      '--height', String(height),
+      '--width', String(width),
+      '--steps', String(steps),
+      '--guidance', String(guidance ?? 0),
+      '--seed', String(seed),
+      '--output', outputPath,
+    ];
+    if (model.tokenizerRepo) args.push('--tokenizer-repo', model.tokenizerRepo);
+    if (model.basePipelineRepo) args.push('--base-pipeline-repo', model.basePipelineRepo);
+    if (negativePrompt) args.push('--negative-prompt', negativePrompt);
+    if (initImagePath) args.push('--image-path', initImagePath);
+    if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
+    if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
+    return { bin: flux2Python, args };
+  }
+
   if (IS_WIN) {
     // imagine_win.py does not implement i2i — silently drop the init-image
     // args here so the request still produces a normal txt2img result rather
@@ -86,7 +142,6 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
       ],
     };
   }
-  // macOS: mflux-generate sits next to the python binary in the venv
   const bin = join(dirname(pythonPath), 'mflux-generate');
   const args = ['--model', modelId, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata'];
   if (guidance > 0) args.push('--guidance', String(guidance));
@@ -102,20 +157,38 @@ const buildArgs = ({ pythonPath, modelId, prompt, negativePrompt, width, height,
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null }) {
-  if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, jobId: providedJobId = null }) {
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  // Enforce the single-activeProcess invariant the rest of this module relies
-  // on — without this, a double-click on Generate would orphan the first
-  // child (cancel() can only kill the one stored in activeProcess).
-  if (activeProcess) throw new ServerError('A generation is already in progress — cancel it before starting another', { status: 409, code: 'IMAGE_GEN_BUSY' });
-  const model = IMAGE_MODELS[modelId];
-  if (!model || model.broken) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
+  // callers that bypass the queue must not run two concurrent renders — the
+  // activeProcess handle below would be clobbered and cancel() would orphan
+  // the first child.
+  // Use the registry cache view (which applies the per-platform `broken`
+  // filter via getImageModels) rather than the module-load IMAGE_MODELS
+  // snapshot. Note: loadMediaModels memoizes on first read — on-disk edits
+  // to data/media-models.json still need a server restart to apply.
+  // Don't re-check model.broken here: getImageModels() already filtered
+  // current-platform entries; an extra truthiness check would also reject
+  // entries broken on the OTHER platform (e.g. 'windows' on a macOS box).
+  const model = getImageModels().find((m) => m.id === modelId);
+  if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  if (!isFlux2(model) && !pythonPath) {
+    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
+  }
+  // FLUX.2 runner doesn't apply LoRAs yet — reject up-front so the user
+  // doesn't end up with a metadata sidecar that records LoRAs the renderer
+  // silently dropped.
+  if (isFlux2(model) && (loraFilenames.length > 0 || loraPaths.length > 0)) {
+    throw new ServerError(
+      'LoRAs are not supported for FLUX.2 models yet — clear the LoRA selection or pick a Flux 1 model.',
+      { status: 400, code: 'IMAGE_GEN_FLUX2_LORA_UNSUPPORTED' },
+    );
+  }
 
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.loras);
 
-  const jobId = randomUUID();
+  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
@@ -163,13 +236,13 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // per inference step here; we watch and stream the latest as `currentImage`.
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
 
-  const { bin, args } = buildArgs({ pythonPath, modelId, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength });
+  const { bin, args } = buildArgs({ pythonPath, model, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength });
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
   activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: 'local' };
 
-  const proc = spawn(bin, args, { env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(bin, args, { env: { ...process.env, ...(await hfTokenEnv()) }, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
   // Without an 'error' handler, a missing/non-executable pythonPath would
   // crash the server with an unhandled error event.
@@ -232,35 +305,70 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // would grow this buffer for the full duration of a long render.
   const STDERR_TAIL_BYTES = 64 * 1024;
   let stderrBuffer = '';
+  // Returns true when the line drove a progress event (so the pm2-log echo
+  // below skips it — progress bars are spammy and already visible in the UI).
+  // Status / debug / error lines fall through to console.log so a stuck render
+  // (model download, HF auth probe, weight load) shows up in pm2 logs instead
+  // of vanishing into the SSE channel only the browser ever sees.
+  // Phase tracking. Lifecycle events from the runner (STAGE:download-pipeline,
+  // STAGE:inference, etc.) flip the phase so the UI can show "Downloading
+  // model weights" instead of misleading "step 0/8" while HF pulls multi-GB
+  // shards. Inference progress events also tag themselves with the current
+  // phase so the client knows whether `step/total` reflects download chunks
+  // (out of N safetensors files) or actual generation steps.
+  let currentPhase = 'starting';
   const handleLine = (line) => {
     const trimmed = line.trim();
-    if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return;
-    // mflux progress: "100%|████| 8/8 [00:05<00:00,  1.43it/s]"
+    if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return true;
+
+    if (trimmed.startsWith('STAGE:')) {
+      const rest = trimmed.slice(6); // strip 'STAGE:'
+      const colon = rest.indexOf(':');
+      const stage = colon === -1 ? rest : rest.slice(0, colon);
+      const detail = colon === -1 ? '' : rest.slice(colon + 1);
+      currentPhase = stage;
+      broadcastSse(job, { type: 'stage', stage, detail });
+      return true;
+    }
+
     const m = trimmed.match(/(\d+)%\|.*?(\d+)\/(\d+)/);
     if (m) {
       const pct = parseInt(m[1], 10) / 100;
       const step = parseInt(m[2], 10);
       const total = parseInt(m[3], 10);
-      broadcastSse(job, { type: 'progress', progress: pct, message: trimmed });
-      imageGenEvents.emit('progress', { generationId: jobId, progress: pct, step, totalSteps: total });
-      if (activeJob && activeJob.generationId === jobId) {
-        activeJob.progress = pct; activeJob.step = step; activeJob.totalSteps = total;
+      broadcastSse(job, { type: 'progress', progress: pct, message: trimmed, phase: currentPhase });
+      // Only forward to imageGenEvents (which drives the UI step counter)
+      // when we're actually in the inference phase — download tqdm bars
+      // count safetensors files, not diffusion steps.
+      if (currentPhase === 'inference') {
+        imageGenEvents.emit('progress', { generationId: jobId, progress: pct, step, totalSteps: total });
+        if (activeJob && activeJob.generationId === jobId) {
+          activeJob.progress = pct; activeJob.step = step; activeJob.totalSteps = total;
+        }
       }
-    } else {
-      broadcastSse(job, { type: 'status', message: trimmed });
+      return true;
     }
+    broadcastSse(job, { type: 'status', message: trimmed });
+    return false;
   };
 
+  const shortId = jobId.slice(0, 8);
   proc.stderr.on('data', (chunk) => {
     const text = chunk.toString();
     stderrBuffer += text;
     if (stderrBuffer.length > STDERR_TAIL_BYTES) {
       stderrBuffer = stderrBuffer.slice(-STDERR_TAIL_BYTES);
     }
-    for (const line of text.split(/[\n\r]+/)) handleLine(line);
+    for (const line of text.split(/[\n\r]+/)) {
+      const trimmed = line.trim();
+      if (!handleLine(line) && trimmed) console.log(`🐍 [${shortId}] ${trimmed}`);
+    }
   });
   proc.stdout.on('data', (chunk) => {
-    for (const line of chunk.toString().split(/[\n\r]+/)) handleLine(line);
+    for (const line of chunk.toString().split(/[\n\r]+/)) {
+      const trimmed = line.trim();
+      if (!handleLine(line) && trimmed) console.log(`🐍-out [${shortId}] ${trimmed}`);
+    }
   });
 
   proc.on('close', async (code, signal) => {
@@ -271,10 +379,35 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
     if (code !== 0) {
       job.status = 'error';
       const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
-      const tail = stderrBuffer.trim().split('\n').slice(-10).join('\n');
-      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}\n${tail}` });
-      imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+      // Extract a structured user-error if the runner emitted one
+      // (USER_ERROR:gated_repo:black-forest-labs/FLUX.2-klein-9B), and find
+      // the matching `❌ …` prose line that follows it. Fall back to the last
+      // 10 stderr lines if no structured error was emitted (unknown crash).
+      const lines = stderrBuffer.split('\n').map((l) => l.trim()).filter(Boolean);
+      const structIdx = lines.findIndex((l) => l.startsWith('USER_ERROR:'));
+      let userMessage = null;
+      let userKind = null;
+      let userRepo = null;
+      if (structIdx >= 0) {
+        // Split with limit=2 so a kind containing colons can't shred the repo.
+        const [kind, ...rest] = lines[structIdx].slice('USER_ERROR:'.length).split(':');
+        userKind = kind;
+        userRepo = rest.join(':') || null;
+        const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
+        userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
+      }
+      const tail = lines.slice(-10).join('\n');
+      const errorText = userMessage
+        ? `${userMessage}\n\n(diagnostic) ${reason}`
+        : `Generation failed: ${reason}\n${tail}`;
+      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
+      job.error = userMessage || reason;
+      job.errorKind = userKind;
+      job.errorRepo = userRepo;
+      broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
+      // Propagate the friendly message (not the raw "Exit code 1") to the
+      // job queue so its `failed` log line and future SSE replays carry it.
+      imageGenEvents.emit('failed', { generationId: jobId, error: userMessage || reason });
     } else {
       job.status = 'complete';
       // Sidecar: persist a metadata record next to the PNG so the gallery
@@ -329,6 +462,7 @@ export async function deleteImage(filename) {
   await unlink(join(PATHS.images, filename)).catch(() => {});
   await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
+  console.log(`🗑️ Deleted image: ${filename}`);
   return { ok: true };
 }
 

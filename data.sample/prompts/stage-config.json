@@ -1,5 +1,40 @@
 {
   "stages": {
+    "writers-room-evaluate": {
+      "name": "Writers Room — Prose Evaluation",
+      "description": "Editorial pass on a Writers Room draft: logline, summary, themes, strengths, issues with excerpts, and concrete suggestions.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "writers-room-format": {
+      "name": "Writers Room — Auto-format Prose",
+      "description": "Copy-edit pass on a Writers Room draft: paragraphing, dialogue formatting, whitespace, punctuation, and consistent chapter/scene markdown headings. Returns cleaned prose only.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "writers-room-script": {
+      "name": "Writers Room — Adapt to Scene Script",
+      "description": "Adapt a Writers Room prose draft into a scene-by-scene screenplay-style breakdown with sluglines, action, dialogue, and per-scene visual prompts the image-gen pipeline can render.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "cd-treatment": {
+      "name": "Creative Director — Treatment",
+      "description": "Plan a long-form generated-video project: write the logline, synopsis, and scene-by-scene treatment.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "cd-evaluate": {
+      "name": "Creative Director — Scene Evaluation",
+      "description": "Evaluate a freshly-rendered scene against the project style spec and scene intent. Reads multi-frame samples to judge intent across the full clip timeline.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "app-detection": {
       "name": "App Detection",
       "description": "Analyze a project directory and detect its configuration",

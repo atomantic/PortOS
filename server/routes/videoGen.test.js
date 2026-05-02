@@ -9,13 +9,22 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/videoGen/local.js', () => ({
   listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
-  generateVideo: vi.fn(),
-  attachSseClient: vi.fn(() => false),
-  cancel: vi.fn(() => true),
   loadHistory: vi.fn(async () => []),
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
+  // The route imports setHistoryItemHidden too — without this entry, ESM
+  // module linking fails when the route is loaded inside the test process.
+  setHistoryItemHidden: vi.fn(async (id, hidden) => ({ ok: true, id, hidden })),
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
+}));
+
+// Render submissions go through the mediaJobQueue. Mock its surface so the
+// route tests stay synchronous and don't kick off the worker loop.
+vi.mock('../services/mediaJobQueue/index.js', () => ({
+  enqueueJob: vi.fn(({ kind, params }) => ({ jobId: `mock-${kind}-job`, position: 1, status: 'queued' })),
+  attachSseClient: vi.fn(() => false),
+  cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
+  listJobs: vi.fn(() => []),
 }));
 
 vi.mock('../lib/multipart.js', () => ({
@@ -28,10 +37,17 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { images: '/mock/images' },
 }));
 
-vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
+vi.mock('fs', () => ({
+  existsSync: vi.fn(() => true),
+  // statSync gates resolveGalleryImage onto regular-file checks — the route
+  // rejects directories, so the mock has to look like a file for the
+  // gallery-image plumbing tests to pass.
+  statSync: vi.fn(() => ({ isFile: () => true })),
+}));
 vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
 
 import * as videoGenService from '../services/videoGen/local.js';
+import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import videoGenRoutes from './videoGen.js';
 
 describe('videoGen routes', () => {
@@ -81,7 +97,6 @@ describe('videoGen routes', () => {
     });
 
     it('accepts empty-string numerics as undefined (multipart preprocess fix)', async () => {
-      videoGenService.generateVideo.mockResolvedValue({ jobId: 'j1', filename: 'j1.mp4' });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
         width: '',
@@ -89,16 +104,19 @@ describe('videoGen routes', () => {
         seed: '',
       });
       expect(r.status).toBe(200);
-      expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        prompt: 'a cat',
-        width: undefined,
-        height: undefined,
-        seed: undefined,
+      expect(r.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          prompt: 'a cat',
+          width: undefined,
+          height: undefined,
+          seed: undefined,
+        }),
       }));
     });
 
     it('strips path-traversal segments from sourceImageFile via basename + prefix-check', async () => {
-      videoGenService.generateVideo.mockResolvedValue({ jobId: 'j2', filename: 'j2.mp4' });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
         sourceImageFile: '../../etc/passwd',
@@ -107,17 +125,58 @@ describe('videoGen routes', () => {
       // path is `/mock/images/passwd` (under PATHS.images). The route does
       // NOT 400 — it just consumes whatever's safely under the images root.
       // What this test really locks in: the request succeeds + the route
-      // never reads outside PATHS.images.
+      // never enqueues a job that points outside PATHS.images.
       expect(r.status).toBe(200);
-      expect(videoGenService.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
-        prompt: 'a cat',
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({ prompt: 'a cat' }),
       }));
+    });
+
+    it('forwards lastImageFile + mode for FFLF', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'morph between two scenes',
+        sourceImageFile: 'first.png',
+        lastImageFile: 'last.png',
+        mode: 'fflf',
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          prompt: 'morph between two scenes',
+          sourceImagePath: '/mock/images/first.png',
+          lastImagePath: '/mock/images/last.png',
+          mode: 'fflf',
+        }),
+      }));
+    });
+
+    it('rejects an unknown mode value', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a cat',
+        mode: 'bogus',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/mode/i);
+    });
+
+    // Pre-enqueue config validation: without pythonPath the queue would
+    // accept the job, return 200/queued, then fail asynchronously over SSE
+    // and pollute the persisted queue with a doomed entry.
+    it('rejects 400 VIDEO_GEN_NOT_CONFIGURED when pythonPath is missing', async () => {
+      const settingsMock = await import('../services/settings.js');
+      settingsMock.getSettings.mockResolvedValueOnce({ imageGen: { local: {} } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/not configured/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 
   describe('GET /:jobId/events', () => {
     it('returns 404 when the job is unknown', async () => {
-      videoGenService.attachSseClient.mockReturnValue(false);
+      mediaJobQueue.attachSseClient.mockReturnValue(false);
       const r = await request(app).get('/api/video-gen/unknown-job/events');
       expect(r.status).toBe(404);
       expect(r.body.error).toMatch(/not found/i);
@@ -125,11 +184,59 @@ describe('videoGen routes', () => {
   });
 
   describe('POST /cancel', () => {
-    it('returns the cancel result', async () => {
-      videoGenService.cancel.mockReturnValue(true);
+    it('reports nothing to cancel when no video render is running', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([]);
+      const r = await request(app).post('/api/video-gen/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(false);
+    });
+
+    it('cancels the running video render through the queue', async () => {
+      mediaJobQueue.listJobs.mockReturnValue([{ id: 'running-job', kind: 'video', status: 'running' }]);
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: true, status: 'canceling' });
       const r = await request(app).post('/api/video-gen/cancel').send({});
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('running-job');
+    });
+
+    // jobId in the body cancels a specific job, even if it's still queued.
+    it('cancels a specific queued job when jobId is supplied', async () => {
+      const jobs = [
+        { id: 'running-1', kind: 'video', status: 'running' },
+        { id: 'queued-2',  kind: 'video', status: 'queued' },
+      ];
+      // The route calls listJobs({ kind: 'video' }) — replicate the production
+      // queue's filter semantics (status filter is optional).
+      mediaJobQueue.listJobs.mockImplementation(({ status, kind } = {}) => jobs.filter((j) => {
+        if (status && j.status !== status) return false;
+        if (kind && j.kind !== kind) return false;
+        return true;
+      }));
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: true, status: 'canceled' });
+      const r = await request(app).post('/api/video-gen/cancel').send({ jobId: 'queued-2' });
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('queued-2');
+    });
+
+    // No running job and no jobId — fall back to newest queued so the user
+    // can pull back a recent submission before it starts.
+    it('falls back to newest queued video when no jobId and nothing is running', async () => {
+      const jobs = [
+        { id: 'queued-old', kind: 'video', status: 'queued' },
+        { id: 'queued-new', kind: 'video', status: 'queued' },
+      ];
+      mediaJobQueue.listJobs.mockImplementation(({ status, kind } = {}) => jobs.filter((j) => {
+        if (status && j.status !== status) return false;
+        if (kind && j.kind !== kind) return false;
+        return true;
+      }));
+      mediaJobQueue.cancelJob.mockResolvedValue({ ok: true, status: 'canceled' });
+      const r = await request(app).post('/api/video-gen/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledWith('queued-new');
     });
   });
 

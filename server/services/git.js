@@ -482,6 +482,131 @@ export async function createPR(dir, { title, body, base, head }) {
 }
 
 /**
+ * Parse a PR / MR URL into { host, owner, repo, number }. Returns null on bad input.
+ * Handles GitHub (`/pull/N`) and GitLab (`/-/merge_requests/N`) URLs, including
+ * GitLab projects nested in subgroups (the entire group path becomes `owner`)
+ * and URLs with trailing segments such as `/files`, `/commits`, `?query`, `#hash`.
+ */
+export function parsePullRequestUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+
+  let parsed;
+  // new URL throws on malformed input; we want a structured null instead so a try
+  // wrapper here is the right call (the project's "no try/catch" rule covers
+  // request handlers, not URL validation helpers).
+  try { parsed = new URL(url); } catch { return null; }
+
+  // Only forge web URLs are valid input — reject file://, ftp://, javascript:,
+  // etc., which can otherwise sneak through to downstream `gh api --hostname`
+  // or `glab` calls with a misleading or empty host.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+
+  // `new URL` accepts `https:///path` and `http://:8080/...` — both yield an
+  // empty hostname. Reject those: a host-less PR URL is meaningless.
+  if (!parsed.hostname) return null;
+
+  // Reject explicit ports (`https://github.com:8443/...`). We use
+  // `parsed.hostname` below (not `host`), so a custom port would be silently
+  // dropped and route the request to the wrong server. Custom-port forges
+  // aren't supported until the port is plumbed through a separate field.
+  if (parsed.port) return null;
+
+  const host = parsed.hostname;
+  const segments = parsed.pathname.split('/').filter(Boolean);
+
+  // GitHub: /<owner>/<repo>/pull/<number>[/<more>]
+  // GitHub PR URLs are STRICTLY two segments before `pull` — anything else
+  // (e.g. /owner/repo/extra/pull/1) is invalid and would silently mis-parse
+  // if we just took the last segment as `repo`. Require segments[2] === 'pull'.
+  if (segments.length >= 4 && segments[2] === 'pull') {
+    const number = Number(segments[3]);
+    if (Number.isInteger(number) && number > 0) {
+      return { host, owner: segments[0], repo: segments[1], number };
+    }
+  }
+
+  // GitLab: /<group>[/<subgroup>...]/<project>/-/merge_requests/<number>[/<more>]
+  // Locate the `-/merge_requests/<n>` triple anchored at any depth.
+  for (let i = segments.length - 3; i >= 2; i--) {
+    if (segments[i] === '-' && segments[i + 1] === 'merge_requests') {
+      const number = Number(segments[i + 2]);
+      if (Number.isInteger(number) && number > 0) {
+        const project = segments.slice(0, i);
+        if (project.length >= 2) {
+          // owner = full group/subgroup path, repo = final project segment
+          return {
+            host,
+            owner: project.slice(0, -1).join('/'),
+            repo: project[project.length - 1],
+            number,
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Request a Copilot code review on a GitHub PR. The reviewer login MUST include
+ * the `[bot]` suffix or GitHub returns 422 "must be a collaborator". GitLab has
+ * no equivalent — this is a GitHub-only no-op there, signaled with
+ * `{ success: true, skipped: true }` so callers can treat it as a successful
+ * non-event rather than a real failure (avoiding spurious warnings/notifications
+ * on GitLab MRs).
+ *
+ * @param {string} dir - Working directory used to resolve gh auth
+ * @param {string} prUrl - PR URL returned by createPR
+ * @returns {Promise<{success: boolean, skipped?: boolean, error?: string}>}
+ */
+export async function requestCopilotReview(dir, prUrl) {
+  const parsed = parsePullRequestUrl(prUrl);
+  if (!parsed) return { success: false, error: `unparseable PR URL: ${prUrl}` };
+
+  // Decide forge from the PR URL itself — that's the authoritative signal of where
+  // the review request needs to go. Falling back to the repo's `origin` (via
+  // resolveForgeForRepo) is wrong when `dir` isn't a parseable repo, or when the
+  // repo origin disagrees with the PR URL (e.g. GitLab MR URL reached via a
+  // mirror/fork on github.com). Non-GitHub PR URLs short-circuit as a successful
+  // skip so cleanupAgentWorktree doesn't emit a warning for every GitLab MR.
+  if (detectForgeCli(parsed.host) !== 'gh') return { success: true, skipped: true };
+
+  const { cli, env } = await resolveForgeForRepo(dir);
+  // Repo-side resolution might still come back non-gh (e.g. dir is empty/malformed
+  // and resolveForgeForRepo returned a glab host). Belt and suspenders: skip rather
+  // than try to talk to gh with the wrong env.
+  if (cli !== 'gh') return { success: true, skipped: true };
+
+  // Target the same GitHub instance the PR lives on. Without --hostname, gh uses
+  // its current default host, which is wrong for GHES installs or when the user
+  // has multiple gh hosts configured. github.com is gh's implicit default so we
+  // only need to set it explicitly for non-default hosts.
+  const args = ['api'];
+  if (parsed.host && parsed.host !== 'github.com') {
+    args.push('--hostname', parsed.host);
+  }
+  args.push(
+    `repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}/requested_reviewers`,
+    '-X', 'POST',
+    '-f', 'reviewers[]=copilot-pull-request-reviewer[bot]'
+  );
+
+  return new Promise((resolve) => {
+    const child = spawn(cli, args, { cwd: dir, env, shell: false, windowsHide: true });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) resolve({ success: true });
+      else resolve({ success: false, error: stderr.trim() || `gh exited with code ${code}` });
+    });
+    child.on('error', (err) => {
+      resolve({ success: false, error: `gh not available: ${err.message}` });
+    });
+  });
+}
+
+/**
  * Generate a rich PR description from the agent's output summary.
  * Extracts the implementation summary from the tail of the agent output,
  * stripping tool-call artifacts and keeping only the meaningful explanation

@@ -208,13 +208,15 @@ function setPgMode(mode) {
 
 // Prompt user to choose storage mode (TTY only)
 function promptStorageChoice(message, hint) {
-  return new Promise((resolve) => {
-    // Non-TTY (CI, piped scripts) — default to file-based
-    if (!process.stdin.isTTY) {
-      resolve('file');
-      return;
-    }
+  // Stdout redirected means we can't show the prompt — warn and exit 0 without changing mode.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(`⚠️  ${message}`);
+    console.error(`   ${hint}`);
+    console.error('   Start Docker then run: npm run setup');
+    process.exit(0);
+  }
 
+  return new Promise((resolve) => {
     console.log(`⚠️  ${message}`);
     console.log(`   ${hint}`);
     console.log('');

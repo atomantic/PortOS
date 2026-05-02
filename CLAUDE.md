@@ -123,6 +123,12 @@ PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodul
 
 When CoS agents or AI tools work on managed apps outside PortOS, all research, plans, docs, and code for those apps must be written to the target app's own repository/directory -- never to this repo. PortOS stores only its own features, plans, and documentation. If an agent generates a PLAN.md, research doc, or feature spec for another app, it goes in that app's directory.
 
+## Worktrees
+
+When working **directly in the Claude Code TUI** with the user driving, edit the main repo directly — don't spawn a worktree. Use normal feature branches and PRs (or push to `main`) when the work is done. The user is at the keyboard, so there is no risk of stepping on in-flight work.
+
+**Worktrees are required only for CoS sub-agents** spawned out of `server/services/cos/subAgentSpawner.js`. Those run unattended in parallel and need isolation so they don't trample each other or the user's working tree. The worktree manager (`server/services/cos/worktreeManager.js`) handles this automatically — TUI sessions should not duplicate that behavior.
+
 ## Code Conventions
 
 - **No try/catch** - errors bubble to centralized middleware

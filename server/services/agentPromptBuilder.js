@@ -169,8 +169,6 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Build worktree context section if applicable
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
-  // When reviewLoop is enabled alongside openPR, the agent opens the PR during its run
-  const prHandledByAgent = willReviewLoop && willOpenPR;
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
 You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
@@ -178,7 +176,7 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: Commit your changes to this branch.${willOpenPR && !prHandledByAgent ? ' Your commits will be submitted as a pull request to the default branch when your task completes.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'} Do NOT manually switch branches or modify the worktree configuration.
+**Important**: Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'} Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
   // Build pipeline context section if this is a pipeline stage
@@ -194,16 +192,25 @@ Read the previous stage's output from:
 Use the findings from the previous stage to inform your work. If the previous stage produced a JSON results block, parse it to determine which items to process.
 ` : '';
 
-  // Build simplify section if enabled
+  // Build simplify section if enabled. In the worktree-with-openPR flow the
+  // system pushes and opens the PR after the agent exits, so the agent must
+  // only commit (not push) — keep this wording aligned with the worktree
+  // section above.
   const simplifySection = isTruthyMetaFn(task.metadata?.simplify) ? `
 ## Simplify Step
-After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then commit and push using \`/do:push\`.
+After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
 
-  // Build review loop section if enabled
-  const reviewLoopSection = willReviewLoop ? `
-## Review Loop
-After opening the PR, run \`/do:rpr\` to resolve PR review feedback and complete the merge validation. Continue running the review loop until all checks pass and the PR is approved.
+  // Build review loop section if enabled. The agent itself does NOT open the PR
+  // or run /do:rpr — by the time the PR exists, the agent has already exited.
+  // The system requests Copilot review automatically after PR creation on GitHub
+  // PRs. On non-GitHub forges (e.g. GitLab MRs) this step is skipped because the
+  // Copilot reviewer is GitHub-only. Only meaningful when a PR will actually be
+  // created (willOpenPR), since the Copilot review request is a no-op without a
+  // PR URL.
+  const reviewLoopSection = willReviewLoop && willOpenPR ? `
+## Code Review
+After your task completes, the system will request a Copilot code review automatically for GitHub PRs (the step is skipped for GitLab MRs and other non-GitHub forges). You do not need to open the PR or trigger the review yourself — focus on producing high-quality, well-tested code so the review pass goes cleanly.
 ` : '';
 
   // Build JIRA context section if applicable
@@ -305,7 +312,9 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
 3. Test your changes when possible
-4. Commit and push your changes (see Git Hygiene below)
+4. ${worktreeInfo && willOpenPR
+  ? 'Commit your changes (see Git Hygiene below) — do NOT push, the system handles that on exit'
+  : 'Commit and push your changes (see Git Hygiene below)'}
 5. Provide a summary of what was done
 
 ## Guidelines
@@ -316,13 +325,15 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
 - **BTW Messages**: The user may send you additional context while you work. Check for a \`BTW.md\` file in your working directory root — if it exists, read it for important messages from the user. Incorporate that context into your work. Do not delete or modify BTW.md.
-${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : task.metadata?.app && worktreeInfo && willOpenPR ? `- A pull request will be automatically created when your task completes — do NOT open a PR manually.` : task.metadata?.app && worktreeInfo ? `- Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : ``}
+${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : worktreeInfo && willOpenPR ? `- On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${willReviewLoop ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run \`/do:rpr\` or attempt to address review comments yourself; you will have already exited.' : ''}` : worktreeInfo ? `- Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : ``}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
-- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.
+${worktreeInfo && willOpenPR
+  ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run \`git push\` or \`/do:push\` yourself.`
+  : `- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.`}
 ${worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
 
 ## Working Directory

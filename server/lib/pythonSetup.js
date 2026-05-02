@@ -68,6 +68,52 @@ export async function detectPython() {
   return stdout.trim().split(/\r?\n/)[0] || null;
 }
 
+// FLUX.2 runs in its own venv because mflux (MLX) and torch+diffusers-from-git
+// have hostile dependency trees. Bootstrap with `INSTALL_FLUX2=1
+// scripts/setup-image-video.sh`. We probe a small candidate list rather than
+// asking the user to configure it separately — first match wins.
+const FLUX2_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-flux2', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-flux2', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-flux2', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-flux2', 'bin', 'python3'),
+    ];
+
+export const FLUX2_VENV_DEFAULT = FLUX2_VENV_CANDIDATES[0];
+
+let cachedFlux2Python = null;
+export function resolveFlux2Python() {
+  if (cachedFlux2Python && existsSync(cachedFlux2Python)) return cachedFlux2Python;
+  for (const p of FLUX2_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedFlux2Python = p; return p; }
+  }
+  return null;
+}
+
+// Whether the venv can actually run the FLUX.2 pipeline. Distinct from
+// resolveFlux2Python() which only confirms the python binary exists — a
+// killed-mid-install run leaves the binary but no packages, and we'd
+// otherwise report that broken state as "ready" forever. Cached because the
+// import probe spawns a process; bust via invalidateFlux2Health().
+let cachedFlux2Healthy = null;
+export async function isFlux2VenvHealthy() {
+  if (cachedFlux2Healthy !== null) return cachedFlux2Healthy;
+  const py = resolveFlux2Python();
+  if (!py) { cachedFlux2Healthy = false; return false; }
+  const ok = await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], { timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+  cachedFlux2Healthy = ok;
+  return ok;
+}
+export function invalidateFlux2Health() {
+  cachedFlux2Python = null;
+  cachedFlux2Healthy = null;
+}
+
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
 // before exec. Single-user / Tailnet model means we trust the operator, but
 // "you can shell out to anything" is still too sharp — restrict to actual
@@ -171,4 +217,101 @@ export function installPackages(pythonPath, importNames, onLog) {
   });
 
   return { promise, kill: () => { if (!proc.killed) proc.kill('SIGTERM'); } };
+}
+
+// Pip specs for the FLUX.2 venv. Mirrors scripts/setup-image-video.sh so the
+// shell path and the in-app installer stay in sync. diffusers + sdnq are
+// git-only because Flux2KleinPipeline isn't in any tagged release yet.
+export const FLUX2_PIP_SPECS = [
+  'torch>=2.5',
+  'torchvision',
+  'accelerate',
+  'transformers>=4.51',
+  'sentencepiece',
+  'protobuf',
+  'safetensors',
+  'huggingface_hub[hf_xet]',
+  'diffusers @ git+https://github.com/huggingface/diffusers',
+  'sdnq @ git+https://github.com/Disty0/sdnq.git',
+  'peft>=0.17',
+  'optimum-quanto>=0.2.7',
+  'pillow',
+];
+
+// Bootstrap the FLUX.2 venv from inside the app so users don't have to drop to
+// a shell. Drives staged SSE progress: detect → venv → upgrade-pip → install
+// → verify. onLog gets `{ type: 'log' | 'stage' | 'error' | 'complete', stage?, message }`.
+// Returns `{ promise, kill }` like installPackages so the route can SIGTERM
+// pip if the EventSource is closed mid-install.
+export function installFlux2Venv(onLog) {
+  let currentProc = null;
+  let killed = false;
+
+  const stage = (name, message) => onLog({ type: 'stage', stage: name, message });
+  const log = (message) => onLog({ type: 'log', message });
+
+  const runPython = (args) => new Promise((resolve) => {
+    const proc = spawn(args[0], args.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
+    currentProc = proc;
+    const onChunk = (chunk) => {
+      for (const line of chunk.toString().split(/[\r\n]+/)) {
+        const t = line.trim();
+        if (t) log(t);
+      }
+    };
+    proc.stdout.on('data', onChunk);
+    proc.stderr.on('data', onChunk);
+    proc.on('close', (code) => { currentProc = null; resolve(code === 0); });
+    proc.on('error', (err) => { onLog({ type: 'error', message: err.message }); currentProc = null; resolve(false); });
+  });
+
+  const promise = (async () => {
+    stage('detect', 'Looking for system Python…');
+    const basePython = await detectPython();
+    if (!basePython) {
+      onLog({ type: 'error', message: 'No system Python 3 found. Install Python 3.10+ and try again.' });
+      return { ok: false, stage: 'detect' };
+    }
+    log(`Using base Python: ${basePython}`);
+
+    stage('venv', `Creating FLUX.2 venv at ${FLUX2_VENV_DEFAULT}…`);
+    const targetDir = FLUX2_VENV_DEFAULT.replace(IS_WIN ? /\\Scripts\\python\.exe$/ : /\/bin\/python3$/, '');
+    const venvPython = await createVenv(basePython, targetDir).catch((err) => {
+      onLog({ type: 'error', message: `venv creation failed: ${err.message}` });
+      return null;
+    });
+    if (!venvPython) return { ok: false, stage: 'venv' };
+    if (killed) return { ok: false, stage: 'venv', cancelled: true };
+
+    stage('upgrade-pip', 'Upgrading pip + wheel + setuptools…');
+    if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools'])) {
+      return { ok: false, stage: 'upgrade-pip' };
+    }
+    if (killed) return { ok: false, stage: 'upgrade-pip', cancelled: true };
+
+    stage('install', 'Installing torch + diffusers + sdnq + transformers (~6-10 min — large download)…');
+    if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
+      return { ok: false, stage: 'install' };
+    }
+    if (killed) return { ok: false, stage: 'install', cancelled: true };
+
+    stage('verify', 'Verifying Flux2KleinPipeline import…');
+    if (!await runPython([venvPython, '-c', 'from diffusers import Flux2KleinPipeline; print("ok")'])) {
+      onLog({ type: 'error', message: 'Verification failed: Flux2KleinPipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
+      return { ok: false, stage: 'verify' };
+    }
+
+    invalidateFlux2Health();
+
+    onLog({ type: 'complete', message: `FLUX.2 venv ready: ${venvPython}` });
+    return { ok: true, pythonPath: venvPython };
+  })();
+
+  return {
+    promise,
+    kill: () => {
+      killed = true;
+      if (currentProc && !currentProc.killed) currentProc.kill('SIGTERM');
+    },
+  };
 }

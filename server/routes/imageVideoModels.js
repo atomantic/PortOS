@@ -15,6 +15,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, formatBytes, dirSize } from '../lib/fileUtils.js';
+import { loadMediaModels } from '../lib/mediaModels.js';
 
 const router = Router();
 const HF_DEFAULT_HUB = join(homedir(), '.cache', 'huggingface', 'hub');
@@ -25,15 +26,25 @@ const HF_DEFAULT_HUB = join(homedir(), '.cache', 'huggingface', 'hub');
 const HF_HUB_DIR = () =>
   process.env.HF_HOME ? join(process.env.HF_HOME, 'hub') : HF_DEFAULT_HUB;
 
-// Friendly labels for our default model picks. Anything else is shown by repo id.
-const APP_MODELS = {
-  'black-forest-labs--FLUX.1-schnell': 'Flux 1 Schnell (Image)',
-  'black-forest-labs--FLUX.1-dev': 'Flux 1 Dev (Image)',
-  'notapalindrome--ltx2-mlx-av': 'LTX-2 Unified (Video)',
-  'notapalindrome--ltx23-mlx-av': 'LTX-2.3 Unified (Video)',
-  'notapalindrome--ltx23-mlx-av-q4': 'LTX-2.3 Distilled Q4 (Video)',
-  'mlx-community--gemma-3-12b-it-4bit': 'Gemma 3 12B 4-bit (Text Encoder)',
+// Friendly labels for known models, derived from the media-models registry.
+// HF stores cache dirs as `models--<org>--<name>` (slashes replaced with --).
+// Image gen still has a few well-known repos (Flux) that the registry tracks
+// only by short id, so we add those here as a small static fallback.
+const buildAppModels = () => {
+  const reg = loadMediaModels();
+  const out = {
+    'black-forest-labs--FLUX.1-schnell': 'Flux 1 Schnell (Image)',
+    'black-forest-labs--FLUX.1-dev': 'Flux 1 Dev (Image)',
+  };
+  const addEntry = (m, suffix) => {
+    if (!m.repo) return;
+    out[m.repo.replace(/\//g, '--')] = `${m.name} ${suffix}`;
+  };
+  for (const m of [...(reg.video?.macos || []), ...(reg.video?.windows || [])]) addEntry(m, '(Video)');
+  for (const t of (reg.textEncoders || [])) addEntry({ name: t.label, repo: t.repo }, '(Text Encoder)');
+  return out;
 };
+const APP_MODELS = buildAppModels();
 
 // Bound concurrent dirSize calls — each one spawns a `du` (or PowerShell)
 // child, and a hub with 50+ models would otherwise create a process storm

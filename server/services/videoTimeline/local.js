@@ -1,0 +1,466 @@
+/**
+ * Video Timeline — non-linear editor backend.
+ *
+ * Lets users compose multiple already-generated video clips into a single
+ * output video with per-clip in/out trim and drag-drop ordering. Distinct
+ * from videoGen/local.js#stitchVideos: that one is stream-copy concat (no
+ * trim, requires identical codec/dims). This one re-encodes through a
+ * filter_complex graph so trims, mixed-audio inputs, and dim mismatches
+ * across LTX-2 model versions all work safely.
+ *
+ * Projects persist to data/video-projects.json. Output entries land in the
+ * existing data/video-history.json with a `timelineProjectId` flag so
+ * Media History shows them alongside generated clips.
+ */
+
+import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import { unlink } from 'fs/promises';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
+import { loadHistory, saveHistory } from '../videoGen/local.js';
+
+const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
+
+// Per-project render mutex map. Keyed by projectId so two different projects
+// can render in parallel; same project re-render returns 409 with the
+// existing jobId so the UI can attach SSE instead of getting a stale failure.
+const jobs = new Map();
+const projectRenders = new Map(); // projectId → jobId
+
+export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
+
+/**
+ * Return the current status of a render job, or null if unknown.
+ * Lets external callers (e.g. stitchRunner) detect ffmpeg failures fast
+ * instead of waiting for a polling timeout.
+ * @param {string} jobId
+ * @returns {{ status: string, error?: string } | null}
+ */
+export function getRenderJobStatus(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return null;
+  return { status: job.status, error: job.lastError };
+}
+
+// =====================================================================
+// Project CRUD
+// =====================================================================
+
+export const loadProjects = async () => {
+  // Defend against a hand-edited / corrupted JSON state file. Without this,
+  // a non-array root would crash every CRUD path with "x.findIndex is not a
+  // function" instead of degrading gracefully to an empty list.
+  const raw = await readJSONFile(PROJECTS_FILE, []);
+  return Array.isArray(raw) ? raw : [];
+};
+const saveProjects = async (projects) => {
+  // First write on a fresh install lands before PATHS.data is created by any
+  // other service — without ensureDir it would ENOENT on the temp-file write
+  // inside atomicWrite.
+  await ensureDir(PATHS.data);
+  return atomicWrite(PROJECTS_FILE, projects);
+};
+
+export async function listProjects() {
+  return loadProjects();
+}
+
+export async function getProject(id) {
+  const projects = await loadProjects();
+  return projects.find((p) => p.id === id) || null;
+}
+
+export async function createProject(name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new ServerError('Project name required', { status: 400, code: 'VALIDATION_ERROR' });
+  const projects = await loadProjects();
+  const now = new Date().toISOString();
+  const project = {
+    id: randomUUID(),
+    name: trimmed,
+    createdAt: now,
+    updatedAt: now,
+    clips: [],
+  };
+  projects.unshift(project);
+  await saveProjects(projects);
+  console.log(`🎬 Timeline project created: ${project.id.slice(0, 8)} "${project.name}"`);
+  return project;
+}
+
+// Validate a single clip patch entry. Returns the cleaned object or throws.
+// We don't trust client-supplied numFrames/fps — those come from the history
+// entry at render time. Only clipId + inSec/outSec are persisted.
+const validateClip = (raw, idx) => {
+  if (!raw || typeof raw !== 'object') {
+    throw new ServerError(`Clip ${idx}: must be an object`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const clipId = String(raw.clipId || '').trim();
+  if (!/^[a-f0-9-]{36}$/i.test(clipId)) {
+    throw new ServerError(`Clip ${idx}: invalid clipId`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const inSec = Number(raw.inSec);
+  const outSec = Number(raw.outSec);
+  if (!Number.isFinite(inSec) || !Number.isFinite(outSec) || inSec < 0 || outSec <= inSec) {
+    throw new ServerError(`Clip ${idx}: inSec/outSec invalid (need 0 ≤ inSec < outSec)`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return { clipId, inSec, outSec };
+};
+
+export async function updateProject(id, patch, expectedUpdatedAt) {
+  const projects = await loadProjects();
+  const idx = projects.findIndex((p) => p.id === id);
+  if (idx === -1) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const project = projects[idx];
+  // Treat any explicitly-provided value (including '' or wrong type) as a
+  // concurrency assertion — only `undefined` skips the check. A truthy guard
+  // would silently let an empty-string `expectedUpdatedAt` clobber a
+  // newer-than-claimed project.
+  if (expectedUpdatedAt !== undefined) {
+    if (typeof expectedUpdatedAt !== 'string' || project.updatedAt !== expectedUpdatedAt) {
+      throw new ServerError('Project was modified by another writer', {
+        status: 409, code: 'CONFLICT', context: { current: project.updatedAt },
+      });
+    }
+  }
+  if (patch.name != null) {
+    const trimmed = String(patch.name).trim();
+    if (!trimmed) throw new ServerError('Project name cannot be empty', { status: 400, code: 'VALIDATION_ERROR' });
+    project.name = trimmed;
+  }
+  if (patch.clips != null) {
+    if (!Array.isArray(patch.clips)) {
+      throw new ServerError('clips must be an array', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    project.clips = patch.clips.map(validateClip);
+  }
+  project.updatedAt = new Date().toISOString();
+  projects[idx] = project;
+  await saveProjects(projects);
+  return project;
+}
+
+export async function deleteProject(id) {
+  const projects = await loadProjects();
+  const filtered = projects.filter((p) => p.id !== id);
+  if (filtered.length === projects.length) {
+    throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  await saveProjects(filtered);
+  console.log(`🗑️ Timeline project deleted: ${id.slice(0, 8)}`);
+  return { ok: true };
+}
+
+// =====================================================================
+// Render pipeline
+// =====================================================================
+
+// ffprobe a clip to find out whether it has an audio stream. Used to decide
+// whether to wire the clip's audio through trim/aresample chain or to insert
+// an anullsrc silent input. Falls back to false when ffprobe is missing so
+// the render can still proceed (silent track inserted for every clip).
+const probeAudio = async (videoPath) => {
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return false;
+  return new Promise((resolve) => {
+    const proc = spawn(ffprobe, [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_type',
+      '-of', 'default=nw=1:nk=1',
+      videoPath,
+    ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    proc.stdout.on('data', (c) => { out += c.toString(); });
+    proc.on('close', () => resolve(out.trim() === 'audio'));
+    proc.on('error', () => resolve(false));
+  });
+};
+
+// Resolve every clip in a project to a verified on-disk path + duration +
+// audio-presence. Throws ServerError(404) listing every missing/invalid clip
+// so the editor can highlight them. Returns the array of resolved entries
+// in project order.
+export async function resolveClips(project) {
+  if (!Array.isArray(project.clips) || project.clips.length === 0) {
+    throw new ServerError('Project has no clips', { status: 400, code: 'EMPTY_PROJECT' });
+  }
+  const history = await loadHistory();
+  // loadHistory comes from the JSON state file; defend against corruption so
+  // a non-array root degrades to "all clips missing" rather than crashing.
+  const historyList = Array.isArray(history) ? history : [];
+  const historyMap = new Map(historyList.map((h) => [h.id, h]));
+  const missing = [];
+  const prepared = [];
+  for (let i = 0; i < project.clips.length; i++) {
+    const ref = project.clips[i];
+    const entry = historyMap.get(ref.clipId);
+    if (!entry) { missing.push(ref.clipId); continue; }
+    const videoPath = safeUnder(PATHS.videos, entry.filename);
+    if (!videoPath || !existsSync(videoPath)) { missing.push(ref.clipId); continue; }
+    const sourceDuration = entry.numFrames && entry.fps ? entry.numFrames / entry.fps : null;
+    const inSec = Math.max(0, ref.inSec);
+    const outSec = sourceDuration != null ? Math.min(ref.outSec, sourceDuration) : ref.outSec;
+    if (outSec - inSec < 1 / Math.max(1, entry.fps || 24)) {
+      throw new ServerError(`Clip ${i} trim too short — must be ≥ 1 frame`, {
+        status: 400, code: 'CLIP_TOO_SHORT', context: { index: i, clipId: ref.clipId },
+      });
+    }
+    prepared.push({ i, ref, entry, videoPath, inSec, outSec });
+  }
+  if (missing.length > 0) {
+    throw new ServerError(`Missing source clips: ${missing.length}`, {
+      status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missing },
+    });
+  }
+  // ffprobe spawns one child per clip. Parallelize, but cap concurrency so a
+  // 200-clip project doesn't fork-bomb on render startup.
+  const PROBE_CONCURRENCY = 8;
+  const audioFlags = new Array(prepared.length);
+  for (let start = 0; start < prepared.length; start += PROBE_CONCURRENCY) {
+    const batch = prepared.slice(start, start + PROBE_CONCURRENCY);
+    const results = await Promise.all(batch.map((p) => probeAudio(p.videoPath)));
+    for (let j = 0; j < results.length; j++) audioFlags[start + j] = results[j];
+  }
+  return prepared.map((p, idx) => ({
+    index: p.i,
+    clipId: p.ref.clipId,
+    videoPath: p.videoPath,
+    inSec: p.inSec,
+    outSec: p.outSec,
+    duration: p.outSec - p.inSec,
+    width: p.entry.width,
+    height: p.entry.height,
+    fps: p.entry.fps,
+    hasAudio: audioFlags[idx],
+  }));
+}
+
+// scale+pad, aresample, and aformat are unconditional belt-and-suspenders.
+// Without them, mixed LTX-2 versions error with "Input link parameters do
+// not match" mid-render.
+export function buildFfmpegArgs(clips, outputPath) {
+  if (clips.length === 0) throw new Error('buildFfmpegArgs: empty clips');
+  const canonW = clips[0].width;
+  const canonH = clips[0].height;
+
+  const inputs = [];
+  const filters = [];
+  const concatStreams = [];
+
+  let inputIdx = 0;
+  const indices = clips.map((c) => {
+    const vIdx = inputIdx++;
+    inputs.push('-i', c.videoPath);
+    let aIdx;
+    if (c.hasAudio) {
+      aIdx = vIdx;
+    } else {
+      // -t bounds the otherwise-infinite anullsrc to match the trimmed clip
+      // duration so concat=v=1:a=1 gets a length-matched silent track.
+      aIdx = inputIdx++;
+      inputs.push('-f', 'lavfi', '-t', String(c.duration), '-i', `anullsrc=channel_layout=stereo:sample_rate=48000`);
+    }
+    return { vIdx, aIdx };
+  });
+
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i];
+    const { vIdx, aIdx } = indices[i];
+    // fps=<canon> resamples each clip to the timeline's canonical frame rate;
+    // without it, concat fails with "Input link parameters do not match" when
+    // a project mixes clips of different fps (e.g. a 24fps generation and a
+    // 30fps one).
+    filters.push(
+      `[${vIdx}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${clips[0].fps || 24},trim=start=${c.inSec}:end=${c.outSec},setpts=PTS-STARTPTS[v${i}]`
+    );
+    if (c.hasAudio) {
+      filters.push(
+        `[${aIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=start=${c.inSec}:end=${c.outSec},asetpts=PTS-STARTPTS[a${i}]`
+      );
+    } else {
+      // The silent input must match the same sample-format/layout as the
+      // real-audio branches; concat=v=1:a=1 fails fast with "Input link
+      // parameters do not match" if they diverge.
+      filters.push(
+        `[${aIdx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`
+      );
+    }
+    concatStreams.push(`[v${i}][a${i}]`);
+  }
+
+  filters.push(`${concatStreams.join('')}concat=n=${clips.length}:v=1:a=1[outv][outa]`);
+
+  const totalDuration = clips.reduce((s, c) => s + c.duration, 0);
+
+  const args = [
+    ...inputs,
+    '-filter_complex', filters.join(';'),
+    '-map', '[outv]',
+    '-map', '[outa]',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '18',
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-movflags', '+faststart',
+    '-progress', 'pipe:2',
+    '-y',
+    outputPath,
+  ];
+
+  return { args, totalDuration, canonW, canonH, fps: clips[0].fps };
+}
+
+export function cancelRender(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || !job.process) return false;
+  const proc = job.process;
+  proc.kill('SIGTERM');
+  setTimeout(() => {
+    if (job.process === proc && proc.exitCode === null && proc.signalCode === null) {
+      console.log(`⚠️ ffmpeg render didn't exit on SIGTERM — escalating to SIGKILL`);
+      proc.kill('SIGKILL');
+    }
+  }, 8000);
+  return true;
+}
+
+export async function renderProject(projectId) {
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+
+  // Per-project mutex — return the existing jobId so the UI can re-attach
+  // SSE instead of getting a stale 500. A different project can render in
+  // parallel; only same-project re-entry is blocked.
+  const existingJob = projectRenders.get(projectId);
+  if (existingJob && jobs.has(existingJob)) {
+    throw new ServerError('Render already in progress for this project', {
+      status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId: existingJob },
+    });
+  }
+
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
+
+  // Resolve clips and build args BEFORE claiming the mutex — if either step
+  // throws (missing clips, validation), a stale projectRenders entry would
+  // permanently block future renders of this project.
+  const clips = await resolveClips(project);
+  await ensureDir(PATHS.videos);
+  await ensureDir(PATHS.videoThumbnails);
+
+  const jobId = randomUUID();
+  const filename = `timeline-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
+  const outputPath = join(PATHS.videos, filename);
+  const { args, totalDuration, canonW, canonH, fps } = buildFfmpegArgs(clips, outputPath);
+
+  const job = {
+    id: jobId,
+    projectId,
+    status: 'running',
+    clients: [],
+    process: null,
+    totalDuration,
+  };
+  jobs.set(jobId, job);
+  projectRenders.set(projectId, jobId);
+
+  console.log(`🎞️ Rendering timeline [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} duration=${totalDuration.toFixed(2)}s`);
+
+  const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  job.process = proc;
+
+  // ffmpeg's -progress pipe:2 emits key=value lines, one per line, every
+  // few hundred ms. The relevant key is `out_time_us` (microseconds of
+  // output written so far). Divide by total duration to get a 0..1 ratio.
+  let stderrBuf = '';
+  proc.stderr.on('data', (chunk) => {
+    stderrBuf += chunk.toString();
+    const lines = stderrBuf.split('\n');
+    stderrBuf = lines.pop();
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      const eq = line.indexOf('=');
+      if (eq <= 0) continue;
+      const key = line.slice(0, eq);
+      const val = line.slice(eq + 1);
+      if (key === 'out_time_us') {
+        const us = parseInt(val, 10);
+        if (Number.isFinite(us) && totalDuration > 0) {
+          const progress = Math.min(1, (us / 1_000_000) / totalDuration);
+          broadcastSse(job, { type: 'progress', progress });
+        }
+      } else if (key === 'progress' && val === 'end') {
+        broadcastSse(job, { type: 'progress', progress: 1 });
+      }
+    }
+  });
+
+  proc.on('error', (err) => {
+    job.status = 'error';
+    const reason = `Failed to spawn ffmpeg: ${err.message}`;
+    job.lastError = reason;
+    console.log(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    projectRenders.delete(projectId);
+    closeJobAfterDelay(jobs, jobId);
+  });
+
+  proc.on('close', async (code, signal) => {
+    job.process = null;
+    if (code !== 0) {
+      const cancelled = signal === 'SIGTERM' || signal === 'SIGKILL';
+      job.status = cancelled ? 'cancelled' : 'error';
+      const reason = cancelled
+        ? 'Render cancelled'
+        : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
+      job.lastError = reason;
+      console.log(`${cancelled ? '🛑' : '❌'} Timeline render ${cancelled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+      await unlink(outputPath).catch(() => {});
+      broadcastSse(job, { type: cancelled ? 'cancelled' : 'error', error: reason });
+      projectRenders.delete(projectId);
+      closeJobAfterDelay(jobs, jobId);
+      return;
+    }
+    job.status = 'complete';
+    // The encode args already include -movflags +faststart, so no separate
+    // remux pass is needed here.
+    const thumb = await generateThumbnail(outputPath, jobId);
+
+    // Push to existing video history with a timelineProjectId flag so the
+    // Media History page picks it up alongside generated clips.
+    const renderedNumFrames = Math.round(totalDuration * (fps || 24));
+    const meta = {
+      id: jobId,
+      prompt: `Timeline: ${project.name}`,
+      modelId: 'timeline',
+      seed: 0,
+      width: canonW,
+      height: canonH,
+      numFrames: renderedNumFrames,
+      fps: fps || 24,
+      filename,
+      thumbnail: thumb,
+      createdAt: new Date().toISOString(),
+      timelineProjectId: projectId,
+    };
+    const loadedHistory = await loadHistory();
+    const history = Array.isArray(loadedHistory) ? loadedHistory : [];
+    history.unshift(meta);
+    await saveHistory(history);
+    console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
+    broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
+    projectRenders.delete(projectId);
+    closeJobAfterDelay(jobs, jobId);
+  });
+
+  return { jobId };
+}

@@ -92,7 +92,10 @@ export default function MediaHistory() {
   const handleContinue = async (item) => {
     try {
       const { filename } = await extractLastFrame(item.id);
-      navigate(`/media/video?sourceImageFile=${encodeURIComponent(filename)}`);
+      const params = new URLSearchParams({ sourceImageFile: filename });
+      if (item?.width) params.set('w', String(item.width));
+      if (item?.height) params.set('h', String(item.height));
+      navigate(`/media/video?${params.toString()}`);
     } catch (err) {
       toast.error(err.message || 'Failed to extract last frame');
     }

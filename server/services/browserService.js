@@ -4,10 +4,10 @@
  * Stores config in data/browser-config.json
  */
 
-import { readFile, writeFile, readdir, stat } from 'fs/promises';
+import { readFile, writeFile, readdir, stat, unlink } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { join } from 'path';
+import { join, basename, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -301,6 +301,42 @@ export async function getDownloads() {
   // Most recent first
   files.sort((a, b) => b.modified.localeCompare(a.modified));
   return { downloadDir, files };
+}
+
+const DOWNLOAD_MIME_TYPES = {
+  '.txt': 'text/plain', '.md': 'text/markdown', '.json': 'application/json',
+  '.csv': 'text/csv', '.xml': 'application/xml', '.pdf': 'application/pdf',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.zip': 'application/zip', '.tar': 'application/x-tar', '.gz': 'application/gzip',
+  '.7z': 'application/x-7z-compressed'
+};
+
+export async function resolveDownload(name) {
+  const config = await loadConfig();
+  const downloadDir = resolve(config.downloadDir || DEFAULT_DOWNLOAD_DIR);
+  const safeName = basename(name || '');
+  if (!safeName || safeName.startsWith('.') || safeName.endsWith('.crdownload')) return null;
+  const absPath = resolve(downloadDir, safeName);
+  if (!absPath.startsWith(downloadDir + '/')) return null;
+  const info = await stat(absPath).catch(() => null);
+  if (!info?.isFile()) return null;
+  const ext = extname(safeName).toLowerCase();
+  return {
+    absPath,
+    name: safeName,
+    ext,
+    mime: DOWNLOAD_MIME_TYPES[ext] || 'application/octet-stream'
+  };
+}
+
+export async function deleteDownload(name) {
+  const file = await resolveDownload(name);
+  if (!file) return false;
+  await unlink(file.absPath);
+  return true;
 }
 
 // ---------- Full combined status ----------

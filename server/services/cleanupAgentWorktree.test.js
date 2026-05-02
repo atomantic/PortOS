@@ -159,6 +159,7 @@ vi.mock('./git.js', () => ({
   createPR: vi.fn(),
   generatePRDescription: vi.fn(),
   deleteBranch: vi.fn().mockResolvedValue(undefined),
+  requestCopilotReview: vi.fn().mockResolvedValue({ success: true }),
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null })
 }));
 
@@ -384,6 +385,63 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     expect(git.push).not.toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  // --- requestCopilotReview flag tests (regression for the openPR && !reviewLoop bug) ---
+
+  it('should request a Copilot review after PR creation when requestCopilotReview is true', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/7' });
+
+    await cleanupAgentWorktree('agent-1', true, { openPR: true, requestCopilotReview: true, description: 'Test' });
+
+    expect(git.requestCopilotReview).toHaveBeenCalledWith('/mock/root/data/cos/worktrees/agent-1', 'https://github.com/test/repo/pull/7');
+  });
+
+  it('should NOT request a Copilot review when requestCopilotReview is false', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/8' });
+
+    await cleanupAgentWorktree('agent-1', true, { openPR: true, requestCopilotReview: false, description: 'Test' });
+
+    expect(git.requestCopilotReview).not.toHaveBeenCalled();
+  });
+
+  it('should still create PR (not auto-merge) when both openPR and requestCopilotReview are true — regression', async () => {
+    // Regression for the bug where `openPR: taskOpenPR && !taskReviewLoop` skipped
+    // PR creation when both flags were set, causing auto-merge into main with no PR/review.
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/9' });
+
+    await cleanupAgentWorktree('agent-1', true, { openPR: true, requestCopilotReview: true, description: 'Test' });
+
+    expect(git.createPR).toHaveBeenCalled();
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+  });
+
+  it('should record warning but still complete cleanup when Copilot review request fails', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/10' });
+    git.requestCopilotReview.mockResolvedValue({ success: false, error: 'gh exited with code 1' });
+
+    const warnings = await cleanupAgentWorktree('agent-1', true, { openPR: true, requestCopilotReview: true, description: 'Test' });
+
+    expect(warnings.some(w => w.includes('Copilot review request failed'))).toBe(true);
+    expect(removeWorktree).toHaveBeenCalled();
+  });
+
+  it('should NOT record a warning when Copilot review is skipped on a non-GitHub forge', async () => {
+    // Regression: GitLab MRs would previously emit a Copilot review request failure
+    // warning since the helper returned { success: false, error: '...GitHub-only' }.
+    // The new contract: { success: true, skipped: true } → no warning, info-level log.
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://gitlab.com/group/proj/-/merge_requests/11' });
+    git.requestCopilotReview.mockResolvedValue({ success: true, skipped: true });
+
+    const warnings = await cleanupAgentWorktree('agent-1', true, { openPR: true, requestCopilotReview: true, description: 'Test' });
+
+    expect(warnings.some(w => w.includes('Copilot review'))).toBe(false);
+    expect(removeWorktree).toHaveBeenCalled();
   });
 });
 

@@ -55,3 +55,4 @@ browser/node_modules/
 browser/package-lock.json
 client/package-lock.json
 server/package-lock.json
+__pycache__/

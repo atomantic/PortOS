@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli } from './git.js';
+import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli, parsePullRequestUrl, requestCopilotReview } from './git.js';
 
 describe('parseGitRemote', () => {
   it('parses GitHub SSH urls', () => {
@@ -113,6 +113,101 @@ describe('createPR', () => {
     // The error must come from gh/spawn behavior, NOT from a missing-import bug.
     expect(result.error).not.toMatch(/spawn is not defined/);
   });
+});
+
+describe('parsePullRequestUrl', () => {
+  it('parses GitHub PR URLs', () => {
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/185')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 185
+    });
+    expect(parsePullRequestUrl('http://github.example.com/org/repo/pull/1')).toEqual({
+      host: 'github.example.com', owner: 'org', repo: 'repo', number: 1
+    });
+  });
+
+  it('parses GitLab MR URLs', () => {
+    expect(parsePullRequestUrl('https://gitlab.com/group/project/-/merge_requests/42')).toEqual({
+      host: 'gitlab.com', owner: 'group', repo: 'project', number: 42
+    });
+  });
+
+  it('parses GitLab MR URLs with subgroups (owner = full group path)', () => {
+    expect(parsePullRequestUrl('https://gitlab.com/group/subgroup/project/-/merge_requests/7')).toEqual({
+      host: 'gitlab.com', owner: 'group/subgroup', repo: 'project', number: 7
+    });
+    expect(parsePullRequestUrl('https://gitlab.example.com/g1/g2/g3/proj/-/merge_requests/100')).toEqual({
+      host: 'gitlab.example.com', owner: 'g1/g2/g3', repo: 'proj', number: 100
+    });
+  });
+
+  it('tolerates trailing path segments and query/hash fragments', () => {
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/186/files')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 186
+    });
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/186/commits/abc')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 186
+    });
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/186?diff=split')).toEqual({
+      host: 'github.com', owner: 'atomantic', repo: 'PortOS', number: 186
+    });
+    expect(parsePullRequestUrl('https://gitlab.com/group/sub/proj/-/merge_requests/9/diffs')).toEqual({
+      host: 'gitlab.com', owner: 'group/sub', repo: 'proj', number: 9
+    });
+  });
+
+  it('returns null for invalid input', () => {
+    expect(parsePullRequestUrl(null)).toBeNull();
+    expect(parsePullRequestUrl('')).toBeNull();
+    expect(parsePullRequestUrl(undefined)).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS')).toBeNull();
+    expect(parsePullRequestUrl('not a url')).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/notanumber')).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/atomantic/PortOS/pull/0')).toBeNull();
+  });
+
+  it('rejects GitHub URLs with extra path segments before /pull/ (no silent mis-parse)', () => {
+    // GitHub PR URLs are strictly /<owner>/<repo>/pull/<n>. Anything with extra
+    // segments before `pull` (e.g. /owner/repo/extra/pull/1) is invalid; we must
+    // return null rather than silently picking the wrong segment as `repo`.
+    expect(parsePullRequestUrl('https://github.com/owner/repo/extra/pull/1')).toBeNull();
+    expect(parsePullRequestUrl('https://github.com/owner/repo/extra/more/pull/1')).toBeNull();
+  });
+
+  it('rejects non-http(s) protocols, empty hosts, and explicit ports', () => {
+    // file:// has an empty host — would yield host="" and route gh to nowhere.
+    expect(parsePullRequestUrl('file:///atomantic/PortOS/pull/1')).toBeNull();
+    // Other non-web schemes are never valid PR URLs.
+    expect(parsePullRequestUrl('ftp://github.com/atomantic/PortOS/pull/1')).toBeNull();
+    expect(parsePullRequestUrl('javascript:alert(1)')).toBeNull();
+    // Custom ports get silently dropped by `parsed.hostname`; reject so we
+    // don't target the wrong server.
+    expect(parsePullRequestUrl('https://github.com:8443/atomantic/PortOS/pull/1')).toBeNull();
+    expect(parsePullRequestUrl('http://gitlab.example.com:9000/group/proj/-/merge_requests/1')).toBeNull();
+  });
+});
+
+describe('requestCopilotReview', () => {
+  it('returns structured failure for unparseable URL without invoking gh', async () => {
+    const result = await requestCopilotReview('/nonexistent-path-for-test', 'not a url');
+    expect(result).toEqual({ success: false, error: expect.stringContaining('unparseable PR URL') });
+  });
+
+  it('returns { success: true, skipped: true } when the PR URL host is a non-GitHub forge', async () => {
+    // The current implementation short-circuits on the PR URL's host (via
+    // detectForgeCli(parsed.host)) before consulting the repo's origin remote.
+    // A GitLab MR URL therefore skips cleanly regardless of `dir` — no git repo,
+    // no system git binary, no environment-specific setup needed.
+    const result = await requestCopilotReview('/nonexistent-path-for-test', 'https://gitlab.com/group/proj/-/merge_requests/1');
+    expect(result).toEqual({ success: true, skipped: true });
+  });
+
+  // The success/failure paths invoke spawn() against the real `gh` binary.
+  // Module-level mocking of `child_process` is fragile here: git.js captures
+  // `spawn` at load time and `resolveForgeForRepo` itself shells out to git
+  // and gh, making the mock surface bigger than the assertion is worth.
+  // The mocked-spawn coverage is provided in cleanupAgentWorktree.test.js,
+  // which mocks `./git.js` wholesale — here we just verify the parser/skip
+  // contract so the request never reaches a real network call.
 });
 
 describe('extractAgentSummary', () => {

@@ -54,7 +54,7 @@ export function BackupTab() {
   }
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-5">
+    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
       <div className="space-y-1">
         <label className="block text-sm text-gray-400">Destination Path</label>
         <input
@@ -103,7 +103,8 @@ export function BackupTab() {
           <button
             onClick={addExclude}
             disabled={!newExclude.trim()}
-            className="px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50"
+            aria-label="Add exclude path"
+            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
           >
             <Plus size={16} />
           </button>
@@ -125,7 +126,7 @@ export function BackupTab() {
       <button
         onClick={handleSave}
         disabled={saving}
-        className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+        className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
       >
         {saving ? <BrailleSpinner /> : <Save size={16} />}
         Save
