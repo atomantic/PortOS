@@ -63,7 +63,7 @@ function Invoke-Logged {
     $cmd = $CmdArgs[0]
     $args = @()
     if ($CmdArgs.Count -gt 1) { $args = $CmdArgs[1..($CmdArgs.Count - 1)] }
-    "" | & $cmd @args >> $UpdateLog 2>&1
+    & $cmd @args >> $UpdateLog 2>&1
 }
 
 Write-SafeHost "===================================" -ForegroundColor Cyan
