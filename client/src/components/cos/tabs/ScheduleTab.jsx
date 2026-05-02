@@ -483,10 +483,8 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
                 </div>
                 <ToggleSwitch
                   enabled={enabled}
-                  onChange={undefined}
                   disabled={updating}
-                  tabIndex={-1}
-                  ariaLabel={undefined}
+                  decorative
                 />
               </button>
             );
