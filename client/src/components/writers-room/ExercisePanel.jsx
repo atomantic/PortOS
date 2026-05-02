@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Timer, Play, Pause, StopCircle, X, Plus } from 'lucide-react';
+import { Timer, Play, StopCircle, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   listWritersRoomExercises,
@@ -7,6 +7,7 @@ import {
   finishWritersRoomExercise,
   discardWritersRoomExercise,
 } from '../../services/apiWritersRoom';
+import { countWords, formatCountdown } from '../../utils/formatters';
 
 const DURATION_PRESETS = [
   { label: '5 min', seconds: 300 },
@@ -14,19 +15,6 @@ const DURATION_PRESETS = [
   { label: '15 min', seconds: 900 },
   { label: '25 min', seconds: 1500 },
 ];
-
-function countWords(text) {
-  if (!text) return 0;
-  const m = String(text).trim().match(/\S+/g);
-  return m ? m.length : 0;
-}
-
-function formatTime(secondsLeft) {
-  const safe = Math.max(0, Math.round(secondsLeft));
-  const m = Math.floor(safe / 60);
-  const s = safe % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
 
 export default function ExercisePanel({ activeWork, onClose }) {
   const [history, setHistory] = useState([]);
@@ -153,7 +141,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
         <div className="flex-1 flex flex-col min-h-0">
           <div className="px-3 py-2 border-b border-port-border bg-port-bg/40 flex items-center gap-3">
             <div className={`text-2xl font-mono ${expired ? 'text-port-error' : 'text-white'}`}>
-              {formatTime(remaining)}
+              {formatCountdown(remaining)}
             </div>
             <div className="flex-1 text-xs text-gray-400">
               <div>{wordsAdded} words this session</div>

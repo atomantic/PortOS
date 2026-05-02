@@ -110,6 +110,27 @@ export function formatBytes(bytes, decimals = 1) {
 }
 
 /**
+ * Count whitespace-separated words in a string. Matches the server-side
+ * countWords in writers-room storage so client + server agree.
+ */
+export function countWords(text) {
+  if (!text) return 0;
+  const m = String(text).trim().match(/\S+/g);
+  return m ? m.length : 0;
+}
+
+/**
+ * Format a number of seconds as MM:SS (e.g. 75 → "01:15"). Used for sprint
+ * timers and other countdowns. Negative values clamp to 0.
+ */
+export function formatCountdown(seconds) {
+  const safe = Math.max(0, Math.round(seconds));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/**
  * Format a timestamp as a localized date+time string (e.g., "Apr 1, 2026, 1:30 PM")
  * @param {string|Date|null} value - ISO timestamp or Date object
  * @returns {string} Formatted date and time, or 'Unknown time' for invalid input

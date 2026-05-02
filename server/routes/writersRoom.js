@@ -116,8 +116,8 @@ router.post('/exercises/:id/finish', asyncHandler(async (req, res) => {
   res.json(await finishExercise(req.params.id, data));
 }));
 
-router.post('/exercises/:id/discard', asyncHandler(async (_req, res) => {
-  res.json(await discardExercise(_req.params.id));
+router.post('/exercises/:id/discard', asyncHandler(async (req, res) => {
+  res.json(await discardExercise(req.params.id));
 }));
 
 export default router;

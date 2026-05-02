@@ -16,10 +16,10 @@
 
 import { join } from 'path';
 import { randomUUID, createHash } from 'crypto';
-import { readFile, writeFile, rm, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { readFile, rm, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { WORK_KINDS, WORK_STATUSES, EXERCISE_STATUSES } from '../../lib/writersRoomPresets.js';
 
 // Paths are resolved lazily so tests can swap PATHS.data via vi.mock without
 // the module-load snapshot freezing them at import time.
@@ -27,10 +27,6 @@ const root = () => join(PATHS.data, 'writers-room');
 const foldersFile = () => join(root(), 'folders.json');
 const exercisesFile = () => join(root(), 'exercises.json');
 const worksDir = () => join(root(), 'works');
-
-const WORK_KINDS = ['novel', 'short-story', 'screenplay', 'essay', 'treatment', 'other'];
-const WORK_STATUSES = ['idea', 'drafting', 'revision', 'adaptation', 'rendering', 'complete', 'archived'];
-const EXERCISE_STATUSES = ['running', 'paused', 'finished', 'discarded'];
 
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 const DRAFT_ID_RE = /^wr-draft-[0-9a-f-]+$/i;
@@ -184,9 +180,11 @@ export async function deleteFolder(id) {
 // ---------- work CRUD ----------
 
 async function loadManifest(workId) {
-  if (!existsSync(manifestPath(workId))) return null;
-  const content = await readFile(manifestPath(workId), 'utf-8');
-  return JSON.parse(content);
+  const content = await readFile(manifestPath(workId), 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  return content === null ? null : JSON.parse(content);
 }
 
 async function saveManifest(workId, manifest) {
@@ -202,26 +200,26 @@ async function listWorkIds() {
 
 export async function listWorks() {
   const ids = await listWorkIds();
-  const works = [];
-  for (const id of ids) {
-    const manifest = await loadManifest(id).catch(() => null);
-    if (!manifest) continue;
-    const activeDraft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
-    works.push({
-      id: manifest.id,
-      folderId: manifest.folderId,
-      title: manifest.title,
-      kind: manifest.kind,
-      status: manifest.status,
-      tags: manifest.tags || [],
-      activeDraftVersionId: manifest.activeDraftVersionId,
-      wordCount: activeDraft?.wordCount ?? 0,
-      draftCount: (manifest.drafts || []).length,
-      createdAt: manifest.createdAt,
-      updatedAt: manifest.updatedAt,
-    });
-  }
-  return works.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch(() => null)));
+  return manifests
+    .filter(Boolean)
+    .map((manifest) => {
+      const activeDraft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
+      return {
+        id: manifest.id,
+        folderId: manifest.folderId,
+        title: manifest.title,
+        kind: manifest.kind,
+        status: manifest.status,
+        tags: manifest.tags || [],
+        activeDraftVersionId: manifest.activeDraftVersionId,
+        wordCount: activeDraft?.wordCount ?? 0,
+        draftCount: (manifest.drafts || []).length,
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+      };
+    })
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
 export async function getWork(id) {
@@ -230,13 +228,18 @@ export async function getWork(id) {
   return manifest;
 }
 
+async function readDraftFile(workId, draftId) {
+  return readFile(draftPath(workId, draftId), 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return '';
+    throw err;
+  });
+}
+
 export async function getWorkWithBody(id) {
   const manifest = await getWork(id);
   const activeId = manifest.activeDraftVersionId;
   if (!activeId) return { manifest, body: '' };
-  const file = draftPath(id, activeId);
-  const body = existsSync(file) ? await readFile(file, 'utf-8') : '';
-  return { manifest, body };
+  return { manifest, body: await readDraftFile(id, activeId) };
 }
 
 export async function createWork({ folderId = null, title, kind = 'short-story' }) {
@@ -250,7 +253,7 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
   const draftId = `wr-draft-${randomUUID()}`;
   const now = nowIso();
   await ensureDir(join(workDir(id), 'drafts'));
-  await writeFile(draftPath(id, draftId), '');
+  await atomicWrite(draftPath(id, draftId), '');
   const manifest = {
     id,
     folderId,
@@ -308,29 +311,36 @@ export async function updateWork(id, patch) {
 }
 
 export async function deleteWork(id) {
-  if (!existsSync(workDir(id))) throw notFound('Work');
+  // 404 the caller if the manifest is missing; rm() with force:true would
+  // silently succeed on a non-existent dir and the user gets no signal.
+  await getWork(id);
   await rm(workDir(id), { recursive: true, force: true });
   return { ok: true };
 }
 
 // ---------- draft body / version snapshots ----------
 
+function buildDraftMeta(text, base = {}) {
+  return {
+    ...base,
+    contentHash: contentHash(text),
+    wordCount: countWords(text),
+    segmentIndex: buildSegmentIndex(text),
+  };
+}
+
 export async function saveDraftBody(workId, body) {
   const manifest = await getWork(workId);
   const activeId = manifest.activeDraftVersionId;
   if (!activeId) throw badRequest('Work has no active draft');
   const text = String(body ?? '');
-  await writeFile(draftPath(workId, activeId), text);
+  await atomicWrite(draftPath(workId, activeId), text);
   const draftIdx = manifest.drafts.findIndex((d) => d.id === activeId);
   if (draftIdx < 0) throw notFound('Active draft');
-  manifest.drafts[draftIdx] = {
-    ...manifest.drafts[draftIdx],
-    contentHash: contentHash(text),
-    wordCount: countWords(text),
-    segmentIndex: buildSegmentIndex(text),
-  };
+  manifest.drafts[draftIdx] = buildDraftMeta(text, manifest.drafts[draftIdx]);
   manifest.updatedAt = nowIso();
   await saveManifest(workId, manifest);
+  console.log(`📝 wr: saved draft ${activeId.slice(0, 14)}… (${manifest.drafts[draftIdx].wordCount} words)`);
   return { manifest, body: text };
 }
 
@@ -338,21 +348,19 @@ export async function snapshotDraft(workId, { label } = {}) {
   const { manifest, body } = await getWorkWithBody(workId);
   const newDraftId = `wr-draft-${randomUUID()}`;
   const fromId = manifest.activeDraftVersionId;
-  const driftLabel = label || `Draft ${manifest.drafts.length + 1}`;
-  await writeFile(draftPath(workId, newDraftId), body);
-  manifest.drafts.push({
+  const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
+  await atomicWrite(draftPath(workId, newDraftId), body);
+  manifest.drafts.push(buildDraftMeta(body, {
     id: newDraftId,
-    label: driftLabel,
+    label: draftLabel,
     contentFile: `drafts/${newDraftId}.md`,
-    contentHash: contentHash(body),
-    wordCount: countWords(body),
-    segmentIndex: buildSegmentIndex(body),
     createdAt: nowIso(),
     createdFromVersionId: fromId,
-  });
+  }));
   manifest.activeDraftVersionId = newDraftId;
   manifest.updatedAt = nowIso();
   await saveManifest(workId, manifest);
+  console.log(`📚 wr: snapshot ${draftLabel} for ${manifest.title}`);
   return manifest;
 }
 
@@ -368,8 +376,7 @@ export async function setActiveDraft(workId, draftId) {
 export async function getDraftBody(workId, draftId) {
   const manifest = await getWork(workId);
   if (!manifest.drafts.find((d) => d.id === draftId)) throw notFound('Draft version');
-  const file = draftPath(workId, draftId);
-  return existsSync(file) ? await readFile(file, 'utf-8') : '';
+  return readDraftFile(workId, draftId);
 }
 
 // ---------- exercise sessions ----------
@@ -461,6 +468,3 @@ export async function discardExercise(id) {
   await saveExercises(all);
   return all[idx];
 }
-
-// Constants exported for validation/tests
-export const CONSTANTS = { WORK_KINDS, WORK_STATUSES, EXERCISE_STATUSES };

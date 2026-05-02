@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
+import { WORK_KINDS, WORK_STATUSES } from './writersRoomPresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -469,8 +470,8 @@ export const restoreRequestSchema = z.object({
 // WRITERS ROOM SCHEMAS
 // =============================================================================
 
-export const writersRoomWorkKindSchema = z.enum(['novel', 'short-story', 'screenplay', 'essay', 'treatment', 'other']);
-export const writersRoomWorkStatusSchema = z.enum(['idea', 'drafting', 'revision', 'adaptation', 'rendering', 'complete', 'archived']);
+export const writersRoomWorkKindSchema = z.enum(WORK_KINDS);
+export const writersRoomWorkStatusSchema = z.enum(WORK_STATUSES);
 
 export const writersRoomFolderCreateSchema = z.object({
   name: z.string().min(1).max(200).trim(),

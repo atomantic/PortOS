@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -7,15 +7,7 @@ import {
   createWritersRoomWork,
   deleteWritersRoomWork,
 } from '../../services/apiWritersRoom';
-
-const KIND_LABELS = {
-  novel: 'Novel',
-  'short-story': 'Short Story',
-  screenplay: 'Screenplay',
-  essay: 'Essay',
-  treatment: 'Treatment',
-  other: 'Other',
-};
+import { KIND_LABELS } from './labels';
 
 export default function LibraryPane({ folders, works, activeWorkId, onSelectWork, onRefresh }) {
   const [openFolders, setOpenFolders] = useState({});
@@ -27,6 +19,8 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
   // Two-click confirm: first click arms the button, second deletes.
   // Cleared automatically after 4s to avoid leaving a pending arm.
   const [armedDelete, setArmedDelete] = useState(null);
+  const armTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(armTimerRef.current), []);
 
   const grouped = useMemo(() => {
     const byFolder = new Map();
@@ -76,7 +70,11 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
 
   const armDelete = (key) => {
     setArmedDelete(key);
-    setTimeout(() => setArmedDelete((current) => (current === key ? null : current)), 4000);
+    clearTimeout(armTimerRef.current);
+    armTimerRef.current = setTimeout(
+      () => setArmedDelete((current) => (current === key ? null : current)),
+      4000,
+    );
   };
 
   const handleDeleteFolder = async (id) => {
@@ -104,7 +102,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
   const renderWorkRow = (work) => {
     const isActive = work.id === activeWorkId;
     return (
-      <li key={work.id} className="group">
+      <li key={work.id} className="group relative">
         <button
           onClick={() => onSelectWork?.(work.id)}
           className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${

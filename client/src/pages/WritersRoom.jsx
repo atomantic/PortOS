@@ -54,14 +54,35 @@ export default function WritersRoom() {
   };
 
   const handleWorkChange = async (updated, opts = {}) => {
+    let next = updated;
     if (opts.reload) {
       const fresh = await getWritersRoomWork(updated.id).catch(() => null);
-      if (fresh) setActiveWork(fresh);
-    } else {
-      setActiveWork(updated);
+      if (fresh) next = fresh;
     }
-    // Keep the library list in sync (title, status, word count)
-    refreshLibrary();
+    setActiveWork(next);
+    // Splice the updated row into the library list (title / status / word
+    // count) without refetching N manifests on every save.
+    setWorks((prev) => {
+      const activeDraft = (next.drafts || []).find((d) => d.id === next.activeDraftVersionId);
+      const summary = {
+        id: next.id,
+        folderId: next.folderId,
+        title: next.title,
+        kind: next.kind,
+        status: next.status,
+        tags: next.tags || [],
+        activeDraftVersionId: next.activeDraftVersionId,
+        wordCount: activeDraft?.wordCount ?? 0,
+        draftCount: (next.drafts || []).length,
+        createdAt: next.createdAt,
+        updatedAt: next.updatedAt,
+      };
+      const idx = prev.findIndex((w) => w.id === next.id);
+      if (idx < 0) return [summary, ...prev];
+      const out = prev.slice();
+      out[idx] = { ...out[idx], ...summary };
+      return out;
+    });
   };
 
   return (

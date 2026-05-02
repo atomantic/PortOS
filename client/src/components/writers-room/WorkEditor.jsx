@@ -7,56 +7,33 @@ import {
   setWritersRoomActiveDraft,
   updateWritersRoomWork,
 } from '../../services/apiWritersRoom';
-
-const KIND_LABELS = {
-  novel: 'Novel',
-  'short-story': 'Short Story',
-  screenplay: 'Screenplay',
-  essay: 'Essay',
-  treatment: 'Treatment',
-  other: 'Other',
-};
-
-const STATUS_LABELS = {
-  idea: 'Idea',
-  drafting: 'Drafting',
-  revision: 'Revision',
-  adaptation: 'Adaptation',
-  rendering: 'Rendering',
-  complete: 'Complete',
-  archived: 'Archived',
-};
-
-function countWords(text) {
-  if (!text) return 0;
-  const m = String(text).trim().match(/\S+/g);
-  return m ? m.length : 0;
-}
+import { KIND_LABELS, STATUS_LABELS } from './labels';
+import { countWords } from '../../utils/formatters';
 
 export default function WorkEditor({ work, onChange }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
-  const [status, setStatus] = useState(work.status);
-  const [savedHash, setSavedHash] = useState(work.activeDraftBody || '');
+  const [savedBody, setSavedBody] = useState(work.activeDraftBody || '');
   const [saving, setSaving] = useState(false);
   const textareaRef = useRef(null);
 
-  // When the parent swaps the active work, rehydrate. Title/body changes that
-  // came from the user inside this work are kept by checking the work id.
+  // When the parent swaps the active work, rehydrate.
   const prevWorkId = useRef(work.id);
   useEffect(() => {
     if (prevWorkId.current === work.id) return;
     prevWorkId.current = work.id;
     setBody(work.activeDraftBody || '');
-    setSavedHash(work.activeDraftBody || '');
+    setSavedBody(work.activeDraftBody || '');
     setTitle(work.title);
-    setStatus(work.status);
-  }, [work.id, work.activeDraftBody, work.title, work.status]);
+  }, [work.id, work.activeDraftBody, work.title]);
 
-  const dirty = body !== savedHash;
+  const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
 
-  const handleSave = async () => {
+  // Refs let the once-bound keydown listener read the freshest body/saving
+  // values without re-registering on every keystroke.
+  const handleSaveRef = useRef(null);
+  handleSaveRef.current = async () => {
     if (saving) return;
     setSaving(true);
     const updated = await saveWritersRoomDraft(work.id, body).catch((err) => {
@@ -65,22 +42,22 @@ export default function WorkEditor({ work, onChange }) {
     });
     setSaving(false);
     if (!updated) return;
-    setSavedHash(body);
+    setSavedBody(body);
     onChange?.(updated);
     toast.success('Saved');
   };
+  const handleSave = () => handleSaveRef.current?.();
 
-  // Cmd/Ctrl + S to save
   useEffect(() => {
     const onKey = (e) => {
       const isSave = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's';
       if (!isSave) return;
       e.preventDefault();
-      handleSave();
+      handleSaveRef.current?.();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [body, work.id, saving]);
+  }, []);
 
   const handleSnapshot = async () => {
     if (dirty) {
@@ -106,7 +83,7 @@ export default function WorkEditor({ work, onChange }) {
   };
 
   const commitStatus = async (next) => {
-    setStatus(next);
+    if (next === work.status) return;
     const updated = await updateWritersRoomWork(work.id, { status: next }).catch((err) => {
       toast.error(`Status save failed: ${err.message}`);
       return null;
@@ -124,7 +101,10 @@ export default function WorkEditor({ work, onChange }) {
     onChange?.(updated, { reload: true });
   };
 
-  const activeDraft = work.drafts?.find((d) => d.id === work.activeDraftVersionId);
+  const activeDraft = useMemo(
+    () => work.drafts?.find((d) => d.id === work.activeDraftVersionId),
+    [work.drafts, work.activeDraftVersionId]
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -138,7 +118,7 @@ export default function WorkEditor({ work, onChange }) {
           aria-label="Work title"
         />
         <select
-          value={status}
+          value={work.status}
           onChange={(e) => commitStatus(e.target.value)}
           className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
           aria-label="Status"
