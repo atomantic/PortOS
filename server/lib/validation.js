@@ -473,23 +473,29 @@ export const restoreRequestSchema = z.object({
 export const writersRoomWorkKindSchema = z.enum(WORK_KINDS);
 export const writersRoomWorkStatusSchema = z.enum(WORK_STATUSES);
 
+// IDs are either null (unfiled / unattached) or a non-empty trimmed string.
+// Without min(1) + trim, an empty-string parentId/folderId/workId would slip
+// through (the service treats it as falsy for existence checks but still
+// persists it as `''` in the manifest, breaking tree-walk invariants).
+const wrIdNullable = z.string().min(1).trim().max(100).nullable();
+
 export const writersRoomFolderCreateSchema = z.object({
   name: z.string().min(1).max(200).trim(),
-  parentId: z.string().max(100).nullable().optional(),
+  parentId: wrIdNullable.optional(),
   sortOrder: z.number().int().optional()
 }).strict();
 
 export const writersRoomWorkCreateSchema = z.object({
   title: z.string().min(1).max(300).trim(),
   kind: writersRoomWorkKindSchema.optional().default('short-story'),
-  folderId: z.string().max(100).nullable().optional()
+  folderId: wrIdNullable.optional()
 }).strict();
 
 export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().min(1).max(300).trim().optional(),
   kind: writersRoomWorkKindSchema.optional(),
   status: writersRoomWorkStatusSchema.optional(),
-  folderId: z.string().max(100).nullable().optional()
+  folderId: wrIdNullable.optional()
 }).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
@@ -501,7 +507,7 @@ export const writersRoomSnapshotSchema = z.object({
 }).strict();
 
 export const writersRoomExerciseCreateSchema = z.object({
-  workId: z.string().max(100).nullable().optional(),
+  workId: wrIdNullable.optional(),
   prompt: z.string().max(2000).optional().default(''),
   durationSeconds: z.number().int().min(60).max(3600).default(600),
   startingWords: z.number().int().min(0).default(0)

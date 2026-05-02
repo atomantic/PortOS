@@ -75,8 +75,10 @@ export function contentHash(text) {
  * Splits on # / ## / ### headings (### collapses to scene; the outline panel
  * doesn't visually distinguish a separate "beat" tier in Phase 1). Anything
  * before the first heading becomes a "preamble" segment. No headings → one
- * segment covers the whole body. The index powers the outline panel today and
- * will anchor stale-analysis detection in later phases.
+ * "(untitled)" segment covers the whole body. Empty/missing text → empty
+ * array (so a brand-new draft doesn't show a phantom segment in the outline).
+ * The index powers the outline panel today and will anchor stale-analysis
+ * detection in later phases.
  */
 function segId(seq) {
   return `seg-${String(seq).padStart(3, '0')}`;
@@ -316,7 +318,15 @@ export async function updateWork(id, patch) {
 export async function deleteWork(id) {
   // 404 the caller if the manifest is missing; rm() with force:true would
   // silently succeed on a non-existent dir and the user gets no signal.
-  await getWork(id);
+  // Tolerate CORRUPTED_MANIFEST so a user can recover from on-disk corruption
+  // by deleting the work via the API/UI instead of resorting to `rm -rf`.
+  await getWork(id).catch((err) => {
+    if (err?.code === 'CORRUPTED_MANIFEST') {
+      console.warn(`⚠️  wr: deleting work ${id} despite corrupted manifest`);
+      return;
+    }
+    throw err;
+  });
   await rm(workDir(id), { recursive: true, force: true });
   return { ok: true };
 }
