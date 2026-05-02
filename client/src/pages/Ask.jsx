@@ -389,11 +389,14 @@ export default function Ask() {
   // checked from `handleSend`'s post-stream cleanup so it can skip state
   // writes if we get there after unmount.
   const mountedRef = useRef(true);
-  useEffect(() => () => {
-    mountedRef.current = false;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    streamingConvIdRef.current = null;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      streamingConvIdRef.current = null;
+    };
   }, []);
 
   const startNew = useCallback(() => {

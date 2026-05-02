@@ -26,7 +26,10 @@ export default function ExercisePanel({ activeWork, onClose }) {
   const tickRef = useRef(null);
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const refresh = useCallback(async () => {
     // Capture the workId we asked for so a slow response from the previous

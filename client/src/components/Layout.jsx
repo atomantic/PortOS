@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Home,
@@ -318,6 +318,28 @@ export default function Layout() {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
+  // Collapsed-sidebar flyout: hovering or focusing a section icon opens a
+  // fixed-position popover to the right listing the section's children, so the
+  // user can reach siblings (e.g. Writers Room from Create) without expanding
+  // the whole sidebar. Tracks which section is open and the icon's screen rect.
+  const [flyoutSection, setFlyoutSection] = useState(null);
+  const [flyoutPos, setFlyoutPos] = useState({ top: 0, left: 0 });
+  const flyoutCloseTimer = useRef(null);
+  const openFlyout = useCallback((event, label) => {
+    clearTimeout(flyoutCloseTimer.current);
+    const rect = event.currentTarget.getBoundingClientRect();
+    setFlyoutPos({ top: rect.top, left: rect.right + 4 });
+    setFlyoutSection(label);
+  }, []);
+  const scheduleCloseFlyout = useCallback(() => {
+    clearTimeout(flyoutCloseTimer.current);
+    flyoutCloseTimer.current = setTimeout(() => setFlyoutSection(null), 180);
+  }, []);
+  const cancelCloseFlyout = useCallback(() => clearTimeout(flyoutCloseTimer.current), []);
+  useEffect(() => () => clearTimeout(flyoutCloseTimer.current), []);
+  // Close any open flyout immediately on navigation so a stale popover doesn't
+  // hang over the next page.
+  useEffect(() => { setFlyoutSection(null); }, [location.pathname]);
 
   // Subscribe to server error notifications
   useErrorNotifications();
@@ -519,14 +541,24 @@ export default function Layout() {
         : 'text-gray-400 hover:text-white hover:bg-port-border/50'
     }`;
 
+    const hasChildrenForFlyout = collapsed && Array.isArray(item.children) && item.children.length > 0;
+
     return (
       <div key={item.label} className="mx-2 min-w-0">
-        <div className={`flex items-stretch min-w-0 ${collapsed ? 'lg:justify-center' : ''}`}>
+        <div
+          className={`flex items-stretch min-w-0 ${collapsed ? 'lg:justify-center' : ''}`}
+          onMouseEnter={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
+          onMouseLeave={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
+          onFocus={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
+          onBlur={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
+        >
           <button
             type="button"
             onClick={navigateToSection}
             className={`flex-1 min-w-0 ${sectionRowClasses} ${collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
             title={collapsed ? item.label : undefined}
+            aria-haspopup={hasChildrenForFlyout ? 'menu' : undefined}
+            aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative">
@@ -725,6 +757,78 @@ export default function Layout() {
           </div>
         </div>
       </aside>
+
+      {/* Collapsed-sidebar section flyout — fixed-position so it escapes the
+          nav scroller's overflow clipping. Opens on hover/focus of a section
+          icon when the sidebar is collapsed; lists the section's children so
+          siblings (e.g. Writers Room under Create) stay reachable without
+          fully expanding the sidebar. */}
+      {collapsed && flyoutSection && (() => {
+        const item = resolvedNavItems.find((i) => i.label === flyoutSection);
+        if (!item || !item.children || item.children.length === 0) return null;
+        return (
+          <div
+            role="menu"
+            aria-label={`${item.label} pages`}
+            onMouseEnter={cancelCloseFlyout}
+            onMouseLeave={scheduleCloseFlyout}
+            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed' }}
+            className="hidden lg:block z-[60] min-w-[200px] bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+          >
+            <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
+              {item.label}
+            </div>
+            {item.children.map((child, childIndex) => {
+              if (child.separator) {
+                return <div key={`flyout-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
+              }
+              const ChildIcon = child.icon;
+              if (child.external) {
+                const childHref = child.dynamicHost
+                  ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
+                  : child.href;
+                return (
+                  <a
+                    key={`flyout-${child.href}`}
+                    href={childHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    role="menuitem"
+                    onClick={() => setFlyoutSection(null)}
+                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ChildIcon size={16} aria-hidden="true" />
+                      <span className="min-w-0 truncate">{child.label}</span>
+                    </div>
+                    <ExternalLink size={12} className="text-gray-500" />
+                  </a>
+                );
+              }
+              const childActive = child.end
+                ? location.pathname === child.to
+                : isActive(child.to);
+              return (
+                <NavLink
+                  key={`flyout-${child.to}`}
+                  to={child.to}
+                  end={child.end}
+                  role="menuitem"
+                  onClick={() => setFlyoutSection(null)}
+                  className={`flex items-center gap-3 px-3 py-2 text-sm min-w-0 ${
+                    childActive
+                      ? 'bg-port-accent/10 text-port-accent'
+                      : 'text-gray-300 hover:text-white hover:bg-port-border/50'
+                  }`}
+                >
+                  <ChildIcon size={16} className="shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 truncate">{child.label}</span>
+                </NavLink>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Main area */}
       <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>

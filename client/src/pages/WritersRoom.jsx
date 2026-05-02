@@ -34,9 +34,13 @@ export default function WritersRoom() {
   }, []);
 
   // Skip setState when an in-flight library or work fetch resolves after the
-  // page unmounts (rapid nav across pages).
+  // page unmounts (rapid nav across pages). Reset on mount so React 18
+  // StrictMode's mount→cleanup→remount cycle doesn't leave the ref stuck false.
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const refreshLibrary = useCallback(async () => {
     const [foldersList, worksList] = await Promise.all([

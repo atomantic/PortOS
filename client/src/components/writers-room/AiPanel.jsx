@@ -52,7 +52,10 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
   const [details, setDetails] = useState({});
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
   const activeHash = activeDraft?.contentHash || null;

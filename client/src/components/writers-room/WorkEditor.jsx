@@ -80,7 +80,10 @@ export default function WorkEditor({ work, onChange }) {
   // Skip post-await setState if the editor unmounted (rapid work-switch or
   // page nav while a save / snapshot / status PATCH is in flight).
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Refs let the once-bound keydown listener read the freshest body/saving
   // values without re-registering on every keystroke. The savingRef gate is
