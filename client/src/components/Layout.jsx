@@ -75,7 +75,9 @@ import {
   Search,
   Mic,
   Rss,
-  Archive
+  Archive,
+  Sun,
+  Moon
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -84,11 +86,30 @@ import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
+import { useThemeContext } from './ThemeContext';
 import NotificationDropdown from './NotificationDropdown';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
 import VoiceWidget from './voice/VoiceWidget';
+
+function ThemeModeToggle({ className = '' }) {
+  const { theme, toggleMode } = useThemeContext();
+  const isDay = theme?.mode === 'day';
+  const Icon = isDay ? Sun : Moon;
+  const pairLabel = theme?.pair ? ` (${isDay ? 'switch to night' : 'switch to day'})` : '';
+  return (
+    <button
+      type="button"
+      onClick={toggleMode}
+      title={`${theme?.label ?? 'Theme'}${pairLabel}`}
+      aria-label={`Toggle day/night mode${pairLabel}`}
+      className={`p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
+    >
+      <Icon size={18} />
+    </button>
+  );
+}
 import * as api from '../services/api';
 import socket from '../services/socket';
 
@@ -690,6 +711,7 @@ export default function Layout() {
               >
                 <Monitor size={18} />
               </NavLink>
+              <ThemeModeToggle />
               <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
               <NotificationDropdown
                 notifications={notifications}
@@ -732,6 +754,7 @@ export default function Layout() {
             >
               <Monitor size={16} />
             </NavLink>
+            <ThemeModeToggle />
             <VoiceToggleButton />
             <NotificationDropdown
               notifications={notifications}
