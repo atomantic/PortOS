@@ -131,15 +131,30 @@ data/writers-room/
 
 ### Work Manifest
 
+The shape that ships in **Phase 1** (matches the on-disk file written by
+`server/services/writersRoom/local.js`):
+
 ```json
 {
   "id": "wr-work-...",
-  "folderId": "wr-folder-...",
+  "folderId": "wr-folder-..." or null,
   "title": "Working Title",
   "kind": "novel|short-story|screenplay|essay|treatment|other",
   "status": "idea|drafting|revision|adaptation|rendering|complete|archived",
-  "tags": [],
   "activeDraftVersionId": "wr-draft-...",
+  "drafts": [ /* see Draft Version */ ],
+  "createdAt": "iso",
+  "updatedAt": "iso"
+}
+```
+
+**Phase 2+ planned (NOT yet persisted)** — added when the phase that uses
+each field ships. Listed here so the data-model story stays continuous, but
+the writer/validator drops them as YAGNI today:
+
+```json
+{
+  "tags": [],
   "collectionId": "media-collection-id",
   "creativeDirectorProjectIds": [],
   "settings": {
@@ -149,9 +164,7 @@ data/writers-room/
     "defaultVideoModelId": null,
     "renderAspectRatio": "16:9",
     "renderQuality": "draft"
-  },
-  "createdAt": "iso",
-  "updatedAt": "iso"
+  }
 }
 ```
 

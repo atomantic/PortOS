@@ -43,6 +43,11 @@ export default function WorkEditor({ work, onChange }) {
   const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
 
+  // Skip post-await setState if the editor unmounted (rapid work-switch or
+  // page nav while a save / snapshot / status PATCH is in flight).
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   // Refs let the once-bound keydown listener read the freshest body/saving
   // values without re-registering on every keystroke. The savingRef gate is
   // synchronous (unlike the `saving` state which only updates after React
@@ -55,10 +60,11 @@ export default function WorkEditor({ work, onChange }) {
     savingRef.current = true;
     setSaving(true);
     const updated = await saveWritersRoomDraft(work.id, body).catch((err) => {
-      toast.error(`Save failed: ${err.message}`);
+      if (mountedRef.current) toast.error(`Save failed: ${err.message}`);
       return null;
     });
     savingRef.current = false;
+    if (!mountedRef.current) return;
     setSaving(false);
     if (!updated) return;
     setSavedBody(body);
@@ -84,10 +90,10 @@ export default function WorkEditor({ work, onChange }) {
       return;
     }
     const updated = await snapshotWritersRoomDraft(work.id).catch((err) => {
-      toast.error(`Snapshot failed: ${err.message}`);
+      if (mountedRef.current) toast.error(`Snapshot failed: ${err.message}`);
       return null;
     });
-    if (!updated) return;
+    if (!updated || !mountedRef.current) return;
     onChange?.({ ...updated, activeDraftBody: body });
     toast.success(`Created ${updated.drafts[updated.drafts.length - 1].label}`);
   };
@@ -95,29 +101,31 @@ export default function WorkEditor({ work, onChange }) {
   const commitTitle = async () => {
     if (title === work.title) return;
     const updated = await updateWritersRoomWork(work.id, { title }).catch((err) => {
-      toast.error(`Title save failed: ${err.message}`);
+      if (mountedRef.current) toast.error(`Title save failed: ${err.message}`);
       return null;
     });
-    if (updated) onChange?.({ ...updated, activeDraftBody: body });
+    if (updated && mountedRef.current) onChange?.({ ...updated, activeDraftBody: body });
   };
 
   const commitStatus = async (next) => {
     if (next === status) return;
     setStatus(next); // optimistic — survives a re-render before the PATCH resolves
     const updated = await updateWritersRoomWork(work.id, { status: next }).catch((err) => {
-      toast.error(`Status save failed: ${err.message}`);
-      setStatus(work.status); // roll back on failure
+      if (mountedRef.current) {
+        toast.error(`Status save failed: ${err.message}`);
+        setStatus(work.status); // roll back on failure
+      }
       return null;
     });
-    if (updated) onChange?.({ ...updated, activeDraftBody: body });
+    if (updated && mountedRef.current) onChange?.({ ...updated, activeDraftBody: body });
   };
 
   const switchToDraft = async (draftId) => {
     const updated = await setWritersRoomActiveDraft(work.id, draftId).catch((err) => {
-      toast.error(`Switch failed: ${err.message}`);
+      if (mountedRef.current) toast.error(`Switch failed: ${err.message}`);
       return null;
     });
-    if (!updated) return;
+    if (!updated || !mountedRef.current) return;
     // Reload via parent so body comes from the server's active version
     onChange?.(updated, { reload: true });
   };

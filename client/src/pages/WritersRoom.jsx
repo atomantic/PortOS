@@ -4,6 +4,7 @@ import { NotebookPen, Timer } from 'lucide-react';
 import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
+import toast from '../components/ui/Toast';
 import {
   listWritersRoomFolders,
   listWritersRoomWorks,
@@ -64,7 +65,15 @@ export default function WritersRoom() {
     if (opts.reload) {
       const fresh = await getWritersRoomWork(updated.id).catch(() => null);
       if (!mountedRef.current) return;
-      if (fresh) next = fresh;
+      if (!fresh) {
+        // Reload failed — `updated` came from setWritersRoomActiveDraft and
+        // lacks activeDraftBody, so setActiveWork(updated) would blank the
+        // editor. Skip the swap; the previous activeWork (and its body) stay
+        // visible and the user can retry the version-switch click.
+        toast.error('Could not load that draft version');
+        return;
+      }
+      next = fresh;
     }
     setActiveWork(next);
     // Splice the updated row into the library list (title / status / word

@@ -202,13 +202,17 @@ async function listWorkIds() {
 
 export async function listWorks() {
   const ids = await listWorkIds();
-  // Don't let a single corrupted manifest 500 the whole library — log + drop
-  // so the user can still see (and hopefully delete) their other works. The
-  // load throws ServerError(CORRUPTED_MANIFEST) which we already logged inside
-  // loadManifest; here we add a single-line drop notice with the work id.
+  // Tolerate KNOWN failure modes per work (corrupted JSON, missing file) so
+  // one bad work doesn't 500 the whole library. Re-throw anything else
+  // (permission errors, EIO, programming bugs) — silently swallowing those
+  // would mask real outages. ENOENT bubbles as null from loadManifest itself,
+  // not as a thrown error, so we only need to special-case CORRUPTED_MANIFEST.
   const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch((err) => {
-    console.warn(`⚠️ wr: dropped work ${id} from listing — ${err.code || err.message}`);
-    return null;
+    if (err?.code === 'CORRUPTED_MANIFEST') {
+      console.warn(`⚠️ wr: dropped work ${id} from listing — corrupted manifest`);
+      return null;
+    }
+    throw err;
   })));
   return manifests
     .filter(Boolean)
