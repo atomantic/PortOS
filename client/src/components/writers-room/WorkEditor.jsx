@@ -31,15 +31,21 @@ export default function WorkEditor({ work, onChange }) {
   const wordCount = useMemo(() => countWords(body), [body]);
 
   // Refs let the once-bound keydown listener read the freshest body/saving
-  // values without re-registering on every keystroke.
+  // values without re-registering on every keystroke. The savingRef gate is
+  // synchronous (unlike the `saving` state which only updates after React
+  // re-renders), so rapid Cmd+S key-repeats can't slip past the guard and
+  // queue overlapping save requests.
+  const savingRef = useRef(false);
   const handleSaveRef = useRef(null);
   handleSaveRef.current = async () => {
-    if (saving) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     const updated = await saveWritersRoomDraft(work.id, body).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
     });
+    savingRef.current = false;
     setSaving(false);
     if (!updated) return;
     setSavedBody(body);

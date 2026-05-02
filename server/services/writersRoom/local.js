@@ -17,7 +17,7 @@
 import { join } from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { readFile, rm, readdir } from 'fs/promises';
-import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, readJSONFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 
@@ -167,11 +167,24 @@ export async function deleteFolder(id) {
 // ---------- work CRUD ----------
 
 async function loadManifest(workId) {
-  const content = await readFile(manifestPath(workId), 'utf-8').catch((err) => {
+  const path = manifestPath(workId);
+  const content = await readFile(path, 'utf-8').catch((err) => {
     if (err.code === 'ENOENT') return null;
     throw err;
   });
-  return content === null ? null : JSON.parse(content);
+  if (content === null) return null;
+  // Surface corrupted manifests as a deterministic 500 with a clear code so
+  // listWorks can drop the work without masking the underlying issue, and
+  // direct callers (getWork) get an actionable error instead of a raw
+  // SyntaxError bubbling out of JSON.parse.
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
+  if (parsed === null) {
+    throw new ServerError(`Corrupted writers-room manifest at ${path}`, {
+      status: 500,
+      code: 'CORRUPTED_MANIFEST',
+    });
+  }
+  return parsed;
 }
 
 async function saveManifest(workId, manifest) {
@@ -187,7 +200,14 @@ async function listWorkIds() {
 
 export async function listWorks() {
   const ids = await listWorkIds();
-  const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch(() => null)));
+  // Don't let a single corrupted manifest 500 the whole library — log + drop
+  // so the user can still see (and hopefully delete) their other works. The
+  // load throws ServerError(CORRUPTED_MANIFEST) which we already logged inside
+  // loadManifest; here we add a single-line drop notice with the work id.
+  const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch((err) => {
+    console.warn(`⚠️ wr: dropped work ${id} from listing — ${err.code || err.message}`);
+    return null;
+  })));
   return manifests
     .filter(Boolean)
     .map((manifest) => {

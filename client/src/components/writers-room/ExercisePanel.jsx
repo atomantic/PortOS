@@ -70,15 +70,26 @@ export default function ExercisePanel({ activeWork, onClose }) {
 
   const finishSession = async ({ keep } = { keep: true }) => {
     if (!active) return;
+    // Only clear local state + toast success after the server confirms; on
+    // failure we keep the session active so the user can retry instead of
+    // staring at a "logged 0 words" UI that's drifted from the server.
     if (keep) {
       const startingWords = active.startingWords || 0;
-      await finishWritersRoomExercise(active.id, {
+      const result = await finishWritersRoomExercise(active.id, {
         endingWords: startingWords + wordsAdded,
         appendedText: text || null,
-      }).catch((err) => toast.error(`Finish failed: ${err.message}`));
+      }).catch((err) => {
+        toast.error(`Finish failed: ${err.message}`);
+        return null;
+      });
+      if (!result) return;
       toast.success(`Logged ${wordsAdded} words`);
     } else {
-      await discardWritersRoomExercise(active.id).catch((err) => toast.error(`Discard failed: ${err.message}`));
+      const result = await discardWritersRoomExercise(active.id).catch((err) => {
+        toast.error(`Discard failed: ${err.message}`);
+        return null;
+      });
+      if (!result) return;
     }
     setActive(null);
     setText('');

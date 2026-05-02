@@ -32,6 +32,10 @@ beforeEach(() => {
 
 afterEach(() => {
   if (tempRoot && existsSync(tempRoot)) rmSync(tempRoot, { recursive: true, force: true });
+  // Always restore real timers — without this, a thrown assertion inside a
+  // useFakeTimers() block could leave subsequent tests running under fake
+  // timers and silently flake (timeouts/Date.now stuck at the system time).
+  vi.useRealTimers();
 });
 
 describe('text utilities', () => {
@@ -136,7 +140,7 @@ describe('work CRUD', () => {
     const list = await listWorks();
     expect(list[0].id).toBe(a.id); // most recently touched
     expect(list[1].id).toBe(b.id);
-    vi.useRealTimers();
+    // Note: afterEach() also calls useRealTimers() as a safety net.
   });
 
   it('updateWork patches allowed fields and rejects invalid status', async () => {

@@ -91,10 +91,14 @@ router.get('/works/:id/versions/:draftId', asyncHandler(async (req, res) => {
 // ---------- exercises ----------
 
 router.get('/exercises', asyncHandler(async (req, res) => {
-  // Coerce ?workId to a single string — Express parses repeated keys as an
-  // array which would silently break the in-memory equality filter below.
-  const rawWorkId = req.query.workId;
-  const workId = typeof rawWorkId === 'string' && rawWorkId ? rawWorkId : undefined;
+  // Coerce ?workId to a single string. Express parses repeated keys as an
+  // array; previously we dropped the filter entirely in that case, which
+  // turned a filtered request into an unfiltered one (data leakage). Now we
+  // pick the first non-empty string and ignore the rest, so a duplicated
+  // param degrades to "filter by the first value" instead of "show all".
+  const raw = req.query.workId;
+  const candidate = Array.isArray(raw) ? raw.find((v) => typeof v === 'string' && v) : raw;
+  const workId = typeof candidate === 'string' && candidate ? candidate : undefined;
   res.json(await listExercises({ workId }));
 }));
 
