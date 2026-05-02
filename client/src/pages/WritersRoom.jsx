@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { NotebookPen, Timer } from 'lucide-react';
 import LibraryPane from '../components/writers-room/LibraryPane';
@@ -19,11 +19,17 @@ export default function WritersRoom() {
   const [loadingWork, setLoadingWork] = useState(false);
   const [showExercise, setShowExercise] = useState(false);
 
+  // Skip setState when an in-flight library or work fetch resolves after the
+  // page unmounts (rapid nav across pages).
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const refreshLibrary = useCallback(async () => {
     const [foldersList, worksList] = await Promise.all([
       listWritersRoomFolders().catch(() => []),
       listWritersRoomWorks().catch(() => []),
     ]);
+    if (!mountedRef.current) return;
     setFolders(foldersList);
     setWorks(worksList);
   }, []);
@@ -57,6 +63,7 @@ export default function WritersRoom() {
     let next = updated;
     if (opts.reload) {
       const fresh = await getWritersRoomWork(updated.id).catch(() => null);
+      if (!mountedRef.current) return;
       if (fresh) next = fresh;
     }
     setActiveWork(next);

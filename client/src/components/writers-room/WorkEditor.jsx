@@ -13,19 +13,32 @@ import { countWords } from '../../utils/formatters';
 export default function WorkEditor({ work, onChange }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
+  // Optimistic mirror of work.status — the dropdown reads this so a status
+  // change shows immediately, even before the PATCH round-trip resolves and
+  // the parent re-renders with the new prop. Synced from the prop whenever
+  // the prop changes (both work-id swap AND any time the parent updates).
+  const [status, setStatus] = useState(work.status);
   const [savedBody, setSavedBody] = useState(work.activeDraftBody || '');
   const [saving, setSaving] = useState(false);
   const textareaRef = useRef(null);
 
-  // When the parent swaps the active work, rehydrate.
-  const prevWorkId = useRef(work.id);
+  // Rehydrate body/title when the parent swaps the active work OR switches to
+  // a different draft version of the same work. Both can change without the
+  // work id changing (version-switch keeps work.id, swaps activeDraftVersionId).
+  const prevKey = useRef({ id: work.id, draftId: work.activeDraftVersionId });
   useEffect(() => {
-    if (prevWorkId.current === work.id) return;
-    prevWorkId.current = work.id;
+    const key = { id: work.id, draftId: work.activeDraftVersionId };
+    if (prevKey.current.id === key.id && prevKey.current.draftId === key.draftId) return;
+    prevKey.current = key;
     setBody(work.activeDraftBody || '');
     setSavedBody(work.activeDraftBody || '');
     setTitle(work.title);
-  }, [work.id, work.activeDraftBody, work.title]);
+  }, [work.id, work.activeDraftVersionId, work.activeDraftBody, work.title]);
+
+  // Keep the optimistic status in sync with the source of truth — separate
+  // from the rehydration effect so a status PATCH that comes back via the
+  // parent's onChange still updates the dropdown even if no other field moved.
+  useEffect(() => { setStatus(work.status); }, [work.status]);
 
   const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
@@ -89,9 +102,11 @@ export default function WorkEditor({ work, onChange }) {
   };
 
   const commitStatus = async (next) => {
-    if (next === work.status) return;
+    if (next === status) return;
+    setStatus(next); // optimistic — survives a re-render before the PATCH resolves
     const updated = await updateWritersRoomWork(work.id, { status: next }).catch((err) => {
       toast.error(`Status save failed: ${err.message}`);
+      setStatus(work.status); // roll back on failure
       return null;
     });
     if (updated) onChange?.({ ...updated, activeDraftBody: body });
@@ -124,7 +139,7 @@ export default function WorkEditor({ work, onChange }) {
           aria-label="Work title"
         />
         <select
-          value={work.status}
+          value={status}
           onChange={(e) => commitStatus(e.target.value)}
           className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
           aria-label="Status"
