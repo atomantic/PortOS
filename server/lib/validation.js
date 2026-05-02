@@ -479,12 +479,6 @@ export const writersRoomFolderCreateSchema = z.object({
   sortOrder: z.number().int().optional()
 }).strict();
 
-export const writersRoomFolderUpdateSchema = z.object({
-  name: z.string().min(1).max(200).trim().optional(),
-  parentId: z.string().max(100).nullable().optional(),
-  sortOrder: z.number().int().optional()
-}).strict();
-
 export const writersRoomWorkCreateSchema = z.object({
   title: z.string().min(1).max(300).trim(),
   kind: writersRoomWorkKindSchema.optional().default('short-story'),
@@ -495,17 +489,7 @@ export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().min(1).max(300).trim().optional(),
   kind: writersRoomWorkKindSchema.optional(),
   status: writersRoomWorkStatusSchema.optional(),
-  folderId: z.string().max(100).nullable().optional(),
-  tags: z.array(z.string().max(50)).max(50).optional(),
-  collectionId: z.string().max(100).nullable().optional(),
-  settings: z.object({
-    defaultAnalysisProviderId: z.string().nullable().optional(),
-    defaultAnalysisModel: z.string().nullable().optional(),
-    defaultImageModelId: z.string().nullable().optional(),
-    defaultVideoModelId: z.string().nullable().optional(),
-    renderAspectRatio: z.string().max(20).optional(),
-    renderQuality: z.string().max(20).optional()
-  }).partial().optional()
+  folderId: z.string().max(100).nullable().optional()
 }).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
@@ -521,12 +505,6 @@ export const writersRoomExerciseCreateSchema = z.object({
   prompt: z.string().max(2000).optional().default(''),
   durationSeconds: z.number().int().min(60).max(3600).default(600),
   startingWords: z.number().int().min(0).default(0)
-}).strict();
-
-export const writersRoomExerciseUpdateSchema = z.object({
-  prompt: z.string().max(2000).optional(),
-  pausedAt: z.string().nullable().optional(),
-  status: z.enum(['running', 'paused']).optional()
 }).strict();
 
 export const writersRoomExerciseFinishSchema = z.object({

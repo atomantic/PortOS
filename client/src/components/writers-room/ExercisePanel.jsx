@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timer, Play, StopCircle, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -25,12 +25,15 @@ export default function ExercisePanel({ activeWork, onClose }) {
   const [text, setText] = useState('');
   const tickRef = useRef(null);
 
-  const refresh = async () => {
-    const all = await listWritersRoomExercises(activeWork?.id).catch(() => []);
-    setHistory(all);
-  };
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
-  useEffect(() => { refresh(); }, [activeWork?.id]);
+  const refresh = useCallback(async () => {
+    const all = await listWritersRoomExercises(activeWork?.id).catch(() => []);
+    if (mountedRef.current) setHistory(all);
+  }, [activeWork?.id]);
+
+  useEffect(() => { refresh(); }, [refresh]);
 
   // 1Hz tick while a session is running
   useEffect(() => {
@@ -75,17 +78,20 @@ export default function ExercisePanel({ activeWork, onClose }) {
     }
     setActive(null);
     setText('');
-    refresh();
+    await refresh();
   };
 
-  // Auto-prompt to finish when timer expires (does not auto-save text — user
-  // can still keep typing past the buzzer or discard; just nudges visually)
+  // Toast once when the timer crosses into expired. The ref guards against
+  // multiple fires if `expired` stays true across re-renders.
+  const expiredToastedRef = useRef(false);
   useEffect(() => {
-    if (expired) {
-      toast('Timer up — finish or keep going', { icon: '⏰' });
+    if (!expired) {
+      expiredToastedRef.current = false;
+      return;
     }
-    // Intentionally only fires once when expired flips to true
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (expiredToastedRef.current) return;
+    expiredToastedRef.current = true;
+    toast('Timer up — finish or keep going', { icon: '⏰' });
   }, [expired]);
 
   return (

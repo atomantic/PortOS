@@ -70,7 +70,6 @@ export default function WritersRoom() {
         title: next.title,
         kind: next.kind,
         status: next.status,
-        tags: next.tags || [],
         activeDraftVersionId: next.activeDraftVersionId,
         wordCount: activeDraft?.wordCount ?? 0,
         draftCount: (next.drafts || []).length,
@@ -96,6 +95,8 @@ export default function WritersRoom() {
           className={`ml-auto flex items-center gap-1 px-3 py-1 text-xs rounded ${
             showExercise ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-300 hover:text-white'
           }`}
+          aria-pressed={showExercise}
+          aria-label="Toggle write-for-10 exercise sidebar"
           title="Toggle exercise sidebar"
         >
           <Timer size={12} /> Write for 10
@@ -103,7 +104,7 @@ export default function WritersRoom() {
       </div>
 
       <div className="flex-1 grid grid-cols-1 md:grid-cols-[260px_1fr] lg:grid-cols-[260px_1fr_320px] min-h-0">
-        <aside className="border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto">
+        <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
           <LibraryPane
             folders={folders}
             works={works}

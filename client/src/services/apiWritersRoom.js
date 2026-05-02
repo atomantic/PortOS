@@ -8,10 +8,6 @@ export const createWritersRoomFolder = (data) => request('/writers-room/folders'
   method: 'POST',
   body: JSON.stringify(data),
 });
-export const updateWritersRoomFolder = (id, patch) => request(`/writers-room/folders/${enc(id)}`, {
-  method: 'PATCH',
-  body: JSON.stringify(patch),
-});
 export const deleteWritersRoomFolder = (id) => request(`/writers-room/folders/${enc(id)}`, {
   method: 'DELETE',
 });
@@ -43,7 +39,6 @@ export const snapshotWritersRoomDraft = (id, label) => request(`/writers-room/wo
 export const setWritersRoomActiveDraft = (id, draftId) => request(`/writers-room/works/${enc(id)}/versions/${enc(draftId)}`, {
   method: 'PATCH',
 });
-export const getWritersRoomDraftBody = (id, draftId) => request(`/writers-room/works/${enc(id)}/versions/${enc(draftId)}`);
 
 // Exercises
 export const listWritersRoomExercises = (workId) => {
@@ -53,10 +48,6 @@ export const listWritersRoomExercises = (workId) => {
 export const createWritersRoomExercise = (data) => request('/writers-room/exercises', {
   method: 'POST',
   body: JSON.stringify(data),
-});
-export const updateWritersRoomExercise = (id, patch) => request(`/writers-room/exercises/${enc(id)}`, {
-  method: 'PATCH',
-  body: JSON.stringify(patch),
 });
 export const finishWritersRoomExercise = (id, data) => request(`/writers-room/exercises/${enc(id)}/finish`, {
   method: 'POST',

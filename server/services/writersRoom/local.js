@@ -19,7 +19,7 @@ import { randomUUID, createHash } from 'crypto';
 import { readFile, rm, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { WORK_KINDS, WORK_STATUSES, EXERCISE_STATUSES } from '../../lib/writersRoomPresets.js';
+import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 
 // Paths are resolved lazily so tests can swap PATHS.data via vi.mock without
 // the module-load snapshot freezing them at import time.
@@ -72,43 +72,45 @@ export function contentHash(text) {
 /**
  * Build a segment index over Markdown-flavored prose.
  *
- * Segments are derived by splitting on headings (#, ##, ###) — anything before
- * the first heading becomes a "preamble" segment. If the draft has no headings,
- * one segment covers the whole body. Each segment carries character offsets,
- * a heading, kind, and word count. The index is the foundation for stale-
- * analysis detection in later phases; in Phase 1 it just powers the draft list
- * outline panel.
+ * Splits on # / ## / ### headings (### collapses to scene; the outline panel
+ * doesn't visually distinguish a separate "beat" tier in Phase 1). Anything
+ * before the first heading becomes a "preamble" segment. No headings → one
+ * segment covers the whole body. The index powers the outline panel today and
+ * will anchor stale-analysis detection in later phases.
  */
+function segId(seq) {
+  return `seg-${String(seq).padStart(3, '0')}`;
+}
+
 export function buildSegmentIndex(text) {
   if (!text) return [];
   const headingRe = /^(#{1,3})\s+(.+)$/gm;
   const matches = [];
   let m;
   while ((m = headingRe.exec(text)) !== null) {
-    matches.push({ index: m.index, hashes: m[1], heading: m[2].trim(), endOfLine: m.index + m[0].length });
+    matches.push({ index: m.index, hashes: m[1], heading: m[2].trim() });
   }
+  let seq = 0;
   if (matches.length === 0) {
-    return [{ id: 'seg-001', kind: 'paragraph', heading: '(untitled)', start: 0, end: text.length, wordCount: countWords(text) }];
+    return [{ id: segId(++seq), kind: 'paragraph', heading: '(untitled)', start: 0, end: text.length, wordCount: countWords(text) }];
   }
   const segments = [];
-  if (matches[0].index > 0) {
-    const preamble = text.slice(0, matches[0].index);
-    if (preamble.trim().length > 0) {
-      segments.push({ id: 'seg-001', kind: 'paragraph', heading: '(preamble)', start: 0, end: matches[0].index, wordCount: countWords(preamble) });
-    }
+  if (matches[0].index > 0 && text.slice(0, matches[0].index).trim().length > 0) {
+    segments.push({
+      id: segId(++seq), kind: 'paragraph', heading: '(preamble)',
+      start: 0, end: matches[0].index, wordCount: countWords(text.slice(0, matches[0].index)),
+    });
   }
   matches.forEach((match, i) => {
     const start = match.index;
     const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-    const body = text.slice(start, end);
-    const kind = match.hashes.length === 1 ? 'chapter' : match.hashes.length === 2 ? 'scene' : 'beat';
     segments.push({
-      id: `seg-${String(segments.length + 1).padStart(3, '0')}`,
-      kind,
+      id: segId(++seq),
+      kind: match.hashes.length === 1 ? 'chapter' : 'scene',
       heading: match.heading,
       start,
       end,
-      wordCount: countWords(body),
+      wordCount: countWords(text.slice(start, end)),
     });
   });
   return segments;
@@ -146,21 +148,6 @@ export async function createFolder({ name, parentId = null, sortOrder = 0 }) {
   folders.push(folder);
   await saveFolders(folders);
   return folder;
-}
-
-export async function updateFolder(id, patch) {
-  const folders = await loadFolders();
-  const idx = folders.findIndex((f) => f.id === id);
-  if (idx < 0) throw notFound('Folder');
-  const allowed = ['name', 'parentId', 'sortOrder'];
-  const next = { ...folders[idx], updatedAt: nowIso() };
-  for (const key of allowed) {
-    if (patch[key] !== undefined) next[key] = patch[key];
-  }
-  if (next.name) next.name = String(next.name).trim();
-  folders[idx] = next;
-  await saveFolders(folders);
-  return next;
 }
 
 export async function deleteFolder(id) {
@@ -211,7 +198,6 @@ export async function listWorks() {
         title: manifest.title,
         kind: manifest.kind,
         status: manifest.status,
-        tags: manifest.tags || [],
         activeDraftVersionId: manifest.activeDraftVersionId,
         wordCount: activeDraft?.wordCount ?? 0,
         draftCount: (manifest.drafts || []).length,
@@ -260,7 +246,6 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
     title: title.trim(),
     kind,
     status: 'drafting',
-    tags: [],
     activeDraftVersionId: draftId,
     drafts: [
       {
@@ -274,16 +259,6 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
         createdFromVersionId: null,
       },
     ],
-    collectionId: null,
-    creativeDirectorProjectIds: [],
-    settings: {
-      defaultAnalysisProviderId: null,
-      defaultAnalysisModel: null,
-      defaultImageModelId: null,
-      defaultVideoModelId: null,
-      renderAspectRatio: '16:9',
-      renderQuality: 'draft',
-    },
     createdAt: now,
     updatedAt: now,
   };
@@ -293,16 +268,12 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
 
 export async function updateWork(id, patch) {
   const manifest = await getWork(id);
-  const allowed = ['title', 'folderId', 'kind', 'status', 'tags', 'collectionId', 'settings'];
+  const allowed = ['title', 'folderId', 'kind', 'status'];
   const next = { ...manifest, updatedAt: nowIso() };
   for (const key of allowed) {
     if (patch[key] === undefined) continue;
     if (key === 'kind' && !WORK_KINDS.includes(patch.kind)) throw badRequest(`Invalid kind: ${patch.kind}`);
     if (key === 'status' && !WORK_STATUSES.includes(patch.status)) throw badRequest(`Invalid status: ${patch.status}`);
-    if (key === 'settings') {
-      next.settings = { ...manifest.settings, ...patch.settings };
-      continue;
-    }
     next[key] = patch[key];
   }
   if (next.title) next.title = String(next.title).trim();
@@ -398,6 +369,10 @@ export async function listExercises({ workId } = {}) {
   return filtered.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
 }
 
+function settled(exercise) {
+  return exercise.status === 'finished' || exercise.status === 'discarded';
+}
+
 export async function createExercise({ workId = null, prompt = '', durationSeconds = 600, startingWords = 0 }) {
   if (workId) await getWork(workId); // 404 if missing
   const exercise = {
@@ -411,7 +386,6 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
     appendedText: null,
     status: 'running',
     startedAt: nowIso(),
-    pausedAt: null,
     finishedAt: null,
   };
   const all = await loadExercises();
@@ -420,37 +394,15 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
   return exercise;
 }
 
-export async function updateExercise(id, patch) {
-  const all = await loadExercises();
-  const idx = all.findIndex((e) => e.id === id);
-  if (idx < 0) throw notFound('Exercise');
-  const current = all[idx];
-  if (current.status === 'finished' || current.status === 'discarded') {
-    throw badRequest('Exercise is already settled');
-  }
-  const allowed = ['prompt', 'pausedAt', 'status'];
-  const next = { ...current };
-  for (const key of allowed) {
-    if (patch[key] === undefined) continue;
-    if (key === 'status' && !EXERCISE_STATUSES.includes(patch.status)) {
-      throw badRequest(`Invalid status: ${patch.status}`);
-    }
-    next[key] = patch[key];
-  }
-  all[idx] = next;
-  await saveExercises(all);
-  return next;
-}
-
 export async function finishExercise(id, { endingWords, appendedText = null } = {}) {
   const all = await loadExercises();
   const idx = all.findIndex((e) => e.id === id);
   if (idx < 0) throw notFound('Exercise');
-  const current = all[idx];
+  if (settled(all[idx])) throw badRequest('Exercise is already settled');
   const finished = {
-    ...current,
-    endingWords: endingWords ?? current.endingWords ?? 0,
-    wordsAdded: (endingWords ?? 0) - (current.startingWords || 0),
+    ...all[idx],
+    endingWords: endingWords ?? all[idx].endingWords ?? 0,
+    wordsAdded: (endingWords ?? 0) - (all[idx].startingWords || 0),
     appendedText: appendedText ?? null,
     status: 'finished',
     finishedAt: nowIso(),
@@ -464,6 +416,7 @@ export async function discardExercise(id) {
   const all = await loadExercises();
   const idx = all.findIndex((e) => e.id === id);
   if (idx < 0) throw notFound('Exercise');
+  if (settled(all[idx])) throw badRequest('Exercise is already settled');
   all[idx] = { ...all[idx], status: 'discarded', finishedAt: nowIso() };
   await saveExercises(all);
   return all[idx];

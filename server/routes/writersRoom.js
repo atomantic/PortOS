@@ -8,20 +8,18 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import {
   validateRequest,
   writersRoomFolderCreateSchema,
-  writersRoomFolderUpdateSchema,
   writersRoomWorkCreateSchema,
   writersRoomWorkUpdateSchema,
   writersRoomDraftSaveSchema,
   writersRoomSnapshotSchema,
   writersRoomExerciseCreateSchema,
-  writersRoomExerciseUpdateSchema,
   writersRoomExerciseFinishSchema,
 } from '../lib/validation.js';
 import {
-  listFolders, createFolder, updateFolder, deleteFolder,
+  listFolders, createFolder, deleteFolder,
   listWorks, getWorkWithBody, createWork, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
-  listExercises, createExercise, updateExercise, finishExercise, discardExercise,
+  listExercises, createExercise, finishExercise, discardExercise,
 } from '../services/writersRoom/local.js';
 
 const router = Router();
@@ -35,11 +33,6 @@ router.get('/folders', asyncHandler(async (_req, res) => {
 router.post('/folders', asyncHandler(async (req, res) => {
   const data = validateRequest(writersRoomFolderCreateSchema, req.body);
   res.status(201).json(await createFolder(data));
-}));
-
-router.patch('/folders/:id', asyncHandler(async (req, res) => {
-  const data = validateRequest(writersRoomFolderUpdateSchema, req.body);
-  res.json(await updateFolder(req.params.id, data));
 }));
 
 router.delete('/folders/:id', asyncHandler(async (req, res) => {
@@ -104,11 +97,6 @@ router.get('/exercises', asyncHandler(async (req, res) => {
 router.post('/exercises', asyncHandler(async (req, res) => {
   const data = validateRequest(writersRoomExerciseCreateSchema, req.body || {});
   res.status(201).json(await createExercise(data));
-}));
-
-router.patch('/exercises/:id', asyncHandler(async (req, res) => {
-  const data = validateRequest(writersRoomExerciseUpdateSchema, req.body);
-  res.json(await updateExercise(req.params.id, data));
 }));
 
 router.post('/exercises/:id/finish', asyncHandler(async (req, res) => {

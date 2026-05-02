@@ -77,9 +77,10 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
     );
   };
 
-  const handleDeleteFolder = async (id) => {
+  const handleDeleteFolder = async (id, name) => {
     if (armedDelete !== `folder:${id}`) {
       armDelete(`folder:${id}`);
+      toast(`Click again to delete folder "${name}"`);
       return;
     }
     setArmedDelete(null);
@@ -115,8 +116,10 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
         </button>
         <button
           onClick={() => handleDeleteWork(work.id, work.title)}
-          className={`hidden group-hover:flex absolute right-1 top-1.5 p-0.5 ${
-            armedDelete === `work:${work.id}` ? 'text-port-error' : 'text-gray-500 hover:text-port-error'
+          className={`absolute right-1 top-1.5 p-0.5 transition-opacity ${
+            armedDelete === `work:${work.id}`
+              ? 'opacity-100 text-port-error'
+              : 'opacity-40 sm:opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error'
           }`}
           aria-label={`Delete ${work.title}`}
           title={armedDelete === `work:${work.id}` ? 'Click again to confirm' : 'Delete'}
@@ -221,16 +224,18 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
                 </button>
                 <button
                   onClick={() => { setCreatingWork(folder.id); setCreatingFolder(false); }}
-                  className="hidden group-hover/folder:flex p-1 text-gray-500 hover:text-port-accent"
+                  className="p-1 text-gray-500 hover:text-port-accent transition-opacity opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100"
                   aria-label="Add work to folder"
                   title="New work in folder"
                 >
                   <FilePlus size={12} />
                 </button>
                 <button
-                  onClick={() => handleDeleteFolder(folder.id)}
-                  className={`hidden group-hover/folder:flex p-1 ${
-                    armedDelete === `folder:${folder.id}` ? 'text-port-error' : 'text-gray-500 hover:text-port-error'
+                  onClick={() => handleDeleteFolder(folder.id, folder.name)}
+                  className={`p-1 transition-opacity ${
+                    armedDelete === `folder:${folder.id}`
+                      ? 'opacity-100 text-port-error'
+                      : 'opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error'
                   }`}
                   aria-label="Delete folder"
                   title={armedDelete === `folder:${folder.id}` ? 'Click again to confirm' : 'Delete folder'}
