@@ -77,10 +77,11 @@ export default function WritersRoom() {
         updatedAt: next.updatedAt,
       };
       const idx = prev.findIndex((w) => w.id === next.id);
-      if (idx < 0) return [summary, ...prev];
-      const out = prev.slice();
-      out[idx] = { ...out[idx], ...summary };
-      return out;
+      const merged = idx < 0 ? summary : { ...prev[idx], ...summary };
+      const others = idx < 0 ? prev : [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+      // Library is sorted by updatedAt desc — re-sort after the merge so a
+      // freshly-saved work surfaces at the top instead of staying mid-list.
+      return [merged, ...others].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     });
   };
 

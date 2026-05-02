@@ -48,7 +48,11 @@ export default function ExercisePanel({ activeWork, onClose }) {
   const expired = active && remaining <= 0;
 
   const start = async () => {
-    const startingWords = activeWork?.wordCount ?? 0;
+    // Word count lives on the active draft metadata, not the work root, so
+    // walk drafts → activeDraftVersionId before falling back to a top-level
+    // wordCount (which only the listWorks summary exposes).
+    const activeDraft = activeWork?.drafts?.find((d) => d.id === activeWork?.activeDraftVersionId);
+    const startingWords = activeDraft?.wordCount ?? activeWork?.wordCount ?? 0;
     const session = await createWritersRoomExercise({
       workId: activeWork?.id ?? null,
       prompt: prompt.trim(),

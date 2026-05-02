@@ -91,7 +91,11 @@ router.get('/works/:id/versions/:draftId', asyncHandler(async (req, res) => {
 // ---------- exercises ----------
 
 router.get('/exercises', asyncHandler(async (req, res) => {
-  res.json(await listExercises({ workId: req.query.workId || undefined }));
+  // Coerce ?workId to a single string — Express parses repeated keys as an
+  // array which would silently break the in-memory equality filter below.
+  const rawWorkId = req.query.workId;
+  const workId = typeof rawWorkId === 'string' && rawWorkId ? rawWorkId : undefined;
+  res.json(await listExercises({ workId }));
 }));
 
 router.post('/exercises', asyncHandler(async (req, res) => {

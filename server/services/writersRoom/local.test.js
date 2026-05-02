@@ -121,15 +121,22 @@ describe('work CRUD', () => {
   });
 
   it('lists works ordered by updatedAt descending', async () => {
+    // Drive nowIso() deterministically — the previous version slept 5ms between
+    // creates which can collapse to the same timestamp on slow/coarse-clock CI.
+    // Vitest's setSystemTime advances `new Date()` (which nowIso uses).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
     const a = await createWork({ title: 'First' });
-    await new Promise((r) => setTimeout(r, 5));
+    vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'));
     const b = await createWork({ title: 'Second' });
-    await new Promise((r) => setTimeout(r, 5));
+    vi.setSystemTime(new Date('2026-01-01T00:00:02.000Z'));
     await updateWork(a.id, { title: 'First Updated' });
 
     const list = await listWorks();
     expect(list[0].id).toBe(a.id); // most recently touched
     expect(list[1].id).toBe(b.id);
+    vi.useRealTimers();
   });
 
   it('updateWork patches allowed fields and rejects invalid status', async () => {
@@ -139,6 +146,23 @@ describe('work CRUD', () => {
     expect(updated.title).toBe('Renamed');
     await expect(updateWork(work.id, { status: 'invalid-status' }))
       .rejects.toThrow(/Invalid status/i);
+  });
+
+  it('updateWork rejects whitespace-only titles', async () => {
+    const work = await createWork({ title: 'Keep' });
+    await expect(updateWork(work.id, { title: '   ' })).rejects.toThrow(/title required/i);
+    // Original title preserved on the persisted manifest
+    const reloaded = await getWork(work.id);
+    expect(reloaded.title).toBe('Keep');
+  });
+
+  it('updateWork rejects unknown folderId and accepts null', async () => {
+    const work = await createWork({ title: 'Filed' });
+    await expect(updateWork(work.id, { folderId: 'wr-folder-does-not-exist' }))
+      .rejects.toThrow(/Folder not found/i);
+    // null is valid — it unfiles the work from any folder
+    const unfiled = await updateWork(work.id, { folderId: null });
+    expect(unfiled.folderId).toBeNull();
   });
 
   it('deleteWork removes the work directory', async () => {
@@ -267,6 +291,21 @@ describe('exercise sessions', () => {
       .rejects.toThrow(/already settled/i);
     await expect(discardExercise(ex.id))
       .rejects.toThrow(/already settled/i);
+  });
+
+  it('finishExercise clamps wordsAdded at 0 and defaults missing endingWords', async () => {
+    // User backspaced past the starting word count → delta should not go negative.
+    const ex1 = await createExercise({ startingWords: 200 });
+    const finished1 = await finishExercise(ex1.id, { endingWords: 150 });
+    expect(finished1.wordsAdded).toBe(0);
+    expect(finished1.endingWords).toBe(150);
+
+    // Caller forgot to send endingWords → fall back to startingWords (delta 0),
+    // not 0 (which would have produced a -200 delta on the previous version).
+    const ex2 = await createExercise({ startingWords: 200 });
+    const finished2 = await finishExercise(ex2.id, {});
+    expect(finished2.wordsAdded).toBe(0);
+    expect(finished2.endingWords).toBe(200);
   });
 
   it('discardExercise marks the session as discarded', async () => {

@@ -276,7 +276,19 @@ export async function updateWork(id, patch) {
     if (key === 'status' && !WORK_STATUSES.includes(patch.status)) throw badRequest(`Invalid status: ${patch.status}`);
     next[key] = patch[key];
   }
-  if (next.title) next.title = String(next.title).trim();
+  // Trim title and reject if it becomes empty after trim — keeps parity with
+  // createWork's "title required" guard so a PATCH can't blank a title out.
+  if (patch.title !== undefined) {
+    const trimmed = String(patch.title ?? '').trim();
+    if (!trimmed) throw badRequest('Work title required');
+    next.title = trimmed;
+  }
+  // folderId can be set to a real folder id or to null (unfile the work).
+  // Anything else would orphan it from the library tree.
+  if (patch.folderId !== undefined && patch.folderId !== null) {
+    const folders = await loadFolders();
+    if (!folders.find((f) => f.id === patch.folderId)) throw notFound('Folder');
+  }
   await saveManifest(id, next);
   return next;
 }
@@ -399,10 +411,16 @@ export async function finishExercise(id, { endingWords, appendedText = null } = 
   const idx = all.findIndex((e) => e.id === id);
   if (idx < 0) throw notFound('Exercise');
   if (settled(all[idx])) throw badRequest('Exercise is already settled');
+  // Default missing endingWords to startingWords so wordsAdded never goes
+  // negative when the caller forgets to send it; clamp the delta as a final
+  // backstop for the case where the user backspaces past their starting count.
+  const startingWords = all[idx].startingWords || 0;
+  const resolvedEnding = endingWords ?? startingWords;
+  const wordsAdded = Math.max(0, resolvedEnding - startingWords);
   const finished = {
     ...all[idx],
-    endingWords: endingWords ?? all[idx].endingWords ?? 0,
-    wordsAdded: (endingWords ?? 0) - (all[idx].startingWords || 0),
+    endingWords: resolvedEnding,
+    wordsAdded,
     appendedText: appendedText ?? null,
     status: 'finished',
     finishedAt: nowIso(),
