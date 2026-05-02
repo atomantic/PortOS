@@ -1,10 +1,21 @@
 import { Link } from 'react-router-dom';
+import toast from '../ui/Toast';
+import ToggleSwitch from '../ToggleSwitch.jsx';
+import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 
-export default function OverviewTab({ project }) {
+export default function OverviewTab({ project, onProjectUpdate }) {
   const collectionLink = `/media/collections/${project.collectionId}`;
   const final = project.finalVideoId
     ? <Link to={`/media/history?selected=${project.finalVideoId}`} className="text-port-accent">{project.finalVideoId}</Link>
     : <span className="text-port-text-muted">not yet rendered</span>;
+
+  const setDisableAudio = async (next) => {
+    const updated = await updateCreativeDirectorProject(project.id, { disableAudio: next })
+      .catch((err) => { toast.error(err.message || 'Failed to update audio setting'); return null; });
+    if (!updated) return;
+    onProjectUpdate?.(updated);
+    toast.success(next ? 'Audio disabled for future scenes' : 'Audio enabled for future scenes');
+  };
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -20,6 +31,20 @@ export default function OverviewTab({ project }) {
         {project.timelineProjectId && (
           <Field label="Timeline" value={<Link to={`/media/timeline/${project.timelineProjectId}`} className="text-port-accent">{project.timelineProjectId}</Link>} />
         )}
+        <Field
+          label="Audio"
+          value={
+            <div className="inline-flex items-center gap-2 text-port-text">
+              <ToggleSwitch
+                size="sm"
+                enabled={!project.disableAudio}
+                onChange={() => setDisableAudio(!project.disableAudio)}
+                ariaLabel="Toggle audio for future scene renders"
+              />
+              <span>{project.disableAudio ? 'Disabled' : 'Enabled'} <span className="text-port-text-muted">(applies to future scene renders)</span></span>
+            </div>
+          }
+        />
       </section>
 
       {project.styleSpec && (

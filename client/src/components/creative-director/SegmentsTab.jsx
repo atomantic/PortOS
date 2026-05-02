@@ -55,14 +55,15 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
         return (
           <div key={s.sceneId} className={`bg-port-card border rounded overflow-hidden ${isInflight ? 'border-port-accent/60' : 'border-port-border'}`}>
             {s.renderedJobId ? (
-              <a href={`/data/videos/${s.renderedJobId}.mp4`} target="_blank" rel="noopener noreferrer" className="block bg-port-bg aspect-video">
-                <img
-                  src={`/data/video-thumbnails/${s.renderedJobId}.jpg`}
-                  alt={`Scene ${s.order + 1}`}
-                  className="w-full h-full object-cover"
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                />
-              </a>
+              <video
+                src={`/data/videos/${s.renderedJobId}.mp4`}
+                poster={`/data/video-thumbnails/${s.renderedJobId}.jpg`}
+                controls
+                preload="none"
+                playsInline
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                className="block w-full bg-port-bg aspect-video object-cover"
+              />
             ) : (
               <div className="bg-port-bg aspect-video flex items-center justify-center text-port-text-muted text-xs">
                 {isInflight ? (

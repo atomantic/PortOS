@@ -24,6 +24,7 @@ vi.mock('./agentBridge.js', () => ({
 }));
 
 import * as localMod from './local.js';
+import * as agentBridge from './agentBridge.js';
 import { advanceAfterSceneSettled } from './completionHook.js';
 
 const baseProject = {
@@ -236,5 +237,42 @@ describe('advanceAfterSceneSettled', () => {
     expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
     const [, sceneArg] = mockRunSceneRender.mock.calls[0];
     expect(sceneArg.sceneId).toBe('scene-2');
+  });
+
+  it('enqueues treatment when project has no treatment, even if route already pre-flipped status to planning', async () => {
+    // Regression: the route's `draft → planning` pre-flip used to short-
+    // circuit advance via a `status === 'planning'` early-return, leaving
+    // brand-new projects stuck in planning with no runs and no agent task.
+    const project = {
+      id: 'cd-stuck',
+      status: 'planning',
+      finalVideoId: null,
+      treatment: null,
+      runs: [],
+    };
+    localMod.getProject
+      .mockResolvedValueOnce(project)
+      .mockResolvedValueOnce({ ...project });
+    agentBridge.enqueueTreatmentTask.mockClear();
+
+    await advanceAfterSceneSettled(project.id);
+
+    expect(agentBridge.enqueueTreatmentTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT enqueue a duplicate treatment when one is already running', async () => {
+    const project = {
+      id: 'cd-dup',
+      status: 'planning',
+      finalVideoId: null,
+      treatment: null,
+      runs: [{ runId: 'r1', kind: 'treatment', status: 'running' }],
+    };
+    localMod.getProject.mockResolvedValueOnce(project);
+    agentBridge.enqueueTreatmentTask.mockClear();
+
+    await advanceAfterSceneSettled(project.id);
+
+    expect(agentBridge.enqueueTreatmentTask).not.toHaveBeenCalled();
   });
 });

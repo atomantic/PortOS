@@ -39,6 +39,7 @@ export default function CreativeDirector() {
     styleSpec: '',
     userStory: '',
     startingImageFile: '',
+    disableAudio: true,
   });
 
   const fetchProjects = useCallback(() => {
@@ -71,6 +72,7 @@ export default function CreativeDirector() {
       styleSpec: form.styleSpec,
       userStory: form.userStory || null,
       startingImageFile: form.startingImageFile || null,
+      disableAudio: form.disableAudio,
     };
     try {
       const created = await createCreativeDirectorProject(payload);
@@ -224,6 +226,17 @@ export default function CreativeDirector() {
                 className="w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
                 maxLength={256}
               />
+            </label>
+            <label className="flex items-center gap-2 text-sm md:col-span-2">
+              <input
+                type="checkbox"
+                checked={!form.disableAudio}
+                onChange={(e) => setForm({ ...form, disableAudio: !e.target.checked })}
+              />
+              <span className="text-port-text-muted">
+                Generate audio for each scene
+                <span className="text-port-text-muted/70"> (off by default — current models produce inconsistent audio)</span>
+              </span>
             </label>
           </div>
           <label className="block text-sm">

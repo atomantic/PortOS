@@ -106,11 +106,19 @@ export async function advanceAfterSceneSettled(projectId) {
 
   // No treatment yet → enqueue treatment task.
   if (!project.treatment) {
-    // Skip if status is already `planning` (a treatment task is in flight)
-    // OR our in-memory dedup set has this project (covers the
-    // updateProject→enqueueTreatmentTask window between two concurrent
-    // advance calls).
-    if (project.status === 'planning' || inflightTreatment.has(projectId)) return;
+    // Skip if a treatment run is already mid-flight (its run row stays
+    // 'running' until the agent's completion hook fires) OR our in-memory
+    // dedup set has this project (covers the updateProject→enqueueTreatmentTask
+    // window between two concurrent advance calls in this process).
+    //
+    // Note: we deliberately do NOT bail just because status === 'planning'.
+    // The route pre-flips `draft`/`paused`/`failed` projects to 'planning'
+    // before calling start, so a status check would short-circuit the very
+    // first Start click and leave the project stuck with no runs and no task.
+    const runningTreatment = (project.runs || []).some(
+      (r) => r.kind === 'treatment' && r.status === 'running',
+    );
+    if (runningTreatment || inflightTreatment.has(projectId)) return;
     inflightTreatment.add(projectId);
     await updateProject(project.id, { status: 'planning' })
       .catch((e) => { inflightTreatment.delete(projectId); throw e; });

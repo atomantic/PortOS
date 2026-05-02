@@ -148,7 +148,7 @@ export default function CreativeDirectorDetail() {
 
       <div className="flex-1 overflow-auto p-6">
         <ActiveAgentsBanner agents={activeAgents} />
-        {activeTab === 'overview' && <OverviewTab project={project} />}
+        {activeTab === 'overview' && <OverviewTab project={project} onProjectUpdate={setProject} />}
         {activeTab === 'treatment' && <TreatmentTab project={project} />}
         {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} />}
         {activeTab === 'runs' && <RunsTab project={project} />}

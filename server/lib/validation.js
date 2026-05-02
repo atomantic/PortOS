@@ -694,8 +694,10 @@ export const creativeDirectorProjectCreateSchema = z.object({
   styleSpec: z.string().max(5000).default(''),
   startingImageFile: safeBasename.nullable().optional(),
   userStory: z.string().max(10000).nullable().optional(),
-  // Test/dev knobs. Both default false. Smoke-test fixtures set these.
-  disableAudio: z.boolean().optional().default(false),
+  // Audio defaults OFF for CD projects — current model audio output is
+  // inconsistent across renders and the user can re-enable per-project.
+  // (videoGen one-offs still default to enabled.)
+  disableAudio: z.boolean().optional().default(true),
   autoAcceptScenes: z.boolean().optional().default(false),
 });
 
@@ -710,6 +712,8 @@ export const creativeDirectorProjectUpdateSchema = z.object({
   finalVideoId: z.string().max(64).nullable().optional(),
   timelineProjectId: z.string().max(64).nullable().optional(),
   failureReason: z.string().max(500).nullable().optional(),
+  // Toggleable post-creation — only affects future scene renders.
+  disableAudio: z.boolean().optional(),
 }).strict();
 
 // One scene in the treatment, written by the agent on the treatment task.
