@@ -101,7 +101,6 @@ const navItems = [
     label: 'AI',
     icon: Bot,
     children: [
-      { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot }
     ]
@@ -170,6 +169,15 @@ const navItems = [
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/agents', label: 'Social Agents', icon: Users },
       { to: '/messages/sync', label: 'Sync', icon: RefreshCw }
+    ]
+  },
+  {
+    label: 'Create',
+    icon: Sparkles,
+    defaultTo: '/media',
+    children: [
+      { to: '/media', label: 'Media Gen', icon: Layers },
+      { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
   },
   {

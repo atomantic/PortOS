@@ -83,6 +83,7 @@ import videoGenRoutes from './routes/videoGen.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
+import writersRoomRoutes from './routes/writersRoom.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
@@ -320,6 +321,7 @@ app.use('/api/video-gen', videoGenRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
+app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.

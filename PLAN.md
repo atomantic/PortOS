@@ -26,6 +26,7 @@ The PR landed with full pipeline mechanics + auto-recovery + smoke-test fixture,
 
 ### Other backlog
 
+- [ ] **Writers Room (Phase 2+)** — Phase 1 ships the authoring core (folders/works/drafts, "write for 10" exercise, version snapshots) under a new top-level `Create` sidebar group alongside Media Gen. Phases 2-5 cover manual AI analysis, Creative Director handoff, synced prose/script/media review, and realtime CD feedback. See [writers-room.md](./docs/features/writers-room.md).
 - [ ] **Voice CoS tool expansion** — `calendar_today` / `calendar_next` (Google Calendar via existing MCP), `meatspace_log_workout` (wraps `meatspaceHealth.js`), `weather_now` (needs API choice — OpenWeather / WeatherKit / NWS), `timer_set` (reuses `agentActionExecutor.js` scheduled actions).
 - [ ] **Voice agent vision fallback** — `ui_describe_visually` tool: screenshot the current tab (or a named canvas/chart) and send to a vision-capable model so "what's on this chart?" works on non-DOM content (CyberCity, graph views). Depends on a vision provider in `portos-ai-toolkit`.
 - [ ] **Voice agent — explicit long-term memory routing** — On "remember that …", auto-route to `brain_capture` and inject top-N relevant memories into the voice turn's system prompt via `brain_search`. Some of this is ambient today; make it explicit and self-improving.

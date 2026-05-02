@@ -81,6 +81,7 @@ const Loops = lazyWithReload(() => import('./pages/Loops'));
 const CharacterSheet = lazyWithReload(() => import('./pages/CharacterSheet'));
 const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
+const WritersRoom = lazyWithReload(() => import('./pages/WritersRoom'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -209,6 +210,8 @@ export default function App() {
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
+          <Route path="writers-room" element={<WritersRoom />} />
+          <Route path="writers-room/works/:workId" element={<WritersRoom />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />

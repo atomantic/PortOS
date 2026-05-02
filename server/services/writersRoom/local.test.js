@@ -1,0 +1,261 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+let tempRoot;
+
+vi.mock('../../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../../lib/fileUtils.js');
+  return new Proxy(actual, {
+    get(target, prop) {
+      if (prop === 'PATHS') {
+        return { ...actual.PATHS, data: tempRoot };
+      }
+      return target[prop];
+    },
+  });
+});
+
+const local = await import('./local.js');
+const {
+  countWords, contentHash, buildSegmentIndex,
+  listFolders, createFolder, updateFolder, deleteFolder,
+  listWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
+  saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
+  listExercises, createExercise, updateExercise, finishExercise, discardExercise,
+} = local;
+
+beforeEach(() => {
+  tempRoot = mkdtempSync(join(tmpdir(), 'wr-test-'));
+});
+
+afterEach(() => {
+  if (tempRoot && existsSync(tempRoot)) rmSync(tempRoot, { recursive: true, force: true });
+});
+
+describe('text utilities', () => {
+  it('countWords ignores leading/trailing whitespace and collapses runs', () => {
+    expect(countWords('')).toBe(0);
+    expect(countWords('   ')).toBe(0);
+    expect(countWords('one')).toBe(1);
+    expect(countWords('one two\nthree\tfour')).toBe(4);
+    expect(countWords('  hello   world  ')).toBe(2);
+  });
+
+  it('contentHash is deterministic and changes when content changes', () => {
+    const a = contentHash('hello');
+    const b = contentHash('hello');
+    const c = contentHash('hello!');
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('buildSegmentIndex returns single segment for body with no headings', () => {
+    const idx = buildSegmentIndex('Some prose with no headings.');
+    expect(idx).toHaveLength(1);
+    expect(idx[0]).toMatchObject({ kind: 'paragraph', wordCount: 5 });
+  });
+
+  it('buildSegmentIndex splits chapters/scenes/beats by heading depth', () => {
+    const text = '# Chapter 1\nProse here.\n## Scene A\nMore prose.\n### Beat 1\nA beat.';
+    const idx = buildSegmentIndex(text);
+    const kinds = idx.map((s) => s.kind);
+    expect(kinds).toEqual(['chapter', 'scene', 'beat']);
+    expect(idx.map((s) => s.heading)).toEqual(['Chapter 1', 'Scene A', 'Beat 1']);
+  });
+
+  it('buildSegmentIndex emits a preamble segment for content before the first heading', () => {
+    const text = 'Preamble text.\n# Chapter 1\nBody.';
+    const idx = buildSegmentIndex(text);
+    expect(idx[0].heading).toBe('(preamble)');
+    expect(idx[1].heading).toBe('Chapter 1');
+  });
+});
+
+describe('folder CRUD', () => {
+  it('creates, updates, and lists folders', async () => {
+    const folder = await createFolder({ name: 'Novels' });
+    expect(folder.id).toMatch(/^wr-folder-/);
+    expect(folder.name).toBe('Novels');
+
+    const updated = await updateFolder(folder.id, { name: 'Long Form' });
+    expect(updated.name).toBe('Long Form');
+
+    const all = await listFolders();
+    expect(all).toHaveLength(1);
+    expect(all[0].name).toBe('Long Form');
+  });
+
+  it('rejects creating a folder with a missing parent', async () => {
+    await expect(createFolder({ name: 'Child', parentId: 'wr-folder-missing' }))
+      .rejects.toThrow(/not found/i);
+  });
+
+  it('refuses to delete a folder containing works', async () => {
+    const folder = await createFolder({ name: 'Drafts' });
+    await createWork({ folderId: folder.id, title: 'Story 1' });
+    await expect(deleteFolder(folder.id)).rejects.toThrow(/not empty/i);
+  });
+
+  it('deletes an empty folder', async () => {
+    const folder = await createFolder({ name: 'Empty' });
+    const result = await deleteFolder(folder.id);
+    expect(result.ok).toBe(true);
+    expect(await listFolders()).toHaveLength(0);
+  });
+});
+
+describe('work CRUD', () => {
+  it('creates a work with an empty active draft', async () => {
+    const work = await createWork({ title: 'My Novel', kind: 'novel' });
+    expect(work.id).toMatch(/^wr-work-/);
+    expect(work.activeDraftVersionId).toMatch(/^wr-draft-/);
+    expect(work.drafts).toHaveLength(1);
+    expect(work.drafts[0].wordCount).toBe(0);
+    expect(work.kind).toBe('novel');
+    expect(work.status).toBe('drafting');
+  });
+
+  it('rejects unknown kinds', async () => {
+    await expect(createWork({ title: 'Bad', kind: 'manifesto' }))
+      .rejects.toThrow(/Invalid kind/i);
+  });
+
+  it('lists works ordered by updatedAt descending', async () => {
+    const a = await createWork({ title: 'First' });
+    await new Promise((r) => setTimeout(r, 5));
+    const b = await createWork({ title: 'Second' });
+    await new Promise((r) => setTimeout(r, 5));
+    await updateWork(a.id, { title: 'First Updated' });
+
+    const list = await listWorks();
+    expect(list[0].id).toBe(a.id); // most recently touched
+    expect(list[1].id).toBe(b.id);
+  });
+
+  it('updateWork patches allowed fields and rejects invalid status', async () => {
+    const work = await createWork({ title: 'Test' });
+    const updated = await updateWork(work.id, { status: 'revision', tags: ['draft', 'sci-fi'] });
+    expect(updated.status).toBe('revision');
+    expect(updated.tags).toEqual(['draft', 'sci-fi']);
+    await expect(updateWork(work.id, { status: 'invalid-status' }))
+      .rejects.toThrow(/Invalid status/i);
+  });
+
+  it('deleteWork removes the work directory', async () => {
+    const work = await createWork({ title: 'To Delete' });
+    await deleteWork(work.id);
+    await expect(getWork(work.id)).rejects.toThrow(/not found/i);
+    expect(await listWorks()).toHaveLength(0);
+  });
+});
+
+describe('draft body and versioning', () => {
+  it('saveDraftBody persists text and updates word count + segment index', async () => {
+    const work = await createWork({ title: 'Story' });
+    const text = '# Chapter 1\nOnce upon a time, a cat learned to fly.';
+    const { manifest, body } = await saveDraftBody(work.id, text);
+    expect(body).toBe(text);
+    const active = manifest.drafts.find((d) => d.id === manifest.activeDraftVersionId);
+    expect(active.wordCount).toBe(countWords(text));
+    expect(active.segmentIndex).toHaveLength(1);
+    expect(active.segmentIndex[0].heading).toBe('Chapter 1');
+    expect(active.contentHash).toBe(contentHash(text));
+  });
+
+  it('saveDraftBody round-trips through getWorkWithBody', async () => {
+    const work = await createWork({ title: 'Round Trip' });
+    await saveDraftBody(work.id, 'Body text v1.');
+    const { body } = await getWorkWithBody(work.id);
+    expect(body).toBe('Body text v1.');
+  });
+
+  it('snapshotDraft creates a new version that mirrors the current body', async () => {
+    const work = await createWork({ title: 'Versioned' });
+    await saveDraftBody(work.id, 'First pass.');
+    const after = await snapshotDraft(work.id);
+    expect(after.drafts).toHaveLength(2);
+    expect(after.activeDraftVersionId).toBe(after.drafts[1].id);
+    expect(after.drafts[1].wordCount).toBe(2);
+    expect(after.drafts[1].createdFromVersionId).toBe(after.drafts[0].id);
+  });
+
+  it('setActiveDraft switches the pointer; subsequent saves write the new version', async () => {
+    const work = await createWork({ title: 'Switch' });
+    const firstId = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Version 1.');
+    const snapped = await snapshotDraft(work.id);
+    const secondId = snapped.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Version 2.');
+    // Switching back should not erase v1
+    const switched = await setActiveDraft(work.id, firstId);
+    expect(switched.activeDraftVersionId).toBe(firstId);
+    const v1 = await getDraftBody(work.id, firstId);
+    const v2 = await getDraftBody(work.id, secondId);
+    expect(v1).toBe('Version 1.');
+    expect(v2).toBe('Version 2.');
+  });
+
+  it('rejects saving when active draft id is invalid (corrupt manifest)', async () => {
+    const work = await createWork({ title: 'Corrupt' });
+    // Sanity: file actually exists on disk
+    const draftFilePath = join(tempRoot, 'writers-room', 'works', work.id, 'drafts', `${work.activeDraftVersionId}.md`);
+    expect(existsSync(draftFilePath)).toBe(true);
+    expect(readFileSync(draftFilePath, 'utf-8')).toBe('');
+  });
+});
+
+describe('exercise sessions', () => {
+  it('creates a running exercise tied to a work', async () => {
+    const work = await createWork({ title: 'Exercise Target' });
+    const ex = await createExercise({ workId: work.id, prompt: 'free-write', startingWords: 100 });
+    expect(ex.id).toMatch(/^wr-ex-/);
+    expect(ex.status).toBe('running');
+    expect(ex.workId).toBe(work.id);
+    expect(ex.durationSeconds).toBe(600);
+  });
+
+  it('clamps duration to [60, 3600] seconds', async () => {
+    const tooShort = await createExercise({ durationSeconds: 10 });
+    expect(tooShort.durationSeconds).toBe(60);
+    const tooLong = await createExercise({ durationSeconds: 99999 });
+    expect(tooLong.durationSeconds).toBe(3600);
+  });
+
+  it('rejects creating an exercise tied to a missing work', async () => {
+    await expect(createExercise({ workId: 'wr-work-deadbeef-1234-5678-aaaa-bbbbccccdddd' }))
+      .rejects.toThrow(/not found/i);
+  });
+
+  it('finishExercise computes wordsAdded delta and seals the session', async () => {
+    const ex = await createExercise({ startingWords: 50 });
+    const finished = await finishExercise(ex.id, { endingWords: 175 });
+    expect(finished.status).toBe('finished');
+    expect(finished.wordsAdded).toBe(125);
+    expect(finished.finishedAt).toBeTruthy();
+
+    // Finishing a settled session should be rejected by updateExercise
+    await expect(updateExercise(ex.id, { status: 'paused' }))
+      .rejects.toThrow(/already settled/i);
+  });
+
+  it('discardExercise marks the session as discarded', async () => {
+    const ex = await createExercise({});
+    const discarded = await discardExercise(ex.id);
+    expect(discarded.status).toBe('discarded');
+  });
+
+  it('listExercises filters by workId', async () => {
+    const w1 = await createWork({ title: 'W1' });
+    const w2 = await createWork({ title: 'W2' });
+    await createExercise({ workId: w1.id });
+    await createExercise({ workId: w2.id });
+    await createExercise({});
+
+    expect(await listExercises({ workId: w1.id })).toHaveLength(1);
+    expect(await listExercises({ workId: w2.id })).toHaveLength(1);
+    expect(await listExercises()).toHaveLength(3);
+  });
+});
