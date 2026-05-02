@@ -147,21 +147,14 @@ export default function WritersRoom() {
             </button>
           </aside>
         ) : (
-          <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none relative">
-            <button
-              onClick={toggleLibrary}
-              className="hidden md:inline-flex absolute top-2 right-2 p-1 text-gray-500 hover:text-white"
-              title="Hide library"
-              aria-label="Hide library"
-            >
-              <PanelLeftClose size={14} />
-            </button>
+          <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
             <LibraryPane
               folders={folders}
               works={works}
               activeWorkId={activeWork?.id}
               onSelectWork={selectWork}
               onRefresh={refreshLibrary}
+              onCollapse={toggleLibrary}
             />
           </aside>
         )}

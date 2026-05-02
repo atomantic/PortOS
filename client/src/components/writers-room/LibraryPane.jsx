@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical } from 'lucide-react';
+import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical, PanelLeftClose } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import toast from '../ui/Toast';
 import {
@@ -13,7 +13,7 @@ import { KIND_LABELS } from './labels';
 
 const UNFILED_DROP_ID = 'wr-unfiled';
 
-export default function LibraryPane({ folders, works, activeWorkId, onSelectWork, onRefresh }) {
+export default function LibraryPane({ folders, works, activeWorkId, onSelectWork, onRefresh, onCollapse }) {
   const [openFolders, setOpenFolders] = useState({});
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
@@ -164,6 +164,16 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
           >
             <FilePlus size={14} />
           </button>
+          {onCollapse && (
+            <button
+              onClick={onCollapse}
+              className="hidden md:inline-flex p-1 text-gray-400 hover:text-white"
+              title="Hide library"
+              aria-label="Hide library"
+            >
+              <PanelLeftClose size={14} />
+            </button>
+          )}
         </div>
       </div>
 
