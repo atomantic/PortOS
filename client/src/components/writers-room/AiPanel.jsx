@@ -1,14 +1,35 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Sparkles, FileSignature, Clapperboard, Loader2, RotateCcw, AlertTriangle, Image as ImageIcon, Check } from 'lucide-react';
+import { Sparkles, FileSignature, Clapperboard, Loader2, RotateCcw, AlertTriangle, Image as ImageIcon, Check, Settings as SettingsIcon } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   listWritersRoomAnalyses,
   runWritersRoomAnalysis,
   getWritersRoomAnalysis,
 } from '../../services/apiWritersRoom';
-import { generateImage } from '../../services/apiSystem';
+import { generateImage, getSettings, updateSettings } from '../../services/apiSystem';
+import { listImageModels } from '../../services/apiImageVideo';
 import { timeAgo } from '../../utils/formatters';
 import socket from '../../services/socket';
+
+// Defaults for the per-scene image gen pipe. The user picked Klein-4B because
+// it's the fastest of the FLUX.2 variants on Apple Silicon, and 768×512 is a
+// 3:2 aspect that suits scene/storyboard work better than a square.
+const WR_IMAGE_DEFAULTS = {
+  modelId: 'flux2-klein-4b',
+  mode: 'local',
+  width: 768,
+  height: 512,
+};
+
+function readWrImageSettings(settings) {
+  const stored = settings?.writersRoom?.imageGen || {};
+  return {
+    modelId: stored.modelId || WR_IMAGE_DEFAULTS.modelId,
+    mode: stored.mode || WR_IMAGE_DEFAULTS.mode,
+    width: Number.isFinite(stored.width) ? stored.width : WR_IMAGE_DEFAULTS.width,
+    height: Number.isFinite(stored.height) ? stored.height : WR_IMAGE_DEFAULTS.height,
+  };
+}
 
 const KIND_META = {
   evaluate: { label: 'Evaluate', icon: Sparkles, hint: 'Editorial critique: logline, themes, issues, suggestions' },
@@ -263,18 +284,108 @@ function FormatResult({ result, onApply }) {
 }
 
 function ScriptResult({ result, workTitle }) {
+  // Image-gen settings are scoped to the Writers Room (not the global Image Gen
+  // page) so a writer can pick a fast/small model + 3:2 aspect without
+  // disrupting the dedicated Image Gen workflow.
+  const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
+  const [models, setModels] = useState([]);
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      getSettings().catch(() => ({})),
+      listImageModels().catch(() => []),
+    ]).then(([settings, modelList]) => {
+      if (cancelled) return;
+      setImageCfg(readWrImageSettings(settings));
+      setModels(Array.isArray(modelList) ? modelList : []);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const persistCfg = useCallback(async (next) => {
+    setImageCfg(next); // optimistic
+    const current = await getSettings().catch(() => ({}));
+    await updateSettings({
+      ...current,
+      writersRoom: { ...(current.writersRoom || {}), imageGen: next },
+    }).catch((err) => toast.error(`Settings save failed: ${err.message}`));
+  }, []);
+
   if (!result || !result.scenes?.length) return <div className="text-gray-500">No scenes returned.</div>;
   return (
     <div className="space-y-2 text-[11px] text-gray-300">
-      {result.logline && <div className="italic text-gray-400">"{result.logline}"</div>}
+      <div className="flex items-center justify-between gap-2 px-1">
+        {result.logline ? <div className="italic text-gray-400 truncate">"{result.logline}"</div> : <div />}
+        <button
+          onClick={() => setShowSettings((v) => !v)}
+          className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-white shrink-0"
+          title="Image-gen settings for this Writers Room"
+        >
+          <SettingsIcon size={10} /> {imageCfg.modelId} · {imageCfg.width}×{imageCfg.height}
+        </button>
+      </div>
+      {showSettings && (
+        <ImageGenSettingsRow cfg={imageCfg} models={models} onChange={persistCfg} />
+      )}
       {result.scenes.map((scene, i) => (
-        <SceneCard key={scene.id || i} scene={scene} workTitle={workTitle} />
+        <SceneCard key={scene.id || i} scene={scene} workTitle={workTitle} imageCfg={imageCfg} />
       ))}
     </div>
   );
 }
 
-function SceneCard({ scene, workTitle }) {
+function ImageGenSettingsRow({ cfg, models, onChange }) {
+  // Resolution presets that match common scene/storyboard aspects. Free-form
+  // numeric inputs would invite invalid sizes (the FLUX.2 runner needs 64-px
+  // multiples) so we expose a curated dropdown instead. "Custom" reveals the
+  // raw inputs for power users who edit settings.json directly anyway.
+  const RES_PRESETS = [
+    { label: '768×512 (3:2)',  width: 768, height: 512 },
+    { label: '512×512 (1:1)',  width: 512, height: 512 },
+    { label: '512×768 (2:3)',  width: 512, height: 768 },
+    { label: '1024×576 (16:9)', width: 1024, height: 576 },
+    { label: '1024×1024 (1:1)', width: 1024, height: 1024 },
+  ];
+  const presetMatch = RES_PRESETS.find((p) => p.width === cfg.width && p.height === cfg.height);
+  return (
+    <div className="border border-port-border rounded p-2 bg-port-bg/40 space-y-1.5">
+      <label className="block">
+        <span className="text-[9px] uppercase tracking-wider text-gray-500">Model</span>
+        <select
+          value={cfg.modelId}
+          onChange={(e) => onChange({ ...cfg, modelId: e.target.value })}
+          className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
+        >
+          {models.length === 0 && <option value={cfg.modelId}>{cfg.modelId}</option>}
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>{m.name || m.id}</option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className="text-[9px] uppercase tracking-wider text-gray-500">Resolution</span>
+        <select
+          value={presetMatch ? `${cfg.width}x${cfg.height}` : 'custom'}
+          onChange={(e) => {
+            if (e.target.value === 'custom') return;
+            const [w, h] = e.target.value.split('x').map(Number);
+            onChange({ ...cfg, width: w, height: h });
+          }}
+          className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
+        >
+          {RES_PRESETS.map((p) => (
+            <option key={p.label} value={`${p.width}x${p.height}`}>{p.label}</option>
+          ))}
+          {!presetMatch && <option value="custom">Custom ({cfg.width}×{cfg.height})</option>}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function SceneCard({ scene, workTitle, imageCfg = WR_IMAGE_DEFAULTS }) {
   // genStatus drives the button + preview overlay:
   //   idle    → no preview area shown
   //   running → preview area shows spinner / live diffusion frame from socket
@@ -350,7 +461,13 @@ function SceneCard({ scene, workTitle }) {
     // Truncate at 1900 chars to stay under the 2000-char API limit even when
     // the model returns a chatty visualPrompt.
     const prompt = `${workTitle ? `${workTitle}. ` : ''}${scene.visualPrompt}`.slice(0, 1900);
-    const res = await generateImage({ prompt }).catch((err) => {
+    const res = await generateImage({
+      prompt,
+      modelId: imageCfg.modelId,
+      mode: imageCfg.mode,
+      width: imageCfg.width,
+      height: imageCfg.height,
+    }).catch((err) => {
       setError(err.message);
       setGenStatus('error');
       return null;
@@ -396,7 +513,9 @@ function SceneCard({ scene, workTitle }) {
       </div>
 
       {showPreviewArea && (
-        <div className="aspect-square w-full bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
+        <div
+          style={{ aspectRatio: `${imageCfg.width} / ${imageCfg.height}` }}
+          className="w-full bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative">
           {view === 'live' && (
             <img
               src={`data:image/png;base64,${progress.currentImage}`}
