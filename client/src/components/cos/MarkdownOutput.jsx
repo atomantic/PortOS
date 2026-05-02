@@ -11,7 +11,7 @@ function parseInline(text) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const s = m[0];
     if (s[0] === '`') {
-      parts.push(<code key={m.index} className="bg-port-bg px-1 py-0.5 rounded text-cyan-400 font-mono text-xs break-all">{s.slice(1, -1)}</code>);
+      parts.push(<code key={m.index} className="bg-port-bg px-1 py-0.5 rounded text-port-accent font-mono text-xs break-all">{s.slice(1, -1)}</code>);
     } else if (s.startsWith('**')) {
       parts.push(<strong key={m.index} className="text-white font-semibold">{s.slice(2, -2)}</strong>);
     } else if (s[0] === '*' || s[0] === '_') {
@@ -57,7 +57,7 @@ function parseBlocks(md) {
       let end = i + 1;
       while (end < lines.length && !lines[end].startsWith('```')) end++;
       const code = lines.slice(i + 1, end).join('\n');
-      blocks.push(<pre key={i} className="my-1 overflow-x-auto"><code className="block bg-port-bg rounded p-2 my-1 text-xs font-mono text-cyan-400 overflow-x-auto whitespace-pre-wrap break-all">{code}</code></pre>);
+      blocks.push(<pre key={i} className="my-1 overflow-x-auto"><code className="block bg-port-bg rounded p-2 my-1 text-xs font-mono text-port-accent overflow-x-auto whitespace-pre-wrap break-all">{code}</code></pre>);
       i = end + 1; continue;
     }
 
