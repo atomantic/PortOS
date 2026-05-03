@@ -559,6 +559,30 @@ export const writersRoomCharacterUpdateSchema = z.object({
   notes: wrCharTextField.optional(),
 }).strict();
 
+const wrSettingTextField = z.string().max(2000);
+export const writersRoomSettingCreateSchema = z.object({
+  name: z.string().trim().max(200).optional(),
+  slugline: z.string().trim().max(200).optional(),
+  description: wrSettingTextField.optional(),
+  palette: wrSettingTextField.optional(),
+  era: wrSettingTextField.optional(),
+  weather: wrSettingTextField.optional(),
+  recurringDetails: wrSettingTextField.optional(),
+  notes: wrSettingTextField.optional(),
+}).strict().refine((v) => (v.name && v.name.trim()) || (v.slugline && v.slugline.trim()), {
+  message: 'Setting requires either a slugline or a name',
+});
+export const writersRoomSettingUpdateSchema = z.object({
+  name: z.string().trim().max(200).optional(),
+  slugline: z.string().trim().max(200).optional(),
+  description: wrSettingTextField.optional(),
+  palette: wrSettingTextField.optional(),
+  era: wrSettingTextField.optional(),
+  weather: wrSettingTextField.optional(),
+  recurringDetails: wrSettingTextField.optional(),
+  notes: wrSettingTextField.optional(),
+}).strict();
+
 // =============================================================================
 // FEATURE AGENT SCHEMAS
 // =============================================================================

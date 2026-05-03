@@ -28,6 +28,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-settings": {
+      "name": "Writers Room — Setting / World Bible",
+      "description": "Extract a setting/world bible from a Writers Room draft: per-location descriptions keyed by screenplay slugline (palette, era, weather, recurring details). Storyboard scenes match their slugline back to a setting and inject its description into the image prompt for visual continuity.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "cd-treatment": {
       "name": "Creative Director — Treatment",
       "description": "Plan a long-form generated-video project: write the logline, synopsis, and scene-by-scene treatment.",

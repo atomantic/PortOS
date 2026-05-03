@@ -15,6 +15,7 @@ import { buildPrompt, getStage } from '../promptService.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
+import { listSettings, mergeExtractedSettings } from './settings.js';
 import { nowIso, badRequest, notFound } from './_shared.js';
 
 export { ANALYSIS_KINDS };
@@ -24,6 +25,7 @@ const KIND_META = {
   format:     { stage: 'writers-room-format',     returnsJson: false },
   script:     { stage: 'writers-room-script',     returnsJson: true },
   characters: { stage: 'writers-room-characters', returnsJson: true },
+  settings:   { stage: 'writers-room-settings',   returnsJson: true },
 };
 
 // Analysis id == kind. Each work keeps at most one snapshot per kind on disk
@@ -259,6 +261,26 @@ const SHAPERS = {
       })),
     };
   },
+  settings: (raw) => {
+    const parsed = extractJson(raw);
+    const list = Array.isArray(parsed.settings) ? parsed.settings : [];
+    return {
+      settings: list
+        .filter((s) => s && typeof s === 'object' && (typeof s.slugline === 'string' || typeof s.name === 'string'))
+        .map((s) => ({
+          slugline: typeof s.slugline === 'string' ? s.slugline.trim() : '',
+          name: typeof s.name === 'string' ? s.name.trim() : '',
+          description: typeof s.description === 'string' ? s.description : '',
+          palette: typeof s.palette === 'string' ? s.palette : '',
+          era: typeof s.era === 'string' ? s.era : '',
+          weather: typeof s.weather === 'string' ? s.weather : '',
+          recurringDetails: typeof s.recurringDetails === 'string' ? s.recurringDetails : '',
+          firstAppearance: typeof s.firstAppearance === 'string' ? s.firstAppearance : null,
+          evidence: Array.isArray(s.evidence) ? s.evidence.filter((e) => typeof e === 'string') : [],
+          missingFromProse: Array.isArray(s.missingFromProse) ? s.missingFromProse.filter((m) => typeof m === 'string') : [],
+        })),
+    };
+  },
 };
 
 // ---------- storage ----------
@@ -464,38 +486,52 @@ export async function runAnalysis(workId, { kind } = {}) {
       draftBody: body,
       returnsJson,
     };
-    if (kind === 'characters') {
-      // Pass the existing bible so the LLM can preserve user edits and only
-      // fill blanks. Stripped down to fields the prompt cares about — no ids,
-      // timestamps, or source markers.
+    // Strip down each bible to the fields the prompts care about — no ids,
+    // timestamps, or source markers. Same shape goes to both the bible's own
+    // re-extraction (preserve-user-edits) AND to script (Adapt) so it can
+    // cite canonical names + descriptions in visualPrompt fields.
+    const trimCharacter = (c) => ({
+      name: c.name,
+      aliases: c.aliases,
+      role: c.role,
+      physicalDescription: c.physicalDescription,
+      personality: c.personality,
+      background: c.background,
+    });
+    const trimSetting = (s) => ({
+      name: s.name,
+      slugline: s.slugline,
+      description: s.description,
+      palette: s.palette,
+      era: s.era,
+      weather: s.weather,
+      recurringDetails: s.recurringDetails,
+    });
+    if (kind === 'characters' || kind === 'script') {
       const existing = await listCharacters(workId);
-      variables.existingCharactersJson = JSON.stringify(
-        existing.map((c) => ({
-          name: c.name,
-          aliases: c.aliases,
-          role: c.role,
-          physicalDescription: c.physicalDescription,
-          personality: c.personality,
-          background: c.background,
-        })),
-        null,
-        2
-      );
+      variables.existingCharactersJson = JSON.stringify(existing.map(trimCharacter), null, 2);
     }
+    if (kind === 'settings' || kind === 'script') {
+      const existing = await listSettings(workId);
+      variables.existingSettingsJson = JSON.stringify(existing.map(trimSetting), null, 2);
+    }
+
     const temperature = kind === 'format' ? 0.2 : 0.4;
     const { content, model: usedModel, providerId: usedProvider } = await callAI(stage, variables, temperature);
     const result = SHAPERS[kind](content);
-    let mergedCharacters = null;
+    let mergedProfiles = null;
     if (kind === 'characters') {
-      mergedCharacters = await mergeExtractedCharacters(workId, result.characters || []);
+      mergedProfiles = await mergeExtractedCharacters(workId, result.characters || []);
+    } else if (kind === 'settings') {
+      mergedProfiles = await mergeExtractedSettings(workId, result.settings || []);
     }
     const finished = {
       ...baseSnapshot,
       status: 'succeeded',
       providerId: usedProvider,
       model: usedModel,
-      result: mergedCharacters
-        ? { ...result, mergedProfiles: mergedCharacters }
+      result: mergedProfiles
+        ? { ...result, mergedProfiles }
         : result,
       rawResponse: content,
       completedAt: nowIso(),

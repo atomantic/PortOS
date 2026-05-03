@@ -1,0 +1,207 @@
+/**
+ * Writers Room — editable setting/world bible.
+ *
+ * Per-location bible keyed by screenplay slugline (e.g. `INT. KITCHEN — NIGHT`)
+ * so SceneCard can match a scene's slugline to its canonical setting and
+ * inject the description into the image prompt.
+ *
+ * Stored at data/writers-room/works/<workId>/settings.json. Same merge rule
+ * as characters: a re-run of `settings` analysis fills empty fields and adds
+ * new locations, but never overwrites a non-empty field on an existing entry.
+ */
+
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
+import { nowIso, badRequest, notFound } from './_shared.js';
+
+const SETTING_ID_RE = /^wr-setting-[0-9a-f-]+$/i;
+
+const root = () => join(PATHS.data, 'writers-room');
+const settingsFile = (workId) => join(root(), 'works', workId, 'settings.json');
+
+const EDITABLE_FIELDS = ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'recurringDetails', 'notes'];
+
+function emptySetting() {
+  return {
+    id: '',
+    name: '',
+    slugline: '',
+    description: '',
+    palette: '',
+    era: '',
+    weather: '',
+    recurringDetails: '',
+    notes: '',
+    firstAppearance: null,
+    evidence: [],
+    missingFromProse: [],
+    source: 'user',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+}
+
+// Sluglines are matched case-insensitively with whitespace+punctuation
+// collapsed so `INT. KITCHEN — NIGHT` and `INT KITCHEN - NIGHT` resolve to
+// the same bible entry. Em-dashes vs hyphens vs spaces in user-edited prose
+// would otherwise fragment a single location across multiple records.
+export function normalizeSlugline(s) {
+  return String(s || '')
+    .toUpperCase()
+    .replace(/[—–-]/g, ' ')
+    .replace(/[.,:;]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isBlank(v) {
+  if (v == null) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === 'string') return v.trim() === '';
+  return false;
+}
+
+async function loadFile(workId) {
+  const fallback = { settings: [], updatedAt: null };
+  const parsed = await readJSONFile(settingsFile(workId), fallback);
+  return parsed && Array.isArray(parsed.settings) ? parsed : fallback;
+}
+
+async function saveFile(workId, state) {
+  await ensureDir(join(root(), 'works', workId));
+  await atomicWrite(settingsFile(workId), { ...state, updatedAt: nowIso() });
+}
+
+export async function listSettings(workId) {
+  const state = await loadFile(workId);
+  return state.settings.sort((a, b) => (a.slugline || a.name || '').localeCompare(b.slugline || b.name || ''));
+}
+
+export async function getSetting(workId, settingId) {
+  if (!SETTING_ID_RE.test(settingId)) throw badRequest('Invalid setting id');
+  const state = await loadFile(workId);
+  const found = state.settings.find((s) => s.id === settingId);
+  if (!found) throw notFound('Setting');
+  return found;
+}
+
+export async function createSetting(workId, patch = {}) {
+  const slugline = String(patch.slugline || '').trim();
+  const name = String(patch.name || '').trim();
+  if (!slugline && !name) throw badRequest('Setting requires either a slugline or a name');
+  const state = await loadFile(workId);
+  const key = normalizeSlugline(slugline || name);
+  if (state.settings.some((s) => normalizeSlugline(s.slugline || s.name) === key)) {
+    throw badRequest(`A setting matching "${slugline || name}" already exists`);
+  }
+  const profile = {
+    ...emptySetting(),
+    id: `wr-setting-${randomUUID()}`,
+    slugline,
+    name: name || slugline,
+    source: 'user',
+  };
+  for (const field of EDITABLE_FIELDS) {
+    if (field === 'slugline' || field === 'name') continue;
+    if (patch[field] !== undefined) profile[field] = patch[field];
+  }
+  state.settings.push(profile);
+  await saveFile(workId, state);
+  return profile;
+}
+
+export async function updateSetting(workId, settingId, patch = {}) {
+  if (!SETTING_ID_RE.test(settingId)) throw badRequest('Invalid setting id');
+  const state = await loadFile(workId);
+  const idx = state.settings.findIndex((s) => s.id === settingId);
+  if (idx < 0) throw notFound('Setting');
+  const next = { ...state.settings[idx] };
+  for (const field of EDITABLE_FIELDS) {
+    if (patch[field] === undefined) continue;
+    if (field === 'slugline' || field === 'name') {
+      const newVal = String(patch[field] || '').trim();
+      if (field === 'slugline' && !newVal && !next.name) throw badRequest('Setting needs slugline or name');
+      const key = normalizeSlugline(newVal);
+      if (key) {
+        const conflict = state.settings.some((s) => s.id !== settingId && normalizeSlugline(s.slugline || s.name) === key);
+        if (conflict) throw badRequest(`A setting matching "${newVal}" already exists`);
+      }
+      next[field] = newVal;
+    } else {
+      next[field] = patch[field];
+    }
+  }
+  next.source = 'user';
+  next.updatedAt = nowIso();
+  state.settings[idx] = next;
+  await saveFile(workId, state);
+  return next;
+}
+
+export async function deleteSetting(workId, settingId) {
+  if (!SETTING_ID_RE.test(settingId)) throw badRequest('Invalid setting id');
+  const state = await loadFile(workId);
+  const before = state.settings.length;
+  state.settings = state.settings.filter((s) => s.id !== settingId);
+  if (state.settings.length === before) throw notFound('Setting');
+  await saveFile(workId, state);
+  return { ok: true };
+}
+
+/**
+ * Merge an AI-extracted setting set into the editable bible.
+ * - Existing settings (matched by normalized slugline OR name) keep every
+ *   non-blank field. Only blank fields get filled from `extracted`.
+ * - New settings are inserted with `source: 'ai'`.
+ * - `firstAppearance`, `evidence`, `missingFromProse` always reflect the
+ *   latest analysis.
+ */
+export async function mergeExtractedSettings(workId, extracted) {
+  if (!Array.isArray(extracted)) return listSettings(workId);
+  const state = await loadFile(workId);
+  const byKey = new Map();
+  for (const s of state.settings) {
+    const key = normalizeSlugline(s.slugline || s.name);
+    if (key) byKey.set(key, s);
+  }
+  for (const incoming of extracted) {
+    if (!incoming || (!incoming.slugline && !incoming.name)) continue;
+    const key = normalizeSlugline(incoming.slugline || incoming.name);
+    const existing = byKey.get(key);
+    if (existing) {
+      for (const field of ['description', 'palette', 'era', 'weather', 'recurringDetails']) {
+        if (isBlank(existing[field]) && !isBlank(incoming[field])) {
+          existing[field] = incoming[field];
+        }
+      }
+      if (isBlank(existing.name) && !isBlank(incoming.name)) {
+        existing.name = String(incoming.name).trim();
+      }
+      existing.firstAppearance = incoming.firstAppearance ?? existing.firstAppearance ?? null;
+      existing.evidence = Array.isArray(incoming.evidence) ? incoming.evidence : (existing.evidence || []);
+      existing.missingFromProse = Array.isArray(incoming.missingFromProse) ? incoming.missingFromProse : [];
+      existing.updatedAt = nowIso();
+    } else {
+      const profile = {
+        ...emptySetting(),
+        id: `wr-setting-${randomUUID()}`,
+        slugline: String(incoming.slugline || '').trim(),
+        name: String(incoming.name || incoming.slugline || '').trim(),
+        description: String(incoming.description || '').trim(),
+        palette: String(incoming.palette || '').trim(),
+        era: String(incoming.era || '').trim(),
+        weather: String(incoming.weather || '').trim(),
+        recurringDetails: String(incoming.recurringDetails || '').trim(),
+        firstAppearance: incoming.firstAppearance ?? null,
+        evidence: Array.isArray(incoming.evidence) ? incoming.evidence : [],
+        missingFromProse: Array.isArray(incoming.missingFromProse) ? incoming.missingFromProse : [],
+        source: 'ai',
+      };
+      state.settings.push(profile);
+      byKey.set(normalizeSlugline(profile.slugline || profile.name), profile);
+    }
+  }
+  await saveFile(workId, state);
+  return state.settings.sort((a, b) => (a.slugline || a.name || '').localeCompare(b.slugline || b.name || ''));
+}

@@ -9,6 +9,7 @@ import {
   Sparkles,
   FileSignature,
   Users,
+  MapPin,
   ListTree,
   Clock,
   History,
@@ -28,20 +29,23 @@ import {
   updateWritersRoomWork,
   runWritersRoomAnalysis,
   listWritersRoomCharacters,
+  listWritersRoomSettings,
 } from '../../services/apiWritersRoom';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
 import StoryboardPanel from './StoryboardPanel';
 import CharactersBible from './CharactersBible';
+import SettingsBible from './SettingsBible';
 import AnalysisHistory from './AnalysisHistory';
 
-const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', EVALUATE: 'evaluate', FORMAT: 'format' };
-const DRAWER = { OUTLINE: 'outline', VERSIONS: 'versions', CHARACTERS: 'characters', HISTORY: 'history' };
+const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', SETTINGS: 'settings', EVALUATE: 'evaluate', FORMAT: 'format' };
+const DRAWER = { OUTLINE: 'outline', VERSIONS: 'versions', CHARACTERS: 'characters', SETTINGS: 'settings', HISTORY: 'history' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
 const ANALYSIS_LABELS = {
   [ANALYSIS_KIND.SCRIPT]: 'Adapt',
   [ANALYSIS_KIND.CHARACTERS]: 'Characters',
+  [ANALYSIS_KIND.SETTINGS]: 'Settings',
   [ANALYSIS_KIND.EVALUATE]: 'Editorial pass',
   [ANALYSIS_KIND.FORMAT]: 'Format pass',
 };
@@ -78,6 +82,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [saving, setSaving] = useState(false);
   const [readingTheme, setReadingTheme] = useState(readReadingTheme);
   const [characters, setCharacters] = useState([]);
+  const [settings, setSettings] = useState([]);
   const [runningKind, setRunningKind] = useState(null);
   const [drawer, setDrawer] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -102,12 +107,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   useEffect(() => { setStatus(work.status); }, [work.status]);
   useEffect(() => { setTitle(work.title); }, [work.title]);
 
-  // The CharactersBible drawer is the canonical editor; mirror its list here
-  // so the storyboard's image-prompt enrichment picks up edits immediately.
+  // The CharactersBible / SettingsBible drawers are the canonical editors;
+  // mirror their lists here so the storyboard's image-prompt enrichment picks
+  // up edits immediately.
   useEffect(() => {
     listWritersRoomCharacters(work.id)
       .then((list) => setCharacters(list || []))
       .catch(() => setCharacters([]));
+    listWritersRoomSettings(work.id)
+      .then((list) => setSettings(list || []))
+      .catch(() => setSettings([]));
   }, [work.id]);
 
   const dirty = body !== savedBody;
@@ -238,6 +247,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     toast.success(`${ANALYSIS_LABELS[kind] || kind} complete`);
     if (kind === 'characters' && Array.isArray(snapshot.result?.mergedProfiles)) {
       setCharacters(snapshot.result.mergedProfiles);
+    }
+    if (kind === 'settings' && Array.isArray(snapshot.result?.mergedProfiles)) {
+      setSettings(snapshot.result.mergedProfiles);
     }
     if (kind === 'format' && snapshot.result?.formattedBody) {
       setBody(snapshot.result.formattedBody);
@@ -411,6 +423,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
               <MenuSection label="AI">
                 <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
                 <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
+                <MenuItem icon={MapPin} label="Refresh settings" running={runningKind === ANALYSIS_KIND.SETTINGS} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SETTINGS))} />
                 <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
               </MenuSection>
@@ -418,6 +431,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <MenuItem icon={ListTree} label="Outline" onClick={closeOverflowAnd(() => setDrawer(DRAWER.OUTLINE))} />
                 <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VERSIONS))} />
                 <MenuItem icon={Users} label="Characters" badge={characters.length || null} onClick={closeOverflowAnd(() => setDrawer(DRAWER.CHARACTERS))} />
+                <MenuItem icon={MapPin} label="Settings" badge={settings.length || null} onClick={closeOverflowAnd(() => setDrawer(DRAWER.SETTINGS))} />
                 <MenuItem icon={History} label="Analysis history" onClick={closeOverflowAnd(() => setDrawer(DRAWER.HISTORY))} />
               </MenuSection>
               <MenuSection label="View">
@@ -491,6 +505,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           <StoryboardPanel
             work={work}
             characters={characters}
+            settings={settings}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
@@ -513,6 +528,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           workId={work.id}
           characters={characters}
           onCharactersChange={setCharacters}
+          readingTheme={readingTheme}
+        />
+      </Drawer>
+      <Drawer open={drawer === DRAWER.SETTINGS} onClose={() => setDrawer(null)} title="Settings (locations / world bible)">
+        <SettingsBible
+          workId={work.id}
+          settings={settings}
+          onSettingsChange={setSettings}
           readingTheme={readingTheme}
         />
       </Drawer>

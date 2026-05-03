@@ -17,8 +17,9 @@ import socket from '../../services/socket';
 import useClickOutside from '../../hooks/useClickOutside';
 import {
   WR_IMAGE_DEFAULTS,
-  buildScenePromptWithCharacters,
+  buildScenePrompt,
   matchSceneCharacters,
+  matchSceneSetting,
   normCharKey,
 } from './sceneCardHelpers';
 
@@ -32,6 +33,7 @@ const SceneCard = forwardRef(function SceneCard({
   initialImage = null,
   readingTheme = 'dark',
   charByKey = null,
+  settingByKey = null,
   isActive = false,
   onJumpToProse = null,
   onDebug = null,
@@ -40,6 +42,10 @@ const SceneCard = forwardRef(function SceneCard({
   const matchedCharacters = useMemo(
     () => matchSceneCharacters(scene.characters, charByKey),
     [scene.characters, charByKey]
+  );
+  const matchedSetting = useMemo(
+    () => matchSceneSetting(scene.slugline, settingByKey),
+    [scene.slugline, settingByKey]
   );
   const matchedNameKeys = useMemo(() => {
     const keys = new Set();
@@ -143,7 +149,7 @@ const SceneCard = forwardRef(function SceneCard({
     setError(null);
     setProgress(null);
     setGenerated(null);
-    const prompt = buildScenePromptWithCharacters(workTitle, scene, matchedCharacters, imageStyle?.prompt || '');
+    const prompt = buildScenePrompt(workTitle, scene, matchedCharacters, imageStyle?.prompt || '', matchedSetting);
     const stepsNum = imageCfg.steps ? Number(imageCfg.steps) : undefined;
     const seedNum = imageCfg.seed && Number(imageCfg.seed) >= 0 ? Number(imageCfg.seed) : undefined;
     const res = await generateImage({

@@ -17,6 +17,8 @@ import {
   writersRoomAnalysisCreateSchema,
   writersRoomCharacterCreateSchema,
   writersRoomCharacterUpdateSchema,
+  writersRoomSettingCreateSchema,
+  writersRoomSettingUpdateSchema,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
@@ -31,6 +33,9 @@ import {
 import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
+import {
+  listSettings, createSetting, updateSetting, deleteSetting,
+} from '../services/writersRoom/settings.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 
@@ -170,6 +175,26 @@ router.patch('/works/:id/characters/:characterId', asyncHandler(async (req, res)
 
 router.delete('/works/:id/characters/:characterId', asyncHandler(async (req, res) => {
   res.json(await deleteCharacter(req.params.id, req.params.characterId));
+}));
+
+// ---------- settings (locations / world bible) ----------
+
+router.get('/works/:id/settings', asyncHandler(async (req, res) => {
+  res.json(await listSettings(req.params.id));
+}));
+
+router.post('/works/:id/settings', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomSettingCreateSchema, req.body || {});
+  res.status(201).json(await createSetting(req.params.id, data));
+}));
+
+router.patch('/works/:id/settings/:settingId', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomSettingUpdateSchema, req.body || {});
+  res.json(await updateSetting(req.params.id, req.params.settingId, data));
+}));
+
+router.delete('/works/:id/settings/:settingId', asyncHandler(async (req, res) => {
+  res.json(await deleteSetting(req.params.id, req.params.settingId));
 }));
 
 // Persist a scene→generated-image link on the analysis snapshot, AND mirror

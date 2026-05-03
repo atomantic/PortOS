@@ -63,34 +63,95 @@ export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
   return matched;
 }
 
+// Match server's normalizeSlugline in services/writersRoom/settings.js — the
+// pair has to agree byte-for-byte or the bible's match keys won't line up
+// with the live scene matching here.
+export const normSlugline = (s) => String(s || '')
+  .toUpperCase()
+  .replace(/[—–-]/g, ' ')
+  .replace(/[.,:;]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+export function buildSettingByKey(allSettings) {
+  const map = new Map();
+  for (const setting of allSettings || []) {
+    const key = normSlugline(setting.slugline || setting.name);
+    if (!key) continue;
+    map.set(key, setting);
+  }
+  return map;
+}
+
+export function matchSceneSetting(sceneSlugline, settingByKey) {
+  if (!sceneSlugline) return null;
+  return settingByKey?.get(normSlugline(sceneSlugline)) || null;
+}
+
 const PROMPT_MAX = 1900;
 
-// scene.visualPrompt is the load-bearing part of the image prompt — it must
-// always survive truncation. Reserve room for style + title + visual prompt
-// first, then fit the "Featuring" block into whatever is left, dropping
-// characters one-by-one if needed. The world style goes FIRST because
-// diffusion models weight early tokens heaviest.
-export function buildScenePromptWithCharacters(workTitle, scene, matchedCharacters, worldStyle = '') {
+// Build the final image-gen prompt with priority order (diffusion models
+// weight earlier tokens heaviest):
+//   1. worldStyle preset (cinematic / film-noir / etc.) — broadest aesthetic
+//   2. workTitle — gives the model story-context cues
+//   3. setting baseline (description / palette / recurring details) — the place
+//   4. Featuring — char1: desc, char2: desc — the subjects
+//   5. scene.visualPrompt — what's NEW this beat
+//
+// Truncation priority is the inverse: visualPrompt survives unconditionally,
+// then setting baseline, then characters. Style + title are short so they're
+// always kept. Featuring drops characters one-by-one to fit; setting drops
+// secondary fields (palette, recurring) before description.
+export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedSetting = null) {
   const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
   const titlePart = workTitle ? `${workTitle}. ` : '';
   const visual = scene.visualPrompt || '';
+
+  const settingFrags = matchedSetting ? [
+    matchedSetting.description?.trim() || '',
+    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
+    matchedSetting.recurringDetails?.trim() || '',
+  ].filter(Boolean) : [];
+
   const featuringFragments = (matchedCharacters || [])
     .filter((c) => c.physicalDescription && c.physicalDescription.trim())
     .map((c) => `${c.name}: ${c.physicalDescription.trim()}`);
+
   const PREFIX = 'Featuring — ';
-  const reserveForVisual = stylePart.length + titlePart.length + visual.length + 1;
-  let budget = PROMPT_MAX - reserveForVisual - PREFIX.length;
-  const fitFragments = [];
-  for (const frag of featuringFragments) {
-    const cost = (fitFragments.length === 0 ? 0 : 1) + frag.length;
+  const reserveCore = stylePart.length + titlePart.length + visual.length + 4;
+  let budget = PROMPT_MAX - reserveCore;
+
+  // Setting first claim on remaining budget (place baseline > characters
+  // for visual continuity across scenes).
+  const settingFit = [];
+  for (const frag of settingFrags) {
+    const cost = (settingFit.length === 0 ? 0 : 1) + frag.length;
     if (cost > budget) break;
-    fitFragments.push(frag);
+    settingFit.push(frag);
     budget -= cost;
   }
+
+  // Then characters fill what's left, prefix included.
+  budget -= PREFIX.length;
+  const charFit = [];
+  for (const frag of featuringFragments) {
+    const cost = (charFit.length === 0 ? 0 : 1) + frag.length;
+    if (cost > budget) break;
+    charFit.push(frag);
+    budget -= cost;
+  }
+
   const segs = [];
   if (stylePart) segs.push(stylePart.trim());
   if (titlePart) segs.push(titlePart.trim());
-  if (fitFragments.length > 0) segs.push(`${PREFIX}${fitFragments.join(' ')}`);
+  if (settingFit.length > 0) segs.push(settingFit.join(' '));
+  if (charFit.length > 0) segs.push(`${PREFIX}${charFit.join(' ')}`);
   if (visual) segs.push(visual);
   return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);
 }
+
+// Backward-compatible alias — older callers (and tests) used the previous
+// name. New code should use `buildScenePrompt` so the setting param is
+// discoverable.
+export const buildScenePromptWithCharacters = (workTitle, scene, matchedCharacters, worldStyle = '') =>
+  buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle, null);

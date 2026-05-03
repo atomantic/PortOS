@@ -16,6 +16,7 @@ import StagePromptModelPicker from './StagePromptModelPicker';
 import {
   WR_IMAGE_DEFAULTS,
   buildCharByKey,
+  buildSettingByKey,
   readWrImageSettings,
   STYLE_ID,
   EMPTY_IMAGE_STYLE,
@@ -26,6 +27,7 @@ const SCRIPT_STAGE = 'writers-room-script';
 export default function StoryboardPanel({
   work,
   characters = [],
+  settings = [],
   onJumpToScene,
   onDebug,
   onRunAdapt,
@@ -140,6 +142,7 @@ export default function StoryboardPanel({
   }, []);
 
   const charByKey = useMemo(() => buildCharByKey(characters), [characters]);
+  const settingByKey = useMemo(() => buildSettingByKey(settings), [settings]);
   const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
   const activeHash = activeDraft?.contentHash || null;
   const isStale = !!latestScript?.sourceContentHash && !!activeHash && latestScript.sourceContentHash !== activeHash;
@@ -241,6 +244,7 @@ export default function StoryboardPanel({
               initialImage={sceneImages[sceneId] || null}
               readingTheme={readingTheme}
               charByKey={charByKey}
+              settingByKey={settingByKey}
               isActive={sceneId === activeSceneId}
               onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
               onDebug={onDebug}
