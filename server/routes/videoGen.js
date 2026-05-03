@@ -24,6 +24,7 @@ import {
   setHistoryItemHidden,
   extractLastFrame,
   stitchVideos,
+  upscaleHistoryItem,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 
@@ -270,6 +271,11 @@ router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
 
 router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(req.params.id));
+}));
+
+router.post('/upscale/:id', asyncHandler(async (req, res) => {
+  const entry = await upscaleHistoryItem(req.params.id);
+  res.json({ ok: true, video: entry });
 }));
 
 router.post('/stitch', asyncHandler(async (req, res) => {

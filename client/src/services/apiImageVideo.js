@@ -31,6 +31,7 @@ export const setVideoHidden = (id, hidden) => request(`/video-gen/history/${enco
   body: JSON.stringify({ hidden }),
 });
 export const extractLastFrame = (id) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST' });
+export const upscaleVideo = (id) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, { method: 'POST' });
 export const stitchVideos = (videoIds) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),

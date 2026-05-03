@@ -16,6 +16,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   setHistoryItemHidden: vi.fn(async (id, hidden) => ({ ok: true, id, hidden })),
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
+  upscaleHistoryItem: vi.fn(),
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the
@@ -271,6 +272,27 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(r.body.video.id).toBe('s1');
+    });
+  });
+
+  describe('POST /upscale/:id', () => {
+    it('forwards id to upscaleHistoryItem and wraps the new entry', async () => {
+      const upscaled = { id: 'new-id', filename: 'new-id.mp4', width: 1536, height: 1024, upscaledFrom: 'orig-id' };
+      videoGenService.upscaleHistoryItem.mockResolvedValue(upscaled);
+      const r = await request(app).post('/api/video-gen/upscale/orig-id').send({});
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(r.body.video).toEqual(upscaled);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith('orig-id');
+    });
+
+    it('returns the ServerError status when the service rejects', async () => {
+      videoGenService.upscaleHistoryItem.mockRejectedValue(
+        Object.assign(new Error('Video not found'), { status: 404, code: 'NOT_FOUND' }),
+      );
+      const r = await request(app).post('/api/video-gen/upscale/missing').send({});
+      expect(r.status).toBe(404);
+      expect(r.body.error).toMatch(/not found/i);
     });
   });
 });

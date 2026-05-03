@@ -65,17 +65,56 @@ export const findFfprobe = async () => {
   return cachedFfprobePath;
 };
 
-// Single-video thumbnail extraction at frame 1. Returns the basename on
-// success, null when ffmpeg is missing or fails — callers should treat null
-// as "no thumbnail" rather than aborting the parent operation.
+// Single-video thumbnail extraction. Seeks to mid-clip rather than frame 0
+// because LTX-2 renders fade IN from black: the first ~0.5s is near-zero
+// brightness, so a frame-0 thumbnail looks like a "broken black" tile
+// even when the clip itself is fine. Mid-clip is reliably the visual peak.
+//
+// Strategy: probe duration via ffprobe and seek to duration/2 (capped at
+// 2.5s — the canonical mid-point of a 5s 24fps LTX clip). When ffprobe is
+// unavailable or returns a tiny duration we fall back to a fixed -ss 1.0
+// rather than frame 0, since 1s is still past the LTX fade-in on every
+// useful clip length. `-ss` BEFORE `-i` is the fast-seek path (keyframe
+// step), which is fine for thumbnails — exact-frame accuracy isn't needed.
+//
+// Returns the basename on success, null when ffmpeg is missing or fails —
+// callers should treat null as "no thumbnail" rather than aborting the
+// parent operation.
+const probeDurationSeconds = async (videoPath) => {
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return null;
+  const args = [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=nokey=1:noprint_wrappers=1',
+    videoPath,
+  ];
+  const { stdout } = await execFileAsync(ffprobe, args, { timeout: 5000 }).catch(() => ({ stdout: '' }));
+  const n = parseFloat((stdout || '').trim());
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 export const generateThumbnail = async (videoPath, jobId) => {
   await ensureDir(PATHS.videoThumbnails);
   const thumbFilename = `${jobId}.jpg`;
   const thumbPath = join(PATHS.videoThumbnails, thumbFilename);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) return null;
+  const duration = await probeDurationSeconds(videoPath);
+  // Cap at 2.5s — the midpoint of a 5s 24fps LTX clip (121 frames). For
+  // longer clips (Extend mode, 10s+) 2.5s is still past the LTX fade-in
+  // and not at an unreliable boundary. For short clips (<2s) seek to the
+  // actual midpoint. Fall back to 1s when ffprobe is unavailable.
+  const seekSec = duration ? Math.min(2.5, Math.max(0.5, duration / 2)) : 1.0;
   return new Promise((resolve) => {
-    const proc = spawn(ffmpeg, ['-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath], { stdio: 'ignore' });
+    const proc = spawn(ffmpeg, [
+      '-ss', seekSec.toFixed(2),
+      '-i', videoPath,
+      '-vframes', '1',
+      '-q:v', '5',
+      '-y',
+      thumbPath,
+    ], { stdio: 'ignore' });
     proc.on('close', (code) => resolve(code === 0 ? thumbFilename : null));
     proc.on('error', (err) => {
       console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${err.message}`);
@@ -200,6 +239,77 @@ export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
   // ffmpeg's image2 muxer numbers output starting at 1 in match order, so
   // the basenames map 1:1 to our frameIndices in timeline order.
   return frameIndices.map((_, i) => `${jobId}-f${i + 1}.jpg`);
+};
+
+// 2× Lanczos upscale of an MP4 in place. Doubles width and height while
+// preserving the exact aspect ratio and the audio track. Used as a quick
+// post-render export option for LTX renders that come out at sub-720p
+// (e.g. 768×512, 640×384) so they read crisply on bigger screens without
+// re-running the model. `+faststart` is preserved on the output.
+//
+// Returns `{ ok: true, outPath }` on success and `{ ok: false, reason }`
+// on any failure — callers decide whether to surface the error.
+//
+// Encoding choice: H.264 yuv420p CRF 18 (visually lossless to most
+// viewers, plays everywhere). The audio track is stream-copied so the
+// LTX-2 audio bed survives untouched. ffmpeg's lanczos scaler is the
+// classical "good default" for upscale — sharper than bicubic, no
+// ringing artifacts on smooth gradients.
+//
+// Concurrency contract: `optimizeForStreaming` and `upscaleVideo2x` both
+// rewrite the same file via a sibling tmp + atomic rename. Don't run them
+// concurrently against the same path; the queue worker that produces a
+// rendered clip already serializes both.
+export const upscaleVideo2x = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) {
+    return { ok: false, reason: 'invalid video path' };
+  }
+  if (!existsSync(videoPath)) {
+    return { ok: false, reason: 'video file missing' };
+  }
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
+  // -2 keeps the dimension on an even multiple (libx264 requires even
+  // dimensions); pairing iw*2:-2 with the lanczos flag gives a clean
+  // exact 2× width and the matching height. Avoiding `iw*2:ih*2` because
+  // any user-supplied source with an odd dimension would otherwise fail.
+  const tmpPath = `${videoPath}.up2x.mp4`;
+  const ok = await new Promise((resolve) => {
+    const proc = spawn(ffmpeg, [
+      '-i', videoPath,
+      '-vf', 'scale=iw*2:-2:flags=lanczos',
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      '-crf', '18',
+      '-preset', 'medium',
+      '-c:a', 'copy',
+      '-movflags', '+faststart',
+      '-y', tmpPath,
+    ], { stdio: 'ignore' });
+    proc.on('close', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(false));
+  });
+  if (!ok) {
+    await unlink(tmpPath).catch(() => {});
+    return { ok: false, reason: 'ffmpeg upscale failed' };
+  }
+  let backupPath = null;
+  try {
+    if (IS_WIN) {
+      backupPath = `${videoPath}.bak.${randomUUID()}`;
+      await rename(videoPath, backupPath).catch((err) => {
+        if (err?.code === 'ENOENT') { backupPath = null; return; }
+        throw err;
+      });
+    }
+    await rename(tmpPath, videoPath);
+    if (backupPath) await unlink(backupPath).catch(() => {});
+    return { ok: true, outPath: videoPath };
+  } catch (err) {
+    if (backupPath) await rename(backupPath, videoPath).catch(() => {});
+    await unlink(tmpPath).catch(() => {});
+    return { ok: false, reason: `Failed to install upscaled video: ${err.message}` };
+  }
 };
 
 // MP4s with the moov atom at the END require browsers to download the entire

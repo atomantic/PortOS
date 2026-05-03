@@ -12,7 +12,7 @@
 
 import { execFile, spawn } from 'child_process';
 import { existsSync, statSync } from 'fs';
-import { unlink, writeFile } from 'fs/promises';
+import { unlink, writeFile, copyFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -22,7 +22,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
-import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
+import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x } from '../../lib/ffmpeg.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -475,6 +475,63 @@ export async function stitchVideos(videoIds) {
   await saveHistory(h);
   console.log(`🎬 Stitched ${videos.length} videos: ${outFilename}`);
   return stitchedMeta;
+}
+
+// 2× Lanczos upscale of an existing history item. Writes the upscaled clip
+// to a new file (never overwrites the original) and inserts a new history
+// entry pointing at it, so the user gets both versions side-by-side in the
+// gallery. Doubles width and height; aspect-ratio is preserved exactly.
+//
+// Returns the new history entry on success; throws ServerError on any
+// missing-input / ffmpeg / file-system failure so the route can map it to
+// a clean HTTP status.
+export async function upscaleHistoryItem(historyId) {
+  const history = await loadHistory();
+  const item = history.find((h) => h.id === historyId);
+  if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
+  if (!/^[a-f0-9-]{36}$/i.test(item.id)) {
+    throw new ServerError('Invalid history id', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const sourcePath = safeUnder(PATHS.videos, item.filename);
+  if (!sourcePath) throw new ServerError('Invalid video filename', { status: 400, code: 'VALIDATION_ERROR' });
+  if (!existsSync(sourcePath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
+
+  const newId = randomUUID();
+  const newFilename = `${newId}.mp4`;
+  const newPath = join(PATHS.videos, newFilename);
+  // Copy first, then upscale-in-place — keeps the upscaler's atomic-rename
+  // contract intact and means a mid-process kill leaves the source clip
+  // untouched.
+  await copyFile(sourcePath, newPath);
+  console.log(`🔍 Upscaling video [${historyId.slice(0, 8)} → ${newId.slice(0, 8)}]: 2×`);
+  const result = await upscaleVideo2x(newPath);
+  if (!result.ok) {
+    await unlink(newPath).catch(() => {});
+    throw new ServerError(`Upscale failed: ${result.reason}`, { status: 500, code: 'FFMPEG_FAILED' });
+  }
+  const thumbnail = await generateThumbnail(newPath, newId);
+  // Build the new history entry from the original, but bump dimensions and
+  // tag with `upscaledFrom: <id>` + a reusable suffix on the prompt so the
+  // gallery row reads as "<original prompt> (2×)".
+  const newEntry = {
+    ...item,
+    id: newId,
+    filename: newFilename,
+    width: (Number(item.width) || 0) * 2,
+    height: (Number(item.height) || 0) * 2,
+    thumbnail,
+    createdAt: new Date().toISOString(),
+    upscaledFrom: item.id,
+    prompt: item.prompt ? `${item.prompt} (2×)` : '(upscaled 2×)',
+    // Drop hidden so the upscaled version surfaces in the visible gallery
+    // even when the source clip was hidden.
+    hidden: false,
+  };
+  const refreshedHistory = await loadHistory();
+  refreshedHistory.unshift(newEntry);
+  await saveHistory(refreshedHistory);
+  console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height})`);
+  return newEntry;
 }
 
 export async function setHistoryItemHidden(id, hidden) {
