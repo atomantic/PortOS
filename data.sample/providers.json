@@ -62,7 +62,9 @@
       "heavyModel": "gemini-3.1-pro",
       "timeout": 300000,
       "enabled": true,
-      "envVars": {}
+      "envVars": {
+        "GEMINI_SANDBOX": "false"
+      }
     },
     "lmstudio": {
       "id": "lmstudio",
