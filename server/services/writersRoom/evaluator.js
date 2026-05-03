@@ -5,9 +5,8 @@
  */
 
 import { join } from 'path';
-import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
-import { readFile, readdir } from 'fs/promises';
+import { readFile, readdir, rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripCodeFences } from '../../lib/aiProvider.js';
@@ -27,7 +26,10 @@ const KIND_META = {
   characters: { stage: 'writers-room-characters', returnsJson: true },
 };
 
-const ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
+// Analysis id == kind. Each work keeps at most one snapshot per kind on disk
+// (re-running a kind overwrites the previous snapshot via atomicWrite).
+const isValidAnalysisId = (id) => typeof id === 'string' && ANALYSIS_KINDS.includes(id);
+const LEGACY_ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
 
 const root = () => join(PATHS.data, 'writers-room');
 const analysisDir = (workId) => join(root(), 'works', workId, 'analysis');
@@ -197,7 +199,7 @@ async function listAnalysisIds(workId) {
   return entries
     .filter((e) => e.isFile() && e.name.endsWith('.json'))
     .map((e) => e.name.replace(/\.json$/, ''))
-    .filter((id) => ANALYSIS_ID_RE.test(id));
+    .filter(isValidAnalysisId);
 }
 
 async function loadAnalysis(workId, id) {
@@ -240,7 +242,7 @@ export async function listAnalyses(workId) {
 }
 
 export async function getAnalysis(workId, id) {
-  if (!ANALYSIS_ID_RE.test(id)) throw badRequest('Invalid analysis id');
+  if (!isValidAnalysisId(id)) throw badRequest('Invalid analysis id');
   const a = await loadAnalysis(workId, id);
   if (!a) throw notFound('Analysis');
   return a;
@@ -252,7 +254,7 @@ export async function getAnalysis(workId, id) {
 // list because the LLM occasionally drifts (regenerated analyses can have
 // different scene ids) and overwriting an old key is harmless.
 export async function attachSceneImage(workId, id, { sceneId, filename, jobId, prompt }) {
-  if (!ANALYSIS_ID_RE.test(id)) throw badRequest('Invalid analysis id');
+  if (!isValidAnalysisId(id)) throw badRequest('Invalid analysis id');
   if (typeof sceneId !== 'string' || !sceneId.trim()) throw badRequest('sceneId required');
   if (typeof filename !== 'string' || !filename.trim()) throw badRequest('filename required');
   const a = await loadAnalysis(workId, id);
@@ -275,35 +277,74 @@ export async function attachSceneImage(workId, id, { sceneId, filename, jobId, p
 
 // ---------- startup recovery ----------
 
+// Walk every wr-analysis-<uuid>.json file in a work's analysis dir, group by
+// kind, keep the latest per kind (by completedAt|createdAt), rewrite as
+// <kind>.json, and delete the legacy files. Idempotent — once a work has
+// been migrated the dir contains only <kind>.json so this is a noop.
+async function migrateLegacyAnalyses(workId) {
+  const dir = analysisDir(workId);
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const legacy = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.json'))
+    .map((e) => e.name.replace(/\.json$/, ''))
+    .filter((id) => LEGACY_ANALYSIS_ID_RE.test(id));
+  if (legacy.length === 0) return 0;
+  const loaded = (await Promise.all(legacy.map(async (id) => {
+    const content = await readFile(join(dir, `${id}.json`), 'utf-8').catch(() => null);
+    if (content === null) return null;
+    const parsed = safeJSONParse(content, null, { allowArray: false });
+    return parsed ? { id, snapshot: parsed } : null;
+  }))).filter(Boolean);
+
+  const latestPerKind = new Map();
+  for (const { snapshot } of loaded) {
+    if (!ANALYSIS_KINDS.includes(snapshot.kind)) continue;
+    const ts = snapshot.completedAt || snapshot.createdAt || '';
+    const prev = latestPerKind.get(snapshot.kind);
+    if (!prev || ts > prev.ts) latestPerKind.set(snapshot.kind, { snapshot, ts });
+  }
+
+  for (const [kind, { snapshot }] of latestPerKind) {
+    await saveAnalysis(workId, { ...snapshot, id: kind });
+  }
+  await Promise.all(legacy.map((id) => rm(join(dir, `${id}.json`)).catch(() => {})));
+  return legacy.length;
+}
+
 /**
- * Mark any `running` snapshots as `failed`. A server restart kills in-flight
- * LLM calls but the pre-call snapshot is already on disk, so without this the
- * UI would spin forever on a phantom row. Idempotent; called fire-and-forget
- * at boot.
+ * Boot-time housekeeping for analyses:
+ *   1. Migrate any legacy wr-analysis-<uuid>.json snapshots into the per-kind
+ *      layout (one snapshot per kind, file named <kind>.json).
+ *   2. Mark any `running` snapshots as `failed` — a server restart kills
+ *      in-flight LLM calls but the pre-call snapshot is already on disk, so
+ *      without this the UI would spin forever on a phantom row.
+ * Idempotent; called fire-and-forget at boot.
  */
 export async function recoverStuckAnalyses() {
   const worksRoot = join(root(), 'works');
   const workEntries = await readdir(worksRoot, { withFileTypes: true }).catch(() => []);
-  const counts = await Promise.all(
+  let migrated = 0;
+  let recovered = 0;
+  await Promise.all(
     workEntries
       .filter((e) => e.isDirectory())
       .map(async (entry) => {
+        migrated += await migrateLegacyAnalyses(entry.name).catch(() => 0);
         const ids = await listAnalysisIds(entry.name).catch(() => []);
-        const results = await Promise.all(ids.map(async (id) => {
+        await Promise.all(ids.map(async (id) => {
           const a = await loadAnalysis(entry.name, id);
-          if (a?.status !== 'running') return 0;
+          if (a?.status !== 'running') return;
           await saveAnalysis(entry.name, {
             ...a,
             status: 'failed',
             error: 'Server restarted while this analysis was running',
             completedAt: nowIso(),
           });
-          return 1;
+          recovered += 1;
         }));
-        return results.reduce((s, n) => s + n, 0);
       })
   );
-  const recovered = counts.reduce((s, n) => s + n, 0);
+  if (migrated > 0) console.log(`📝 wr: migrated ${migrated} legacy analysis file(s) to per-kind layout`);
   if (recovered > 0) console.log(`📝 wr: recovered ${recovered} stuck analysis snapshot(s) on boot`);
 }
 
@@ -319,7 +360,7 @@ export async function runAnalysis(workId, { kind } = {}) {
     throw badRequest('Cannot analyze an empty draft — write some prose first');
   }
   const draft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
-  const id = `wr-analysis-${randomUUID()}`;
+  const id = kind;
   const baseSnapshot = {
     id,
     workId,
