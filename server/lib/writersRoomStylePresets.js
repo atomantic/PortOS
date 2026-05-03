@@ -44,8 +44,12 @@ export const STYLE_PRESETS = [
     id: 'graphic-novel',
     label: 'Graphic novel',
     description: 'Bold ink linework, halftone shading, limited palette.',
-    prompt: 'graphic novel illustration, bold ink outlines, halftone shading, limited muted color palette, sequential art panels, mike mignola influence, cinematic framing',
-    negativePrompt: 'photorealistic, photograph, 3d render, soft watercolor, anime',
+    // Fast image models (FLUX.2 Klein, Schnell) render text as garbled
+    // gibberish. "sequential art panels" reliably summons word balloons and
+    // sound effects, so it's pulled out of the prompt and the negative
+    // prompt explicitly suppresses every form of text the model might add.
+    prompt: 'graphic novel illustration, bold ink outlines, halftone shading, limited muted color palette, mike mignola influence, cinematic framing, single full-bleed image, no text',
+    negativePrompt: 'photorealistic, photograph, 3d render, soft watercolor, anime, text, words, letters, lettering, typography, title, logo, word balloon, speech bubble, caption box, sound effect, comic book cover',
   },
   {
     id: 'watercolor-storybook',
@@ -58,8 +62,10 @@ export const STYLE_PRESETS = [
     id: 'comic-book',
     label: 'Comic book',
     description: 'American comic book art, ink and color, dynamic angles.',
-    prompt: 'american comic book art, dynamic poses, bold ink and flat color, ben-day dots, dramatic angles, action-oriented composition, jim lee influence',
-    negativePrompt: 'photorealistic, photograph, soft watercolor, anime, low contrast',
+    // Same text-suppression as graphic novel — fast models bake garbled
+    // word balloons and "POW" sound effects into the image otherwise.
+    prompt: 'american comic book art, dynamic poses, bold ink and flat color, ben-day dots, dramatic angles, action-oriented composition, jim lee influence, single full-bleed image, no text',
+    negativePrompt: 'photorealistic, photograph, soft watercolor, anime, low contrast, text, words, letters, lettering, typography, title, logo, word balloon, speech bubble, caption box, sound effect, onomatopoeia, comic book cover',
   },
   {
     id: 'photorealistic',

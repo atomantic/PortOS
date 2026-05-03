@@ -144,6 +144,8 @@ export default function SceneCard({
     setProgress(null);
     setGenerated(null);
     const prompt = buildScenePromptWithCharacters(workTitle, scene, matchedCharacters, imageStyle?.prompt || '');
+    const stepsNum = imageCfg.steps ? Number(imageCfg.steps) : undefined;
+    const seedNum = imageCfg.seed && Number(imageCfg.seed) >= 0 ? Number(imageCfg.seed) : undefined;
     const res = await generateImage({
       prompt,
       negativePrompt: imageStyle?.negativePrompt || '',
@@ -151,6 +153,8 @@ export default function SceneCard({
       mode: imageCfg.mode,
       width: imageCfg.width,
       height: imageCfg.height,
+      ...(Number.isFinite(stepsNum) ? { steps: stepsNum } : {}),
+      ...(Number.isFinite(seedNum) ? { seed: seedNum } : {}),
     }).catch((err) => {
       setError(err.message);
       setGenStatus('error');

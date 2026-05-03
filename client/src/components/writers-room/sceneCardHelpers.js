@@ -4,11 +4,16 @@
 
 // Defaults for the per-scene image gen pipe. Klein-4B is the fastest FLUX.2
 // variant on Apple Silicon, and 768×512 is a 3:2 aspect that suits scene work.
+// steps + seed are stored as strings (or empty) so the form inputs can bind
+// directly. Empty string = "use model default" for steps, "random per render"
+// for seed. Parsed to numbers at the generateImage boundary in SceneCard.
 export const WR_IMAGE_DEFAULTS = {
   modelId: 'flux2-klein-4b',
   mode: 'local',
   width: 768,
   height: 512,
+  steps: '',
+  seed: '',
 };
 
 export function readWrImageSettings(settings) {
@@ -18,6 +23,8 @@ export function readWrImageSettings(settings) {
     mode: stored.mode || WR_IMAGE_DEFAULTS.mode,
     width: Number.isFinite(stored.width) ? stored.width : WR_IMAGE_DEFAULTS.width,
     height: Number.isFinite(stored.height) ? stored.height : WR_IMAGE_DEFAULTS.height,
+    steps: stored.steps != null && stored.steps !== '' ? String(stored.steps) : '',
+    seed: stored.seed != null && stored.seed !== '' ? String(stored.seed) : '',
   };
 }
 

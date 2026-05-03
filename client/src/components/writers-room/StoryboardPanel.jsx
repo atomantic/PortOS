@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle, Palette, Check } from 'lucide-react';
+import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle, Palette, Check, Dice5 } from 'lucide-react';
+import { randomSeed } from '../../lib/genUtils';
 import toast from '../ui/Toast';
 import {
   listWritersRoomAnalyses,
@@ -346,47 +347,88 @@ function WorldStyleRow({ value, presets, onChange }) {
   );
 }
 
+const RES_PRESETS = [
+  { label: '768×512 (3:2)',  width: 768, height: 512 },
+  { label: '512×512 (1:1)',  width: 512, height: 512 },
+  { label: '512×768 (2:3)',  width: 512, height: 768 },
+  { label: '1024×576 (16:9)', width: 1024, height: 576 },
+  { label: '1024×1024 (1:1)', width: 1024, height: 1024 },
+];
+
 function ImageGenSettingsRow({ cfg, models, onChange }) {
-  const RES_PRESETS = [
-    { label: '768×512 (3:2)',  width: 768, height: 512 },
-    { label: '512×512 (1:1)',  width: 512, height: 512 },
-    { label: '512×768 (2:3)',  width: 512, height: 768 },
-    { label: '1024×576 (16:9)', width: 1024, height: 576 },
-    { label: '1024×1024 (1:1)', width: 1024, height: 1024 },
-  ];
   const presetMatch = RES_PRESETS.find((p) => p.width === cfg.width && p.height === cfg.height);
+  const currentModel = models.find((m) => m.id === cfg.modelId);
+  const inputCls = 'w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none';
+  const labelCls = 'text-[9px] uppercase tracking-wider text-gray-500';
   return (
     <div className="space-y-1.5">
-      <label className="block">
-        <span className="text-[9px] uppercase tracking-wider text-gray-500">Image model</span>
-        <select
-          value={cfg.modelId}
-          onChange={(e) => onChange({ ...cfg, modelId: e.target.value })}
-          className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
-        >
-          {models.length === 0 && <option value={cfg.modelId}>{cfg.modelId}</option>}
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>{m.name || m.id}</option>
-          ))}
-        </select>
-      </label>
-      <label className="block">
-        <span className="text-[9px] uppercase tracking-wider text-gray-500">Resolution</span>
-        <select
-          value={presetMatch ? `${cfg.width}x${cfg.height}` : 'custom'}
-          onChange={(e) => {
-            if (e.target.value === 'custom') return;
-            const [w, h] = e.target.value.split('x').map(Number);
-            onChange({ ...cfg, width: w, height: h });
-          }}
-          className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
-        >
-          {RES_PRESETS.map((p) => (
-            <option key={p.label} value={`${p.width}x${p.height}`}>{p.label}</option>
-          ))}
-          {!presetMatch && <option value="custom">Custom ({cfg.width}×{cfg.height})</option>}
-        </select>
-      </label>
+      <div className="grid grid-cols-2 gap-1.5">
+        <label className="block">
+          <span className={labelCls}>Image model</span>
+          <select
+            value={cfg.modelId}
+            onChange={(e) => onChange({ ...cfg, modelId: e.target.value })}
+            className={inputCls}
+          >
+            {models.length === 0 && <option value={cfg.modelId}>{cfg.modelId}</option>}
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.name || m.id}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className={labelCls}>Resolution</span>
+          <select
+            value={presetMatch ? `${cfg.width}x${cfg.height}` : 'custom'}
+            onChange={(e) => {
+              if (e.target.value === 'custom') return;
+              const [w, h] = e.target.value.split('x').map(Number);
+              onChange({ ...cfg, width: w, height: h });
+            }}
+            className={inputCls}
+          >
+            {RES_PRESETS.map((p) => (
+              <option key={p.label} value={`${p.width}x${p.height}`}>{p.label}</option>
+            ))}
+            {!presetMatch && <option value="custom">Custom ({cfg.width}×{cfg.height})</option>}
+          </select>
+        </label>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <label className="block">
+          <span className={labelCls}>
+            Steps {currentModel?.steps && <span className="normal-case text-gray-600">(default {currentModel.steps})</span>}
+          </span>
+          <input
+            type="number" min={1} max={150}
+            value={cfg.steps}
+            onChange={(e) => onChange({ ...cfg, steps: e.target.value })}
+            placeholder={String(currentModel?.steps || 'auto')}
+            className={inputCls}
+          />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Seed</span>
+          <div className="flex items-stretch gap-1 mt-0.5">
+            <input
+              type="number"
+              value={cfg.seed}
+              onChange={(e) => onChange({ ...cfg, seed: e.target.value })}
+              placeholder="random"
+              className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => onChange({ ...cfg, seed: randomSeed() })}
+              className="px-1.5 text-gray-500 hover:text-port-accent border border-port-border rounded"
+              title="Randomize seed"
+              aria-label="Randomize seed"
+            >
+              <Dice5 size={11} />
+            </button>
+          </div>
+        </label>
+      </div>
     </div>
   );
 }
