@@ -7,7 +7,7 @@
  */
 
 import { execFile, spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { unlink, rename } from 'fs/promises';
 import { join, resolve as resolvePath, sep as PATH_SEP, dirname } from 'path';
 import { randomUUID } from 'crypto';
@@ -106,6 +106,36 @@ const probeFrameCount = async (videoPath) => {
     return Number.isFinite(n) && n > 0 ? n : null;
   };
   return (await run(false)) ?? (await run(true));
+};
+
+// Sanity-check that a rendered video file is actually playable: the file
+// exists on disk, has non-zero bytes, and ffprobe can decode at least one
+// video frame from it. Returns `{ ok: true }` on success and
+// `{ ok: false, reason }` with a short human-readable cause on failure.
+//
+// Used by the `autoAcceptScenes` path in the Creative Director scene
+// runner to avoid marking a black/zero-frame render as accepted just
+// because the renderer process exited 0. Falls back to "ok" when ffprobe
+// is unavailable so machines without ffmpeg installed still complete the
+// auto-accept flow (the file-exists/size>0 checks still run).
+export const verifyVideoPlayable = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) {
+    return { ok: false, reason: 'invalid video path' };
+  }
+  if (!existsSync(videoPath)) {
+    return { ok: false, reason: `video file missing: ${videoPath}` };
+  }
+  const size = statSync(videoPath).size;
+  if (!size || size <= 0) {
+    return { ok: false, reason: 'video file is empty (0 bytes)' };
+  }
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return { ok: true };
+  const frames = await probeFrameCount(videoPath);
+  if (!frames || frames < 1) {
+    return { ok: false, reason: 'ffprobe could not read any video frames' };
+  }
+  return { ok: true };
 };
 
 // Extract `count` evenly-spaced frames across the video for the cognitive
