@@ -712,7 +712,7 @@ export default function Layout() {
           {/* Mobile close button */}
           <button
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden p-1 text-gray-500 hover:text-white"
+            className="lg:hidden inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg text-gray-500 hover:text-white"
             aria-label="Close sidebar"
           >
             <span aria-hidden="true">✕</span>
@@ -733,7 +733,7 @@ export default function Layout() {
             <div className={`flex items-center gap-1 ${collapsed ? 'lg:flex-col' : ''}`}>
               <NavLink
                 to="/ambient"
-                className={`p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
+                className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
                   isActive('/ambient')
                     ? 'text-port-accent'
                     : 'text-gray-500 hover:text-white'
@@ -833,10 +833,10 @@ export default function Layout() {
       {/* Main area */}
       <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
-        <header className="lg:hidden flex items-center justify-between px-3 py-2 border-b border-port-border bg-port-card">
+        <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card">
           <button
             onClick={() => setMobileOpen(true)}
-            className="p-1.5 -ml-1 text-gray-400 hover:text-white"
+            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-1 rounded-lg text-gray-400 hover:text-white"
             aria-label="Open navigation menu"
             aria-expanded={mobileOpen}
           >
@@ -846,17 +846,17 @@ export default function Layout() {
             <Logo size={22} className="shrink-0" />
             <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <NavLink
               to="/ambient"
-              className={`p-1.5 rounded-lg transition-colors ${
+              className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg transition-colors ${
                 isActive('/ambient')
                   ? 'text-port-accent'
                   : 'text-gray-500 hover:text-white'
               }`}
               aria-label="Ambient display"
             >
-              <Monitor size={16} />
+              <Monitor size={18} />
             </NavLink>
             <ThemeModeToggle />
             <VoiceToggleButton />

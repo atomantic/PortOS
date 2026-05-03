@@ -809,7 +809,7 @@ export default function ChiefOfStaff() {
                   aria-controls={`tabpanel-${tabItem.id}`}
                   id={`tab-${tabItem.id}`}
                   onClick={() => navigate(`/cos/${tabItem.id}`)}
-                  className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
+                  className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
                     isSelected
                       ? 'text-port-accent border-port-accent'
                       : 'text-gray-500 border-transparent hover:text-white'
