@@ -9,7 +9,14 @@ vi.mock('../services/pm2.js', () => ({
 }));
 
 vi.mock('../services/apps.js', () => ({
-  getAllApps: vi.fn().mockResolvedValue([])
+  getAllApps: vi.fn().mockResolvedValue([]),
+  getAppStatusSummary: vi.fn().mockResolvedValue({
+    total: 0,
+    online: 0,
+    stopped: 0,
+    notStarted: 0,
+    unmanaged: 0
+  })
 }));
 
 vi.mock('../services/cos.js', () => ({
