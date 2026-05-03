@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Clapperboard, Loader2, RefreshCcw, AlertTriangle, Palette, Check, Dice5, Cpu,
   Users, MapPin as MapPinIcon, ArrowRight, ListTree, SlidersHorizontal, Square,
+  Settings as SettingsIcon,
 } from 'lucide-react';
 import { randomSeed } from '../../lib/genUtils';
 import toast from '../ui/Toast';
@@ -15,6 +17,8 @@ import BackendChipStrip from '../media/BackendChipStrip';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
+import Drawer from '../Drawer';
+import { ImageGenTab } from '../settings/ImageGenTab';
 import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
 import CharactersBible from './CharactersBible';
@@ -79,6 +83,22 @@ export default function StoryboardPanel({
   onTabChange,
 }) {
   const setTab = onTabChange;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const settingsOpen = searchParams.get('settings') === 'imagegen';
+  const openImageGenSettings = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('settings', 'imagegen');
+      return next;
+    });
+  }, [setSearchParams]);
+  const closeImageGenSettings = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('settings');
+      return next;
+    });
+  }, [setSearchParams]);
   const [latestScript, setLatestScript] = useState(null);
   const [latestFailure, setLatestFailure] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -97,6 +117,16 @@ export default function StoryboardPanel({
   const imageStyle = work.imageStyle || EMPTY_IMAGE_STYLE;
   const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
 
+  // Re-runnable so the Settings drawer can refresh availableBackends/imageCfg
+  // when it closes — without this, enabling Codex in the drawer wouldn't
+  // surface the chip until the user reloaded the page.
+  const reloadSysSettings = useCallback(async () => {
+    const s = await getSettings().catch(() => ({}));
+    if (!mountedRef.current) return;
+    setSysSettings(s);
+    setImageCfg(readWrImageSettings(s));
+  }, [mountedRef]);
+
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -112,6 +142,17 @@ export default function StoryboardPanel({
     });
     return () => { cancelled = true; };
   }, []);
+
+  // When the user closes the Image Gen settings drawer, settings may have
+  // changed (e.g. they enabled Codex) — reload so the chip strip reflects
+  // the new state without a page refresh. Mirrors the pattern in ImageGen.jsx.
+  const wasSettingsOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasSettingsOpenRef.current && !settingsOpen) {
+      reloadSysSettings();
+    }
+    wasSettingsOpenRef.current = settingsOpen;
+  }, [settingsOpen, reloadSysSettings]);
 
   const loadLatestScript = useCallback(async () => {
     setLoading(true);
@@ -343,9 +384,14 @@ export default function StoryboardPanel({
             stylePresets={stylePresets}
             imageStyle={imageStyle}
             onStyleChange={onStyleChange}
+            onOpenImageGenSettings={openImageGenSettings}
           />
         )}
       </div>
+
+      <Drawer open={settingsOpen} onClose={closeImageGenSettings} title="Image Gen Settings">
+        <ImageGenTab />
+      </Drawer>
     </div>
   );
 }
@@ -653,7 +699,7 @@ function BoardsTab({
 }
 
 // ─── Config (image gen + style + Adapt LLM) ───────────────────────────────
-function ConfigTab({ imageCfg, models, availableBackends, onCfgChange, stylePresets, imageStyle, onStyleChange }) {
+function ConfigTab({ imageCfg, models, availableBackends, onCfgChange, stylePresets, imageStyle, onStyleChange, onOpenImageGenSettings }) {
   return (
     <div className="px-3 py-3 space-y-4">
       <section className="space-y-1.5">
@@ -670,7 +716,22 @@ function ConfigTab({ imageCfg, models, availableBackends, onCfgChange, stylePres
         <WorldStyleRow value={imageStyle} presets={stylePresets} onChange={onStyleChange} />
       </section>
       <section className="space-y-1.5 pt-3 border-t border-port-border">
-        <div className="text-[12px] font-semibold text-gray-200">Image generation</div>
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[12px] font-semibold text-gray-200">Image generation</div>
+          <button
+            type="button"
+            onClick={onOpenImageGenSettings}
+            className="flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white"
+            title="Configure image gen backends — enable Codex $imagegen, set local Python, etc."
+          >
+            <SettingsIcon size={10} /> Backends
+          </button>
+        </div>
+        {availableBackends.length === 0 && (
+          <div className="text-[10px] text-port-warning bg-port-warning/10 border border-port-warning/40 rounded px-2 py-1.5">
+            No image gen backend configured. Click <span className="font-medium">Backends</span> to enable Local mflux or Codex <code className="text-gray-400">$imagegen</code>.
+          </div>
+        )}
         <ImageGenSettingsRow cfg={imageCfg} models={models} availableBackends={availableBackends} onChange={onCfgChange} />
       </section>
     </div>
