@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle, Palette, Check, Dice5 } from 'lucide-react';
+import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle, Palette, Check, Dice5, Cpu } from 'lucide-react';
 import { randomSeed } from '../../lib/genUtils';
 import toast from '../ui/Toast';
 import {
@@ -12,6 +12,7 @@ import { listImageModels } from '../../services/apiImageVideo';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 import SceneCard from './SceneCard';
+import StagePromptModelPicker from './StagePromptModelPicker';
 import {
   WR_IMAGE_DEFAULTS,
   buildCharByKey,
@@ -19,6 +20,8 @@ import {
   STYLE_ID,
   EMPTY_IMAGE_STYLE,
 } from './sceneCardHelpers';
+
+const SCRIPT_STAGE = 'writers-room-script';
 
 export default function StoryboardPanel({
   work,
@@ -32,6 +35,7 @@ export default function StoryboardPanel({
   onStyleChange,
 }) {
   const [latestScript, setLatestScript] = useState(null);
+  const [latestFailure, setLatestFailure] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
   const [models, setModels] = useState([]);
@@ -60,14 +64,22 @@ export default function StoryboardPanel({
     setLoading(true);
     const list = await listWritersRoomAnalyses(work.id).catch(() => []);
     if (!mountedRef.current) return;
-    const latest = list.find((a) => a.kind === 'script' && a.status === 'succeeded');
-    if (!latest) {
+    // listAnalyses is sorted createdAt desc, so the first match per status is
+    // also the most-recent one. Track failures only when newer than the latest
+    // success — a stale failure under a newer success is just history.
+    const scripts = list.filter((a) => a.kind === 'script');
+    const latestRun = scripts[0] || null;
+    const latestSucceeded = scripts.find((a) => a.status === 'succeeded') || null;
+    const failureIsNewer = latestRun?.status === 'failed'
+      && (!latestSucceeded || (latestRun.createdAt || '') > (latestSucceeded.createdAt || ''));
+    setLatestFailure(failureIsNewer ? latestRun : null);
+    if (!latestSucceeded) {
       setLatestScript(null);
       setLoading(false);
       return;
     }
     // listAnalyses returns metadata only — fetch the full snapshot for scenes + sceneImages.
-    const full = await getWritersRoomAnalysis(work.id, latest.id).catch(() => null);
+    const full = await getWritersRoomAnalysis(work.id, latestSucceeded.id).catch(() => null);
     if (!mountedRef.current) return;
     setLatestScript(full);
     setLoading(false);
@@ -75,6 +87,7 @@ export default function StoryboardPanel({
 
   useEffect(() => {
     setLatestScript(null);
+    setLatestFailure(null);
     loadLatestScript();
   }, [loadLatestScript]);
 
@@ -163,7 +176,13 @@ export default function StoryboardPanel({
       </div>
 
       {showSettings && (
-        <div className="px-3 py-2 border-b border-port-border bg-port-card/30 shrink-0 space-y-3">
+        <div className="px-3 py-2 border-b border-port-border bg-port-card/30 shrink-0 space-y-3 max-h-[60vh] overflow-y-auto">
+          <StagePromptModelPicker
+            stageName={SCRIPT_STAGE}
+            label="Adapt LLM"
+            icon={<Cpu size={10} />}
+            hint="Used when you click Run Adapt to break prose into scenes."
+          />
           <WorldStyleRow
             value={imageStyle}
             presets={stylePresets}
@@ -180,11 +199,21 @@ export default function StoryboardPanel({
           </div>
         )}
 
-        {!loading && !latestScript && (
+        {!loading && latestFailure && (
+          <FailedAdaptBanner
+            failure={latestFailure}
+            onRunAdapt={onRunAdapt}
+            runningAdapt={runningAdapt}
+            onOpenSettings={() => setShowSettings(true)}
+            hasPriorScript={!!latestScript}
+          />
+        )}
+
+        {!loading && !latestScript && !latestFailure && (
           <EmptyAdaptCTA onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} />
         )}
 
-        {!loading && latestScript && isStale && (
+        {!loading && latestScript && isStale && !latestFailure && (
           <StaleBanner onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} />
         )}
 
@@ -239,6 +268,49 @@ function EmptyAdaptCTA({ onRunAdapt, runningAdapt }) {
         {runningAdapt ? <Loader2 size={12} className="animate-spin" /> : <Clapperboard size={12} />}
         {runningAdapt ? 'Running Adapt…' : 'Run Adapt'}
       </button>
+    </div>
+  );
+}
+
+function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenSettings, hasPriorScript }) {
+  const error = failure?.error || 'Adapt failed for an unknown reason';
+  const isTimeout = /timed out/i.test(error);
+  return (
+    <div className="p-3 mb-2 border border-port-error/40 bg-port-error/5 rounded text-[11px] space-y-2">
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={14} className="text-port-error mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-port-error font-medium">Adapt failed</div>
+          <div className="text-gray-300 break-words">{error}</div>
+          {isTimeout && (
+            <div className="text-gray-500 mt-1">
+              Long drafts are heavy for small/light models — try a faster model
+              (e.g. an API provider) via the gear icon.
+            </div>
+          )}
+          {!hasPriorScript && (
+            <div className="text-gray-500 mt-1">
+              No prior storyboard to fall back to — re-running will create the first one.
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <button
+          onClick={onOpenSettings}
+          className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40"
+        >
+          <SettingsIcon size={10} /> Adjust LLM
+        </button>
+        <button
+          onClick={onRunAdapt}
+          disabled={runningAdapt || !onRunAdapt}
+          className="flex items-center gap-1 px-2 py-1 bg-port-error/20 border border-port-error/40 text-port-error rounded text-[10px] hover:bg-port-error/30 disabled:opacity-50"
+        >
+          {runningAdapt ? <Loader2 size={10} className="animate-spin" /> : <RefreshCcw size={10} />}
+          Re-run Adapt
+        </button>
+      </div>
     </div>
   );
 }

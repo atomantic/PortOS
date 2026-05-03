@@ -10,8 +10,8 @@ import { readFile, readdir, rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripCodeFences } from '../../lib/aiProvider.js';
-import { getActiveProvider } from '../providers.js';
-import { buildPrompt } from '../promptService.js';
+import { getActiveProvider, getProviderById } from '../providers.js';
+import { buildPrompt, getStage } from '../promptService.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
@@ -37,7 +37,41 @@ const analysisPath = (workId, id) => join(analysisDir(workId), `${id}.json`);
 
 // ---------- LLM invocation ----------
 
-async function resolveProvider() {
+// Tier names used in stage configs (PromptManager UI). Map to the provider's
+// configured per-tier model id; an unset tier falls back to defaultModel so
+// stages with `model: 'heavy'` still run on providers that don't break out tiers.
+const TIER_TO_MODEL_KEY = {
+  default: 'defaultModel',
+  quick: 'lightModel',
+  coding: 'mediumModel',
+  heavy: 'heavyModel',
+};
+
+function isTierName(model) {
+  return typeof model === 'string' && model in TIER_TO_MODEL_KEY;
+}
+
+function resolveModel(provider, stageModel) {
+  if (!stageModel) return provider.defaultModel || null;
+  if (isTierName(stageModel)) {
+    return provider[TIER_TO_MODEL_KEY[stageModel]] || provider.defaultModel || null;
+  }
+  return stageModel;
+}
+
+// Stage config can pin a specific provider via `stage.provider`. When set we
+// must use that provider (or fail) — falling back to the active provider would
+// silently route the call through whatever's currently selected, defeating the
+// whole point of the per-stage override.
+async function resolveProviderForStage(stage) {
+  if (stage?.provider) {
+    const pinned = await getProviderById(stage.provider).catch(() => null);
+    if (pinned?.enabled) return pinned;
+    throw new ServerError(
+      `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the Storyboard settings`,
+      { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
+    );
+  }
   const active = await getActiveProvider().catch(() => null);
   if (active?.enabled) return active;
   throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
@@ -64,23 +98,56 @@ async function callApiProvider(provider, model, prompt, temperature) {
   return data.choices?.[0]?.message?.content || '';
 }
 
+// Each CLI needs a different incantation to run non-interactively from a
+// server process. Get it wrong and the CLI either hangs waiting for a TTY or
+// exits with "Error: stdin is not a terminal". Mirrors `runner.js` /
+// `agentCliSpawning.js` so the writers-room path agrees with how PortOS
+// already spawns these CLIs everywhere else.
+function buildCliInvocation(provider, model) {
+  const baseArgs = [...(provider.args || [])];
+  if (provider.headlessArgs?.length) baseArgs.push(...provider.headlessArgs);
+
+  switch (provider.id) {
+    case 'gemini-cli': {
+      const args = [...baseArgs];
+      if (!args.includes('--output-format') && !args.includes('-o')) {
+        args.push('--output-format', 'text');
+      }
+      if (model) args.push('--model', model);
+      return { args, promptViaStdin: false };
+    }
+    case 'codex': {
+      // `codex exec -` reads the prompt from stdin. Without `exec` codex
+      // launches its REPL and bails with "Error: stdin is not a terminal".
+      const args = [...baseArgs, 'exec'];
+      if (model) args.push('--model', model);
+      args.push('-');
+      return { args, promptViaStdin: true };
+    }
+    case 'claude-code':
+    case 'claude-code-bedrock': {
+      const args = [...baseArgs, '-p', '-'];
+      if (model) args.push('--model', model);
+      return { args, promptViaStdin: true };
+    }
+    default: {
+      const args = [...baseArgs];
+      if (model) args.push('--model', model);
+      return { args, promptViaStdin: true };
+    }
+  }
+}
+
 function callCliProvider(provider, model, prompt) {
   return new Promise((resolve, reject) => {
-    const args = [...(provider.args || [])];
-    if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
-    const isGeminiCli = provider.id === 'gemini-cli';
-    if (isGeminiCli && !args.includes('--output-format') && !args.includes('-o')) {
-      args.push('--output-format', 'text');
-    }
-    if (model) args.push('--model', model);
-    // Send the prose via stdin for non-gemini CLIs — adapted-screenplay drafts
-    // can run tens of thousands of characters once headings and dialogue are
-    // inlined, well past argv ceilings on macOS/Linux.
-    const usingStdin = !isGeminiCli;
-    if (isGeminiCli) args.push('--prompt', prompt);
+    const { args, promptViaStdin } = buildCliInvocation(provider, model);
+    // gemini-cli takes the prompt as a flag because its non-interactive mode
+    // requires `--prompt` plus stdio: ['ignore', ...]. Every other CLI accepts
+    // the prompt on stdin, which dodges argv ceilings on long drafts.
+    if (!promptViaStdin) args.push('--prompt', prompt);
     const child = spawn(provider.command, args, {
       env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
-      stdio: [usingStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      stdio: [promptViaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     });
@@ -95,19 +162,23 @@ function callCliProvider(provider, model, prompt) {
     child.on('close', (code) => {
       clearTimeout(killer);
       if (code === 0) resolve(output);
-      else reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.slice(0, 500) : ''}`));
+      // Tail the output rather than head — CLI banners/transcripts come first
+      // and the actual error/stack lives at the end. 500 chars of header was
+      // hiding real failures (e.g. provider auth errors) under a Codex banner.
+      else reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.slice(-2000) : ''}`));
     });
     child.on('error', (err) => { clearTimeout(killer); reject(err); });
-    if (usingStdin) child.stdin.end(prompt);
+    if (promptViaStdin) child.stdin.end(prompt);
   });
 }
 
 async function callAI(stageName, variables, temperature) {
-  const provider = await resolveProvider();
+  const stage = getStage(stageName);
+  const provider = await resolveProviderForStage(stage);
   const prompt = await buildPrompt(stageName, variables);
-  let model = provider.defaultModel;
+  let model = resolveModel(provider, stage?.model);
   if (provider.id === 'gemini-cli' && !model) {
-    model = provider.lightModel || 'gemini-2.5-flash-lite';
+    model = provider.lightModel || 'gemini-2.5-flash';
   }
   console.log(`📝 wr eval: ${provider.id} / ${model || '(default)'} / ${stageName}`);
   if (provider.type === 'api') {

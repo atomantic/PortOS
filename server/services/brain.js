@@ -50,11 +50,11 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
   const prompt = await buildPrompt(promptStageName, variables);
   let model = modelOverride || provider.defaultModel;
 
-  // gemini-cli default is a thinking model (2.5-pro); prefer the provider's configured
+  // gemini-cli default is a thinking model (3.1-pro); prefer the provider's configured
   // light tier (populated from data.sample/providers.json on new installs) and only fall
-  // back to the hard-coded flash-lite if nothing is configured at all.
+  // back to the hard-coded flash if nothing is configured at all.
   if (provider.id === 'gemini-cli' && !model) {
-    model = provider.lightModel || 'gemini-2.5-flash-lite';
+    model = provider.lightModel || 'gemini-2.5-flash';
   }
 
   console.log(`🧠 Calling AI: ${provider.id} / ${model} / ${promptStageName}`);
@@ -566,7 +566,7 @@ export async function runDailyDigest(providerOverride, modelOverride) {
   }
 
   // Store digest — ai.modelId reflects the resolved model so attribution stays
-  // accurate even when callAI falls back (e.g., gemini-cli → gemini-2.5-flash-lite).
+  // accurate even when callAI falls back (e.g., gemini-cli → gemini-2.5-flash).
   const digest = await storage.createDigest({
     ...digestData,
     ai: {
@@ -628,7 +628,7 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
   }
 
   // Store review — ai.modelId reflects the resolved model so attribution stays
-  // accurate even when callAI falls back (e.g., gemini-cli → gemini-2.5-flash-lite).
+  // accurate even when callAI falls back (e.g., gemini-cli → gemini-2.5-flash).
   const review = await storage.createReview({
     ...reviewData,
     ai: {
