@@ -257,9 +257,10 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   }, [completed, durations, agent.metadata?.taskDescription]);
 
   // Calculate progress percentage using P80-based estimate
+  // Cap at 99% for active tasks — only completion can land on 100%
   const progress = useMemo(() => {
     if (!durationEstimate) return null;
-    const percent = Math.min(100, Math.round((duration / durationEstimate.estimatedMs) * 100));
+    const percent = Math.min(99, Math.round((duration / durationEstimate.estimatedMs) * 100));
     return percent;
   }, [duration, durationEstimate]);
 
@@ -631,9 +632,9 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             <div className="h-1.5 bg-port-border rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all duration-1000 ease-linear ${
-                  progress >= 100 ? 'bg-yellow-500' : 'bg-port-accent'
+                  remainingTime?.isOvertime ? 'bg-yellow-500' : 'bg-port-accent'
                 }`}
-                style={{ width: `${Math.min(progress, 100)}%` }}
+                style={{ width: `${Math.min(progress, 99)}%` }}
               />
             </div>
             <div className="flex justify-between mt-1.5 text-xs">
