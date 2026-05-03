@@ -725,12 +725,12 @@ export default function Layout() {
         </nav>
 
         {/* Footer with version and notifications */}
-        <div className={`p-4 border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
-          <div className={`flex items-center ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
+        <div className={`border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center lg:p-2 p-4' : 'p-4'}`}>
+          <div className={`flex items-center ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'justify-between'}`}>
             <span className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
               v{__APP_VERSION__}
             </span>
-            <div className="flex items-center gap-1">
+            <div className={`flex items-center gap-1 ${collapsed ? 'lg:flex-col' : ''}`}>
               <NavLink
                 to="/ambient"
                 className={`p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
