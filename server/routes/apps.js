@@ -424,6 +424,26 @@ router.post('/detect-icons', asyncHandler(async (req, res) => {
   res.json({ success: true, detected, total: apps.length });
 }));
 
+// POST /api/apps/:id/detect-icon - Detect and persist app icon for a single app
+router.post('/:id/detect-icon', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  if (!app.repoPath || !await pathExists(app.repoPath)) {
+    throw new ServerError('App repoPath is missing or inaccessible', { status: 400, code: 'INVALID_REPO_PATH' });
+  }
+
+  const iconPath = await detectAppIcon(app.repoPath, app.type);
+  if (!iconPath) {
+    console.log(`🎨 No icon detected for ${app.name}`);
+    res.json({ success: true, detected: false, appIconPath: null });
+    return;
+  }
+
+  await appsService.updateApp(app.id, { appIconPath: iconPath });
+  notifyAppsChanged('detect-icon');
+  console.log(`🎨 Detected icon for ${app.name}: ${iconPath.split('/').pop()}`);
+  res.json({ success: true, detected: true, appIconPath: iconPath });
+}));
+
 // GET /api/apps/:id/task-types - Get per-app task type overrides
 router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;

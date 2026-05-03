@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera } from 'lucide-react';
+import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera, Image } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { NON_PM2_TYPES } from '../constants';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -23,6 +23,7 @@ export default function OverviewTab({ app, onRefresh }) {
   const [jiraTickets, setJiraTickets] = useState(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
   const [installingScripts, setInstallingScripts] = useState(false);
+  const [detectingIcon, setDetectingIcon] = useState(false);
 
   const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
   const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete });
@@ -49,6 +50,19 @@ export default function OverviewTab({ app, onRefresh }) {
   };
 
   const handleStandardize = () => startStandardize(app.id);
+
+  const handleDetectIcon = async () => {
+    setDetectingIcon(true);
+    const result = await api.detectAppIcon(app.id).catch(() => null);
+    setDetectingIcon(false);
+    if (!result) return;
+    if (result.detected) {
+      toast.success(`Icon detected for ${app.name}`);
+      onRefresh();
+    } else {
+      toast.error(`No icon found for ${app.name}`);
+    }
+  };
 
   const missingScripts = app.xcodeScripts?.missing || [];
 
@@ -279,6 +293,15 @@ export default function OverviewTab({ app, onRefresh }) {
         >
           <RefreshCw size={14} className={refreshingConfig ? 'animate-spin' : ''} />
           Refresh Config
+        </button>
+        <button
+          onClick={handleDetectIcon}
+          disabled={detectingIcon}
+          className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+          title="Scan the app's repo for an icon/logo"
+        >
+          <Image size={14} />
+          {detectingIcon ? 'Scanning...' : 'Detect Icon'}
         </button>
         {!NON_PM2_TYPES.has(app.type) && (
           <button
