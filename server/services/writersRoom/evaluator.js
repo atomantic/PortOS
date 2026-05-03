@@ -290,9 +290,10 @@ async function migrateLegacyAnalyses(workId) {
     .filter((id) => LEGACY_ANALYSIS_ID_RE.test(id));
   if (legacy.length === 0) return 0;
   const loaded = (await Promise.all(legacy.map(async (id) => {
-    const content = await readFile(join(dir, `${id}.json`), 'utf-8').catch(() => null);
+    const path = join(dir, `${id}.json`);
+    const content = await readFile(path, 'utf-8').catch(() => null);
     if (content === null) return null;
-    const parsed = safeJSONParse(content, null, { allowArray: false });
+    const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
     return parsed ? { id, snapshot: parsed } : null;
   }))).filter(Boolean);
 

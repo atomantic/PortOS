@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
-import { STYLE_PRESET_IDS, SPECIAL_STYLE_IDS } from './writersRoomStylePresets.js';
+import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -498,7 +498,7 @@ export const writersRoomImageStyleSchema = z.object({
   // or one of the curated preset ids. The resolved prompt text lives on the
   // work — picking a preset later doesn't retroactively change historical
   // works' rendering.
-  presetId: z.enum(['none', ...SPECIAL_STYLE_IDS.filter((id) => id !== 'none'), ...STYLE_PRESET_IDS]).default('none'),
+  presetId: z.enum(ALL_STYLE_IDS).default(STYLE_ID.NONE),
   prompt: z.string().max(2000).default(''),
   negativePrompt: z.string().max(2000).default(''),
 }).strict();

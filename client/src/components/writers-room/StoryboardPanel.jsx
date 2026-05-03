@@ -16,9 +16,9 @@ import {
   WR_IMAGE_DEFAULTS,
   buildCharByKey,
   readWrImageSettings,
+  STYLE_ID,
+  EMPTY_IMAGE_STYLE,
 } from './sceneCardHelpers';
-
-const EMPTY_STYLE = { presetId: 'none', prompt: '', negativePrompt: '' };
 
 export default function StoryboardPanel({
   work,
@@ -39,7 +39,7 @@ export default function StoryboardPanel({
   const [stylePresets, setStylePresets] = useState([]);
   const mountedRef = useMounted();
 
-  const imageStyle = work.imageStyle || EMPTY_STYLE;
+  const imageStyle = work.imageStyle || EMPTY_IMAGE_STYLE;
 
   useEffect(() => {
     let cancelled = false;
@@ -113,7 +113,7 @@ export default function StoryboardPanel({
             {scenes.length} scene{scenes.length === 1 ? '' : 's'} · {timeAgo(latestScript.completedAt || latestScript.createdAt, 'never')}
           </span>
         )}
-        {imageStyle.presetId !== 'none' && (
+        {imageStyle.presetId !== STYLE_ID.NONE && (
           <button
             onClick={() => setShowSettings((v) => !v)}
             className="text-port-accent/80 hover:text-port-accent flex items-center gap-1 text-[10px]"
@@ -230,8 +230,8 @@ function StaleBanner({ onRunAdapt, runningAdapt }) {
 }
 
 function styleChip(style, presets) {
-  if (!style || style.presetId === 'none') return null;
-  if (style.presetId === 'custom') return 'Custom style';
+  if (!style || style.presetId === STYLE_ID.NONE) return null;
+  if (style.presetId === STYLE_ID.CUSTOM) return 'Custom style';
   const p = presets.find((x) => x.id === style.presetId);
   return p?.label || style.presetId;
 }
@@ -253,13 +253,13 @@ function WorldStyleRow({ value, presets, onChange }) {
   }, [value.presetId, value.prompt, value.negativePrompt]);
 
   const pickPreset = (presetId) => {
-    if (presetId === 'none') {
-      onChange?.({ presetId: 'none', prompt: '', negativePrompt: '' });
+    if (presetId === STYLE_ID.NONE) {
+      onChange?.(EMPTY_IMAGE_STYLE);
       return;
     }
-    if (presetId === 'custom') {
+    if (presetId === STYLE_ID.CUSTOM) {
       // Keep whatever's in the textarea — just flip the discriminator.
-      onChange?.({ presetId: 'custom', prompt: draftPrompt, negativePrompt: draftNeg });
+      onChange?.({ presetId: STYLE_ID.CUSTOM, prompt: draftPrompt, negativePrompt: draftNeg });
       return;
     }
     const preset = presets.find((p) => p.id === presetId);
@@ -276,7 +276,7 @@ function WorldStyleRow({ value, presets, onChange }) {
       && matchingPreset.prompt === draftPrompt
       && matchingPreset.negativePrompt === draftNeg;
     onChange?.({
-      presetId: stillMatchesPreset ? value.presetId : 'custom',
+      presetId: stillMatchesPreset ? value.presetId : STYLE_ID.CUSTOM,
       prompt: draftPrompt,
       negativePrompt: draftNeg,
     });
@@ -288,10 +288,10 @@ function WorldStyleRow({ value, presets, onChange }) {
         <span className="text-[9px] uppercase tracking-wider text-gray-500 flex items-center gap-1">
           <Palette size={10} /> World style
         </span>
-        {value.presetId !== 'none' && (
+        {value.presetId !== STYLE_ID.NONE && (
           <button
             type="button"
-            onClick={() => pickPreset('none')}
+            onClick={() => pickPreset(STYLE_ID.NONE)}
             className="text-[9px] text-gray-500 hover:text-port-error"
             title="Clear style"
           >
@@ -304,19 +304,19 @@ function WorldStyleRow({ value, presets, onChange }) {
         onChange={(e) => pickPreset(e.target.value)}
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
       >
-        <option value="none">None — use scene visualPrompt only</option>
+        <option value={STYLE_ID.NONE}>None — use scene visualPrompt only</option>
         <optgroup label="Presets">
           {presets.map((p) => (
             <option key={p.id} value={p.id}>{p.label}</option>
           ))}
         </optgroup>
-        <option value="custom">Custom</option>
+        <option value={STYLE_ID.CUSTOM}>Custom</option>
       </select>
-      {value.presetId !== 'none' && (
+      {value.presetId !== STYLE_ID.NONE && (
         <>
           <label className="block">
             <span className="text-[9px] uppercase tracking-wider text-gray-500">
-              Style prompt {value.presetId === 'custom' && <Check size={9} className="inline text-port-accent" />}
+              Style prompt {value.presetId === STYLE_ID.CUSTOM && <Check size={9} className="inline text-port-accent" />}
             </span>
             <textarea
               value={draftPrompt}

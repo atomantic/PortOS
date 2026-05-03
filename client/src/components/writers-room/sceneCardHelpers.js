@@ -2,6 +2,13 @@
 // (legacy) inline script result. Lives in its own module so SceneCard can be
 // imported wherever scenes are rendered without dragging the whole AI panel.
 
+// Mirror of server/lib/writersRoomStylePresets.js — kept in sync manually
+// since client and server are separate bundles. Curated preset ids come from
+// the /api/writers-room/style-presets endpoint at runtime; only the two
+// special discriminators live here.
+export const STYLE_ID = { NONE: 'none', CUSTOM: 'custom' };
+export const EMPTY_IMAGE_STYLE = { presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' };
+
 // Defaults for the per-scene image gen pipe. Klein-4B is the fastest FLUX.2
 // variant on Apple Silicon, and 768×512 is a 3:2 aspect that suits scene work.
 // steps + seed are stored as strings (or empty) so the form inputs can bind
