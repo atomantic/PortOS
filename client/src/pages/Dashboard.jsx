@@ -231,19 +231,23 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Dashboard</h2>
-          <p className="text-gray-500 text-sm sm:text-base">
-            {activeApps.length} app{activeApps.length !== 1 ? 's' : ''} registered{apps.length !== activeApps.length ? ` (${apps.length - activeApps.length} archived)` : ''}
-          </p>
-        </div>
+      <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
+        <h2 className="flex items-center gap-2.5 text-2xl font-bold text-white">
+          Dashboard
+          <span
+            className="relative inline-flex h-2.5 w-2.5"
+            title={health ? 'Server online' : 'Server offline'}
+            aria-label={health ? 'Server online' : 'Server offline'}
+          >
+            {health && (
+              <span className="absolute inline-flex h-full w-full rounded-full bg-port-success opacity-60 animate-ping" />
+            )}
+            <span
+              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_#22c55e]' : 'bg-port-error shadow-[0_0_8px_#ef4444]'}`}
+            />
+          </span>
+        </h2>
         <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-          {health && (
-            <div className="text-sm text-gray-500">
-              Server: <span className="text-port-success">Online</span>
-            </div>
-          )}
           {layouts.length > 0 && !editingGrid && (
             <LayoutPicker
               layouts={layouts}
