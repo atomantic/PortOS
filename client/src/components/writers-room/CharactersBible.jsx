@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -7,6 +7,7 @@ import {
   updateWritersRoomCharacter,
   deleteWritersRoomCharacter,
 } from '../../services/apiWritersRoom';
+import useMounted from '../../hooks/useMounted';
 
 const CHARACTER_FIELDS = [
   { key: 'aliases',             label: 'Aliases',              placeholder: 'nicknames, titles (comma-separated)',                                                                  kind: 'csv' },
@@ -17,32 +18,29 @@ const CHARACTER_FIELDS = [
   { key: 'notes',               label: 'Notes',                placeholder: 'Anything else worth tracking',                                                                         kind: 'multiline' },
 ];
 
-// Character bible — editable, persistent across analysis runs. Used by image
-// gen to inject physicalDescription into per-scene prompts.
+// Editable character bible — persistent across analysis runs and consumed by
+// image gen to inject physicalDescription into per-scene prompts.
+//
+// Controlled vs. uncontrolled: caller may pass `characters` to keep multiple
+// mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
+// and own the list so this can stand alone.
 export default function CharactersBible({ workId, characters: charactersProp, onCharactersChange, readingTheme = 'dark' }) {
-  // Internal vs. controlled: caller can pass `characters` to keep multiple
-  // mounts in sync (e.g. drawer + storyboard chip count). When omitted we
-  // fetch and own the list ourselves so this can stand alone.
   const [internalCharacters, setInternalCharacters] = useState(charactersProp || []);
   const characters = charactersProp ?? internalCharacters;
   const [editingId, setEditingId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   useEffect(() => {
-    if (charactersProp) return; // controlled — caller is fetching
+    if (charactersProp) return;
     if (!workId) return;
     setLoading(true);
     listWritersRoomCharacters(workId)
       .then((list) => { if (mountedRef.current) setInternalCharacters(list); })
       .catch(() => { if (mountedRef.current) setInternalCharacters([]); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
-  }, [workId, charactersProp]);
+  }, [workId, charactersProp, mountedRef]);
 
   const upsert = (next) => {
     const update = (prev) => {

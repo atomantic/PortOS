@@ -14,6 +14,7 @@ import {
   attachWritersRoomSceneImage,
 } from '../../services/apiWritersRoom';
 import socket from '../../services/socket';
+import useClickOutside from '../../hooks/useClickOutside';
 import {
   WR_IMAGE_DEFAULTS,
   buildScenePromptWithCharacters,
@@ -21,10 +22,6 @@ import {
   normCharKey,
 } from './sceneCardHelpers';
 
-// One scene in the storyboard. Renders heading, image (or empty/in-progress
-// state), characters, action/dialogue snippets, and a per-card Debug menu that
-// scopes AI tools (re-extract scene, check characters, why this image) to this
-// one scene.
 export default function SceneCard({
   scene,
   workId,
@@ -62,9 +59,8 @@ export default function SceneCard({
   const jobIdRef = useRef(null);
   const debugMenuRef = useRef(null);
 
-  // initialImage prop changes when the parent reloads analyses (e.g. after a
-  // re-Adapt). Sync the local rendered state so a fresh image actually appears
-  // without needing the user to re-click Generate.
+  // Sync local image state when parent reloads analyses (e.g. post-re-Adapt)
+  // so a fresh image appears without forcing the user to re-click Generate.
   useEffect(() => {
     if (!initialImage) return;
     setGenerated({
@@ -75,14 +71,7 @@ export default function SceneCard({
     setGenStatus('done');
   }, [initialImage?.filename]);
 
-  useEffect(() => {
-    if (!showDebugMenu) return;
-    const onClick = (e) => {
-      if (!debugMenuRef.current?.contains(e.target)) setShowDebugMenu(false);
-    };
-    window.addEventListener('mousedown', onClick);
-    return () => window.removeEventListener('mousedown', onClick);
-  }, [showDebugMenu]);
+  useClickOutside(debugMenuRef, showDebugMenu, () => setShowDebugMenu(false));
 
   useEffect(() => {
     const onStarted = (data) => {

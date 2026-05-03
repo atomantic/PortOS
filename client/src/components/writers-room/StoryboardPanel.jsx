@@ -8,6 +8,7 @@ import {
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { listImageModels } from '../../services/apiImageVideo';
 import { timeAgo } from '../../utils/formatters';
+import useMounted from '../../hooks/useMounted';
 import SceneCard from './SceneCard';
 import {
   WR_IMAGE_DEFAULTS,
@@ -15,10 +16,6 @@ import {
   readWrImageSettings,
 } from './sceneCardHelpers';
 
-// Vertical storyboard companion — the scene-by-scene visual interpretation of
-// the active draft. Renders cards from the latest successful Adapt analysis.
-// When the Adapt is older than the current draft hash, surfaces a stale
-// banner inviting a re-run.
 export default function StoryboardPanel({
   work,
   characters = [],
@@ -34,15 +31,8 @@ export default function StoryboardPanel({
   const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
   const [models, setModels] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
-  const mountedRef = useRef(true);
+  const mountedRef = useMounted();
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  // Image-gen settings + model catalog — fetched once per mount, persisted to
-  // settings.json so the user's resolution + model choice sticks.
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -66,8 +56,7 @@ export default function StoryboardPanel({
       setLoading(false);
       return;
     }
-    // We need the full snapshot (scenes + sceneImages) — list returns metadata
-    // only.
+    // listAnalyses returns metadata only — fetch the full snapshot for scenes + sceneImages.
     const full = await getWritersRoomAnalysis(work.id, latest.id).catch(() => null);
     if (!mountedRef.current) return;
     setLatestScript(full);
@@ -79,8 +68,7 @@ export default function StoryboardPanel({
     loadLatestScript();
   }, [loadLatestScript]);
 
-  // After Adapt finishes the parent will toggle runningAdapt false — that's
-  // our cue to refetch the latest.
+  // Refetch when Adapt completes — parent toggles runningAdapt true→false.
   const prevRunning = useRef(runningAdapt);
   useEffect(() => {
     if (prevRunning.current && !runningAdapt) {

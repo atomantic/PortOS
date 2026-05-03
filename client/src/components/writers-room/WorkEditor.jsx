@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
+import useMounted from '../../hooks/useMounted';
+import useClickOutside from '../../hooks/useClickOutside';
 import {
   saveWritersRoomDraft,
   snapshotWritersRoomDraft,
@@ -32,6 +34,17 @@ import { countWords } from '../../utils/formatters';
 import StoryboardPanel from './StoryboardPanel';
 import CharactersBible from './CharactersBible';
 import AnalysisHistory from './AnalysisHistory';
+
+const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', EVALUATE: 'evaluate', FORMAT: 'format' };
+const DRAWER = { OUTLINE: 'outline', VERSIONS: 'versions', CHARACTERS: 'characters', HISTORY: 'history' };
+const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
+
+const ANALYSIS_LABELS = {
+  [ANALYSIS_KIND.SCRIPT]: 'Adapt',
+  [ANALYSIS_KIND.CHARACTERS]: 'Characters',
+  [ANALYSIS_KIND.EVALUATE]: 'Editorial pass',
+  [ANALYSIS_KIND.FORMAT]: 'Format pass',
+};
 
 const SIDEBAR_WIDTH_KEY = 'wr.sidebarWidth';
 const SIDEBAR_DEFAULT = 480;
@@ -55,25 +68,20 @@ function persistSidebarWidth(width) {
   try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch {}
 }
 
-const ANALYSIS_LABELS = {
-  script: 'Adapt',
-  characters: 'Characters',
-  evaluate: 'Editorial pass',
-  format: 'Format pass',
-};
-
 export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
+  // Optimistic mirror of work.status so the dropdown changes show immediately
+  // before the PATCH round-trip resolves. Re-synced from the prop when it changes.
   const [status, setStatus] = useState(work.status);
   const [savedBody, setSavedBody] = useState(work.activeDraftBody || '');
   const [saving, setSaving] = useState(false);
   const [readingTheme, setReadingTheme] = useState(readReadingTheme);
   const [characters, setCharacters] = useState([]);
-  const [runningKind, setRunningKind] = useState(null); // 'script' | 'characters' | 'evaluate' | 'format'
-  const [drawer, setDrawer] = useState(null); // 'outline' | 'versions' | 'characters' | 'history' | null
+  const [runningKind, setRunningKind] = useState(null);
+  const [drawer, setDrawer] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
-  const [mobileTab, setMobileTab] = useState('writing'); // 'writing' | 'storyboard'
+  const [mobileTab, setMobileTab] = useState(MOBILE_TAB.WRITING);
   const [activeSceneId, setActiveSceneId] = useState(null);
 
   const textareaRef = useRef(null);
@@ -94,10 +102,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   useEffect(() => { setStatus(work.status); }, [work.status]);
   useEffect(() => { setTitle(work.title); }, [work.title]);
 
-  // Load character bible for the active work — passed into the storyboard so
-  // physicalDescription gets injected into per-scene image prompts. The
-  // CharactersBible drawer is the canonical editor; we re-fetch when it
-  // notifies us via onCharactersChange.
+  // The CharactersBible drawer is the canonical editor; mirror its list here
+  // so the storyboard's image-prompt enrichment picks up edits immediately.
   useEffect(() => {
     listWritersRoomCharacters(work.id)
       .then((list) => setCharacters(list || []))
@@ -107,14 +113,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
 
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
-  // Saving uses refs so the once-bound key listener reads fresh values
-  // without re-registering on every keystroke.
+  // savingRef gates parallel saves synchronously — `saving` state lags React
+  // re-renders, so rapid Cmd+S key-repeats can slip past it otherwise.
   const savingRef = useRef(false);
   const handleSaveRef = useRef(null);
   handleSaveRef.current = async () => {
@@ -146,16 +148,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Close the overflow menu on outside click — keeping it open while the
-  // user clicks something else would feel sticky.
-  useEffect(() => {
-    if (!overflowOpen) return;
-    const onClick = (e) => {
-      if (!overflowRef.current?.contains(e.target)) setOverflowOpen(false);
-    };
-    window.addEventListener('mousedown', onClick);
-    return () => window.removeEventListener('mousedown', onClick);
-  }, [overflowOpen]);
+  useClickOutside(overflowRef, overflowOpen, () => setOverflowOpen(false));
 
   const handleSnapshot = async () => {
     if (dirty) {
@@ -252,25 +245,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   );
   const activeHash = activeDraft?.contentHash || null;
 
-  // Click-to-jump from a storyboard card → scroll the prose textarea so the
-  // scene's heading is visible. The Adapt LLM often paraphrases the user's
-  // headings (e.g. user wrote `## Chapter 1`, LLM emits "Scene 1 — The Curry
-  // Burns"), so we try a few candidates in order:
-  //   1. Common markdown prefixes + the LLM heading
-  //   2. Raw LLM heading
-  //   3. First chunk of scene.summary or scene.action — these often quote
-  //      actual prose phrases
-  //   4. Proportional scrollTop based on the scene's index in the storyboard
-  //      (sceneIndex / totalScenes) — guarantees we land somewhere reasonable
-  //      even when nothing matches.
-  // setSelectionRange + focus uses the browser's caret-into-view scroll;
-  // setting scrollTop afterward guarantees we land "near" the line in cases
-  // where the browser doesn't re-scroll an already-visible caret.
+  // Click-to-jump tries the LLM heading (with markdown prefixes), then a
+  // summary/action snippet, then proportional by scene index. Browsers don't
+  // always re-scroll on focus alone if the caret was already visible, so we
+  // always set scrollTop explicitly after focusing.
   const jumpToScene = useCallback((scene, sceneIndex = -1, totalScenes = 0) => {
     const ta = textareaRef.current;
     if (!ta || !scene || !body) return;
     setActiveSceneId(scene.id || null);
-    setMobileTab('writing');
+    setMobileTab(MOBILE_TAB.WRITING);
     const heading = scene.heading || '';
     let idx = -1;
     for (const prefix of ['## ', '### ', '# ', '']) {
@@ -279,8 +262,6 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       if (idx >= 0) break;
     }
     if (idx < 0) {
-      // Try a chunk of the scene's summary or action — the LLM may have
-      // pulled from real prose phrases.
       for (const candidate of [scene.summary, scene.action]) {
         if (!candidate) continue;
         const snippet = String(candidate).trim().slice(0, 40);
@@ -296,7 +277,6 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       const fraction = idx / body.length;
       target = Math.max(0, fraction * (ta.scrollHeight - ta.clientHeight));
     } else if (totalScenes > 0 && sceneIndex >= 0) {
-      // Last resort: position by scene index in the storyboard.
       const fraction = sceneIndex / totalScenes;
       target = Math.max(0, fraction * (ta.scrollHeight - ta.clientHeight));
     } else {
@@ -305,14 +285,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     ta.scrollTop = target;
   }, [body]);
 
-  // Per-scene Debug menu actions from SceneCard — for now everything except
-  // "Jump to prose" (handled directly via onJumpToProse) opens the most
-  // relevant drawer. Scoping AI tools to a single scene is a follow-up.
+  // Per-scene Debug menu actions — until scoped tools land, route to the
+  // most relevant drawer.
   const handleDebug = useCallback(({ kind, scene }) => {
     if (scene) setActiveSceneId(scene.id || null);
-    if (kind === 'check-characters') setDrawer('characters');
-    else if (kind === 'editorial') setDrawer('history');
-    else if (kind === 'why-image') setDrawer('history');
+    if (kind === 'check-characters') setDrawer(DRAWER.CHARACTERS);
+    else if (kind === 'editorial') setDrawer(DRAWER.HISTORY);
+    else if (kind === 'why-image') setDrawer(DRAWER.HISTORY);
   }, []);
 
   // Drag-to-resize sidebar (desktop only).
@@ -419,16 +398,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           {overflowOpen && (
             <div className="absolute right-0 top-full mt-1 z-30 w-60 rounded-md border border-port-border bg-port-card shadow-xl py-1 text-xs">
               <MenuSection label="AI">
-                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === 'script'} onClick={closeOverflowAnd(() => runAnalysis('script'))} />
-                <MenuItem icon={Users} label="Refresh characters" running={runningKind === 'characters'} onClick={closeOverflowAnd(() => runAnalysis('characters'))} />
-                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === 'evaluate'} onClick={closeOverflowAnd(() => runAnalysis('evaluate'))} />
-                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === 'format'} onClick={closeOverflowAnd(() => runAnalysis('format'))} />
+                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
+                <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
+                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
+                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
               </MenuSection>
               <MenuSection label="Open">
-                <MenuItem icon={ListTree} label="Outline" onClick={closeOverflowAnd(() => setDrawer('outline'))} />
-                <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer('versions'))} />
-                <MenuItem icon={Users} label="Characters" badge={characters.length || null} onClick={closeOverflowAnd(() => setDrawer('characters'))} />
-                <MenuItem icon={History} label="Analysis history" onClick={closeOverflowAnd(() => setDrawer('history'))} />
+                <MenuItem icon={ListTree} label="Outline" onClick={closeOverflowAnd(() => setDrawer(DRAWER.OUTLINE))} />
+                <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VERSIONS))} />
+                <MenuItem icon={Users} label="Characters" badge={characters.length || null} onClick={closeOverflowAnd(() => setDrawer(DRAWER.CHARACTERS))} />
+                <MenuItem icon={History} label="Analysis history" onClick={closeOverflowAnd(() => setDrawer(DRAWER.HISTORY))} />
               </MenuSection>
               <MenuSection label="View">
                 <MenuItem
@@ -452,12 +431,12 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
       {/* Mobile-only Writing/Storyboard toggle — desktop renders both side-by-side. */}
       <div className="lg:hidden flex border-b border-port-border bg-port-bg/40 shrink-0">
-        <MobileTab active={mobileTab === 'writing'} onClick={() => setMobileTab('writing')} icon={PenLine} label="Writing" />
-        <MobileTab active={mobileTab === 'storyboard'} onClick={() => setMobileTab('storyboard')} icon={Clapperboard} label="Storyboard" />
+        <MobileTab active={mobileTab === MOBILE_TAB.WRITING} onClick={() => setMobileTab(MOBILE_TAB.WRITING)} icon={PenLine} label="Writing" />
+        <MobileTab active={mobileTab === MOBILE_TAB.STORYBOARD} onClick={() => setMobileTab(MOBILE_TAB.STORYBOARD)} icon={Clapperboard} label="Storyboard" />
       </div>
 
       <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
-        <div className={`relative min-h-0 flex-1 ${mobileTab === 'storyboard' ? 'hidden lg:block' : 'block'}`}>
+        <div className={`relative min-h-0 flex-1 ${mobileTab === MOBILE_TAB.STORYBOARD ? 'hidden lg:block' : 'block'}`}>
           <textarea
             ref={textareaRef}
             value={body}
@@ -495,7 +474,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <aside
           style={{ '--sidebar-w': `${sidebarWidth}px` }}
           className={`border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full flex-1 lg:flex-initial lg:w-[var(--sidebar-w)] lg:shrink-0 ${
-            mobileTab === 'writing' ? 'hidden lg:flex' : 'flex'
+            mobileTab === MOBILE_TAB.WRITING ? 'hidden lg:flex' : 'flex'
           }`}
         >
           <StoryboardPanel
@@ -503,22 +482,21 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             characters={characters}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
-            onRunAdapt={() => runAnalysis('script')}
-            runningAdapt={runningKind === 'script'}
+            onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
+            runningAdapt={runningKind === ANALYSIS_KIND.SCRIPT}
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
           />
         </aside>
       </div>
 
-      {/* Slide-over drawers — only one open at a time */}
-      <Drawer open={drawer === 'outline'} onClose={() => setDrawer(null)} title="Outline">
-        <OutlineList activeDraft={activeDraft} onClose={() => setDrawer(null)} />
+      <Drawer open={drawer === DRAWER.OUTLINE} onClose={() => setDrawer(null)} title="Outline">
+        <OutlineList activeDraft={activeDraft} />
       </Drawer>
-      <Drawer open={drawer === 'versions'} onClose={() => setDrawer(null)} title="Versions">
+      <Drawer open={drawer === DRAWER.VERSIONS} onClose={() => setDrawer(null)} title="Versions">
         <VersionsList work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />
       </Drawer>
-      <Drawer open={drawer === 'characters'} onClose={() => setDrawer(null)} title="Characters">
+      <Drawer open={drawer === DRAWER.CHARACTERS} onClose={() => setDrawer(null)} title="Characters">
         <CharactersBible
           workId={work.id}
           characters={characters}
@@ -526,7 +504,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           readingTheme={readingTheme}
         />
       </Drawer>
-      <Drawer open={drawer === 'history'} onClose={() => setDrawer(null)} title="Analysis history">
+      <Drawer open={drawer === DRAWER.HISTORY} onClose={() => setDrawer(null)} title="Analysis history">
         <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
       </Drawer>
     </div>
@@ -575,7 +553,7 @@ function MobileTab({ active, onClick, icon: Icon, label }) {
   );
 }
 
-function OutlineList({ activeDraft, onClose }) {
+function OutlineList({ activeDraft }) {
   const segs = activeDraft?.segmentIndex || [];
   if (segs.length === 0) {
     return (

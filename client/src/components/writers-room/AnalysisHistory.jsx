@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Clapperboard, FileSignature, Loader2, RotateCcw, Sparkles, Users } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listWritersRoomAnalyses, getWritersRoomAnalysis } from '../../services/apiWritersRoom';
 import { timeAgo } from '../../utils/formatters';
+import useMounted from '../../hooks/useMounted';
 
 const KIND_ICON = { evaluate: Sparkles, format: FileSignature, script: Clapperboard, characters: Users };
 const KIND_LABEL = { evaluate: 'Evaluate', format: 'Format', script: 'Adapt', characters: 'Characters' };
@@ -14,19 +15,14 @@ const SEVERITY_COLOR = {
 };
 
 // Read-only history of past Evaluate / Format / Adapt / Characters runs.
-// "Apply" actions for Format pass go through onApplyFormat — caller hooks
-// this to the prose buffer (currently only WorkEditor needs that).
+// `onApplyFormat` is the only mutation hook — Format-pass results call it
+// with the cleaned text and the caller decides what to do with it.
 export default function AnalysisHistory({ work, activeHash, onApplyFormat }) {
   const [analyses, setAnalyses] = useState([]);
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useState({});
   const [expanded, setExpanded] = useState(null);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   const refresh = async () => {
     setLoading(true);
