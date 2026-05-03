@@ -295,7 +295,7 @@ export default function WorkEditor({ work, onChange }) {
       </div>
 
       <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
-        <div className="relative min-h-0 flex-1">
+        <div className="relative min-h-0 flex-[2] lg:flex-1">
           <textarea
             ref={textareaRef}
             value={body}
@@ -337,7 +337,7 @@ export default function WorkEditor({ work, onChange }) {
 
         <aside
           style={{ '--sidebar-w': `${sidebarWidth}px` }}
-          className="border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full lg:w-[var(--sidebar-w)] lg:shrink-0">
+          className="border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full flex-1 lg:flex-initial lg:w-[var(--sidebar-w)] lg:shrink-0">
           <div className="flex border-b border-port-border bg-port-bg/40">
             {SIDEBAR_TABS.map(({ id, label, Icon }) => (
               <button
