@@ -81,7 +81,7 @@ export default function CharactersBible({ workId, characters: charactersProp, on
 
       {!loading && characters.length === 0 && !creating && (
         <div className="text-gray-500 italic px-1 mb-2">
-          No profiles yet. Run "Refresh Characters" from the work menu, or add one manually.
+          No profiles yet. Click "Refresh from prose" above to extract them, or add one manually.
         </div>
       )}
 

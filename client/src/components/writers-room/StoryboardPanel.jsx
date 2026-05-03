@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle, Palette, Check, Dice5, Cpu, Users, MapPin as MapPinIcon, ArrowRight } from 'lucide-react';
+import {
+  Clapperboard, Loader2, RefreshCcw, AlertTriangle, Palette, Check, Dice5, Cpu,
+  Users, MapPin as MapPinIcon, ArrowRight, ListTree, SlidersHorizontal, Square,
+} from 'lucide-react';
 import { randomSeed } from '../../lib/genUtils';
 import toast from '../ui/Toast';
 import {
@@ -8,11 +11,13 @@ import {
   listWritersRoomStylePresets,
 } from '../../services/apiWritersRoom';
 import { getSettings, updateSettings } from '../../services/apiSystem';
-import { listImageModels } from '../../services/apiImageVideo';
+import { listImageModels, cancelImageGen } from '../../services/apiImageVideo';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
+import CharactersBible from './CharactersBible';
+import SettingsBible from './SettingsBible';
 import {
   WR_IMAGE_DEFAULTS,
   buildCharByKey,
@@ -23,6 +28,24 @@ import {
 } from './sceneCardHelpers';
 
 const SCRIPT_STAGE = 'writers-room-script';
+
+export const STORYBOARD_TAB = {
+  CHARACTERS: 'characters',
+  WORLD: 'world',
+  SCENES: 'scenes',
+  BOARDS: 'boards',
+  CONFIG: 'config',
+};
+const TAB = STORYBOARD_TAB;
+export const STORYBOARD_TAB_VALUES = Object.values(TAB);
+
+const RUN_LABEL = {
+  characters: 'Refreshing characters',
+  settings: 'Refreshing world',
+  script: 'Running Adapt',
+  evaluate: 'Editorial pass',
+  format: 'Format pass',
+};
 
 export default function StoryboardPanel({
   work,
@@ -39,17 +62,22 @@ export default function StoryboardPanel({
   readingTheme = 'dark',
   activeSceneId = null,
   onStyleChange,
+  onCharactersChange,
+  onSettingsChange,
+  tab,
+  onTabChange,
 }) {
+  const setTab = onTabChange;
   const [latestScript, setLatestScript] = useState(null);
   const [latestFailure, setLatestFailure] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
   const [models, setModels] = useState([]);
-  const [showSettings, setShowSettings] = useState(false);
   const [stylePresets, setStylePresets] = useState([]);
   const mountedRef = useMounted();
 
   const imageStyle = work.imageStyle || EMPTY_IMAGE_STYLE;
+  const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,9 +85,9 @@ export default function StoryboardPanel({
       getSettings().catch(() => ({})),
       listImageModels().catch(() => []),
       listWritersRoomStylePresets().catch(() => []),
-    ]).then(([settings, modelList, presets]) => {
+    ]).then(([sysSettings, modelList, presets]) => {
       if (cancelled) return;
-      setImageCfg(readWrImageSettings(settings));
+      setImageCfg(readWrImageSettings(sysSettings));
       setModels(Array.isArray(modelList) ? modelList : []);
       setStylePresets(Array.isArray(presets) ? presets : []);
     });
@@ -115,6 +143,47 @@ export default function StoryboardPanel({
   // Map keyed by sceneId — replaced wholesale on each script load.
   const sceneRefs = useRef({});
 
+  // Track which scenes are actively rendering so the Boards tab can show a
+  // "Cancel renders" CTA. SceneCard fires onRunningChange when its local
+  // genStatus toggles. Storing the Set as state (not ref) so the count
+  // re-renders the cancel button reactively.
+  const [runningSceneIds, setRunningSceneIds] = useState(() => new Set());
+  const handleSceneRunningChange = useCallback((sceneId, running) => {
+    setRunningSceneIds((prev) => {
+      const has = prev.has(sceneId);
+      if (running === has) return prev;
+      const next = new Set(prev);
+      if (running) next.add(sceneId);
+      else next.delete(sceneId);
+      return next;
+    });
+  }, []);
+  // Drop stale running-scene entries when the script reloads — old sceneIds
+  // may not exist in the new render.
+  useEffect(() => {
+    setRunningSceneIds(new Set());
+  }, [latestScript?.id]);
+
+  const cancelAllRenders = useCallback(async () => {
+    if (runningSceneIds.size === 0) return;
+    // Issue server cancel first so background work actually stops, then wipe
+    // local state on every running card so the UI returns to idle without
+    // waiting for the cancellation socket events to round-trip.
+    await cancelImageGen({ all: true }).catch((err) => {
+      toast.error(`Cancel failed: ${err.message}`);
+    });
+    // Reset every previously-running card unconditionally — if a
+    // cancellation 'failed' socket event raced ahead and flipped the card to
+    // 'error', isRunning() would return false, but we still want the card
+    // back at idle so the user can retry. cancel() is idempotent.
+    const total = runningSceneIds.size;
+    for (const sceneId of runningSceneIds) {
+      sceneRefs.current[sceneId]?.cancel?.();
+    }
+    setRunningSceneIds(new Set());
+    if (total > 0) toast(`Stopped ${total} render${total === 1 ? '' : 's'}`, { icon: '🛑' });
+  }, [runningSceneIds]);
+
   // Auto-queue every missing image when latestScript updates *because* of a
   // just-finished Adapt run. requestAnimationFrame defers until the cards
   // have actually mounted with the new scenes — useImperativeHandle has to
@@ -125,9 +194,9 @@ export default function StoryboardPanel({
     const handle = requestAnimationFrame(() => {
       let queued = 0;
       for (const sceneId in sceneRefs.current) {
-        const handle = sceneRefs.current[sceneId];
-        if (handle?.canGenerate?.()) {
-          handle.generate();
+        const h = sceneRefs.current[sceneId];
+        if (h?.canGenerate?.()) {
+          h.generate();
           queued += 1;
         }
       }
@@ -135,6 +204,16 @@ export default function StoryboardPanel({
     });
     return () => cancelAnimationFrame(handle);
   }, [latestScript]);
+
+  // refresh-characters/settings stay on whichever tab the user is on (they
+  // have their own per-tab spinner); only Adapt yanks them to Boards so the
+  // newly-built storyboard is what they see when it finishes.
+  useEffect(() => {
+    if (runningKind === 'script') setTab(TAB.BOARDS);
+    // setTab intentionally omitted — caller may not memoize it, and the
+    // effect should only fire on runningKind transitions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningKind]);
 
   const persistCfg = useCallback(async (next) => {
     setImageCfg(next);
@@ -147,7 +226,10 @@ export default function StoryboardPanel({
 
   const charByKey = useMemo(() => buildCharByKey(characters), [characters]);
   const settingByKey = useMemo(() => buildSettingByKey(settings), [settings]);
-  const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
+  const scenesCount = useMemo(
+    () => (activeDraft?.segmentIndex || []).filter((s) => s.kind === 'scene').length,
+    [activeDraft?.segmentIndex]
+  );
   const activeHash = activeDraft?.contentHash || null;
   const isStale = !!latestScript?.sourceContentHash && !!activeHash && latestScript.sourceContentHash !== activeHash;
   const scenes = latestScript?.result?.scenes || [];
@@ -155,125 +237,422 @@ export default function StoryboardPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-port-border bg-port-bg/40 shrink-0">
-        <Clapperboard size={13} className="text-port-accent" />
-        <span className="text-[11px] font-semibold text-gray-200 uppercase tracking-wider">Storyboard</span>
-        {latestScript && (
-          <span className="text-[10px] text-gray-500 truncate">
-            {scenes.length} scene{scenes.length === 1 ? '' : 's'} · {timeAgo(latestScript.completedAt || latestScript.createdAt, 'never')}
-          </span>
-        )}
-        {imageStyle.presetId !== STYLE_ID.NONE && (
-          <button
-            onClick={() => setShowSettings((v) => !v)}
-            className="text-port-accent/80 hover:text-port-accent flex items-center gap-1 text-[10px]"
-            title="World style applied — click to edit"
-          >
-            <Palette size={11} /> {styleChip(imageStyle, stylePresets)}
-          </button>
-        )}
-        <button
-          onClick={() => setShowSettings((v) => !v)}
-          className="ml-auto text-gray-500 hover:text-white"
-          title={`Image gen: ${imageCfg.modelId} · ${imageCfg.width}×${imageCfg.height}`}
-          aria-label="Image gen settings"
-        >
-          <SettingsIcon size={12} />
-        </button>
-      </div>
+      <TabNav
+        tab={tab}
+        setTab={setTab}
+        runningKind={runningKind}
+        charactersCount={characters.length}
+        settingsCount={settings.length}
+        scenesCount={scenesCount}
+        boardsCount={scenes.length}
+      />
 
-      {showSettings && (
-        <div className="px-3 py-2 border-b border-port-border bg-port-card/30 shrink-0 space-y-3 max-h-[60vh] overflow-y-auto">
-          <StagePromptModelPicker
-            stageName={SCRIPT_STAGE}
-            label="Adapt LLM"
-            icon={<Cpu size={10} />}
-            hint="Used when you click Run Adapt to break prose into scenes."
-          />
-          <WorldStyleRow
-            value={imageStyle}
-            presets={stylePresets}
-            onChange={onStyleChange}
-          />
-          <ImageGenSettingsRow cfg={imageCfg} models={models} onChange={persistCfg} />
+      {runningKind && (
+        <div className="px-3 py-1.5 border-b border-port-border bg-port-accent/10 text-[11px] text-port-accent flex items-center gap-2 shrink-0">
+          <Loader2 size={11} className="animate-spin" />
+          <span>{RUN_LABEL[runningKind] || runningKind}…</span>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
-        {loading && (
-          <div className="flex items-center justify-center text-[11px] text-gray-500 gap-2 py-6">
-            <Loader2 size={14} className="animate-spin" /> Loading storyboard…
-          </div>
-        )}
-
-        {!loading && latestFailure && (
-          <FailedAdaptBanner
-            failure={latestFailure}
-            onRunAdapt={onRunAdapt}
-            runningAdapt={runningAdapt}
-            onOpenSettings={() => setShowSettings(true)}
-            hasPriorScript={!!latestScript}
+      <div className="flex-1 overflow-y-auto">
+        {tab === TAB.CHARACTERS && (
+          <BibleTab
+            kind="characters"
+            workId={work.id}
+            items={characters}
+            onItemsChange={onCharactersChange}
+            onRefresh={onRunCharacters}
+            running={runningKind === 'characters'}
+            anyRunning={!!runningKind}
+            readingTheme={readingTheme}
           />
         )}
-
-        {!loading && !latestScript && !latestFailure && (
-          <StoryboardSetup
+        {tab === TAB.WORLD && (
+          <BibleTab
+            kind="world"
+            workId={work.id}
+            items={settings}
+            onItemsChange={onSettingsChange}
+            onRefresh={onRunSettings}
+            running={runningKind === 'settings'}
+            anyRunning={!!runningKind}
+            readingTheme={readingTheme}
+          />
+        )}
+        {tab === TAB.SCENES && (
+          <ScenesTab activeDraft={activeDraft} onJumpToScene={onJumpToScene} />
+        )}
+        {tab === TAB.BOARDS && (
+          <BoardsTab
+            work={work}
+            scenes={scenes}
+            sceneImages={sceneImages}
+            latestScript={latestScript}
+            latestFailure={latestFailure}
+            loading={loading}
+            isStale={isStale}
+            imageCfg={imageCfg}
+            imageStyle={imageStyle}
+            stylePresets={stylePresets}
+            charByKey={charByKey}
+            settingByKey={settingByKey}
             charactersCount={characters.length}
             settingsCount={settings.length}
-            onRunCharacters={onRunCharacters}
-            onRunSettings={onRunSettings}
+            sceneRefs={sceneRefs}
+            onJumpToScene={onJumpToScene}
+            onDebug={onDebug}
+            onSceneRunningChange={handleSceneRunningChange}
             onRunAdapt={onRunAdapt}
-            onRunFullPipeline={onRunFullPipeline}
-            runningKind={runningKind}
-          />
-        )}
-
-        {!loading && latestScript && isStale && !latestFailure && (
-          <StaleBanner onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} />
-        )}
-
-        {!loading && latestScript && !isStale && !latestFailure && (characters.length === 0 || settings.length === 0) && (
-          <BiblesMissingNotice
-            charactersMissing={characters.length === 0}
-            settingsMissing={settings.length === 0}
             onRunCharacters={onRunCharacters}
             onRunSettings={onRunSettings}
+            onRunFullPipeline={onRunFullPipeline}
+            runningAdapt={runningAdapt}
             runningKind={runningKind}
+            readingTheme={readingTheme}
+            activeSceneId={activeSceneId}
+            onOpenConfig={() => setTab(TAB.CONFIG)}
+            runningRenderCount={runningSceneIds.size}
+            onCancelRenders={cancelAllRenders}
           />
         )}
-
-        {!loading && latestScript && scenes.length === 0 && (
-          <div className="text-[11px] text-gray-500 italic px-1">
-            Adapt finished but produced no scenes. Try adding `## Scene` headings to your prose, then re-run.
-          </div>
+        {tab === TAB.CONFIG && (
+          <ConfigTab
+            imageCfg={imageCfg}
+            models={models}
+            onCfgChange={persistCfg}
+            stylePresets={stylePresets}
+            imageStyle={imageStyle}
+            onStyleChange={onStyleChange}
+          />
         )}
-
-        {!loading && scenes.map((scene, i) => {
-          const sceneId = scene.id || `scene-${i}`;
-          return (
-            <SceneCard
-              key={sceneId}
-              ref={(handle) => {
-                if (handle) sceneRefs.current[sceneId] = handle;
-                else delete sceneRefs.current[sceneId];
-              }}
-              scene={{ ...scene, id: sceneId }}
-              workId={work.id}
-              analysisId={latestScript.id}
-              workTitle={work.title}
-              imageCfg={imageCfg}
-              imageStyle={imageStyle}
-              initialImage={sceneImages[sceneId] || null}
-              readingTheme={readingTheme}
-              charByKey={charByKey}
-              settingByKey={settingByKey}
-              isActive={sceneId === activeSceneId}
-              onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
-              onDebug={onDebug}
-            />
-          );
-        })}
       </div>
+    </div>
+  );
+}
+
+function TabNav({
+  tab,
+  setTab,
+  runningKind,
+  charactersCount,
+  settingsCount,
+  scenesCount,
+  boardsCount,
+}) {
+  const tabs = [
+    { id: TAB.CHARACTERS, label: 'Characters', icon: Users,        count: charactersCount, runningWhen: 'characters' },
+    { id: TAB.WORLD,      label: 'World',      icon: MapPinIcon,   count: settingsCount,   runningWhen: 'settings' },
+    { id: TAB.SCENES,     label: 'Scenes',     icon: ListTree,     count: scenesCount,     runningWhen: null },
+    { id: TAB.BOARDS,     label: 'Boards',     icon: Clapperboard, count: boardsCount,     runningWhen: 'script' },
+    { id: TAB.CONFIG,     label: 'Config',     icon: SlidersHorizontal, count: null,       runningWhen: null },
+  ];
+  return (
+    <div className="flex items-stretch border-b border-port-border bg-port-bg/40 shrink-0 overflow-x-auto">
+      {tabs.map((t) => {
+        const active = t.id === tab;
+        const running = runningKind && t.runningWhen === runningKind;
+        const Icon = t.icon;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`flex-1 min-w-0 flex items-center justify-center gap-1 px-2 py-2 text-[11px] border-b-2 transition-colors ${
+              active
+                ? 'border-port-accent text-white bg-port-card/40'
+                : 'border-transparent text-gray-500 hover:text-gray-200 hover:bg-port-card/20'
+            }`}
+            title={t.label}
+            aria-pressed={active}
+          >
+            {running
+              ? <Loader2 size={11} className="animate-spin text-port-accent shrink-0" />
+              : <Icon size={11} className="shrink-0" />
+            }
+            <span className="truncate">{t.label}</span>
+            {t.count != null && t.count > 0 && (
+              <span className={`text-[9px] px-1 rounded ${active ? 'text-gray-400' : 'text-gray-600'}`}>
+                {t.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const BIBLE_KINDS = {
+  characters: {
+    label: 'Character bible',
+    sub: 'Persisted across runs · feeds image-gen prompts',
+    refreshNoun: 'characters',
+    Component: CharactersBible,
+    propName: 'characters',
+    changeProp: 'onCharactersChange',
+  },
+  world: {
+    label: 'World / setting bible',
+    sub: 'Locations keyed by slugline · feeds image-gen prompts',
+    refreshNoun: 'world',
+    Component: SettingsBible,
+    propName: 'settings',
+    changeProp: 'onSettingsChange',
+  },
+};
+
+function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyRunning, readingTheme }) {
+  const meta = BIBLE_KINDS[kind];
+  const Bible = meta.Component;
+  const bibleProps = {
+    workId,
+    [meta.propName]: items,
+    [meta.changeProp]: onItemsChange,
+    readingTheme,
+  };
+  return (
+    <div className="px-3 py-3 space-y-3">
+      <RefreshHeader
+        noun={meta.refreshNoun}
+        label={meta.label}
+        sub={meta.sub}
+        running={running}
+        anyRunning={anyRunning}
+        onRefresh={onRefresh}
+        empty={items.length === 0}
+      />
+      <Bible {...bibleProps} />
+    </div>
+  );
+}
+
+function RefreshHeader({ noun, label, sub, running, anyRunning, onRefresh, empty }) {
+  return (
+    <div className="flex items-start justify-between gap-2 pb-2 border-b border-port-border">
+      <div className="min-w-0">
+        <div className="text-[12px] font-semibold text-gray-200">{label}</div>
+        <div className="text-[10px] text-gray-500">{sub}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={anyRunning || !onRefresh}
+        className="shrink-0 flex items-center gap-1 px-2 py-1 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:bg-port-card hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+        title={empty ? `Extract ${noun} from prose` : `Re-extract ${noun} from prose (merges into existing)`}
+      >
+        {running
+          ? <Loader2 size={10} className="animate-spin text-port-accent" />
+          : <RefreshCcw size={10} />
+        }
+        {running ? 'Refreshing…' : empty ? 'Extract from prose' : 'Refresh from prose'}
+      </button>
+    </div>
+  );
+}
+
+// ─── Scenes (outline from prose headings) ─────────────────────────────────
+function ScenesTab({ activeDraft, onJumpToScene }) {
+  const segs = activeDraft?.segmentIndex || [];
+  if (segs.length === 0) {
+    return (
+      <div className="px-3 py-3 text-[11px] text-gray-500 italic">
+        No segments yet. Use <code className="text-gray-300"># Chapter</code> /{' '}
+        <code className="text-gray-300">## Scene</code> /{' '}
+        <code className="text-gray-300">### Beat</code> headings in your prose to populate the outline.
+      </div>
+    );
+  }
+  return (
+    <ul className="px-3 py-3 space-y-1 text-[11px]">
+      {segs.map((seg) => {
+        const indent = seg.kind === 'beat' ? 'pl-4' : seg.kind === 'scene' ? 'pl-2' : '';
+        const tone = seg.kind === 'chapter' ? 'text-white font-semibold' : seg.kind === 'scene' ? 'text-gray-200' : 'text-gray-500';
+        return (
+          <li key={seg.id} className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onJumpToScene ? () => onJumpToScene({ heading: seg.heading }) : undefined}
+              disabled={!onJumpToScene}
+              className={`flex-1 truncate text-left hover:text-port-accent disabled:hover:text-inherit ${indent} ${tone}`}
+              title={onJumpToScene ? 'Jump to this segment in the prose' : seg.heading}
+            >
+              {seg.heading}
+            </button>
+            <span className="text-[9px] text-gray-600 shrink-0">{seg.wordCount}w</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// ─── Boards (storyboard scene cards) ──────────────────────────────────────
+function BoardsTab({
+  work,
+  scenes,
+  sceneImages,
+  latestScript,
+  latestFailure,
+  loading,
+  isStale,
+  imageCfg,
+  imageStyle,
+  stylePresets,
+  charByKey,
+  settingByKey,
+  charactersCount,
+  settingsCount,
+  sceneRefs,
+  onJumpToScene,
+  onDebug,
+  onSceneRunningChange,
+  onRunAdapt,
+  onRunCharacters,
+  onRunSettings,
+  onRunFullPipeline,
+  runningAdapt,
+  runningKind,
+  readingTheme,
+  activeSceneId,
+  onOpenConfig,
+  runningRenderCount = 0,
+  onCancelRenders,
+}) {
+  return (
+    <div className="px-3 py-3 space-y-2">
+      {runningRenderCount > 0 && (
+        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 mb-1 border border-port-warning/40 bg-port-warning/5 rounded text-[11px]">
+          <div className="flex items-center gap-2 min-w-0">
+            <Loader2 size={11} className="animate-spin text-port-warning shrink-0" />
+            <span className="text-port-warning truncate">
+              Rendering {runningRenderCount} scene{runningRenderCount === 1 ? '' : 's'}…
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelRenders}
+            className="shrink-0 flex items-center gap-1 px-2 py-1 bg-port-error/15 border border-port-error/40 text-port-error rounded text-[10px] hover:bg-port-error/25"
+            title="Cancel every queued and in-flight scene render"
+          >
+            <Square size={10} /> Stop all
+          </button>
+        </div>
+      )}
+      {latestScript && (
+        <div className="flex items-center gap-2 pb-2 text-[10px] text-gray-500">
+          <span>{scenes.length} scene{scenes.length === 1 ? '' : 's'} · {timeAgo(latestScript.completedAt || latestScript.createdAt, 'never')}</span>
+          {imageStyle.presetId !== STYLE_ID.NONE && (
+            <button
+              type="button"
+              onClick={onOpenConfig}
+              className="text-port-accent/80 hover:text-port-accent flex items-center gap-1"
+              title="World style applied — click to edit in Config"
+            >
+              <Palette size={10} /> {styleChip(imageStyle, stylePresets)}
+            </button>
+          )}
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center text-[11px] text-gray-500 gap-2 py-6">
+          <Loader2 size={14} className="animate-spin" /> Loading storyboard…
+        </div>
+      )}
+
+      {!loading && latestFailure && (
+        <FailedAdaptBanner
+          failure={latestFailure}
+          onRunAdapt={onRunAdapt}
+          runningAdapt={runningAdapt}
+          onOpenConfig={onOpenConfig}
+          hasPriorScript={!!latestScript}
+        />
+      )}
+
+      {!loading && !latestScript && !latestFailure && (
+        <StoryboardSetup
+          charactersCount={charactersCount}
+          settingsCount={settingsCount}
+          onRunCharacters={onRunCharacters}
+          onRunSettings={onRunSettings}
+          onRunAdapt={onRunAdapt}
+          onRunFullPipeline={onRunFullPipeline}
+          runningKind={runningKind}
+        />
+      )}
+
+      {!loading && latestScript && isStale && !latestFailure && (
+        <StaleBanner onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} />
+      )}
+
+      {!loading && latestScript && !isStale && !latestFailure && (charactersCount === 0 || settingsCount === 0) && (
+        <BiblesMissingNotice
+          charactersMissing={charactersCount === 0}
+          settingsMissing={settingsCount === 0}
+          onRunCharacters={onRunCharacters}
+          onRunSettings={onRunSettings}
+          runningKind={runningKind}
+        />
+      )}
+
+      {!loading && latestScript && scenes.length === 0 && (
+        <div className="text-[11px] text-gray-500 italic px-1">
+          Adapt finished but produced no scenes. Try adding `## Scene` headings to your prose, then re-run.
+        </div>
+      )}
+
+      {!loading && scenes.map((scene, i) => {
+        const sceneId = scene.id || `scene-${i}`;
+        return (
+          <SceneCard
+            key={sceneId}
+            ref={(handle) => {
+              if (handle) sceneRefs.current[sceneId] = handle;
+              else delete sceneRefs.current[sceneId];
+            }}
+            scene={{ ...scene, id: sceneId }}
+            workId={work.id}
+            analysisId={latestScript.id}
+            workTitle={work.title}
+            imageCfg={imageCfg}
+            imageStyle={imageStyle}
+            initialImage={sceneImages[sceneId] || null}
+            readingTheme={readingTheme}
+            charByKey={charByKey}
+            settingByKey={settingByKey}
+            isActive={sceneId === activeSceneId}
+            onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
+            onDebug={onDebug}
+            onRunningChange={onSceneRunningChange}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Config (image gen + style + Adapt LLM) ───────────────────────────────
+function ConfigTab({ imageCfg, models, onCfgChange, stylePresets, imageStyle, onStyleChange }) {
+  return (
+    <div className="px-3 py-3 space-y-4">
+      <section className="space-y-1.5">
+        <div className="text-[12px] font-semibold text-gray-200">Adapt LLM</div>
+        <StagePromptModelPicker
+          stageName={SCRIPT_STAGE}
+          label="Adapt LLM"
+          icon={<Cpu size={10} />}
+          hint="Used when you click Run Adapt to break prose into scenes."
+        />
+      </section>
+      <section className="space-y-1.5 pt-3 border-t border-port-border">
+        <div className="text-[12px] font-semibold text-gray-200">World style</div>
+        <WorldStyleRow value={imageStyle} presets={stylePresets} onChange={onStyleChange} />
+      </section>
+      <section className="space-y-1.5 pt-3 border-t border-port-border">
+        <div className="text-[12px] font-semibold text-gray-200">Image generation</div>
+        <ImageGenSettingsRow cfg={imageCfg} models={models} onChange={onCfgChange} />
+      </section>
     </div>
   );
 }
@@ -340,7 +719,7 @@ function StoryboardSetup({
   };
 
   return (
-    <div className="px-3 py-4 space-y-3">
+    <div className="px-1 py-1 space-y-3">
       <div className="text-center space-y-1">
         <Clapperboard size={24} className="mx-auto text-gray-600" />
         <div className="text-[12px] text-gray-300 font-medium">No storyboard yet</div>
@@ -393,14 +772,14 @@ function StoryboardSetup({
 
       {(charDone || setDone) && (
         <div className="text-[10px] text-gray-500 text-center">
-          Tip: edit either bible in the Work overflow menu before running Adapt.
+          Tip: edit either bible in its tab above before running Adapt.
         </div>
       )}
     </div>
   );
 }
 
-function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenSettings, hasPriorScript }) {
+function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenConfig, hasPriorScript }) {
   const error = failure?.error || 'Adapt failed for an unknown reason';
   const isTimeout = /timed out/i.test(error);
   return (
@@ -413,7 +792,7 @@ function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenSettings, 
           {isTimeout && (
             <div className="text-gray-500 mt-1">
               Long drafts are heavy for small/light models — try a faster model
-              (e.g. an API provider) via the gear icon.
+              (e.g. an API provider) in the Config tab.
             </div>
           )}
           {!hasPriorScript && (
@@ -425,10 +804,10 @@ function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenSettings, 
       </div>
       <div className="flex gap-2 justify-end">
         <button
-          onClick={onOpenSettings}
+          onClick={onOpenConfig}
           className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40"
         >
-          <SettingsIcon size={10} /> Adjust LLM
+          <SlidersHorizontal size={10} /> Adjust LLM
         </button>
         <button
           onClick={onRunAdapt}

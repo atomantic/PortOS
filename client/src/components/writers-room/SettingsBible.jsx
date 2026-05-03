@@ -81,7 +81,7 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
 
       {!loading && settings.length === 0 && !creating && (
         <div className="text-gray-500 italic px-1 mb-2">
-          No locations yet. Run "Refresh Settings" from the work menu, or add one manually.
+          No locations yet. Click "Refresh from prose" above to extract them, or add one manually.
         </div>
       )}
 

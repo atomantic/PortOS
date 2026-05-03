@@ -37,6 +37,7 @@ const SceneCard = forwardRef(function SceneCard({
   isActive = false,
   onJumpToProse = null,
   onDebug = null,
+  onRunningChange = null,
 }, ref) {
   const light = readingTheme === 'light';
   const matchedCharacters = useMemo(
@@ -79,6 +80,14 @@ const SceneCard = forwardRef(function SceneCard({
   }, [initialImage?.filename]);
 
   useClickOutside(debugMenuRef, showDebugMenu, () => setShowDebugMenu(false));
+
+  useEffect(() => {
+    onRunningChange?.(scene.id, genStatus === 'running');
+    // Unmount cleanup — without this a card that disappears while running
+    // (e.g. scene removed from a re-Adapt) leaves a stale entry in the
+    // parent's running-scene set, which inflates the "Rendering N…" count.
+    return () => onRunningChange?.(scene.id, false);
+  }, [scene.id, genStatus, onRunningChange]);
 
   useEffect(() => {
     const onStarted = (data) => {
@@ -174,15 +183,28 @@ const SceneCard = forwardRef(function SceneCard({
     }
   };
 
-  // Expose generate() to the parent so the storyboard can batch-trigger
-  // renders (e.g. auto-queue every missing image after Adapt completes).
+  // Drops jobIdRef so late socket events for the cancelled job are ignored,
+  // and rolls state back to idle (or to the prior image if there was one).
+  // Server-side cancellation is issued in bulk by the parent.
+  const cancelLocal = () => {
+    jobIdRef.current = null;
+    setProgress(null);
+    setError(null);
+    setGenerated(initialImage
+      ? { path: `/data/images/${initialImage.filename}`, jobId: initialImage.jobId, prompt: initialImage.prompt }
+      : null);
+    setGenStatus(initialImage ? 'done' : 'idle');
+  };
+
   // canGenerate() returns false for cards that already have an image, are
-  // mid-render, or lack a visualPrompt — the parent uses this to skip
-  // ineligible scenes silently.
+  // mid-render, or lack a visualPrompt — the parent uses it to skip
+  // ineligible scenes silently when batch-queueing renders after Adapt.
   useImperativeHandle(ref, () => ({
     generate,
+    cancel: cancelLocal,
     canGenerate: () => genStatus === 'idle' && !!scene.visualPrompt?.trim(),
-  }), [genStatus, scene.visualPrompt]);
+    isRunning: () => genStatus === 'running',
+  }), [genStatus, scene.visualPrompt, initialImage?.filename]);
 
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
   const view = progress?.currentImage ? 'live'

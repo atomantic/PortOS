@@ -7,7 +7,13 @@ export const listImageModels = () => request('/image-gen/models');
 export const listLoras = () => request('/image-gen/loras');
 export const listImageGallery = () => request('/image-gen/gallery');
 export const getActiveImageJob = () => request('/image-gen/active');
-export const cancelImageGen = () => request('/image-gen/cancel', { method: 'POST' });
+// cancelImageGen({ all: true }) cancels every queued/running image job.
+// cancelImageGen({ jobId }) cancels a specific job. Plain cancelImageGen()
+// cancels the most-recent queued/running job (legacy behavior).
+export const cancelImageGen = (opts = {}) => request('/image-gen/cancel', {
+  method: 'POST',
+  body: JSON.stringify(opts),
+});
 export const deleteImage = (filename) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE' });
 export const setImageHidden = (filename, hidden) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
   method: 'POST',

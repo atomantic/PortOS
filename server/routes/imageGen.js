@@ -227,16 +227,33 @@ router.get('/:jobId/events', (req, res) => {
 
 router.post('/cancel', asyncHandler(async (req, res) => {
   // Cancel selection rules, in priority order:
-  //   1. Explicit body.jobId — cancel that queued/running local image job.
+  //   1. body.all === true — cancel every queued/running image job. Used by
+  //      the writers-room storyboard "Cancel renders" CTA, which can have
+  //      20+ scene renders in flight at once.
+  //   2. Explicit body.jobId — cancel that queued/running local image job.
   //      Required for users with multiple in-flight renders.
-  //   2. No jobId — cancel the newest queued/running local image job (most
+  //   3. No jobId — cancel the newest queued/running local image job (most
   //      recent activity wins, matching the user's last "submit" gesture).
-  //   3. No queue match — fall through to the codex-mode cancel.
+  //   4. No queue match — fall through to the codex-mode cancel.
   const requestedJobId = typeof req.body?.jobId === 'string' && req.body.jobId.trim()
     ? req.body.jobId.trim()
     : undefined;
   const cancellable = listJobs({ kind: 'image' })
     .filter((j) => j.status === 'queued' || j.status === 'running');
+  if (req.body?.all === true) {
+    // Cancel queued first so the running job's slot doesn't get refilled the
+    // moment we cancel it. Settle individually so one stale job doesn't
+    // block the rest. cancellable is already a fresh filter() result.
+    const ordered = cancellable.sort((a, b) => {
+      if (a.status === b.status) return 0;
+      return a.status === 'queued' ? -1 : 1;
+    });
+    const results = await Promise.all(ordered.map((j) => cancelJob(j.id).catch((err) => ({ ok: false, error: err.message }))));
+    // Belt-and-braces: also poke the legacy single-process cancel so any
+    // in-flight gen outside the queue (codex sync mode) gets stopped.
+    imageGen.cancel();
+    return res.json({ ok: true, canceled: results.filter((r) => r?.ok).length, attempted: results.length });
+  }
   if (requestedJobId) {
     const target = cancellable.find((j) => j.id === requestedJobId);
     if (target) return res.json(await cancelJob(target.id));

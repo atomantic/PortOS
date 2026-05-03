@@ -10,7 +10,6 @@ import {
   FileSignature,
   Users,
   MapPin,
-  ListTree,
   Clock,
   History,
   Timer,
@@ -33,13 +32,11 @@ import {
 } from '../../services/apiWritersRoom';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
-import StoryboardPanel from './StoryboardPanel';
-import CharactersBible from './CharactersBible';
-import SettingsBible from './SettingsBible';
+import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import AnalysisHistory from './AnalysisHistory';
 
 const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', SETTINGS: 'settings', EVALUATE: 'evaluate', FORMAT: 'format' };
-const DRAWER = { OUTLINE: 'outline', VERSIONS: 'versions', CHARACTERS: 'characters', SETTINGS: 'settings', HISTORY: 'history' };
+const DRAWER = { VERSIONS: 'versions', HISTORY: 'history' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
 const ANALYSIS_LABELS = {
@@ -55,6 +52,7 @@ const SIDEBAR_DEFAULT = 480;
 const SIDEBAR_MIN = 320;
 const SIDEBAR_MAX_FRACTION = 0.6;
 const READING_THEME_KEY = 'wr.readingTheme';
+const SIDEBAR_TAB_KEY = 'wr.sidebarTab';
 
 function readReadingTheme() {
   if (typeof window === 'undefined') return 'dark';
@@ -70,6 +68,12 @@ function readSidebarWidth() {
 
 function persistSidebarWidth(width) {
   try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch {}
+}
+
+function readSidebarTab() {
+  if (typeof window === 'undefined') return STORYBOARD_TAB.BOARDS;
+  const stored = window.localStorage.getItem(SIDEBAR_TAB_KEY);
+  return STORYBOARD_TAB_VALUES.includes(stored) ? stored : STORYBOARD_TAB.BOARDS;
 }
 
 export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen }) {
@@ -88,6 +92,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState(MOBILE_TAB.WRITING);
   const [activeSceneId, setActiveSceneId] = useState(null);
+  const [sidebarTab, setSidebarTab] = useState(readSidebarTab);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab); } catch { /* sandboxed storage */ }
+  }, [sidebarTab]);
 
   const textareaRef = useRef(null);
   const overflowRef = useRef(null);
@@ -323,10 +332,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   }, [body]);
 
   // Per-scene Debug menu actions — until scoped tools land, route to the
-  // most relevant drawer.
+  // most relevant tab/drawer.
   const handleDebug = useCallback(({ kind, scene }) => {
     if (scene) setActiveSceneId(scene.id || null);
-    if (kind === 'check-characters') setDrawer(DRAWER.CHARACTERS);
+    if (kind === 'check-characters') {
+      setSidebarTab(STORYBOARD_TAB.CHARACTERS);
+      setMobileTab(MOBILE_TAB.STORYBOARD);
+    }
     else if (kind === 'editorial') setDrawer(DRAWER.HISTORY);
     else if (kind === 'why-image') setDrawer(DRAWER.HISTORY);
   }, []);
@@ -442,10 +454,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
               </MenuSection>
               <MenuSection label="Open">
-                <MenuItem icon={ListTree} label="Outline" onClick={closeOverflowAnd(() => setDrawer(DRAWER.OUTLINE))} />
                 <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VERSIONS))} />
-                <MenuItem icon={Users} label="Characters" badge={characters.length || null} onClick={closeOverflowAnd(() => setDrawer(DRAWER.CHARACTERS))} />
-                <MenuItem icon={MapPin} label="Settings" badge={settings.length || null} onClick={closeOverflowAnd(() => setDrawer(DRAWER.SETTINGS))} />
                 <MenuItem icon={History} label="Analysis history" onClick={closeOverflowAnd(() => setDrawer(DRAWER.HISTORY))} />
               </MenuSection>
               <MenuSection label="View">
@@ -520,6 +529,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             work={work}
             characters={characters}
             settings={settings}
+            onCharactersChange={setCharacters}
+            onSettingsChange={setSettings}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
@@ -531,31 +542,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
             onStyleChange={commitImageStyle}
+            tab={sidebarTab}
+            onTabChange={setSidebarTab}
           />
         </aside>
       </div>
 
-      <Drawer open={drawer === DRAWER.OUTLINE} onClose={() => setDrawer(null)} title="Outline">
-        <OutlineList activeDraft={activeDraft} />
-      </Drawer>
       <Drawer open={drawer === DRAWER.VERSIONS} onClose={() => setDrawer(null)} title="Versions">
         <VersionsList work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />
-      </Drawer>
-      <Drawer open={drawer === DRAWER.CHARACTERS} onClose={() => setDrawer(null)} title="Characters">
-        <CharactersBible
-          workId={work.id}
-          characters={characters}
-          onCharactersChange={setCharacters}
-          readingTheme={readingTheme}
-        />
-      </Drawer>
-      <Drawer open={drawer === DRAWER.SETTINGS} onClose={() => setDrawer(null)} title="Settings (locations / world bible)">
-        <SettingsBible
-          workId={work.id}
-          settings={settings}
-          onSettingsChange={setSettings}
-          readingTheme={readingTheme}
-        />
       </Drawer>
       <Drawer open={drawer === DRAWER.HISTORY} onClose={() => setDrawer(null)} title="Analysis history">
         <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
@@ -603,29 +597,6 @@ function MobileTab({ active, onClick, icon: Icon, label }) {
     >
       <Icon size={13} /> {label}
     </button>
-  );
-}
-
-function OutlineList({ activeDraft }) {
-  const segs = activeDraft?.segmentIndex || [];
-  if (segs.length === 0) {
-    return (
-      <div className="text-xs text-gray-500 italic">
-        No segments yet. Use # Chapter / ## Scene / ### Beat headings in the prose to populate the outline.
-      </div>
-    );
-  }
-  return (
-    <ul className="space-y-1 text-xs">
-      {segs.map((seg) => (
-        <li key={seg.id} className="flex items-center gap-2 text-gray-400">
-          <span className={`flex-1 truncate ${seg.kind === 'chapter' ? 'text-white font-semibold' : seg.kind === 'scene' ? 'text-gray-300' : 'pl-3 text-gray-500'}`}>
-            {seg.heading}
-          </span>
-          <span className="text-[10px] text-gray-600">{seg.wordCount}w</span>
-        </li>
-      ))}
-    </ul>
   );
 }
 
