@@ -20,6 +20,7 @@ import { readFile, rm, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, readJSONFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
+import { nowIso, badRequest, notFound } from './_shared.js';
 
 // Paths are resolved lazily so tests can swap PATHS.data via vi.mock without
 // the module-load snapshot freezing them at import time.
@@ -30,18 +31,6 @@ const worksDir = () => join(root(), 'works');
 
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 const DRAFT_ID_RE = /^wr-draft-[0-9a-f-]+$/i;
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function notFound(what) {
-  return new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
-}
-
-function badRequest(message) {
-  return new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
-}
 
 function workDir(workId) {
   if (!WORK_ID_RE.test(workId)) throw badRequest('Invalid work id');

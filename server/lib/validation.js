@@ -523,6 +523,30 @@ export const writersRoomAnalysisCreateSchema = z.object({
   kind: z.enum(ANALYSIS_KINDS)
 }).strict();
 
+// Character profile fields are all optional on update so the UI can PATCH
+// one field at a time. `name` accepts trimmed non-empty when present; all
+// other text fields tolerate '' so the writer can deliberately blank a field
+// out and have the next analysis re-fill it.
+const wrCharTextField = z.string().max(2000);
+export const writersRoomCharacterCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  role: wrCharTextField.optional(),
+  physicalDescription: wrCharTextField.optional(),
+  personality: wrCharTextField.optional(),
+  background: wrCharTextField.optional(),
+  notes: wrCharTextField.optional(),
+}).strict();
+export const writersRoomCharacterUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  role: wrCharTextField.optional(),
+  physicalDescription: wrCharTextField.optional(),
+  personality: wrCharTextField.optional(),
+  background: wrCharTextField.optional(),
+  notes: wrCharTextField.optional(),
+}).strict();
+
 // =============================================================================
 // FEATURE AGENT SCHEMAS
 // =============================================================================

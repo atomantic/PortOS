@@ -15,13 +15,16 @@ import { getActiveProvider } from '../providers.js';
 import { buildPrompt } from '../promptService.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
+import { listCharacters, mergeExtractedCharacters } from './characters.js';
+import { nowIso, badRequest, notFound } from './_shared.js';
 
 export { ANALYSIS_KINDS };
 
 const KIND_META = {
-  evaluate: { stage: 'writers-room-evaluate', returnsJson: true },
-  format:   { stage: 'writers-room-format',   returnsJson: false },
-  script:   { stage: 'writers-room-script',   returnsJson: true },
+  evaluate:   { stage: 'writers-room-evaluate',   returnsJson: true },
+  format:     { stage: 'writers-room-format',     returnsJson: false },
+  script:     { stage: 'writers-room-script',     returnsJson: true },
+  characters: { stage: 'writers-room-characters', returnsJson: true },
 };
 
 const ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
@@ -29,10 +32,6 @@ const ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
 const root = () => join(PATHS.data, 'writers-room');
 const analysisDir = (workId) => join(root(), 'works', workId, 'analysis');
 const analysisPath = (workId, id) => join(analysisDir(workId), `${id}.json`);
-
-function nowIso() { return new Date().toISOString(); }
-function badRequest(msg) { return new ServerError(msg, { status: 400, code: 'VALIDATION_ERROR' }); }
-function notFound(what) { return new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' }); }
 
 // ---------- LLM invocation ----------
 
@@ -147,6 +146,25 @@ const SHAPERS = {
       strengths: Array.isArray(parsed.strengths) ? parsed.strengths.filter((s) => typeof s === 'string') : [],
       issues: Array.isArray(parsed.issues) ? parsed.issues.filter((i) => i && typeof i === 'object') : [],
       suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter((s) => s && typeof s === 'object') : [],
+    };
+  },
+  characters: (raw) => {
+    const parsed = extractJson(raw);
+    const list = Array.isArray(parsed.characters) ? parsed.characters : [];
+    return {
+      characters: list
+        .filter((c) => c && typeof c === 'object' && typeof c.name === 'string' && c.name.trim())
+        .map((c) => ({
+          name: c.name.trim(),
+          aliases: Array.isArray(c.aliases) ? c.aliases.filter((a) => typeof a === 'string') : [],
+          role: typeof c.role === 'string' ? c.role : '',
+          physicalDescription: typeof c.physicalDescription === 'string' ? c.physicalDescription : '',
+          personality: typeof c.personality === 'string' ? c.personality : '',
+          background: typeof c.background === 'string' ? c.background : '',
+          firstAppearance: typeof c.firstAppearance === 'string' ? c.firstAppearance : null,
+          evidence: Array.isArray(c.evidence) ? c.evidence.filter((e) => typeof e === 'string') : [],
+          missingFromProse: Array.isArray(c.missingFromProse) ? c.missingFromProse.filter((m) => typeof m === 'string') : [],
+        })),
     };
   },
   script: (raw) => {
@@ -333,15 +351,39 @@ export async function runAnalysis(workId, { kind } = {}) {
       draftBody: body,
       returnsJson,
     };
+    if (kind === 'characters') {
+      // Pass the existing bible so the LLM can preserve user edits and only
+      // fill blanks. Stripped down to fields the prompt cares about — no ids,
+      // timestamps, or source markers.
+      const existing = await listCharacters(workId);
+      variables.existingCharactersJson = JSON.stringify(
+        existing.map((c) => ({
+          name: c.name,
+          aliases: c.aliases,
+          role: c.role,
+          physicalDescription: c.physicalDescription,
+          personality: c.personality,
+          background: c.background,
+        })),
+        null,
+        2
+      );
+    }
     const temperature = kind === 'format' ? 0.2 : 0.4;
     const { content, model: usedModel, providerId: usedProvider } = await callAI(stage, variables, temperature);
     const result = SHAPERS[kind](content);
+    let mergedCharacters = null;
+    if (kind === 'characters') {
+      mergedCharacters = await mergeExtractedCharacters(workId, result.characters || []);
+    }
     const finished = {
       ...baseSnapshot,
       status: 'succeeded',
       providerId: usedProvider,
       model: usedModel,
-      result,
+      result: mergedCharacters
+        ? { ...result, mergedProfiles: mergedCharacters }
+        : result,
       rawResponse: content,
       completedAt: nowIso(),
     };

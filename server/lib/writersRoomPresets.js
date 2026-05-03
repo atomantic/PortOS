@@ -5,4 +5,4 @@
 export const WORK_KINDS = ['novel', 'short-story', 'screenplay', 'essay', 'treatment', 'other'];
 export const WORK_STATUSES = ['idea', 'drafting', 'revision', 'adaptation', 'rendering', 'complete', 'archived'];
 export const EXERCISE_STATUSES = ['running', 'finished', 'discarded'];
-export const ANALYSIS_KINDS = ['evaluate', 'format', 'script'];
+export const ANALYSIS_KINDS = ['evaluate', 'format', 'script', 'characters'];

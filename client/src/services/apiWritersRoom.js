@@ -56,6 +56,24 @@ export const attachWritersRoomSceneImage = (workId, analysisId, payload) =>
     body: JSON.stringify(payload),
   });
 
+// Characters (editable bible — separate from immutable analysis snapshots)
+export const listWritersRoomCharacters = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/characters`);
+export const createWritersRoomCharacter = (workId, data) =>
+  request(`/writers-room/works/${enc(workId)}/characters`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+export const updateWritersRoomCharacter = (workId, characterId, patch) =>
+  request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+export const deleteWritersRoomCharacter = (workId, characterId) =>
+  request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}`, {
+    method: 'DELETE',
+  });
+
 // Exercises
 export const listWritersRoomExercises = (workId) => {
   const qs = workId ? `?workId=${enc(workId)}` : '';

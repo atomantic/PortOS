@@ -15,6 +15,8 @@ import {
   writersRoomExerciseCreateSchema,
   writersRoomExerciseFinishSchema,
   writersRoomAnalysisCreateSchema,
+  writersRoomCharacterCreateSchema,
+  writersRoomCharacterUpdateSchema,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
@@ -26,6 +28,9 @@ import {
 import {
   runAnalysis, listAnalyses, getAnalysis, attachSceneImage,
 } from '../services/writersRoom/evaluator.js';
+import {
+  listCharacters, createCharacter, updateCharacter, deleteCharacter,
+} from '../services/writersRoom/characters.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 
 const router = Router();
@@ -140,6 +145,26 @@ router.post('/works/:id/analysis', asyncHandler(async (req, res) => {
 
 router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
   res.json(await getAnalysis(req.params.id, req.params.analysisId));
+}));
+
+// ---------- characters ----------
+
+router.get('/works/:id/characters', asyncHandler(async (req, res) => {
+  res.json(await listCharacters(req.params.id));
+}));
+
+router.post('/works/:id/characters', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomCharacterCreateSchema, req.body || {});
+  res.status(201).json(await createCharacter(req.params.id, data));
+}));
+
+router.patch('/works/:id/characters/:characterId', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomCharacterUpdateSchema, req.body || {});
+  res.json(await updateCharacter(req.params.id, req.params.characterId, data));
+}));
+
+router.delete('/works/:id/characters/:characterId', asyncHandler(async (req, res) => {
+  res.json(await deleteCharacter(req.params.id, req.params.characterId));
 }));
 
 // Persist a scene→generated-image link on the analysis snapshot, AND mirror

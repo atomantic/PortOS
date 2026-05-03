@@ -1,11 +1,15 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { Sparkles, FileSignature, Clapperboard, Loader2, RotateCcw, AlertTriangle, Image as ImageIcon, Check, Settings as SettingsIcon } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { Sparkles, FileSignature, Clapperboard, Users, Loader2, RotateCcw, AlertTriangle, Image as ImageIcon, Check, Settings as SettingsIcon, Pencil, Trash2, Plus, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   listWritersRoomAnalyses,
   runWritersRoomAnalysis,
   getWritersRoomAnalysis,
   attachWritersRoomSceneImage,
+  listWritersRoomCharacters,
+  createWritersRoomCharacter,
+  updateWritersRoomCharacter,
+  deleteWritersRoomCharacter,
 } from '../../services/apiWritersRoom';
 import { generateImage, getSettings, updateSettings } from '../../services/apiSystem';
 import { listImageModels } from '../../services/apiImageVideo';
@@ -33,9 +37,10 @@ function readWrImageSettings(settings) {
 }
 
 const KIND_META = {
-  evaluate: { label: 'Evaluate', icon: Sparkles, hint: 'Editorial critique: logline, themes, issues, suggestions' },
-  format:   { label: 'Format',   icon: FileSignature, hint: 'Tidy prose: paragraphing, dialogue, whitespace, typos' },
-  script:   { label: 'Adapt',    icon: Clapperboard, hint: 'Adapt prose into scene-by-scene script with visual prompts' },
+  evaluate:   { label: 'Evaluate',   icon: Sparkles,      hint: 'Editorial critique: logline, themes, issues, suggestions' },
+  format:     { label: 'Format',     icon: FileSignature, hint: 'Tidy prose: paragraphing, dialogue, whitespace, typos' },
+  script:     { label: 'Adapt',      icon: Clapperboard,  hint: 'Adapt prose into scene-by-scene script with visual prompts' },
+  characters: { label: 'Characters', icon: Users,         hint: 'Build/refresh character profiles with image-gen-ready physical descriptions. Preserves your edits — fills gaps from prose.' },
 };
 
 const SEVERITY_COLOR = {
@@ -50,6 +55,7 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
   const [running, setRunning] = useState(null);
   const [expanded, setExpanded] = useState(null);
   const [details, setDetails] = useState({});
+  const [characters, setCharacters] = useState([]);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -62,13 +68,17 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
 
   const refresh = useCallback(async () => {
     setLoadingList(true);
-    const list = await listWritersRoomAnalyses(work.id).catch((err) => {
-      if (mountedRef.current) toast.error(`Failed to list analyses: ${err.message}`);
-      return [];
-    });
+    const [list, chars] = await Promise.all([
+      listWritersRoomAnalyses(work.id).catch((err) => {
+        if (mountedRef.current) toast.error(`Failed to list analyses: ${err.message}`);
+        return [];
+      }),
+      listWritersRoomCharacters(work.id).catch(() => []),
+    ]);
     if (!mountedRef.current) return;
     setLoadingList(false);
     setAnalyses(list);
+    setCharacters(chars);
   }, [work.id]);
 
   useEffect(() => {
@@ -77,6 +87,7 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
     setAnalyses([]);
     setExpanded(null);
     setDetails({});
+    setCharacters([]);
     refresh();
   }, [work.id, refresh]);
 
@@ -100,6 +111,23 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
     setDetails((d) => ({ ...d, [snapshot.id]: snapshot }));
     setExpanded(snapshot.id);
     setAnalyses((prev) => [snapshot, ...prev.filter((a) => a.id !== snapshot.id)]);
+    if (kind === 'characters' && snapshot.status === 'succeeded' && Array.isArray(snapshot.result?.mergedProfiles)) {
+      setCharacters(snapshot.result.mergedProfiles);
+    }
+  };
+
+  const upsertCharacterLocal = (next) => {
+    setCharacters((prev) => {
+      const idx = prev.findIndex((c) => c.id === next.id);
+      if (idx < 0) return [...prev, next].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      const copy = [...prev];
+      copy[idx] = next;
+      return copy.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    });
+  };
+
+  const removeCharacterLocal = (id) => {
+    setCharacters((prev) => prev.filter((c) => c.id !== id));
   };
 
   const expand = async (analysis) => {
@@ -120,7 +148,7 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
     <div className="space-y-3 text-xs">
       <div>
         <h3 className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">AI Actions</h3>
-        <div className="grid grid-cols-3 gap-1">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
           {Object.entries(KIND_META).map(([kind, meta]) => {
             const Icon = meta.icon;
             const isRunning = running === kind;
@@ -145,6 +173,14 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
           })}
         </div>
       </div>
+
+      <CharactersBible
+        workId={work.id}
+        characters={characters}
+        onLocalChange={upsertCharacterLocal}
+        onLocalDelete={removeCharacterLocal}
+        readingTheme={readingTheme}
+      />
 
       <div>
         <div className="flex items-center justify-between mb-1.5">
@@ -208,7 +244,11 @@ export default function AiPanel({ work, onApplyFormat, readingTheme = 'dark' }) 
                         sceneImages={full.sceneImages || {}}
                         workTitle={work.title}
                         readingTheme={readingTheme}
+                        characters={characters}
                       />
+                    )}
+                    {full?.status === 'succeeded' && full.kind === 'characters' && (
+                      <CharactersAnalysisResult result={full.result} readingTheme={readingTheme} />
                     )}
                   </div>
                 )}
@@ -302,7 +342,8 @@ function FormatResult({ result, onApply, readingTheme = 'dark' }) {
   );
 }
 
-function ScriptResult({ result, workId, analysisId, sceneImages = {}, workTitle, readingTheme = 'dark' }) {
+function ScriptResult({ result, workId, analysisId, sceneImages = {}, workTitle, readingTheme = 'dark', characters = [] }) {
+  const charByKey = useMemo(() => buildCharByKey(characters), [characters]);
   // Image-gen settings are scoped to the Writers Room (not the global Image Gen
   // page) so a writer can pick a fast/small model + 3:2 aspect without
   // disrupting the dedicated Image Gen workflow.
@@ -360,6 +401,7 @@ function ScriptResult({ result, workId, analysisId, sceneImages = {}, workTitle,
             imageCfg={imageCfg}
             initialImage={sceneImages[sceneId] || null}
             readingTheme={readingTheme}
+            charByKey={charByKey}
           />
         );
       })}
@@ -416,8 +458,78 @@ function ImageGenSettingsRow({ cfg, models, onChange }) {
   );
 }
 
-function SceneCard({ scene, workId, analysisId, workTitle, imageCfg = WR_IMAGE_DEFAULTS, initialImage = null, readingTheme = 'dark' }) {
+// LLM scene lists use bare names ("ARIA"), profiles may use full names
+// ("Aria Reyes") or "the bartender" — strip leading "the " and lowercase so
+// either side resolves to the same key.
+const normCharKey = (s) => String(s || '').trim().toLowerCase().replace(/^the\s+/, '');
+
+// Build a name+alias → profile lookup. One pass at the panel level so chip
+// rendering is O(1) per chip instead of O(N) per render.
+function buildCharByKey(allCharacters) {
+  const map = new Map();
+  for (const profile of allCharacters) {
+    map.set(normCharKey(profile.name), profile);
+    for (const alias of profile.aliases || []) map.set(normCharKey(alias), profile);
+  }
+  return map;
+}
+
+function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
+  if (!Array.isArray(sceneCharacterNames) || !sceneCharacterNames.length) return [];
+  const matched = [];
+  const seen = new Set();
+  for (const name of sceneCharacterNames) {
+    const profile = charByKey?.get(normCharKey(name));
+    if (profile && !seen.has(profile.id)) {
+      matched.push(profile);
+      seen.add(profile.id);
+    }
+  }
+  return matched;
+}
+
+const PROMPT_MAX = 1900;
+
+// The scene's visualPrompt is the load-bearing part of the image-gen prompt
+// (location, action, mood) — it must always survive truncation. Reserve room
+// for title + visual prompt first, then fit the "Featuring" block into
+// whatever is left, dropping characters one-by-one if needed.
+function buildScenePromptWithCharacters(workTitle, scene, matchedCharacters) {
+  const titlePart = workTitle ? `${workTitle}. ` : '';
+  const visual = scene.visualPrompt || '';
+  const featuringFragments = matchedCharacters
+    .filter((c) => c.physicalDescription && c.physicalDescription.trim())
+    .map((c) => `${c.name}: ${c.physicalDescription.trim()}`);
+  const PREFIX = 'Featuring — ';
+  const reserveForVisual = titlePart.length + visual.length + 1; // +1 for the join space
+  let budget = PROMPT_MAX - reserveForVisual - PREFIX.length;
+  const fitFragments = [];
+  for (const frag of featuringFragments) {
+    const cost = (fitFragments.length === 0 ? 0 : 1) + frag.length; // +1 for join space
+    if (cost > budget) break;
+    fitFragments.push(frag);
+    budget -= cost;
+  }
+  const segs = [titlePart.trim()];
+  if (fitFragments.length > 0) segs.push(`${PREFIX}${fitFragments.join(' ')}`);
+  if (visual) segs.push(visual);
+  return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);
+}
+
+function SceneCard({ scene, workId, analysisId, workTitle, imageCfg = WR_IMAGE_DEFAULTS, initialImage = null, readingTheme = 'dark', charByKey = null }) {
   const light = readingTheme === 'light';
+  const matchedCharacters = useMemo(
+    () => matchSceneCharacters(scene.characters, charByKey),
+    [scene.characters, charByKey]
+  );
+  const matchedNameKeys = useMemo(() => {
+    const keys = new Set();
+    for (const c of matchedCharacters) {
+      keys.add(normCharKey(c.name));
+      for (const a of c.aliases || []) keys.add(normCharKey(a));
+    }
+    return keys;
+  }, [matchedCharacters]);
   // genStatus drives the button + preview overlay:
   //   idle    → no preview area shown
   //   running → preview area shows spinner / live diffusion frame from socket
@@ -508,9 +620,7 @@ function SceneCard({ scene, workId, analysisId, workTitle, imageCfg = WR_IMAGE_D
     setError(null);
     setProgress(null);
     setGenerated(null);
-    // Truncate at 1900 chars to stay under the 2000-char API limit even when
-    // the model returns a chatty visualPrompt.
-    const prompt = `${workTitle ? `${workTitle}. ` : ''}${scene.visualPrompt}`.slice(0, 1900);
+    const prompt = buildScenePromptWithCharacters(workTitle, scene, matchedCharacters);
     const res = await generateImage({
       prompt,
       modelId: imageCfg.modelId,
@@ -620,11 +730,21 @@ function SceneCard({ scene, workId, analysisId, workTitle, imageCfg = WR_IMAGE_D
       {scene.summary && <div className={light ? 'text-gray-700' : 'text-gray-400'}>{scene.summary}</div>}
       {scene.characters?.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {scene.characters.map((c, i) => (
-            <span key={i} className={`px-1.5 py-0.5 border rounded text-[9px] uppercase tracking-wider ${
-              light ? 'bg-white border-gray-300 text-gray-700' : 'bg-port-bg border-port-border'
-            }`}>{c}</span>
-          ))}
+          {scene.characters.map((c, i) => {
+            const isMatched = matchedNameKeys.has(normCharKey(c));
+            return (
+              <span
+                key={i}
+                title={isMatched ? 'Profile linked — physical description injected into image prompt' : 'No matching profile — run Characters to add'}
+                className={`px-1.5 py-0.5 border rounded text-[9px] uppercase tracking-wider ${
+                  isMatched
+                    ? 'border-port-accent text-port-accent bg-port-accent/10'
+                    : light ? 'bg-white border-gray-300 text-gray-700' : 'bg-port-bg border-port-border'
+                }`}>
+                {c}
+              </span>
+            );
+          })}
         </div>
       )}
       {scene.action && (
@@ -646,6 +766,270 @@ function SceneCard({ scene, workId, analysisId, workTitle, imageCfg = WR_IMAGE_D
           <div className="mt-1 italic">{scene.visualPrompt}</div>
         </details>
       )}
+    </div>
+  );
+}
+
+// ---------- character bible (editable, persistent across analysis runs) ----------
+
+const CHARACTER_FIELDS = [
+  { key: 'aliases',             label: 'Aliases',              placeholder: 'nicknames, titles (comma-separated)',                                                                  kind: 'csv' },
+  { key: 'role',                label: 'Role',                 placeholder: 'protagonist, mentor, antagonist…',                                                                     kind: 'text' },
+  { key: 'physicalDescription', label: 'Physical description', placeholder: 'Age, build, hair, eyes, distinctive features, signature wardrobe. Used directly in image-gen prompts.', kind: 'multiline' },
+  { key: 'personality',         label: 'Personality',          placeholder: 'Temperament, voice, quirks',                                                                           kind: 'multiline' },
+  { key: 'background',          label: 'Background',           placeholder: 'Who they are, where they come from',                                                                   kind: 'multiline' },
+  { key: 'notes',               label: 'Notes',                placeholder: 'Anything else worth tracking',                                                                         kind: 'multiline' },
+];
+
+function CharactersBible({ workId, characters, onLocalChange, onLocalDelete, readingTheme }) {
+  const [editingId, setEditingId] = useState(null);
+  const [creating, setCreating] = useState(false);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <h3 className="text-[10px] uppercase tracking-wider text-gray-500">Characters</h3>
+        <button
+          onClick={() => { setCreating(true); setEditingId(null); }}
+          className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-port-accent"
+          title="Add a character profile manually"
+        >
+          <Plus size={11} /> Add
+        </button>
+      </div>
+
+      {characters.length === 0 && !creating && (
+        <div className="text-gray-600 italic px-1 mb-2">
+          No profiles yet. Run <span className="text-gray-400">Characters</span> to extract from prose, or add one manually.
+        </div>
+      )}
+
+      {creating && (
+        <CharacterEditor
+          workId={workId}
+          character={null}
+          onSaved={(c) => { onLocalChange(c); setCreating(false); }}
+          onCancel={() => setCreating(false)}
+          readingTheme={readingTheme}
+        />
+      )}
+
+      <ul className="space-y-1">
+        {characters.map((c) => {
+          const isEditing = editingId === c.id;
+          if (isEditing) {
+            return (
+              <li key={c.id}>
+                <CharacterEditor
+                  workId={workId}
+                  character={c}
+                  onSaved={(updated) => { onLocalChange(updated); setEditingId(null); }}
+                  onDeleted={() => { onLocalDelete(c.id); setEditingId(null); }}
+                  onCancel={() => setEditingId(null)}
+                  readingTheme={readingTheme}
+                />
+              </li>
+            );
+          }
+          return (
+            <li key={c.id} className="border border-port-border rounded">
+              <CharacterRow character={c} onEdit={() => setEditingId(c.id)} readingTheme={readingTheme} />
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function CharacterRow({ character, onEdit, readingTheme }) {
+  const light = readingTheme === 'light';
+  const blanks = CHARACTER_FIELDS.filter((f) => {
+    if (f.key === 'notes' || f.key === 'aliases') return false;
+    return !String(character[f.key] || '').trim();
+  });
+  return (
+    <div className="px-2 py-1.5">
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{character.name}</span>
+            {character.role && (
+              <span className="text-[9px] uppercase tracking-wider text-port-accent">{character.role}</span>
+            )}
+            {character.source === 'ai' && (
+              <span className="text-[9px] text-gray-500" title="Created by AI extraction — edit to mark as user-curated">ai</span>
+            )}
+            {character.aliases?.length > 0 && (
+              <span className="text-[10px] text-gray-500 truncate">aka {character.aliases.join(', ')}</span>
+            )}
+          </div>
+          {character.physicalDescription ? (
+            <div className={`text-[11px] mt-0.5 ${light ? 'text-gray-700' : 'text-gray-400'}`}>
+              {character.physicalDescription}
+            </div>
+          ) : (
+            <div className="text-[11px] mt-0.5 text-port-warning italic">No physical description — image gen will use scene context only</div>
+          )}
+          {blanks.length > 0 && (
+            <div className="text-[10px] text-port-warning mt-1 flex items-center gap-1">
+              <AlertTriangle size={9} /> Missing: {blanks.map((f) => f.label.toLowerCase()).join(', ')}
+            </div>
+          )}
+          {character.missingFromProse?.length > 0 && (
+            <div className="text-[10px] text-gray-500 mt-1">
+              <span className="uppercase tracking-wider text-[9px]">Prose gaps:</span> {character.missingFromProse.join(', ')}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onEdit}
+          className="text-gray-500 hover:text-port-accent shrink-0"
+          title="Edit profile"
+          aria-label={`Edit ${character.name}`}
+        >
+          <Pencil size={11} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel, readingTheme }) {
+  const isCreate = !character;
+  const [draft, setDraft] = useState(() => {
+    const seed = { name: character?.name || '' };
+    for (const f of CHARACTER_FIELDS) {
+      seed[f.key] = f.kind === 'csv' ? (character?.[f.key] || []).join(', ') : (character?.[f.key] || '');
+    }
+    return seed;
+  });
+  const [saving, setSaving] = useState(false);
+
+  const set = (field) => (e) => setDraft((d) => ({ ...d, [field]: e.target.value }));
+
+  const save = async () => {
+    if (!draft.name.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    setSaving(true);
+    const payload = { name: draft.name.trim() };
+    for (const f of CHARACTER_FIELDS) {
+      payload[f.key] = f.kind === 'csv'
+        ? draft[f.key].split(',').map((s) => s.trim()).filter(Boolean)
+        : draft[f.key];
+    }
+    const result = await (isCreate
+      ? createWritersRoomCharacter(workId, payload)
+      : updateWritersRoomCharacter(workId, character.id, payload)
+    ).catch((err) => {
+      toast.error(`Save failed: ${err.message}`);
+      return null;
+    });
+    setSaving(false);
+    if (!result) return;
+    toast.success(`${result.name} saved`);
+    onSaved?.(result);
+  };
+
+  const remove = async () => {
+    if (!character) return;
+    setSaving(true);
+    const ok = await deleteWritersRoomCharacter(workId, character.id).then(() => true).catch((err) => {
+      toast.error(`Delete failed: ${err.message}`);
+      return false;
+    });
+    setSaving(false);
+    if (ok) {
+      toast.success(`${character.name} removed`);
+      onDeleted?.();
+    }
+  };
+
+  const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none';
+
+  return (
+    <div className="border border-port-accent/40 rounded p-2 bg-port-card/40 space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <input
+          value={draft.name}
+          onChange={set('name')}
+          placeholder="Character name"
+          className={`${inputCls} font-semibold`}
+        />
+        <button
+          onClick={onCancel}
+          className="text-gray-500 hover:text-white shrink-0"
+          aria-label="Cancel edit"
+          title="Cancel"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      {CHARACTER_FIELDS.map((f) => (
+        <label key={f.key} className="block">
+          <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
+          {f.kind === 'multiline' ? (
+            <textarea value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.key === 'physicalDescription' ? 3 : 2} className={`${inputCls} font-sans resize-y`} />
+          ) : (
+            <input value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
+          )}
+        </label>
+      ))}
+      <div className="flex items-center justify-between pt-1">
+        {!isCreate ? (
+          <button
+            onClick={remove}
+            disabled={saving}
+            className="flex items-center gap-1 text-[10px] text-port-error hover:underline disabled:opacity-50"
+          >
+            <Trash2 size={10} /> Delete
+          </button>
+        ) : <span />}
+        <button
+          onClick={save}
+          disabled={saving}
+          className="flex items-center gap-1 px-2 py-1 bg-port-accent text-white rounded text-[10px] hover:bg-port-accent/80 disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Read-only summary of the most recent characters analysis snapshot, shown in
+// the History expander. The editable bible above is the source of truth for
+// scene-image injection — this view exists so the user can compare what came
+// back from this specific run against what's now in the bible.
+function CharactersAnalysisResult({ result, readingTheme }) {
+  const light = readingTheme === 'light';
+  const list = result?.characters || [];
+  if (!list.length) return <div className="text-gray-500">No characters returned.</div>;
+  return (
+    <div className={`space-y-2 text-[11px] ${light ? 'text-gray-900' : 'text-gray-300'}`}>
+      <div className="text-[10px] text-gray-500">
+        {list.length} character{list.length === 1 ? '' : 's'} extracted. Edits to the bible above persist across re-runs.
+      </div>
+      <ul className="space-y-1.5">
+        {list.map((c, i) => (
+          <li key={i} className={`border rounded p-2 ${light ? 'border-gray-300 bg-white' : 'border-port-border bg-port-bg/40'}`}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{c.name}</span>
+              {c.role && <span className="text-[9px] uppercase tracking-wider text-port-accent">{c.role}</span>}
+            </div>
+            {c.physicalDescription && (
+              <div className={`mt-1 ${light ? 'text-gray-700' : 'text-gray-400'}`}>{c.physicalDescription}</div>
+            )}
+            {c.missingFromProse?.length > 0 && (
+              <div className="text-[10px] text-port-warning mt-1">
+                Prose gaps: {c.missingFromProse.join(', ')}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
